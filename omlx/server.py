@@ -31,6 +31,8 @@ The server provides:
     - POST /v1/chat/completions - Chat completions
     - POST /v1/messages - Anthropic Messages API
     - POST /v1/responses - OpenAI Responses API (Codex compatibility)
+    - POST /v1/images/generations - Image generation
+    - POST /v1/images/edits - Image editing
     - GET /v1/models - List available models (with load status)
     - GET /health - Health check
     - GET /v1/mcp/tools - List MCP tools
@@ -447,6 +449,11 @@ app = FastAPI(
 from .api.mcp_routes import router as mcp_router, set_mcp_manager_getter
 set_mcp_manager_getter(get_mcp_manager)
 app.include_router(mcp_router, dependencies=[Depends(verify_api_key)])
+
+# Keep image routes registered even when optional mflux/image support is absent;
+# handlers return a 503 install hint so OpenAI-compatible paths remain stable.
+from .api.image_routes import router as image_router
+app.include_router(image_router, dependencies=[Depends(verify_api_key)])
 
 # Include audio routes only when mlx-audio is installed.
 # audio_routes.py itself only imports fastapi/stdlib at module level, so it

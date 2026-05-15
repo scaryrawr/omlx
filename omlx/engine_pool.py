@@ -14,13 +14,15 @@ when memory limits are exceeded. It supports:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 if TYPE_CHECKING:
+    from .engine.image import ImageEngine
     from .model_settings import ModelSettingsManager
 
 import mlx.core as mx
@@ -28,23 +30,48 @@ import mlx.core as mx
 from .engine import BaseEngine, BatchedEngine
 from .engine.embedding import EmbeddingEngine
 from .engine.reranker import RerankerEngine
-from .engine.stt import STTEngine
 from .engine.sts import STSEngine
+from .engine.stt import STTEngine
 from .engine.tts import TTSEngine
 from .engine.vlm import VLMBatchedEngine
+from .engine_core import get_mlx_executor
 from .exceptions import (
-    EnginePoolError,
     InsufficientMemoryError,
     ModelLoadingError,
     ModelNotFoundError,
     ModelTooLargeError,
 )
-from .model_discovery import DiscoveredModel, discover_models, format_size
-from .engine_core import get_mlx_executor
+from .model_discovery import EngineType, ModelType, discover_models, format_size
 from .scheduler import SchedulerConfig
+from .utils.optional_deps import MFLUX_MISSING_MESSAGE, is_mflux_available
 from .utils.proc_memory import get_phys_footprint
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessMemoryEnforcerLike(Protocol):
+    max_bytes: int
+
+    def _propagate_memory_limit(self) -> None: ...
+
+
+def _clear_mlx_cache_sync() -> None:
+    mx.synchronize()
+    mx.clear_cache()
+
+
+if TYPE_CHECKING:
+    EngineInstance: TypeAlias = (
+        BaseEngine
+        | EmbeddingEngine
+        | RerankerEngine
+        | STTEngine
+        | STSEngine
+        | TTSEngine
+        | ImageEngine
+    )
+else:
+    EngineInstance: TypeAlias = object
 
 
 @dataclass
@@ -53,15 +80,18 @@ class EngineEntry:
 
     model_id: str  # Directory name (e.g., "llama-3b")
     model_path: str  # Full path to model directory
-    model_type: Literal["llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]  # Model type
-    engine_type: Literal["batched", "simple", "embedding", "reranker", "vlm", "audio_stt", "audio_tts", "audio_sts"]  # Engine type to use
+    model_type: ModelType  # Model type
+    engine_type: EngineType  # Engine type to use
     estimated_size: int  # Pre-calculated from safetensors (bytes)
     actual_size: int | None = None  # Observed process-memory delta after load settles
     config_model_type: str = ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     thinking_default: bool | None = None  # True if model thinks by default, False if not, None if unknown
     preserve_thinking_default: bool | None = None  # True when template supports preserve_thinking (Qwen 3.6+)
     model_context_length: int | None = None  # Declared context length from config.json (None if unknown)
-    engine: BaseEngine | EmbeddingEngine | RerankerEngine | STTEngine | STSEngine | TTSEngine | None = None  # Loaded engine instance
+    capabilities: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
+    image_metadata: dict[str, object] | None = None
+    engine: EngineInstance | None = None  # Loaded engine instance
     last_access: float = 0.0  # Timestamp for LRU (0 if never loaded)
     is_loading: bool = False  # Prevent concurrent loads
     loading_started_at: float | None = None  # Timestamp when current load started
@@ -99,9 +129,9 @@ class EnginePool:
         self._lock = asyncio.Lock()
         self._current_model_memory = 0
         self._scheduler_config = scheduler_config or SchedulerConfig()
-        self._process_memory_enforcer: object | None = None  # Set by server
+        self._process_memory_enforcer: ProcessMemoryEnforcerLike | None = None  # Set by server
         self._get_final_ceiling: object | None = None  # Set by server
-        self._settings_manager: object | None = None  # Set by server
+        self._settings_manager: ModelSettingsManager | None = None  # Set by server
         self._suppress_ttl: bool = False  # Suppress TTL during benchmarks
         self._load_seconds_per_gb_ema: float | None = None
         self._load_time_observations: int = 0
@@ -191,6 +221,9 @@ class EnginePool:
                     thinking_default=getattr(info, "thinking_default", None),
                     preserve_thinking_default=getattr(info, "preserve_thinking_default", None),
                     model_context_length=getattr(info, "model_context_length", None),
+                    capabilities=list(getattr(info, "capabilities", [])),
+                    tasks=list(getattr(info, "tasks", [])),
+                    image_metadata=getattr(info, "image_metadata", None),
                     is_pinned=model_id in pinned_set,
                 )
 
@@ -215,7 +248,7 @@ class EnginePool:
 
         logger.info(f"Discovered {len(self._entries)} models")
 
-    _MODEL_TYPE_TO_ENGINE: dict[str, str] = {
+    _MODEL_TYPE_TO_ENGINE: dict[ModelType, EngineType] = {
         "llm": "batched",
         "vlm": "vlm",
         "embedding": "embedding",
@@ -223,18 +256,20 @@ class EnginePool:
         "audio_stt": "audio_stt",
         "audio_tts": "audio_tts",
         "audio_sts": "audio_sts",
+        "image": "image",
     }
 
     def apply_settings_overrides(
-        self, settings_manager: "ModelSettingsManager"
+        self, settings_manager: ModelSettingsManager
     ) -> None:
         """Apply model_type_override from persisted settings to discovered entries."""
         for model_id, entry in self._entries.items():
             settings = settings_manager.get_settings(model_id)
             if settings.model_type_override:
-                entry.model_type = settings.model_type_override
+                model_type_override = cast(ModelType, settings.model_type_override)
+                entry.model_type = model_type_override
                 entry.engine_type = self._MODEL_TYPE_TO_ENGINE.get(
-                    settings.model_type_override, "batched"
+                    model_type_override, "batched"
                 )
                 logger.info(
                     f"Applied model_type override for {model_id}: "
@@ -281,7 +316,11 @@ class EnginePool:
                 return mid
         return None
 
-    def resolve_model_id(self, model_id_or_alias: str, settings_manager) -> str:
+    def resolve_model_id(
+        self,
+        model_id_or_alias: str,
+        settings_manager: ModelSettingsManager | None,
+    ) -> str:
         """Resolve a model alias to its actual model_id (directory name).
 
         Tries exact match in _entries first, then case-insensitive match,
@@ -302,7 +341,7 @@ class EnginePool:
             all_settings = settings_manager.get_all_settings()
             for mid, ms in all_settings.items():
                 if ms.model_alias and ms.model_alias == model_id_or_alias:
-                    return mid
+                    return str(mid)
 
         # Strip provider prefix (e.g. "omlx/qwen3.5-35b" -> "qwen3.5-35b")
         if "/" in model_id_or_alias:
@@ -315,13 +354,13 @@ class EnginePool:
             if all_settings is not None:
                 for mid, ms in all_settings.items():
                     if ms.model_alias and ms.model_alias == stripped:
-                        return mid
+                        return str(mid)
 
         return model_id_or_alias
 
     async def get_engine(
         self, model_id: str, force_lm: bool = False,
-    ) -> BaseEngine | EmbeddingEngine | RerankerEngine | STTEngine | STSEngine | TTSEngine:
+    ) -> EngineInstance:
         """
         Get or load engine for the specified model.
 
@@ -363,6 +402,14 @@ class EnginePool:
                 else:
                     entry.last_access = time.time()
                     return entry.engine
+
+            # Gate image engine loads on the optional `mflux` extra before
+            # reserving any memory or evicting other models. Discovery only
+            # needs metadata, so image entries can exist without mflux; we
+            # fail fast here with the centralized install hint instead of
+            # leaking a raw ImportError from deeper in the load path.
+            if entry.engine_type == "image" and not is_mflux_available():
+                raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE)
 
             # Pre-load admission against the memory ceiling from the
             # process memory enforcer (min of static and dynamic). Try
@@ -504,7 +551,7 @@ class EnginePool:
         gc.collect()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            get_mlx_executor(), lambda: (mx.synchronize(), mx.clear_cache())
+            get_mlx_executor(), _clear_mlx_cache_sync
         )
 
         # Memory settle barrier: poll actual freed memory instead of
@@ -534,7 +581,7 @@ class EnginePool:
             await asyncio.sleep(0.5)
             gc.collect()
             await loop.run_in_executor(
-                get_mlx_executor(), lambda: (mx.synchronize(), mx.clear_cache())
+                get_mlx_executor(), _clear_mlx_cache_sync
             )
 
         # Release memory tracking AFTER barrier
@@ -558,7 +605,7 @@ class EnginePool:
                 gc.collect()
                 await loop.run_in_executor(
                     get_mlx_executor(),
-                    lambda: (mx.synchronize(), mx.clear_cache()),
+                    _clear_mlx_cache_sync,
                 )
                 await asyncio.sleep(1.0)
             active_after = mx.get_active_memory()
@@ -690,6 +737,24 @@ class EnginePool:
                         model_name=entry.model_path,
                         config_model_type=entry.config_model_type,
                     )
+                elif effective_type == "image":
+                    if not is_mflux_available():
+                        raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE)
+                    try:
+                        from .engine.image import ImageEngine
+                    except ImportError as exc:
+                        raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE) from exc
+
+                    engine = ImageEngine(
+                        model_name=entry.model_path,
+                        model_id=model_id,
+                        model_path=entry.model_path,
+                        config_model_type=entry.config_model_type,
+                        image_metadata=entry.image_metadata or {},
+                        capabilities=list(entry.capabilities),
+                        tasks=list(entry.tasks),
+                        model_settings=model_settings,
+                    )
                 else:
                     engine = BatchedEngine(
                         model_name=entry.model_path,
@@ -710,15 +775,13 @@ class EnginePool:
                         f"DFlash start failed for {model_id}: {start_error}. "
                         f"Falling back to {effective_type} engine."
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     if effective_type == "vlm":
@@ -755,15 +818,13 @@ class EnginePool:
                         f"(force_lm=True), falling back to VLM engine: "
                         f"{start_error}"
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     engine = VLMBatchedEngine(
@@ -790,15 +851,13 @@ class EnginePool:
                         f"VLM loading failed for {model_id}, "
                         f"falling back to LLM: {start_error}"
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     engine = BatchedEngine(
@@ -821,6 +880,14 @@ class EnginePool:
                         f"Successfully loaded {model_id} as LLM "
                         f"(fallback from VLM)"
                     )
+                elif entry.engine_type == "image" and isinstance(start_error, ImportError):
+                    # ImageEngine imports mflux lazily during model load. If
+                    # the optional `image` extra is missing at start time,
+                    # surface the centralized install hint via
+                    # ModelLoadingError instead of leaking a raw ImportError.
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE) from start_error
                 else:
                     raise
 
@@ -839,7 +906,7 @@ class EnginePool:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
                     get_mlx_executor(),
-                    lambda: (mx.synchronize(), mx.clear_cache()),
+                    _clear_mlx_cache_sync,
                 )
                 raise ModelLoadingError(
                     f"Model {model_id} load aborted: "
@@ -904,7 +971,7 @@ class EnginePool:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 get_mlx_executor(),
-                lambda: (mx.synchronize(), mx.clear_cache()),
+                _clear_mlx_cache_sync,
             )
 
             post_load_memory = max(mx.get_active_memory(), get_phys_footprint())
@@ -998,6 +1065,9 @@ class EnginePool:
                     "config_model_type": e.config_model_type,
                     "thinking_default": e.thinking_default,
                     "preserve_thinking_default": e.preserve_thinking_default,
+                    "capabilities": e.capabilities,
+                    "tasks": e.tasks,
+                    "image_metadata": e.image_metadata,
                     "last_access": e.last_access if e.last_access > 0 else None,
                 }
                 for mid, e in sorted(self._entries.items())
