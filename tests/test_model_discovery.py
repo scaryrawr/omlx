@@ -2,12 +2,13 @@
 """Tests for model discovery functionality."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from omlx.model_discovery import (
+    IMAGE_DEFAULT_ESTIMATED_SIZES,
+    IMAGE_UNKNOWN_FALLBACK_SIZE,
     DiscoveredModel,
     _is_adapter_dir,
     _is_unsupported_model,
@@ -787,6 +788,306 @@ class TestDiscoverModels:
         assert model.model_type == "llm"
         assert model.engine_type == "batched"
         assert model.estimated_size == int(1000 * 1.05)
+
+
+class TestImageManifestDiscovery:
+    """Tests for mflux image model manifest discovery."""
+
+    def _make_lmstudio_image_layout(
+        self,
+        model_dir: Path,
+        weights: dict[str, int] | None = None,
+    ) -> int:
+        """Create a small LM Studio-style image directory."""
+        weights = weights or {
+            "text_encoder": 1000,
+            "transformer": 2000,
+            "vae": 3000,
+        }
+        for component in (*weights, "tokenizer"):
+            (model_dir / component).mkdir(parents=True, exist_ok=True)
+        (model_dir / "tokenizer" / "tokenizer.json").write_text("{}")
+        for component, size in weights.items():
+            (model_dir / component / "0.safetensors").write_bytes(b"0" * size)
+        return int(sum(weights.values()) * 1.05)
+
+    def test_discover_valid_image_manifest_without_config(self, tmp_path):
+        """Image manifest is enough to discover a mflux image model."""
+        model_dir = tmp_path / "flux-dev"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "task": ["txt2img", "edit"],
+                    "quantize": 8,
+                    "default_steps": 4,
+                    "default_guidance": 3.5,
+                    "estimated_size": 123456,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert len(models) == 1
+        model = models["flux-dev"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == 123456
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == "schnell"
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["capabilities"] == ["generation", "edit"]
+        assert model.image_metadata["tasks"] is not model.image_metadata["capabilities"]
+
+    def test_infers_lmstudio_qwen_image_edit_without_manifest(self, tmp_path):
+        """LM Studio Qwen-Image-Edit folders are discovered without a manifest."""
+        model_dir = tmp_path / "Qwen-Image-Edit-2511-6bit"
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models["Qwen-Image-Edit-2511-6bit"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["edit"]
+        assert model.tasks == ["edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == "qwen-image-edit"
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    def test_infers_nested_lmstudio_qwen_image_without_manifest(self, tmp_path):
+        """Two-level LM Studio Qwen-Image folders are discovered as generation."""
+        model_dir = tmp_path / "mlx-community" / "Qwen-Image-2512-4bit"
+        self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        model = models["Qwen-Image-2512-4bit"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.capabilities == ["generation"]
+        assert model.tasks == ["generation"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["base_model"] == "qwen-image"
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("Z-Image-mxfp8", "z-image"),
+            ("Z-Image-Turbo-mxfp8", "z-image-turbo"),
+            ("FIBO-mxfp8", "fibo"),
+        ],
+    )
+    def test_infers_lmstudio_mflux_image_models_without_manifest(
+        self, tmp_path, dirname, base_model
+    ):
+        """LM Studio mflux image folders are discovered without a manifest."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation"]
+        assert model.tasks == ["generation"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("FLUX.2-klein-4B-mxfp8", "flux2-klein-4b"),
+            ("FLUX.2-klein-9B-mxfp8", "flux2-klein-9b"),
+        ],
+    )
+    def test_infers_lmstudio_klein_image_models_support_edit(
+        self, tmp_path, dirname, base_model
+    ):
+        """Klein image folders are discovered as generation and edit capable."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    def test_inferred_image_layout_does_not_require_specific_component_names(
+        self, tmp_path
+    ):
+        """Inference is based on supported aliases plus local weights, not component names."""
+        model_dir = tmp_path / "Z-Image-mxfp8"
+        self._make_lmstudio_image_layout(
+            model_dir,
+            weights={"encoder": 1000, "diffusion_model": 2000},
+        )
+
+        models = discover_models(tmp_path)
+
+        model = models["Z-Image-mxfp8"]
+        assert model.model_type == "image"
+        assert model.image_metadata is not None
+        assert model.image_metadata["base_model"] == "z-image"
+
+    def test_qwen_image_name_without_local_layout_is_skipped(self, tmp_path):
+        """Names alone are not enough to infer image models."""
+        model_dir = tmp_path / "Qwen-Image-not-a-model"
+        model_dir.mkdir()
+        (model_dir / "README.md").write_text("notes")
+
+        assert discover_models(tmp_path) == {}
+
+    def test_invalid_image_manifest_without_config_is_skipped(self, tmp_path):
+        """Invalid image manifests do not make a directory discoverable."""
+        model_dir = tmp_path / "not-image"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "other", "base_model": "schnell"})
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models == {}
+
+    def test_image_manifest_defaults_to_generation_task(self, tmp_path):
+        """Omitting task defaults image manifests to generation support."""
+        model_dir = tmp_path / "flux-default-task"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "mflux", "base_model": "dev"})
+        )
+
+        models = discover_models(tmp_path)
+
+        model = models["flux-default-task"]
+        assert model.model_type == "image"
+        assert model.capabilities == ["generation"]
+        assert model.tasks == ["generation"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["tasks"] == ["generation"]
+
+    def test_image_manifest_with_unsupported_task_is_skipped(self, tmp_path):
+        """Unsupported image manifest tasks do not register image models."""
+        model_dir = tmp_path / "flux-upscaler"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "dev",
+                    "task": "upscale",
+                }
+            )
+        )
+
+        assert discover_models(tmp_path) == {}
+
+    def test_image_manifest_estimates_size_from_local_model_path(self, tmp_path):
+        """Image model size falls back to local model_path weights."""
+        model_dir = tmp_path / "flux-local"
+        weights_dir = model_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        (weights_dir / "model.safetensors").write_bytes(b"0" * 2000)
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "dev",
+                    "model_path": "weights",
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["flux-local"].estimated_size == int(2000 * 1.05)
+
+    def test_image_manifest_uses_conservative_base_model_size(self, tmp_path):
+        """Image models without local weights use conservative memory estimates."""
+        model_dir = tmp_path / "flux-no-local"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "flux2-klein-4b",
+                    "quantize": 4,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["flux-no-local"].estimated_size == int(
+            IMAGE_DEFAULT_ESTIMATED_SIZES["flux2-klein-4b"] * 0.45
+        )
+
+    def test_image_manifest_unknown_base_model_uses_unknown_fallback(self, tmp_path):
+        """Unknown image aliases still register with a safe non-tiny estimate."""
+        model_dir = tmp_path / "future-image"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "mflux", "base_model": "future-image"})
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["future-image"].estimated_size == IMAGE_UNKNOWN_FALLBACK_SIZE
+
+    def test_image_manifest_coexists_with_normal_config_models(self, tmp_path):
+        """Image and normal config.json models can be discovered together."""
+        llm_dir = tmp_path / "llama-3b"
+        llm_dir.mkdir()
+        (llm_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (llm_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        image_dir = tmp_path / "flux-with-config"
+        image_dir.mkdir()
+        (image_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (image_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "estimated_size": 2048,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert len(models) == 2
+        assert models["llama-3b"].model_type == "llm"
+        assert models["flux-with-config"].model_type == "image"
+        assert models["flux-with-config"].engine_type == "image"
 
 
 class TestFormatSize:

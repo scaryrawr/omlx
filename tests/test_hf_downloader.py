@@ -738,6 +738,14 @@ class TestHFDownloader:
 class TestHFDownloaderRoutes:
     """Test admin API endpoints for the HF downloader."""
 
+    def _make_qwen_image_layout(self, model_dir: Path) -> None:
+        """Create a small LM Studio-style Qwen image directory."""
+        for component in ("text_encoder", "tokenizer", "transformer", "vae"):
+            (model_dir / component).mkdir(parents=True, exist_ok=True)
+        (model_dir / "tokenizer" / "tokenizer.json").write_text("{}")
+        for component in ("text_encoder", "transformer", "vae"):
+            (model_dir / component / "0.safetensors").write_bytes(b"x" * 8)
+
     @pytest.fixture
     def model_dir_with_models(self, tmp_path):
         """Create a model directory with some fake models."""
@@ -766,6 +774,14 @@ class TestHFDownloaderRoutes:
         model_apple.mkdir()
         (model_apple / "config.json").write_text('{"architectures": ["TestA"]}')
         (model_apple / "model.safetensors").write_bytes(b"a" * 256)
+
+        # LM Studio Qwen image model without config.json
+        self._make_qwen_image_layout(model_dir / "Qwen-Image-Edit-2511-6bit")
+
+        # Nested LM Studio Qwen image model without config.json
+        self._make_qwen_image_layout(
+            model_dir / "mlx-community" / "Qwen-Image-2512-4bit"
+        )
 
         # Directory without config.json (should be excluded)
         (model_dir / "not-a-model").mkdir()
@@ -796,12 +812,14 @@ class TestHFDownloaderRoutes:
             result = await list_hf_models(is_admin=True)
             models = result["models"]
 
-            assert len(models) == 4
+            assert len(models) == 6
             names = [m["name"] for m in models]
             assert "model-a" in names
             assert "model-b" in names
             assert "Zebra-Model" in names
             assert "apple-model" in names
+            assert "Qwen-Image-Edit-2511-6bit" in names
+            assert "Qwen-Image-2512-4bit" in names
             assert "not-a-model" not in names
             assert ".hidden" not in names
 
@@ -853,6 +871,48 @@ class TestHFDownloaderRoutes:
             mock_pool.discover_models.assert_called_once()
             # Deleted model's settings (alias etc.) must be released (issue #1321)
             mock_settings_mgr.delete_settings.assert_called_once_with("model-a")
+        finally:
+            routes_module._get_global_settings = orig_settings
+            routes_module._get_engine_pool = orig_pool
+            routes_module._get_settings_manager = orig_mgr
+
+    @pytest.mark.asyncio
+    async def test_delete_image_model_without_config(self, model_dir_with_models):
+        """Image model directories without config.json can be deleted."""
+        from omlx.admin.routes import delete_hf_model
+
+        import omlx.admin.routes as routes_module
+
+        mock_settings = MagicMock()
+        mock_settings.model.get_model_dirs.return_value = [model_dir_with_models]
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids.return_value = []
+        mock_pool._entries = {}
+        mock_pool.discover_models = MagicMock()
+
+        mock_settings_mgr = MagicMock()
+        mock_settings_mgr.get_pinned_model_ids.return_value = []
+
+        orig_settings = routes_module._get_global_settings
+        orig_pool = routes_module._get_engine_pool
+        orig_mgr = routes_module._get_settings_manager
+
+        routes_module._get_global_settings = lambda: mock_settings
+        routes_module._get_engine_pool = lambda: mock_pool
+        routes_module._get_settings_manager = lambda: mock_settings_mgr
+
+        try:
+            image_path = model_dir_with_models / "mlx-community" / "Qwen-Image-2512-4bit"
+            assert image_path.exists()
+
+            result = await delete_hf_model(
+                model_name="Qwen-Image-2512-4bit", is_admin=True
+            )
+
+            assert result["success"] is True
+            assert not image_path.exists()
+            mock_pool.discover_models.assert_called_once()
         finally:
             routes_module._get_global_settings = orig_settings
             routes_module._get_engine_pool = orig_pool
