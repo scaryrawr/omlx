@@ -71,18 +71,20 @@ MODEL_SPECIFIC_PROFILE_FIELDS = (
 )
 
 # Excluded — never stored in a profile or template.
-EXCLUDED_FROM_PROFILES = frozenset({
-    "is_pinned",
-    "is_default",
-    "display_name",
-    "description",
-    "model_alias",
-    "model_type_override",
-    "active_profile_name",
-    "ttl_seconds",
-    # Security flag must be explicit per model — never propagated via profiles.
-    "trust_remote_code",
-})
+EXCLUDED_FROM_PROFILES = frozenset(
+    {
+        "is_pinned",
+        "is_default",
+        "display_name",
+        "description",
+        "model_alias",
+        "model_type_override",
+        "active_profile_name",
+        "ttl_seconds",
+        # Security flag must be explicit per model — never propagated via profiles.
+        "trust_remote_code",
+    }
+)
 
 
 def filter_universal_fields(data: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +170,7 @@ class GlobalTemplate:
 
 def utcnow() -> datetime:
     """Return current UTC time (single-source helper for testability)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)  # noqa: UP017
 
 
 class InvalidProfileNameError(ValueError):
