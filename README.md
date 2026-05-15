@@ -73,7 +73,7 @@ brew services start omlx
 
 # Optional: mflux-backed image generation/edit support
 # (pulls heavier transitive dependencies such as torch)
-/opt/homebrew/opt/omlx/libexec/bin/pip install mflux
+/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@03c378c57b72b0d32fd1f05531e536a87bec001e
 ```
 
 ### From Source

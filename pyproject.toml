@@ -90,7 +90,8 @@ grammar = [
 ]
 image = [
     # Image generation via mflux; may pull heavy transitive deps such as torch.
-    "mflux>=0.17.5",
+    # Pin to scaryrawr/mflux HEAD for image model transition fixes.
+    "mflux @ git+https://github.com/scaryrawr/mflux@03c378c57b72b0d32fd1f05531e536a87bec001e",
 ]
 mcp = [
     "mcp>=1.0.0",
@@ -190,8 +191,8 @@ include = ["omlx*"]
 # mlx-lm is pinned to a git commit; override transitive pins
 # (e.g. mlx-audio → mlx-lm==0.31.1) so the resolver accepts it.
 override-dependencies = [
-    # When the [image] extra enables mflux 0.17.5, its Linux cuda extra
-    # metadata cannot resolve mlx 0.31.2; keep oMLX on the newer core MLX pin.
+    # When the [image] extra enables mflux, its Linux cuda extra metadata can
+    # otherwise resolve an older mlx; keep oMLX on the newer core MLX pin.
     "mlx>=0.31.2",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ed1fca4cef15a824c5f1702c80f70b4cffc8e4dd",
 ]
