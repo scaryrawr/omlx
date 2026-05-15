@@ -134,10 +134,34 @@ IMAGE_DEFAULT_ESTIMATED_SIZES = {
     )
 }
 
+# Per-model quality defaults (mflux defaults are too low for good quality).
+# Qwen-Image and Qwen-Image-Edit ship with only 4 steps and 4.0 guidance,
+# which produces a fuzzy/pixelated look.  These values are used when the
+# model has no manifest-level defaults.
+IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
+    "qwen-image": {
+        "default_steps": 50,
+        "default_guidance": 10.0,
+    },
+    "qwen-image-edit": {
+        "default_steps": 50,
+        "default_guidance": 10.0,
+    },
+}
+
 
 def image_engine_aliases(task: ImageTask, base_model: str) -> tuple[str, ...]:
     """Return supported engine aliases for a base model/task pair."""
     return IMAGE_ENGINE_ALIASES.get((task, normalize_image_alias(base_model)), ())
+
+
+def get_image_defaults(base_model: str) -> dict[str, int | float]:
+    """Return quality-adjusted defaults for a given base model.
+
+    Falls back to empty dict when no model-specific defaults exist.
+    """
+    return IMAGE_DEFAULTS.get(base_model, {})
+
 
 
 def _matches_image_model_prefix(normalized_name: str, alias: str) -> bool:

@@ -22,7 +22,11 @@ from typing import Any, Literal
 import mlx.core as mx
 
 from ..engine_core import get_mlx_executor
-from ..image_registry import image_engine_aliases, normalize_image_alias
+from ..image_registry import (
+    get_image_defaults,
+    image_engine_aliases,
+    normalize_image_alias,
+)
 from ..utils.optional_deps import MFLUX_MISSING_MESSAGE
 from .base import BaseNonStreamingEngine
 
@@ -546,12 +550,32 @@ class ImageEngine(BaseNonStreamingEngine):
     def _resolve_steps(self, steps: int | None) -> int | None:
         if steps is not None:
             return int(steps)
-        return _coerce_int(self._image_metadata.get("default_steps"), "default_steps")
+        # Model-level manifest default.
+        manifest_steps = _coerce_int(
+            self._image_metadata.get("default_steps"), "default_steps"
+        )
+        if manifest_steps is not None:
+            return manifest_steps
+        # Per-model quality defaults (applied when manifest has none).
+        base_model = self.base_model
+        model_defaults = get_image_defaults(base_model)
+        return model_defaults.get("default_steps")
 
-    def _resolve_guidance(self, guidance: float | None) -> float | None:
+    def _resolve_guidance(
+        self, guidance: float | None
+    ) -> float | None:
         if guidance is not None:
             return float(guidance)
-        return _coerce_float(self._image_metadata.get("default_guidance"), "default_guidance")
+        # Model-level manifest default.
+        manifest_guidance = _coerce_float(
+            self._image_metadata.get("default_guidance"), "default_guidance"
+        )
+        if manifest_guidance is not None:
+            return manifest_guidance
+        # Per-model quality defaults (applied when manifest has none).
+        base_model = self.base_model
+        model_defaults = get_image_defaults(base_model)
+        return model_defaults.get("default_guidance")
 
     async def _load_model_for_task(
         self,
