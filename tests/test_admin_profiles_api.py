@@ -386,6 +386,17 @@ class TestModelsResponseActiveProfile:
         assert settings["mtp_enabled"] is False
         assert settings["vlm_mtp_enabled"] is False
 
+    def test_admin_model_type_override_accepts_image(self, client):
+        c, mgr = client
+        r = c.put("/admin/api/models/model-a/settings", json={
+            "model_type_override": "image",
+        })
+
+        assert r.status_code == 200, r.text
+        assert r.json()["model_type"] == "image"
+        assert r.json()["engine_type"] == "image"
+        assert mgr.get_settings("model-a").model_type_override == "image"
+
 
 class TestActiveProfileDriftClearing:
     def test_active_preserved_when_no_drift(self, client):

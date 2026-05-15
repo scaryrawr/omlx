@@ -420,11 +420,13 @@ class InsufficientMemoryError(EnginePoolError):
 
 
 class ModelLoadingError(EnginePoolError):
-    """Raised when a model is already being loaded."""
+    """Raised when a model cannot be loaded (already loading or load failure)."""
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, message: str | None = None):
         self.model_id = model_id
-        super().__init__(f"Model '{model_id}' is already being loaded")
+        if message is None:
+            message = f"Model '{model_id}' is already being loaded"
+        super().__init__(message)
 
 
 # =============================================================================

@@ -34,8 +34,8 @@ dependencies = [
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@2c008fd0252b2c569227d12568356ab88ab0560a",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
-    # mlx-embeddings from latest commit (32981fa)
-    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206",
+    # mlx-embeddings from latest upstream commit.
+    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@9b28270be81211f2b8daed0041aec65ea5dc4b28",
     # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
     "transformers>=5.7.0",
     # transformers 5.x's tokenization_mistral_common module imports
@@ -54,7 +54,7 @@ dependencies = [
     "pyyaml>=6.0",
     "itsdangerous>=2.0",
     "jinja2>=3.0",
-    # mlx-lm 0.31.3 imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
+    # mlx-lm imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
     "rich>=13.0.0",
     "sentencepiece",
     "tiktoken",
@@ -83,9 +83,8 @@ dependencies = [
     # plus prior Gemma4/Qwen/Qwen3-VL/Phi VLM fixes.
     "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@5a4222a15c70cb3725179d591442b1fbe1044b60",
     "Pillow>=9.0.0",
-    # dflash-mlx v0.1.9 (5d70fae) - bstnxbt repo. Apple G17 NAX verify,
-    # PR #37 prefix snapshot metrics, CopySpec mode, and Qwen text wrapper fix.
-    "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@5d70faebe3d0af0a3dae76fcc15cc731f7ba46da",
+    # dflash-mlx git pin - latest upstream speculative decoding fixes.
+    "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@7f884380954037984f0ac89244b9fe14142744df",
     "markitdown[pdf,docx,pptx]==0.1.6",
 ]
 
@@ -94,6 +93,11 @@ grammar = [
     # Grammar-constrained decoding for structured output (requires torch ~2GB)
     "xgrammar>=0.1.32",
 ]
+image = [
+    # Image generation via mflux; may pull heavy transitive deps such as torch.
+    # Pin to scaryrawr/mflux HEAD for image model transition fixes.
+    "mflux @ git+https://github.com/scaryrawr/mflux@03c378c57b72b0d32fd1f05531e536a87bec001e",
+]
 mcp = [
     "mcp>=1.0.0",
 ]
@@ -101,11 +105,11 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from commit (5175326) with tts/stt/sts extras
+    # mlx-audio from latest upstream commit with tts/stt/sts extras
     # tts extra: misaki, num2words, spacy, phonemizer-fork, espeakng-loader, sentencepiece
     # stt extra: tiktoken, mistral-common[audio]
     # sts extra: tts deps + stt deps + webrtcvad
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@51753266e0a4f766fd5e6fbc46652224efc23981",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@a7ef98604cfd752e9e5c9011bcee8ec8c67228be",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
@@ -124,7 +128,7 @@ paroquant = [
 # venvstacks 0.7.0's internal `uv pip compile` runs with --no-config and
 # doesn't propagate pyproject.toml's `tool.uv.override-dependencies`,
 # so it can't resolve mlx-audio's `mlx-lm==0.31.1` pin against our
-# git-pinned mlx-lm (v0.31.3). build.py installs mlx-audio + paroquant
+# git-pinned mlx-lm. build.py installs mlx-audio + paroquant
 # separately via --no-deps post-resolution.
 bundle = [
     "mcp>=1.0.0",
@@ -200,6 +204,9 @@ include = ["omlx*"]
 # mlx-lm is pinned to a git commit; override transitive pins
 # (e.g. mlx-audio → mlx-lm==0.31.1) so the resolver accepts it.
 override-dependencies = [
+    # When the [image] extra enables mflux, its Linux cuda extra metadata can
+    # otherwise resolve an older mlx; keep oMLX on the newer core MLX pin.
+    "mlx>=0.31.2",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@2c008fd0252b2c569227d12568356ab88ab0560a",
 ]
 
