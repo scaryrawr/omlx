@@ -1860,6 +1860,9 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "preserve_thinking_default": model_info.get("preserve_thinking_default"),
             "source_type": model_info.get("source_type", "local"),
             "source_repo_id": model_info.get("source_repo_id"),
+            "capabilities": model_info.get("capabilities", []),
+            "tasks": model_info.get("tasks", []),
+            "image_metadata": model_info.get("image_metadata"),
             "last_access": model_info.get("last_access"),
             "dflash_compatible": compat_ok,
             "dflash_compatibility_reason": compat_reason,
@@ -2078,6 +2081,7 @@ async def update_model_settings(
             "audio_stt",
             "audio_tts",
             "audio_sts",
+            "image",
         }
         # Treat empty string as None (auto-detect)
         override_value = request.model_type_override or None
@@ -2096,6 +2100,7 @@ async def update_model_settings(
             "audio_stt": "audio_stt",
             "audio_tts": "audio_tts",
             "audio_sts": "audio_sts",
+            "image": "image",
         }
         if override_value:
             entry.model_type = override_value
@@ -5128,7 +5133,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
 
-    from ..model_discovery import _resolve_hf_cache_entry
+    from ..model_discovery import _is_model_dir, _resolve_hf_cache_entry
 
     def _add_model(model_path: Path, model_name: str) -> None:
         if model_name in seen_names:
@@ -5153,14 +5158,14 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
 
-            if (subdir / "config.json").exists():
+            if _is_model_dir(subdir):
                 # Level 1: direct model folder
                 _add_model(subdir, subdir.name)
             else:
                 # HF Hub cache entry: models--Org--Name/snapshots/<hash>/
                 hf_resolved = _resolve_hf_cache_entry(subdir)
                 if hf_resolved is not None:
-                    if (hf_resolved.snapshot_path / "config.json").exists():
+                    if _is_model_dir(hf_resolved.snapshot_path):
                         _add_model(hf_resolved.snapshot_path, hf_resolved.model_id)
                     continue
 
@@ -5168,7 +5173,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                 for child in sorted(subdir.iterdir()):
                     if not child.is_dir() or child.name.startswith("."):
                         continue
-                    if (child / "config.json").exists():
+                    if _is_model_dir(child):
                         _add_model(child, child.name)
 
     # Sort case-insensitively by name for a stable, user-friendly order.
@@ -5189,6 +5194,7 @@ async def delete_hf_model(
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
+    from ..model_discovery import _is_model_dir
 
     # Search for model across all directories in both flat and org-folder layouts
     model_path = None
@@ -5197,7 +5203,7 @@ async def delete_hf_model(
         if not model_dir.exists():
             continue
         candidate = model_dir / model_name
-        if candidate.is_dir() and (candidate / "config.json").exists():
+        if candidate.is_dir() and _is_model_dir(candidate):
             model_path = candidate
             parent_model_dir = model_dir
             break
@@ -5206,7 +5212,7 @@ async def delete_hf_model(
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
             candidate = subdir / model_name
-            if candidate.is_dir() and (candidate / "config.json").exists():
+            if candidate.is_dir() and _is_model_dir(candidate):
                 model_path = candidate
                 parent_model_dir = model_dir
                 break
