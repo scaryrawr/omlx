@@ -351,6 +351,34 @@ class EnginePool:
                 return mid
         return None
 
+    def get_active_model_aliases(
+        self, settings_manager: ModelSettingsManager | None
+    ) -> dict[str, str]:
+        """Return aliases that can resolve unambiguously to discovered models."""
+        if settings_manager is None:
+            return {}
+
+        aliases_by_name: dict[str, list[str]] = {}
+        for model_id, settings in settings_manager.get_all_settings().items():
+            if model_id not in self._entries or not settings.model_alias:
+                continue
+            alias = settings.model_alias.strip()
+            if not alias:
+                continue
+            aliases_by_name.setdefault(alias, []).append(str(model_id))
+
+        active_aliases: dict[str, str] = {}
+        lower_entry_ids = {model_id.lower(): model_id for model_id in self._entries}
+        for alias, model_ids in aliases_by_name.items():
+            if len(model_ids) != 1:
+                continue
+            model_id = model_ids[0]
+            conflicting_entry = lower_entry_ids.get(alias.lower())
+            if conflicting_entry is not None and conflicting_entry != model_id:
+                continue
+            active_aliases[model_id] = alias
+        return active_aliases
+
     def resolve_model_id(
         self,
         model_id_or_alias: str,
@@ -371,12 +399,11 @@ class EnginePool:
         if ci_match is not None:
             return ci_match
 
-        all_settings = None
+        active_aliases = self.get_active_model_aliases(settings_manager)
         if settings_manager is not None:
-            all_settings = settings_manager.get_all_settings()
-            for mid, ms in all_settings.items():
-                if ms.model_alias and ms.model_alias == model_id_or_alias:
-                    return str(mid)
+            for mid, alias in active_aliases.items():
+                if alias == model_id_or_alias:
+                    return mid
 
         # Strip provider prefix (e.g. "omlx/qwen3.5-35b" -> "qwen3.5-35b")
         if "/" in model_id_or_alias:
@@ -386,10 +413,10 @@ class EnginePool:
             ci_match = self._case_insensitive_entry_match(stripped)
             if ci_match is not None:
                 return ci_match
-            if all_settings is not None:
-                for mid, ms in all_settings.items():
-                    if ms.model_alias and ms.model_alias == stripped:
-                        return str(mid)
+            if settings_manager is not None:
+                for mid, alias in active_aliases.items():
+                    if alias == stripped:
+                        return mid
 
         return model_id_or_alias
 
