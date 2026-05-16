@@ -801,8 +801,6 @@ class TestImageManifestDiscovery:
     @pytest.mark.parametrize(
         ("dirname", "base_model"),
         [
-            ("FLUX.2-klein-4B-mxfp8", "flux2-klein-4b"),
-            ("FLUX.2-klein-9B-mxfp8", "flux2-klein-9b"),
             ("Z-Image-mxfp8", "z-image"),
             ("Z-Image-Turbo-mxfp8", "z-image-turbo"),
             ("FIBO-mxfp8", "fibo"),
@@ -827,6 +825,36 @@ class TestImageManifestDiscovery:
         assert model.image_metadata is not None
         assert model.image_metadata["backend"] == "mflux"
         assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("FLUX.2-klein-4B-mxfp8", "flux2-klein-4b"),
+            ("FLUX.2-klein-9B-mxfp8", "flux2-klein-9b"),
+        ],
+    )
+    def test_infers_lmstudio_klein_image_models_support_edit(
+        self, tmp_path, dirname, base_model
+    ):
+        """Klein image folders are discovered as generation and edit capable."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
         assert model.image_metadata["model_path"] == "."
         assert model.image_metadata["inferred"] is True
 

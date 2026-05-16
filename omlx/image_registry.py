@@ -72,13 +72,13 @@ def normalize_image_alias(value: object) -> str:
 IMAGE_MODEL_SPECS: tuple[ImageModelSpec, ...] = (
     ImageModelSpec(
         base_model="flux2-klein-4b",
-        tasks=("generation",),
+        tasks=("generation", "edit"),
         estimated_size=8 * 1024**3,
         discovery_aliases=("flux2-klein-4b", "flux2-klein"),
     ),
     ImageModelSpec(
         base_model="flux2-klein-9b",
-        tasks=("generation",),
+        tasks=("generation", "edit"),
         estimated_size=18 * 1024**3,
         discovery_aliases=("flux2-klein-9b",),
     ),
