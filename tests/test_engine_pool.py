@@ -1385,6 +1385,37 @@ class TestResolveModelId:
         result = pool.resolve_model_id("gpt-4", settings_manager)
         assert result == "model-a"
 
+    def test_alias_conflicting_with_model_id_is_not_active(self, small_mock_model_dir):
+        """Test aliases that collide with model IDs are ignored."""
+        pool = EnginePool(max_model_memory=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="model-b"),
+            "model-b": ModelSettings(),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("model-b", settings_manager) == "model-b"
+        assert pool.resolve_model_id("omlx/model-b", settings_manager) == "model-b"
+
+    def test_duplicate_alias_is_not_active(self, small_mock_model_dir):
+        """Test duplicate aliases are ignored instead of resolving arbitrarily."""
+        pool = EnginePool(max_model_memory=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="gpt-4"),
+            "model-b": ModelSettings(model_alias="gpt-4"),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("gpt-4", settings_manager) == "gpt-4"
+
     def test_no_match_returns_original(self, small_mock_model_dir):
         """Test unresolved name returns original string."""
         pool = _make_pool(ceiling=10 * 1024**3)

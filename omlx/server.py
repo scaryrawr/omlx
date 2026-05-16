@@ -1051,6 +1051,15 @@ def resolve_model_id(model_id: str | None) -> str | None:
     return pool.resolve_model_id(model_id, _server_state.settings_manager)
 
 
+def _active_model_aliases() -> dict[str, str]:
+    """Return aliases that the current engine pool can resolve safely."""
+    pool = _server_state.engine_pool
+    settings_manager = _server_state.settings_manager
+    if pool is None or settings_manager is None:
+        return {}
+    return pool.get_active_model_aliases(settings_manager)
+
+
 def _get_ocr_defaults(model_id: str | None) -> dict | None:
     """Get OCR generation defaults for a model, or None if not an OCR model."""
     if model_id is None:
@@ -1727,14 +1736,10 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
 
     if _server_state.engine_pool is not None:
         status = _server_state.engine_pool.get_status()
-        settings_manager = _server_state.settings_manager
+        active_aliases = _active_model_aliases()
         for m in status["models"]:
             model_id = m["id"]
-            display_id = model_id
-            if settings_manager:
-                ms = settings_manager.get_settings(model_id)
-                if ms.model_alias:
-                    display_id = ms.model_alias
+            display_id = active_aliases.get(model_id, model_id)
             models.append(
                 ModelInfo(
                     id=display_id,
@@ -1757,6 +1762,7 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     status = _server_state.engine_pool.get_status()
+    active_aliases = _active_model_aliases()
     for m in status["models"]:
         model_id = m["id"]
         m["max_context_window"] = get_max_context_window(model_id)
@@ -1765,8 +1771,10 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
         max_tokens = _server_state.sampling.max_tokens
         if _server_state.settings_manager:
             ms = _server_state.settings_manager.get_settings(model_id)
-            if ms and ms.model_alias:
-                m["model_alias"] = ms.model_alias
+            if model_id in active_aliases:
+                m["model_alias"] = active_aliases[model_id]
+            else:
+                m.pop("model_alias", None)
             if ms and ms.max_tokens is not None:
                 max_tokens = ms.max_tokens
         m["max_tokens"] = max_tokens
