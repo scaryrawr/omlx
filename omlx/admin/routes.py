@@ -1266,6 +1266,25 @@ async def chat_page(request: Request, is_admin: bool = Depends(require_admin)):
     return templates.TemplateResponse(request, "chat.html", {"api_key": api_key or ""})
 
 
+@router.get("/imagine", response_class=HTMLResponse)
+async def imagine_page(request: Request, is_admin: bool = Depends(require_admin)):
+    """
+    Render the image generation/editing page for image models.
+
+    Requires admin authentication via session cookie. The API key is injected
+    into the template context so the page can call the OpenAI-compatible image
+    endpoints with the same localStorage flow used by the chat page.
+
+    Returns:
+        HTML Imagine page.
+    """
+    global_settings = _get_global_settings()
+    api_key = global_settings.auth.api_key if global_settings else ""
+    return templates.TemplateResponse(
+        request, "imagine.html", {"api_key": api_key or ""}
+    )
+
+
 @router.get("/static/{path:path}")
 async def admin_static(path: str):
     """Serve static files for admin panel (CSS, JS, fonts, logos, etc.)."""
@@ -3743,6 +3762,7 @@ def _get_engine_info() -> dict:
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
         "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
+        "mflux": "https://github.com/scaryrawr/mflux",
     }
 
     fallback_commits = _load_fallback_commits(packages)
