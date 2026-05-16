@@ -2077,7 +2077,8 @@
             },
 
             // VLM Detection State
-            modelTypeMap: {},            // { modelId: "llm"|"vlm"|"embedding"|"reranker" }
+            modelTypeMap: {},            // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
+            modelEngineTypeMap: {},      // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
             aliasToGateway: {},          // { aliasName: gatewayId } maps alias to directory name
 
             // Session Prompt
@@ -3366,10 +3367,23 @@
             if (!resp.ok) return;
             const data = await resp.json();
             const map = {};
+            const engineMap = {};
             for (const m of (data.models || [])) {
-                map[m.id] = m.model_type || 'llm';
+                if (m.id) {
+                    map[m.id] = m.model_type || 'llm';
+                    engineMap[m.id] = m.engine_type || '';
+                }
+            }
+            for (const m of (data.models || [])) {
+                if (m.model_alias && map[m.model_alias] === undefined) {
+                    map[m.model_alias] = m.model_type || 'llm';
+                    engineMap[m.model_alias] = m.engine_type || '';
+                } else if (m.model_alias) {
+                    console.warn(`Ignoring model alias '${m.model_alias}' because it conflicts with another model id`);
+                }
             }
             this.modelTypeMap = map;
+            this.modelEngineTypeMap = engineMap;
             this._mirrorAliasModelTypes();
         } catch (e) {
             // Model status endpoint unavailable
@@ -3381,6 +3395,10 @@
             const t = this.modelTypeMap[gatewayId];
             if (t && !this.modelTypeMap[alias]) {
                 this.modelTypeMap[alias] = t;
+            }
+            const e = this.modelEngineTypeMap[gatewayId];
+            if (e && !this.modelEngineTypeMap[alias]) {
+                this.modelEngineTypeMap[alias] = e;
             }
         }
     },
@@ -3758,19 +3776,22 @@
             const modelsData = await modelsResponse.json();
             const allModels = modelsData.data || [];
 
+            // Filter out audio/embedding/reranker/image — chat only works with LLM/VLM
             // Build available models with gateway id (directory name) as the value
             // Store alias for display (in case we want to show it later)
             this.availableModels = this.dedupeAvailableModels(
                 allModels.filter(m => {
                     const gatewayId = this.aliasToGateway[m.id] || m.id;
-                    const t = (this.modelTypeMap[gatewayId] || '').toLowerCase();
-                    return !t.startsWith('audio_') && t !== 'embedding' && t !== 'reranker';
+                    const t = (this.modelTypeMap[gatewayId] || this.modelTypeMap[m.id] || '').toLowerCase();
+                    const e = (this.modelEngineTypeMap[gatewayId] || this.modelEngineTypeMap[m.id] || '').toLowerCase();
+                    return !t.startsWith('audio_') && t !== 'embedding' && t !== 'reranker' && t !== 'image' && e !== 'image';
                 }).map(m => ({
                     id: this.aliasToGateway[m.id] || m.id, // gateway id for API calls
                     name: m.id, // original name (alias or directory name) for display
                     owned_by: m.owned_by
                 }))
             );
+
 
             // Get default model from health endpoint
             let defaultModel = null;
@@ -4097,9 +4118,34 @@
         if (session) session.systemPrompt = '';
     },
 
+    isAvailableModel(modelId) {
+        return this.isModelAvailableOnServer(modelId);
+    },
+
+    fallbackModel(defaultModel = null) {
+        const gatewayDefault = this.resolveGatewayModelId(defaultModel);
+        if (this.isAvailableModel(gatewayDefault)) {
+            return gatewayDefault;
+        }
+        return this.availableModels[0]?.id || null;
+    },
+
+    ensureValidCurrentModel(defaultModel = null) {
+        if (!this.isAvailableModel(this.currentModel)) {
+            this.currentModel = this.fallbackModel(defaultModel);
+        } else {
+            this.currentModel = this.resolveGatewayModelId(this.currentModel);
+        }
+    },
+
     async selectModel(modelId) {
-        const session = this.getChatSession(this.currentChatId, true);
         const gatewayId = this.resolveGatewayModelId(modelId);
+        if (!this.isAvailableModel(gatewayId)) {
+            this.ensureValidCurrentModel();
+            return;
+        }
+
+        const session = this.getChatSession(this.currentChatId, true);
         try {
             if (session?.model && session.model !== gatewayId) {
                 this.syncSessionModelSettingsFromUi(session);
