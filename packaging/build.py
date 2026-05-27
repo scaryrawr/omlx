@@ -411,6 +411,7 @@ def _write_engine_commits(omlx_pkg_dir: Path):
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
         "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mflux": "https://github.com/scaryrawr/mflux",
     }
 
     commits = {}
