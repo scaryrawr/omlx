@@ -1387,7 +1387,7 @@ class TestResolveModelId:
 
     def test_alias_conflicting_with_model_id_is_not_active(self, small_mock_model_dir):
         """Test aliases that collide with model IDs are ignored."""
-        pool = EnginePool(max_model_memory=10 * 1024**3)
+        pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
 
         settings_manager = MagicMock()
@@ -1403,7 +1403,7 @@ class TestResolveModelId:
 
     def test_duplicate_alias_is_not_active(self, small_mock_model_dir):
         """Test duplicate aliases are ignored instead of resolving arbitrarily."""
-        pool = EnginePool(max_model_memory=10 * 1024**3)
+        pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
 
         settings_manager = MagicMock()
