@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 IMAGINE_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "imagine.html"
+CHAT_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "chat.html"
 NAVBAR_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "dashboard" / "_navbar.html"
 ROUTES = ROOT / "omlx" / "admin" / "routes.py"
 I18N_DIR = ROOT / "omlx" / "admin" / "i18n"
@@ -166,12 +167,15 @@ def test_imagine_status_metadata_maps_active_aliases_without_collisions():
 def test_imagine_route_and_nav_are_registered():
     routes_source = ROUTES.read_text()
     nav_source = NAVBAR_TEMPLATE.read_text()
+    chat_source = CHAT_TEMPLATE.read_text()
 
     assert '@router.get("/imagine", response_class=HTMLResponse)' in routes_source
     assert '"imagine.html"' in routes_source
     assert "api_key" in routes_source
     assert 'href="/admin/imagine"' in nav_source
     assert "navbar.tab.imagine" in nav_source
+    assert 'href="/admin/imagine"' in chat_source
+    assert "navbar.tab.imagine" in chat_source
 
 
 def test_imagine_template_wires_image_endpoints_and_safe_fields():
