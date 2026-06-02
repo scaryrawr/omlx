@@ -490,6 +490,7 @@ class TestImageEngineLoading:
         fake_module = types.ModuleType("omlx.engine.image")
         fake_module.ImageEngine = FakeImageEngine
         monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
+        monkeypatch.setattr("omlx.engine_pool.is_mflux_available", lambda: True)
         monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
         monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
 
