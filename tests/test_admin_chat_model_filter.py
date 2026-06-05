@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from omlx.model_settings import ModelSettings
+from omlx.settings import GlobalSettings
 
 CHAT_TEMPLATE = (
     Path(__file__).parent.parent / "omlx" / "admin" / "templates" / "chat.html"
@@ -166,6 +167,8 @@ async def test_models_endpoints_omit_inactive_colliding_aliases():
         ]
     }
     state.engine_pool.get_active_model_aliases.return_value = {}
+    state.global_settings = GlobalSettings()
+    state.global_settings.integrations.markitdown_expose_model = False
     state.settings_manager = MagicMock()
     state.settings_manager.get_settings.side_effect = lambda model_id: ModelSettings(
         model_alias="chat-model" if model_id == "raw-image-model" else None
