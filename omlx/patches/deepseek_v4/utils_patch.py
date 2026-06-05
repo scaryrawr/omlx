@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: SIM105
 """Patch ``mlx_lm.utils.load_model`` for DeepSeek V4 support.
 
 Two surgical changes from PR 1192 are applied:
