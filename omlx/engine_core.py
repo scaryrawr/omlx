@@ -95,7 +95,9 @@ def _init_mlx_thread() -> None:
 
     import mlx.core as mx
 
-    stream = mx.new_thread_local_stream(mx.default_device())
+    stream = mx.new_stream(mx.default_device())
+    if hasattr(mx, "set_default_stream"):
+        mx.set_default_stream(stream)
 
     gen_mod = sys.modules.get("mlx_lm.generate")
     if gen_mod is not None:
@@ -106,6 +108,32 @@ def _init_mlx_thread() -> None:
         sched_mod.generation_stream = stream
 
     logger.info(f"MLX executor thread initialized: generation_stream = {stream}")
+
+
+def _create_mlx_thread_stream() -> Any:
+    """Create the per-engine stream on the MLX executor thread that owns it."""
+    stream = mx.new_stream(mx.default_device())
+    if hasattr(mx, "set_default_stream"):
+        mx.set_default_stream(stream)
+    logger.info("MLX engine thread initialized: stream = %s", stream)
+    return stream
+
+
+def _get_mlx_thread_default_stream() -> Any:
+    """Return the current thread's default MLX stream."""
+    return mx.default_stream(mx.default_device())
+
+
+def _model_requires_loader_executor(model: Any) -> bool:
+    """Return True for runtimes that bind lazy work to the loader thread."""
+    candidates = [model, getattr(model, "model", None), getattr(model, "_model", None)]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        module_name = type(candidate).__module__
+        if module_name.startswith("jang_tools.dsv4"):
+            return True
+    return False
 
 
 def get_mlx_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -212,14 +240,31 @@ class EngineCore:
         )
         self._owns_model = True
 
-        # Per-engine executor with dedicated mx.Stream (#1248).
-        # Each EngineCore gets its own thread + GPU stream so different
-        # models can run scheduler.step() concurrently.
-        self._mlx_stream = mx.new_thread_local_stream(mx.default_device())
-        self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
-        )
+        self._owns_mlx_executor = True
+        if _model_requires_loader_executor(model):
+            # JANG DSV4 attaches some runtime work to the loader executor's
+            # stream. Running inference on a separate per-engine thread leaves
+            # those arrays bound to a stream that does not exist in the
+            # inference thread ("There is no Stream(gpu, N) in current thread").
+            self._mlx_executor = get_mlx_executor()
+            self._mlx_stream = self._mlx_executor.submit(
+                _get_mlx_thread_default_stream
+            ).result()
+            self._owns_mlx_executor = False
+        else:
+            # Per-engine executor with dedicated mx.Stream (#1248).
+            # Each EngineCore gets its own thread + GPU stream so different
+            # models can run scheduler.step() concurrently. MLX streams must be
+            # created on the same thread that later uses them; creating this on
+            # the server/main thread and using it from the executor raises
+            # "There is no Stream(gpu, N) in current thread".
+            self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
+            )
+            self._mlx_stream = self._mlx_executor.submit(
+                _create_mlx_thread_stream
+            ).result()
 
         # Create scheduler with per-engine stream
         scheduler_config = self.config.scheduler_config or SchedulerConfig()
@@ -851,39 +896,43 @@ class EngineCore:
         Returns:
             List of RequestOutput in same order as prompts
         """
-        import uuid as uuid_module
-
-        from .request import Request
-
         if sampling_params is None:
             sampling_params = SamplingParams()
 
-        # Add all requests to scheduler
-        request_ids = []
-        for prompt in prompts:
-            request_id = str(uuid_module.uuid4())
-            request = Request(
-                request_id=request_id,
-                prompt=prompt,
-                sampling_params=sampling_params,
-            )
-            self.scheduler.add_request(request)
-            request_ids.append(request_id)
+        def _run_batch_sync() -> List[RequestOutput]:
+            import uuid as uuid_module
 
-        # Process until all done - direct scheduler access, no async overhead
-        results: Dict[str, RequestOutput] = {}
-        while self.scheduler.has_requests():
-            output = self.scheduler.step()
-            for req_output in output.outputs:
-                if req_output.finished:
-                    results[req_output.request_id] = req_output
+            from .request import Request
 
-        # Cleanup
-        for rid in request_ids:
-            self.scheduler.remove_finished_request(rid)
+            # Add all requests to scheduler
+            request_ids = []
+            for prompt in prompts:
+                request_id = str(uuid_module.uuid4())
+                request = Request(
+                    request_id=request_id,
+                    prompt=prompt,
+                    sampling_params=sampling_params,
+                )
+                self.scheduler.add_request(request)
+                request_ids.append(request_id)
 
-        # Return in original order
-        return [results[rid] for rid in request_ids]
+            # Process until all done - direct scheduler access on the engine's
+            # MLX worker thread, where self._mlx_stream is valid.
+            results: Dict[str, RequestOutput] = {}
+            while self.scheduler.has_requests():
+                output = self.scheduler.step()
+                for req_output in output.outputs:
+                    if req_output.finished:
+                        results[req_output.request_id] = req_output
+
+            # Cleanup
+            for rid in request_ids:
+                self.scheduler.remove_finished_request(rid)
+
+            # Return in original order
+            return [results[rid] for rid in request_ids]
+
+        return self._mlx_executor.submit(_run_batch_sync).result()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get engine statistics."""
@@ -984,7 +1033,7 @@ class EngineCore:
                 )
             self.scheduler.paged_ssd_cache_manager = None
 
-        if self._mlx_executor is not None:
+        if self._mlx_executor is not None and self._owns_mlx_executor:
             # MLX's @mx.compile cache is a C++ thread_local CompilerCache. If
             # this worker thread exits with a non-empty cache, ~CompilerCache
             # frees the cached graphs' Python objects from a thread-exit handler
@@ -1014,6 +1063,8 @@ class EngineCore:
                 # alive for the process lifetime via the module-global registry.
                 _immortal_mlx_executors.append(self._mlx_executor)
                 _immortal_mlx_streams.append(self._mlx_stream)
+            self._mlx_executor = None
+        elif self._mlx_executor is not None:
             self._mlx_executor = None
 
         # Clear output collectors

@@ -56,6 +56,12 @@ EngineType = Literal[
 ]
 
 IMAGE_MANIFEST_NAME = "omlx-image-model.json"
+JANG_CONFIG_FILENAMES = (
+    "jang_config.json",
+    "jjqf_config.json",
+    "jang_cfg.json",
+    "mxq_config.json",
+)
 
 # Known VLM (Vision-Language Model) types from mlx-vlm
 VLM_MODEL_TYPES = {
@@ -724,6 +730,27 @@ def _has_vision_subconfig(config: dict) -> bool:
     )
 
 
+def _jang_sidecar_has_vision(model_path: Path) -> bool:
+    """Return True when a JANG sidecar declares a vision-capable artifact."""
+    has_sidecar = False
+    for name in JANG_CONFIG_FILENAMES:
+        path = model_path / name
+        if not path.exists():
+            continue
+        has_sidecar = True
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        architecture = data.get("architecture")
+        if isinstance(architecture, dict) and architecture.get("has_vision") is True:
+            return True
+    return has_sidecar and (model_path / "preprocessor_config.json").exists()
+
+
 def _architecture_indicates_causal_lm(architectures: list[str]) -> bool:
     """True when ``architectures`` describe a text causal LM (not mlx-audio STS).
 
@@ -879,6 +906,9 @@ def detect_model_type(model_path: Path) -> ModelType:
             "vision_config / vit_config / mm_vision_tower found — "
             "treating as LLM (text-only quant)"
         )
+
+    if _jang_sidecar_has_vision(model_path):
+        return "vlm"
 
     # Check for VLM: presence of a vision sub-config (fallback heuristic).
     # Catch-all for VLMs that aren't yet listed in VLM_MODEL_TYPES.
