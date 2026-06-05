@@ -1530,6 +1530,37 @@ def validate_context_window(
         )
 
 
+def _select_default_chat_model(
+    pool: EnginePool,
+    settings_default: str | None,
+) -> tuple[str | None, str | None]:
+    """Select a default model suitable for chat/completions endpoints."""
+    available_models = pool.get_model_ids()
+    if not available_models:
+        return None, None
+
+    if settings_default:
+        entry = pool.get_entry(settings_default)
+        if entry is not None and entry.model_type in {"llm", "vlm"}:
+            return settings_default, None
+        if entry is None:
+            reason = f"Default model '{settings_default}' not found"
+        else:
+            reason = (
+                f"Default model '{settings_default}' is a {entry.model_type} model, "
+                "not a chat-capable model"
+            )
+    else:
+        reason = None
+
+    for model_id in available_models:
+        entry = pool.get_entry(model_id)
+        if entry is not None and entry.model_type in {"llm", "vlm"}:
+            return model_id, reason
+
+    return None, reason
+
+
 def init_server(
     model_dirs: str | list[str],
     scheduler_config=None,
@@ -1660,21 +1691,18 @@ def init_server(
             f"No models found in {', '.join(dir_list)}. Add models to serve them."
         )
 
-    # Set default model (from settings file, fallback to first model)
-    available_models = _server_state.engine_pool.get_model_ids()
-    if available_models:
-        if settings_default:
-            if settings_default in available_models:
-                _server_state.default_model = settings_default
-            else:
-                logger.warning(
-                    f"Default model '{settings_default}' not found, using first model"
-                )
-                _server_state.default_model = available_models[0]
+    # Set default model for chat/completions. Discovery can include image,
+    # embedding, and audio models; never make those the implicit chat default.
+    default_model, default_warning = _select_default_chat_model(
+        _server_state.engine_pool,
+        settings_default,
+    )
+    if default_warning is not None:
+        if default_model is not None:
+            logger.warning(f"{default_warning}, using '{default_model}'")
         else:
-            _server_state.default_model = available_models[0]
-    else:
-        _server_state.default_model = None
+            logger.warning(f"{default_warning}, and no chat-capable models were found")
+    _server_state.default_model = default_model
 
     # Reset server metrics for fresh start (with all-time persistence)
     stats_path = base_path / "stats.json"
