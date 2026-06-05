@@ -84,6 +84,9 @@ dependencies = [
     # dflash-mlx git pin - latest upstream speculative decoding fixes.
     "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@7f884380954037984f0ac89244b9fe14142744df",
     "markitdown[pdf,docx,pptx]==0.1.6",
+    # JANG mixed-precision quantized model runtime. Package installs as `jang`
+    # and imports as `jang_tools`.
+    "jang[vlm]>=2.5.29",
 ]
 
 [project.optional-dependencies]

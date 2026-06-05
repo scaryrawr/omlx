@@ -1,4 +1,6 @@
 # Copyright © 2026 Apple Inc.
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: N803, N806, UP006, UP007, UP035, UP045
 
 import math
 from dataclasses import dataclass, field

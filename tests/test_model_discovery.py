@@ -234,6 +234,52 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "vlm"
 
+    def test_detect_jang_vlm_by_sidecar(self, tmp_path):
+        """JANG VLMs can declare vision support in the JANG sidecar."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "architecture": {"has_vision": True}})
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_text_sidecar_without_vision_is_llm(self, tmp_path):
+        """A JANG sidecar alone should not make a text model a VLM."""
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jangtq_sidecar_without_vision_is_llm(self, tmp_path):
+        """JANGTQ artifacts do not change discovery to VLM without a vision signal."""
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "quantization": {"profile": "JANGTQ_2L"}})
+        )
+        (tmp_path / "jangtq_runtime.safetensors").write_text("")
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_vlm_by_preprocessor_config(self, tmp_path):
+        """JANG VLMs can use preprocessor_config.json as the vision signal."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (tmp_path / "preprocessor_config.json").write_text(json.dumps({}))
+        assert detect_model_type(tmp_path) == "vlm"
+
     def test_detect_vlm_gemma3(self, tmp_path):
         """Test detection of Gemma3 as VLM."""
         config = {
