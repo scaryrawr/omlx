@@ -34,8 +34,8 @@ dependencies = [
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@2c008fd0252b2c569227d12568356ab88ab0560a",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
-    # mlx-embeddings from latest upstream commit.
-    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@9b28270be81211f2b8daed0041aec65ea5dc4b28",
+    # mlx-embeddings from latest scaryrawr commit (426e784)
+    "mlx-embeddings @ git+https://github.com/scaryrawr/mlx-embeddings@426e784ef3bf976d8a7e67c0ad87a22cfeb58436",
     # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
     "transformers>=5.7.0",
     # transformers 5.x's tokenization_mistral_common module imports
