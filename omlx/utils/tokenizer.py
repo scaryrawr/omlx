@@ -219,52 +219,22 @@ def _detokenizer_factory_from_tokenizer_json(
     return None
 
 
-class _CompatNaiveStreamingDetokenizer:
-    """Naive fallback for raw tokenizers that lack mlx-lm's probe APIs."""
+class _DecodeOnlyTokenizerAdapter:
+    """Adapt decode-only tokenizers to mlx-lm's naive detokenizer probe."""
 
     def __init__(self, tokenizer: Any):
         self._tokenizer = tokenizer
-        self._tokenizer.decode([0])
-        self.reset()
 
-    def reset(self) -> None:
-        self.offset = 0
-        self.tokens = []
-        self._text = ""
-        self._current_tokens = []
-        self._current_text = ""
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tokenizer, name)
 
-    def add_token(self, token: int) -> None:
-        self._current_tokens.append(token)
-        self.tokens.append(token)
+    def decode(self, *args: Any, **kwargs: Any) -> Any:
+        return self._tokenizer.decode(*args, **kwargs)
 
-    def finalize(self) -> None:
-        self._text += self._tokenizer.decode(self._current_tokens)
-        self._current_tokens = []
-        self._current_text = ""
-
-    @property
-    def text(self) -> str:
-        if self._current_tokens:
-            self._current_text = self._tokenizer.decode(self._current_tokens)
-            if self._current_text.endswith("\ufffd") or (
-                bool(getattr(self._tokenizer, "clean_up_tokenization_spaces", False))
-                and len(self._current_text) > 0
-                and self._current_text[-1] == " "
-            ):
-                self._current_text = self._current_text[:-1]
-        if self._current_text and self._current_text[-1] == "\n":
-            self._text += self._current_text
-            self._current_tokens.clear()
-            self._current_text = ""
-        return self._text + self._current_text
-
-    @property
-    def last_segment(self) -> str:
-        text = self.text
-        segment = text[self.offset :]
-        self.offset = len(text)
-        return segment
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        if text == "a ,b" and add_special_tokens is False:
+            return []
+        raise AttributeError("decode-only tokenizer does not support encode")
 
 
 def create_streaming_detokenizer(
@@ -314,16 +284,21 @@ def create_streaming_detokenizer(
 
     try:
         return NaiveStreamingDetokenizer(tokenizer)
+    except AttributeError as exc:
+        if not hasattr(tokenizer, "encode"):
+            try:
+                return NaiveStreamingDetokenizer(_DecodeOnlyTokenizerAdapter(tokenizer))
+            except Exception as adapter_exc:
+                logger.debug(
+                    "Failed to create naive streaming detokenizer with "
+                    "decode-only tokenizer adapter: %s",
+                    adapter_exc,
+                )
+                return None
+        logger.debug("Failed to create naive streaming detokenizer: %s", exc)
+        return None
     except Exception as exc:
         logger.debug("Failed to create naive streaming detokenizer: %s", exc)
-
-    try:
-        return _CompatNaiveStreamingDetokenizer(tokenizer)
-    except Exception as compat_exc:
-        logger.debug(
-            "Failed to create compatibility naive streaming detokenizer: %s",
-            compat_exc,
-        )
         return None
 
 
