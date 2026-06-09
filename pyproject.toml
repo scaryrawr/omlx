@@ -74,10 +74,8 @@ dependencies = [
   "jsonschema>=4.0.0",
   # Harmony format parser for gpt-oss models
   "openai-harmony",
-  # mlx-vlm from commit (c9a6743, main) — includes Gemma4 shared-KV/load fixes,
-  # Qwen quantized KV cache prompt-state fixes, Qwen3-VL visual mask/deepstack
-  # chunked-prefill fixes, Phi 3.5 VL EOS fixes, and speculative prefill fixes.
-  "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@c9a6743e5f059be36362d8e4a78171bbf91f18bc",
+  # mlx-vlm from latest main commit (0617dd8)
+  "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@0617dd85416f3856a260b6c8ebbbc5677209a47f",
   "Pillow>=9.0.0",
   # dflash-mlx from latest upstream main commit (7f88438)
   "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@7f884380954037984f0ac89244b9fe14142744df",
