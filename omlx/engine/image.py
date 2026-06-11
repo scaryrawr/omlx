@@ -33,7 +33,7 @@ from .base import BaseNonStreamingEngine
 logger = logging.getLogger(__name__)
 
 ImageTask = Literal["generation", "edit"]
-EditInputStyle = Literal["image_paths", "image_path_mask"]
+EditInputStyle = Literal["image_paths", "image_path", "image_path_mask"]
 
 
 def _cleanup_mlx_cache() -> None:
@@ -164,6 +164,30 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
     )
     add(fibo, *image_engine_aliases("generation", "fibo"))
 
+    ernie_image_turbo = _MfluxModelSpec(
+        task="generation",
+        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
+        class_name="ErnieImage",
+        config_name="ernie-image-turbo",
+    )
+    add(ernie_image_turbo, *image_engine_aliases("generation", "ernie-image-turbo"))
+
+    ernie_image = _MfluxModelSpec(
+        task="generation",
+        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
+        class_name="ErnieImage",
+        config_name="ernie-image",
+    )
+    add(ernie_image, *image_engine_aliases("generation", "ernie-image"))
+
+    ideogram4 = _MfluxModelSpec(
+        task="generation",
+        module="mflux.models.ideogram4.variants.txt2img.ideogram4",
+        class_name="Ideogram4",
+        config_name="ideogram-4-fp8",
+    )
+    add(ideogram4, *image_engine_aliases("generation", "ideogram-4-fp8"))
+
     flux2_4b_edit = _MfluxModelSpec(
         task="edit",
         module="mflux.models.flux2.variants.edit.flux2_klein_edit",
@@ -199,6 +223,24 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
         edit_input_style="image_path_mask",
     )
     add(fibo_edit, *image_engine_aliases("edit", "fibo-edit"))
+
+    ernie_image_turbo_edit = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
+        class_name="ErnieImage",
+        config_name="ernie-image-turbo",
+        edit_input_style="image_path",
+    )
+    add(ernie_image_turbo_edit, *image_engine_aliases("edit", "ernie-image-turbo"))
+
+    ernie_image_edit = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
+        class_name="ErnieImage",
+        config_name="ernie-image",
+        edit_input_style="image_path",
+    )
+    add(ernie_image_edit, *image_engine_aliases("edit", "ernie-image"))
 
     return specs
 
@@ -424,6 +466,12 @@ class ImageEngine(BaseNonStreamingEngine):
                     gen_kwargs["image_path"] = image_paths[0]
                     if mask_path is not None:
                         gen_kwargs["mask_path"] = mask_path
+                elif spec.edit_input_style == "image_path":
+                    if len(image_paths) != 1:
+                        raise ValueError(f"{self.base_model} edit supports exactly one input image")
+                    if mask_path is not None:
+                        raise ValueError(f"{self.base_model} edit does not support mask_path")
+                    gen_kwargs["image_path"] = image_paths[0]
                 else:
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
@@ -559,7 +607,7 @@ class ImageEngine(BaseNonStreamingEngine):
         # Per-model quality defaults (applied when manifest has none).
         base_model = self.base_model
         model_defaults = get_image_defaults(base_model)
-        return model_defaults.get("default_steps")
+        return _coerce_int(model_defaults.get("default_steps"), "default_steps")
 
     def _resolve_guidance(
         self, guidance: float | None
@@ -659,12 +707,12 @@ class ImageEngine(BaseNonStreamingEngine):
         return ImageEngineResult(image=image, metadata=metadata)
 
     async def _finish_activity(self, activity_id: str) -> None:
-        if self._end_activity(activity_id):
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                get_mlx_executor(),
-                _clear_mlx_cache,
-            )
+        self._end_activity(activity_id)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            get_mlx_executor(),
+            _clear_mlx_cache,
+        )
 
     def _build_result_metadata(
         self,

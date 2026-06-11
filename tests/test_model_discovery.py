@@ -950,6 +950,7 @@ class TestImageManifestDiscovery:
             ("Z-Image-mxfp8", "z-image"),
             ("Z-Image-Turbo-mxfp8", "z-image-turbo"),
             ("FIBO-mxfp8", "fibo"),
+            ("Ideogram-4-FP8-mxfp8", "ideogram-4-fp8"),
         ],
     )
     def test_infers_lmstudio_mflux_image_models_without_manifest(
@@ -985,6 +986,36 @@ class TestImageManifestDiscovery:
         self, tmp_path, dirname, base_model
     ):
         """Klein image folders are discovered as generation and edit capable."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("ERNIE-Image-Turbo-mxfp8", "ernie-image-turbo"),
+            ("ERNIE-Image-mxfp8", "ernie-image"),
+        ],
+    )
+    def test_infers_lmstudio_ernie_image_models_support_edit(
+        self, tmp_path, dirname, base_model
+    ):
+        """ERNIE image folders are discovered as generation and image-to-image capable."""
         model_dir = tmp_path / dirname
         expected_size = self._make_lmstudio_image_layout(model_dir)
 

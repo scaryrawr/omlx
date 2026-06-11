@@ -23,6 +23,8 @@ Key areas:
 
 Use `uv run` for Python tooling and tests. If dependencies are missing, start with `uv sync --dev`. When `uv` selects CPython 3.14, pin validation commands to Python 3.13 (for example, `UV_PYTHON=python3.13 uv run --python python3.13 pytest ...`) because pinned wheels such as `onnxruntime==1.20.1` do not currently support CPython 3.14.
 
+`uv.lock` is intentionally ignored in this repository; dependency pin changes should be tracked in `pyproject.toml` unless a task explicitly changes the lockfile policy.
+
 - Default fast test run: `uv run pytest`
 - Explicit fast test selection: `uv run pytest -m "not slow and not integration"`
 - Narrow test run: `uv run pytest tests/test_config.py -v`
