@@ -170,10 +170,20 @@ IMAGE_DEFAULT_ESTIMATED_SIZES = {
 }
 
 # Per-model quality defaults (mflux defaults are too low for good quality).
-# Qwen-Image and Qwen-Image-Edit ship with only 4 steps and 4.0 guidance,
-# which produces a fuzzy/pixelated look.  These values are used when the
-# model has no manifest-level defaults.
+# These values are used when the model has no manifest-level defaults.
 IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
+    "flux2-klein-4b": {
+        "default_steps": 8,
+    },
+    "flux2-klein-9b": {
+        "default_steps": 8,
+    },
+    "z-image-turbo": {
+        "default_steps": 8,
+    },
+    "z-image": {
+        "default_steps": 50,
+    },
     "qwen-image": {
         "default_steps": 50,
         "default_guidance": 10.0,

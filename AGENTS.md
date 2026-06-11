@@ -35,6 +35,8 @@ Use `uv run` for Python tooling and tests. If dependencies are missing, start wi
 
 `pytest.ini` defaults to verbose tests excluding `slow` and `integration`. Mark tests that require real model files with `@pytest.mark.slow`, and tests that require a live server with `@pytest.mark.integration`.
 
+For manual server smoke tests, remember `omlx serve` persists non-default CLI flags to `~/.omlx/settings.json`. Snapshot or avoid changing user-tuned settings before temporary runs with flags such as `--model-dir`, `--memory-guard`, or `--max-concurrent-requests`; restart any stopped Homebrew service afterward.
+
 ## Code conventions
 
 - Keep the Apache 2.0 SPDX header at the top of Python source and test files.
@@ -42,6 +44,7 @@ Use `uv run` for Python tooling and tests. If dependencies are missing, start wi
 - Keep protocol-specific conversion in `omlx/api/` or `omlx/api/adapters/`; avoid mixing API wire-format logic into scheduler/cache internals.
 - Preserve async boundaries: FastAPI handlers and engine orchestration are async, while MLX generation is isolated through scheduler/engine abstractions.
 - Keep optional dependency behavior explicit. Extras such as `mcp`, `audio`, `grammar`, `image`, `modelscope`, and `paroquant` are intentionally separated; use availability helpers such as `omlx/utils/optional_deps.py` rather than importing heavy optional packages in core paths.
+- For image generation defaults, keep request-level `steps`/`guidance` overrides ahead of manifest `default_*` values, and manifest values ahead of `omlx/image_registry.py` family defaults; cover changes with focused `tests/test_image_engine.py` cases.
 - For model-family patches under `omlx/patches/`, keep changes narrow and covered by focused regression tests. These files mirror upstream behavior and can be brittle across dependency updates.
 - When changing cache, scheduler, streaming, adapters, or tool-call behavior, add focused tests for token accounting, finish reasons, cancellation/disconnect behavior, cache reuse/regression paths, and protocol output shape.
 
