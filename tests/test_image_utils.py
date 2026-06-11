@@ -79,18 +79,49 @@ class TestLoadImage:
         loaded = load_image(uri)
         assert isinstance(loaded, Image.Image)
 
-    @patch("urllib.request.urlopen")
-    def test_load_from_url(self, mock_urlopen):
+    @patch("urllib.request.build_opener")
+    def test_load_from_url(self, mock_build_opener):
         """Load image from HTTP URL."""
         img = _make_test_image(4, 4)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
-        mock_urlopen.return_value.__enter__ = MagicMock(return_value=buf)
-        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_opener = MagicMock()
+        mock_build_opener.return_value = mock_opener
+        mock_opener.open.return_value.__enter__ = MagicMock(return_value=buf)
+        mock_opener.open.return_value.__exit__ = MagicMock(return_value=False)
 
         loaded = load_image("https://example.com/image.png")
         assert isinstance(loaded, Image.Image)
+        mock_opener.open.assert_called_once_with(
+            "https://example.com/image.png",
+            timeout=30,
+        )
+
+    @patch("urllib.request.urlopen")
+    @patch("urllib.request.build_opener")
+    def test_load_from_url_uses_no_redirect_opener(
+        self,
+        mock_build_opener,
+        mock_urlopen,
+    ):
+        """Image URL downloads must not follow redirects after URL validation."""
+        img = _make_test_image(4, 4)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        mock_opener = MagicMock()
+        mock_build_opener.return_value = mock_opener
+        mock_opener.open.return_value.__enter__ = MagicMock(return_value=buf)
+        mock_opener.open.return_value.__exit__ = MagicMock(return_value=False)
+
+        loaded = load_image("https://example.com/image.png")
+
+        assert isinstance(loaded, Image.Image)
+        mock_build_opener.assert_called_once()
+        redirect_handler = mock_build_opener.call_args.args[0]()
+        assert redirect_handler.redirect_request(None, None, 302, "Found", {}, "") is None
+        mock_urlopen.assert_not_called()
 
     def test_load_invalid_format_raises(self):
         """Invalid input raises ValueError."""
@@ -466,6 +497,41 @@ class TestExtractImagesFromMessages:
 
         with pytest.raises(ValueError, match="non-public"):
             extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected_after_strip(self):
+        """String-form video URLs are stripped before URL safety checks."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": " http://127.0.0.1/clip.mp4 ",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_empty_string_ignored(self):
+        """Empty string-form video parts are ignored instead of forwarded."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "   ",
+                    }
+                ],
+            }
+        ]
+
+        _, _, _, videos = extract_media_from_messages(messages)
+
+        assert videos == []
 
 
 # =============================================================================

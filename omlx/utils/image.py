@@ -64,8 +64,13 @@ def load_image(url_or_base64: str) -> Image.Image:
 
         from .url_security import validate_public_http_url
 
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
         validate_public_http_url(url_or_base64, field_name="image URL")
-        with urllib.request.urlopen(url_or_base64, timeout=30) as response:
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(url_or_base64, timeout=30) as response:
             img_bytes = response.read()
         img = Image.open(io.BytesIO(img_bytes))
     else:
@@ -215,9 +220,9 @@ def extract_media_from_messages(
                     )
                 )
                 if isinstance(input_video, str):
-                    videos.append(
-                        _validate_media_source_url(input_video, "video URL")
-                    )
+                    source = input_video.strip()
+                    if source:
+                        videos.append(_validate_media_source_url(source, "video URL"))
                 elif input_video and isinstance(input_video, dict):
                     source = (
                         input_video.get("url")
