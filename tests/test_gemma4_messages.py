@@ -59,6 +59,41 @@ class TestExtractGemma4Messages:
             {"role": "system", "content": "Tail instruction"},
         ]
 
+    def test_input_video_preserved_for_vlm_processing(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": "Describe this clip"},
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "/tmp/clip.mp4",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            )
+        ]
+
+        result = extract_gemma4_messages(messages)
+
+        assert result == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this clip"},
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "/tmp/clip.mp4",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            }
+        ]
+
     def test_tool_result_folded_onto_model_turn(self):
         """Single tool result is attached to the same assistant message as tool_calls."""
         messages = [

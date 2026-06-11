@@ -47,9 +47,11 @@ from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError
 from ..models.vlm import VLMModelAdapter
 from ..utils.image import (
+    cleanup_temporary_media,
+    compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
-    extract_images_from_messages,
+    extract_media_from_messages,
 )
 from .base import BaseEngine, GenerationOutput, _warn_scheduler_unreachable_once
 
@@ -1325,8 +1327,10 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         num_images: int,
         num_audios: int = 0,
+        num_videos: int = 0,
+        videos: list[Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[tuple[int, int]]]:
-        """Format VLM messages with image/audio tokens on media-bearing user turns."""
+        """Format VLM messages with image/audio/video tokens on media-bearing user turns."""
         from mlx_vlm.prompt_utils import extract_text_from_content, get_message_json
 
         model_type = self.model_type or getattr(
@@ -1337,6 +1341,7 @@ class VLMBatchedEngine(BaseEngine):
 
         image_part_types = {"image", "image_url", "input_image"}
         audio_part_types = {"input_audio"}
+        video_part_types = {"input_video", "video"}
         has_explicit_images = any(
             isinstance(msg, dict)
             and self._count_content_parts(msg.get("content"), image_part_types) > 0
@@ -1348,11 +1353,18 @@ class VLMBatchedEngine(BaseEngine):
             and self._count_content_parts(msg.get("content"), audio_part_types) > 0
             for msg in messages
         )
+        has_explicit_video = any(
+            isinstance(msg, dict)
+            and self._count_content_parts(msg.get("content"), video_part_types) > 0
+            for msg in messages
+        )
 
         remaining_images = num_images
         remaining_audios = num_audios
+        remaining_videos = list(videos or [])
         assigned_fallback_images = False
         assigned_fallback_audios = False
+        assigned_fallback_videos = False
         formatted_messages: list[dict[str, Any]] = []
         image_message_ranges: list[tuple[int, int]] = []
 
@@ -1366,12 +1378,17 @@ class VLMBatchedEngine(BaseEngine):
 
             msg_num_images = 0
             msg_num_audios = 0
+            msg_num_videos = 0
+            msg_videos: list[Any] = []
             if role == "user":
                 explicit_images = self._count_content_parts(
                     raw_content, image_part_types
                 )
                 explicit_audios = self._count_content_parts(
                     raw_content, audio_part_types
+                )
+                explicit_videos = self._count_content_parts(
+                    raw_content, video_part_types
                 )
                 if explicit_images > 0 and remaining_images > 0:
                     msg_num_images = min(explicit_images, remaining_images)
@@ -1396,6 +1413,20 @@ class VLMBatchedEngine(BaseEngine):
                     msg_num_audios = remaining_audios
                     remaining_audios = 0
                     assigned_fallback_audios = True
+
+                if explicit_videos > 0 and remaining_videos:
+                    msg_num_videos = min(explicit_videos, len(remaining_videos))
+                    msg_videos = remaining_videos[:msg_num_videos]
+                    remaining_videos = remaining_videos[msg_num_videos:]
+                elif (
+                    not has_explicit_video
+                    and remaining_videos
+                    and not assigned_fallback_videos
+                ):
+                    msg_num_videos = len(remaining_videos)
+                    msg_videos = remaining_videos
+                    remaining_videos = []
+                    assigned_fallback_videos = True
 
             if msg_num_images > 0:
                 image_message_ranges.append((idx, msg_num_images))
@@ -1424,6 +1455,7 @@ class VLMBatchedEngine(BaseEngine):
                     skip_audio_token=role != "user" or msg_num_audios == 0,
                     num_images=msg_num_images,
                     num_audios=msg_num_audios,
+                    **({"video": msg_videos} if msg_num_videos > 0 else {}),
                 )
                 # Collapse text-only list content to plain string so that
                 # simplified chat templates (without render_content macro)
@@ -1722,6 +1754,7 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         images: list[Any],
         audio: list | None = None,
+        videos: list[Any] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         tools: list[dict] | None = None,
     ) -> Tuple[
@@ -1743,6 +1776,7 @@ class VLMBatchedEngine(BaseEngine):
             messages: Chat messages (text-only, media already extracted)
             images: List of PIL Image objects
             audio: List of audio data (BytesIO, file paths, or numpy arrays)
+            videos: List of video paths, arrays, or temporary paths
 
         Returns:
             Tuple of (
@@ -1767,6 +1801,7 @@ class VLMBatchedEngine(BaseEngine):
 
         num_images = len(images)
         num_audios = len(audio) if audio else 0
+        num_videos = len(videos) if videos else 0
 
         model_type = self.model_type or ""
         if model_type == COHERE2_MOE_MODEL_TYPE and (num_images > 0 or num_audios > 0):
@@ -1803,7 +1838,11 @@ class VLMBatchedEngine(BaseEngine):
         try:
             formatted_messages, image_message_ranges = (
                 self._format_messages_for_vlm_template(
-                    messages, num_images=num_images, num_audios=num_audios
+                    messages,
+                    num_images=num_images,
+                    num_audios=num_audios,
+                    num_videos=num_videos,
+                    videos=videos,
                 )
             )
         except Exception as e:
@@ -1818,6 +1857,7 @@ class VLMBatchedEngine(BaseEngine):
                 messages,
                 num_images=num_images,
                 num_audios=num_audios,
+                video=videos if videos else None,
                 return_messages=True,
             )
             image_message_ranges = []
@@ -1883,13 +1923,17 @@ class VLMBatchedEngine(BaseEngine):
             else:
                 raise
 
-        # Tokenize text and preprocess images and audio
-        inputs = prepare_inputs(
-            self._processor,
-            images=images if images else None,
-            audio=audio if audio else None,
-            prompts=[prompt] if isinstance(prompt, str) else prompt,
-        )
+        # Tokenize text and preprocess images, audio, and video.
+        try:
+            inputs = prepare_inputs(
+                self._processor,
+                images=images if images else None,
+                audio=audio if audio else None,
+                videos=videos if videos else None,
+                prompts=[prompt] if isinstance(prompt, str) else prompt,
+            )
+        finally:
+            cleanup_temporary_media(videos or [])
 
         input_ids = inputs["input_ids"]
         pixel_values = inputs.get("pixel_values")
@@ -1970,9 +2014,11 @@ class VLMBatchedEngine(BaseEngine):
             and v is not None
         }
 
-        # Check for any multimodal inputs: images or audio
+        # Check for any multimodal inputs: images, audio, or video
         has_audio = "input_features" in extra_model_inputs
-        has_multimodal = (pixel_values is not None and num_images > 0) or has_audio
+        has_multimodal = (
+            pixel_values is not None and (num_images > 0 or num_videos > 0)
+        ) or has_audio
 
         if has_multimodal:
             # Build call kwargs from extra_model_inputs (includes input_features
@@ -2551,23 +2597,23 @@ class VLMBatchedEngine(BaseEngine):
         # tokens AND we then add the per-image budget on top — a double
         # count that rejects borderline image-bearing prompts the real
         # chat path would have handled. The real ``chat`` flow itself
-        # strips images first via ``extract_images_from_messages`` (see
+        # strips media first via ``extract_media_from_messages`` (see
         # ``_process_chat_messages``), so mirroring that here keeps
         # preflight and execution on the same template input.
-        text_messages, _, _ = extract_images_from_messages(messages)
-        prompt = self._apply_chat_template(
-            text_messages,
-            template_tools,
-            chat_template_kwargs=ct_kwargs,
-            is_partial=partial,
-        )
-        # Tokenizer errors propagate as 500 today regardless of where they
-        # fire; the real chat path's add_request → tokenize call has no
-        # path-specific 400 handler. Don't introduce a NEW failure mode
-        # in preflight: skip the memory check on tokenizer error and let
-        # the real chat path surface the same error through the existing
-        # handler chain.
         try:
+            text_messages, _, _, videos = extract_media_from_messages(messages)
+            prompt = self._apply_chat_template(
+                text_messages,
+                template_tools,
+                chat_template_kwargs=ct_kwargs,
+                is_partial=partial,
+            )
+            # Tokenizer errors propagate as 500 today regardless of where they
+            # fire; the real chat path's add_request → tokenize call has no
+            # path-specific 400 handler. Don't introduce a NEW failure mode
+            # in preflight: skip the memory check on tokenizer error and let
+            # the real chat path surface the same error through the existing
+            # handler chain.
             num_tokens = len(self._tokenizer.encode(prompt))
         except Exception as e:
             logger.warning(
@@ -2577,6 +2623,8 @@ class VLMBatchedEngine(BaseEngine):
                 type(e).__name__,
             )
             return
+        finally:
+            cleanup_temporary_media(locals().get("videos", []))
         # Count images from the ORIGINAL messages (the stripped
         # ``text_messages`` no longer has the image content-parts).
         num_tokens += _count_image_tokens(
@@ -2802,33 +2850,51 @@ class VLMBatchedEngine(BaseEngine):
         Returns:
             Tuple of (prompt_or_token_ids, vlm_embeds, vlm_kwargs, image_hash)
         """
-        # Extract images from messages
-        text_messages, images, audio = extract_images_from_messages(messages)
+        # Extract media from messages
+        text_messages, images, audio, videos = extract_media_from_messages(messages)
+        try:
+            audio_video_hash = compute_audio_video_hash(audio, videos)
 
-        ct_kwargs = kwargs.pop("chat_template_kwargs", None)
+            ct_kwargs = kwargs.pop("chat_template_kwargs", None)
 
-        # Keep VLM-capable models on one prompt-rendering path, even before the
-        # first image arrives. Otherwise the conversation switches prompt families
-        # on the first image-bearing turn and invalidates early prefix blocks.
-        vlm_messages = self._apply_ocr_prompt(messages) if images else text_messages
-        template_tools = convert_tools_for_template(tools) if tools else None
-        (
-            token_ids,
-            vlm_embeds,
-            vlm_kwargs,
-            image_hash,
-            image_cache_key_start,
-            image_cache_key_ranges,
-        ) = self._prepare_vision_inputs(
-            vlm_messages,
-            images,
-            audio=audio if audio else None,
-            chat_template_kwargs=ct_kwargs,
-            tools=template_tools,
-        )
+            # Keep VLM-capable models on one prompt-rendering path, even before the
+            # first image arrives. Otherwise the conversation switches prompt families
+            # on the first image-bearing turn and invalidates early prefix blocks.
+            if images:
+                vlm_messages = self._apply_ocr_prompt(messages)
+            elif audio or videos:
+                vlm_messages = messages
+            else:
+                vlm_messages = text_messages
+            template_tools = convert_tools_for_template(tools) if tools else None
+            (
+                token_ids,
+                vlm_embeds,
+                vlm_kwargs,
+                image_hash,
+                image_cache_key_start,
+                image_cache_key_ranges,
+            ) = self._prepare_vision_inputs(
+                vlm_messages,
+                images,
+                audio=audio if audio else None,
+                videos=videos if videos else None,
+                chat_template_kwargs=ct_kwargs,
+                tools=template_tools,
+            )
+        finally:
+            cleanup_temporary_media(videos)
+        if audio_video_hash is not None:
+            image_hash = (
+                f"av:{audio_video_hash}:img:{image_hash}"
+                if image_hash
+                else f"av:{audio_video_hash}"
+            )
+            image_cache_key_start = 0
+            image_cache_key_ranges = []
 
-        if images:
-            # Free Metal intermediates from vision encoding.
+        if images or videos:
+            # Free Metal intermediates from multimodal encoding.
             mx.synchronize()
             mx.clear_cache()
 
@@ -3259,18 +3325,20 @@ class VLMBatchedEngine(BaseEngine):
         Image tokens are added during vision encoding and vary by model.
         """
         # Extract text-only version for token counting
-        from ..utils.image import extract_images_from_messages
+        from ..utils.image import extract_media_from_messages
 
-        text_messages, _, _ = extract_images_from_messages(messages)
-
-        template_tools = convert_tools_for_template(tools) if tools else None
-        prompt = self._apply_chat_template(
-            text_messages,
-            template_tools,
-            chat_template_kwargs=chat_template_kwargs,
-            is_partial=is_partial,
-        )
-        return len(self._tokenizer.encode(prompt))
+        text_messages, _, _, videos = extract_media_from_messages(messages)
+        try:
+            template_tools = convert_tools_for_template(tools) if tools else None
+            prompt = self._apply_chat_template(
+                text_messages,
+                template_tools,
+                chat_template_kwargs=chat_template_kwargs,
+                is_partial=is_partial,
+            )
+            return len(self._tokenizer.encode(prompt))
+        finally:
+            cleanup_temporary_media(videos)
 
     def has_active_requests(self) -> bool:
         """Check if the engine has active in-flight requests."""
