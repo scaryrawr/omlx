@@ -9,12 +9,13 @@ import pytest
 from PIL import Image
 
 from omlx.utils.image import (
+    cleanup_temporary_media,
     compute_image_hash,
     compute_per_image_hashes,
     extract_images_from_messages,
+    extract_media_from_messages,
     load_image,
 )
-
 
 # =============================================================================
 # Helper: create small test images
@@ -78,18 +79,49 @@ class TestLoadImage:
         loaded = load_image(uri)
         assert isinstance(loaded, Image.Image)
 
-    @patch("urllib.request.urlopen")
-    def test_load_from_url(self, mock_urlopen):
+    @patch("urllib.request.build_opener")
+    def test_load_from_url(self, mock_build_opener):
         """Load image from HTTP URL."""
         img = _make_test_image(4, 4)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
-        mock_urlopen.return_value.__enter__ = MagicMock(return_value=buf)
-        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_opener = MagicMock()
+        mock_build_opener.return_value = mock_opener
+        mock_opener.open.return_value.__enter__ = MagicMock(return_value=buf)
+        mock_opener.open.return_value.__exit__ = MagicMock(return_value=False)
 
         loaded = load_image("https://example.com/image.png")
         assert isinstance(loaded, Image.Image)
+        mock_opener.open.assert_called_once_with(
+            "https://example.com/image.png",
+            timeout=30,
+        )
+
+    @patch("urllib.request.urlopen")
+    @patch("urllib.request.build_opener")
+    def test_load_from_url_uses_no_redirect_opener(
+        self,
+        mock_build_opener,
+        mock_urlopen,
+    ):
+        """Image URL downloads must not follow redirects after URL validation."""
+        img = _make_test_image(4, 4)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        mock_opener = MagicMock()
+        mock_build_opener.return_value = mock_opener
+        mock_opener.open.return_value.__enter__ = MagicMock(return_value=buf)
+        mock_opener.open.return_value.__exit__ = MagicMock(return_value=False)
+
+        loaded = load_image("https://example.com/image.png")
+
+        assert isinstance(loaded, Image.Image)
+        mock_build_opener.assert_called_once()
+        redirect_handler = mock_build_opener.call_args.args[0]()
+        assert redirect_handler.redirect_request(None, None, 302, "Found", {}, "") is None
+        mock_urlopen.assert_not_called()
 
     def test_load_invalid_format_raises(self):
         """Invalid input raises ValueError."""
@@ -375,6 +407,131 @@ class TestExtractImagesFromMessages:
         assert len(audio) == 1
         # Text content should be preserved
         assert "Describe this image and audio" in text_msgs[0]["content"]
+
+    def test_input_video_data_uri_extracts_temp_path(self):
+        """Video data URIs are decoded to temporary paths for mlx-vlm load_video."""
+        video_b64 = base64.b64encode(b"fake mp4 bytes").decode("ascii")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "data": f"data:video/mp4;base64,{video_b64}",
+                            "format": "mp4",
+                            "filename": "clip.mp4",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this clip"},
+                ],
+            }
+        ]
+
+        text_msgs, images, audio, videos = extract_media_from_messages(messages)
+        try:
+            assert len(images) == 0
+            assert len(audio) == 0
+            assert len(videos) == 1
+            assert str(videos[0]).endswith(".mp4")
+            with open(videos[0], "rb") as f:
+                assert f.read() == b"fake mp4 bytes"
+            assert text_msgs[0]["content"] == "Describe this clip"
+        finally:
+            cleanup_temporary_media(videos)
+
+    def test_input_video_url_extracts_url(self):
+        """Video URLs are passed through for mlx-vlm load_video."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "https://example.com/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        _, _, _, videos = extract_media_from_messages(messages)
+
+        assert videos == ["https://example.com/clip.mp4"]
+
+    def test_input_video_private_url_rejected(self):
+        """Private HTTP URLs are rejected before server-side media loading."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "http://127.0.0.1/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected(self):
+        """String-form video URLs go through the same URL safety checks."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "http://127.0.0.1/clip.mp4",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected_after_strip(self):
+        """String-form video URLs are stripped before URL safety checks."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": " http://127.0.0.1/clip.mp4 ",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_empty_string_ignored(self):
+        """Empty string-form video parts are ignored instead of forwarded."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "   ",
+                    }
+                ],
+            }
+        ]
+
+        _, _, _, videos = extract_media_from_messages(messages)
+
+        assert videos == []
 
 
 # =============================================================================

@@ -24,6 +24,8 @@ from omlx.api.openai_models import (
     CompletionResponse,
     ContentPart,
     FunctionCall,
+    InputAudio,
+    InputVideo,
     Message,
     ModelInfo,
     ModelsResponse,
@@ -72,6 +74,41 @@ class TestContentPart:
         assert part.type == "file"
         assert part.file.filename == "sample.pdf"
         assert part.file.file_data.endswith("ZA==")
+
+    def test_input_video_content_part(self):
+        """Video content parts are accepted as an oMLX extension."""
+        part = ContentPart(
+            type="input_video",
+            input_video={
+                "data": "data:video/mp4;base64,ZA==",
+                "format": "mp4",
+                "filename": "clip.mp4",
+            },
+        )
+
+        assert part.type == "input_video"
+        assert part.input_video.filename == "clip.mp4"
+        assert part.input_video.format == "mp4"
+
+    def test_input_audio_requires_data_or_url(self):
+        """input_audio must carry a usable media source."""
+        with pytest.raises(ValidationError, match="data or url"):
+            InputAudio()
+        with pytest.raises(ValidationError, match="data or url"):
+            InputAudio(data=" ")
+
+        assert InputAudio(data="abc").data == "abc"
+        assert InputAudio(url="https://example.com/audio.wav").url is not None
+
+    def test_input_video_requires_data_or_url(self):
+        """input_video must carry a usable media source."""
+        with pytest.raises(ValidationError, match="data or url"):
+            InputVideo()
+        with pytest.raises(ValidationError, match="data or url"):
+            InputVideo(url="")
+
+        assert InputVideo(data="abc").data == "abc"
+        assert InputVideo(url="/tmp/clip.mp4").url == "/tmp/clip.mp4"
 
 
 class TestMessage:

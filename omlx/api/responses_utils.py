@@ -9,6 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from .media_inputs import responses_input_file_to_file_part
 from .responses_models import (
     InputItem,
     InputTokensDetails,
@@ -105,6 +106,24 @@ def _consolidate_system_messages(
     return [{"role": "system", "content": "\n\n".join(system_parts)}] + non_system
 
 
+def _normalize_previous_messages(
+    previous_messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Drop default-only fields that should not replay as chat message content."""
+    normalized = copy.deepcopy(previous_messages)
+    for msg in normalized:
+        if msg.get("partial") is False:
+            msg.pop("partial", None)
+    return normalized
+
+
+def normalize_chat_messages_for_response_store(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize chat messages before persisting Responses conversation state."""
+    return _normalize_previous_messages(messages)
+
+
 # =============================================================================
 # Input Conversion
 # =============================================================================
@@ -143,7 +162,7 @@ def convert_responses_input_to_messages(
 
     # Prepend previous response context
     if previous_messages:
-        messages.extend(copy.deepcopy(previous_messages))
+        messages.extend(_normalize_previous_messages(previous_messages))
     current_message_start = len(messages)
 
     if input_data is None:
@@ -217,11 +236,35 @@ def convert_responses_input_to_messages(
                                     "detail": detail,
                                 }
                             )
+                        elif part.get("type") == "input_audio":
+                            converted_parts.append(
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": part.get("input_audio", {}),
+                                }
+                            )
+                        elif part.get("type") == "input_file":
+                            converted_parts.append(
+                                responses_input_file_to_file_part(part)
+                            )
+                        elif part.get("type") in ("input_video", "video"):
+                            converted_parts.append(
+                                {
+                                    "type": "input_video",
+                                    "input_video": part.get("input_video")
+                                    or part.get("video", {}),
+                                }
+                            )
                     elif isinstance(part, str):
                         text_parts.append(part)
                         converted_parts.append({"type": "text", "text": part})
-                if has_image:
-                    # Keep as content list so VLM can extract images
+                has_structured_part = any(
+                    isinstance(p, dict)
+                    and p.get("type") not in {"text", "input_text", "output_text"}
+                    for p in converted_parts
+                )
+                if has_image or has_structured_part:
+                    # Keep as content list so media/file preprocessing can run.
                     content = converted_parts
                 else:
                     content = "\n".join(text_parts) if text_parts else ""

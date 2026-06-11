@@ -294,6 +294,7 @@ def preprocess_markitdown_file_parts(
     global_settings: Any | None = None,
     fail_when_disabled: bool = True,
     allow_missing_historical_files: bool = False,
+    allow_file_url: bool = False,
 ) -> list[Message]:
     """Replace file content parts with Markdown text parts."""
     if not request_has_file_parts(messages):
@@ -349,7 +350,11 @@ def preprocess_markitdown_file_parts(
                     status_code=400,
                 )
 
-            parsed = parse_file_part(part_dict, max_file_size_mb=max_file_size_mb)
+            parsed = parse_file_part(
+                part_dict,
+                max_file_size_mb=max_file_size_mb,
+                allow_file_url=allow_file_url,
+            )
             markdown = convert_attachment_to_markdown(
                 parsed,
                 global_settings=global_settings,
@@ -378,6 +383,7 @@ async def preprocess_markitdown_file_parts_async(
     get_sampling_params: Any | None = None,
     fail_when_disabled: bool = True,
     allow_missing_historical_files: bool = False,
+    allow_file_url: bool = False,
 ) -> list[Message]:
     """Replace file content parts with Markdown text parts asynchronously."""
     if not request_has_file_parts(messages):
@@ -433,7 +439,11 @@ async def preprocess_markitdown_file_parts_async(
                     status_code=400,
                 )
 
-            parsed = parse_file_part(part_dict, max_file_size_mb=max_file_size_mb)
+            parsed = parse_file_part(
+                part_dict,
+                max_file_size_mb=max_file_size_mb,
+                allow_file_url=allow_file_url,
+            )
             markdown = await convert_attachment_to_markdown_async(
                 parsed,
                 global_settings=global_settings,
@@ -456,25 +466,49 @@ async def preprocess_markitdown_file_parts_async(
     return processed
 
 
-def parse_file_part(part: dict[str, Any], *, max_file_size_mb: int) -> MarkItDownFile:
+def parse_file_part(
+    part: dict[str, Any],
+    *,
+    max_file_size_mb: int,
+    allow_file_url: bool = False,
+) -> MarkItDownFile:
     file_obj = part.get("file")
     if not isinstance(file_obj, dict):
         raise MarkItDownRequestError("File content part must include a file object.")
 
     data_value = file_obj.get("file_data") or file_obj.get("data")
+    file_url = file_obj.get("file_url")
+    required_source_message = (
+        "File content part requires file.file_data or file.file_url."
+        if allow_file_url
+        else "File content part requires file.file_data."
+    )
+    if not data_value and file_url and not allow_file_url:
+        raise MarkItDownRequestError(
+            "File URLs are not supported for Chat Completions file parts. "
+            "Use the Responses API or send base64 content in file.file_data.",
+            status_code=400,
+        )
     if not data_value and file_obj.get("file_id"):
         raise MarkItDownRequestError(
             "File content part file_id is not supported. "
             "Send base64 content in file.file_data instead.",
             status_code=400,
         )
-    if not isinstance(data_value, str) or not data_value.strip():
+    if not data_value and not file_url:
         raise MarkItDownRequestError(
-            "File content part requires file.file_data.",
+            required_source_message,
+            status_code=400,
+        )
+    if data_value is not None and (
+        not isinstance(data_value, str) or not data_value.strip()
+    ):
+        raise MarkItDownRequestError(
+            required_source_message,
             status_code=400,
         )
 
-    data_uri_mime_type = _mime_type_from_data_uri(data_value)
+    data_uri_mime_type = _mime_type_from_data_uri(data_value or "")
     mime_type = (
         str(file_obj.get("mime_type") or data_uri_mime_type or "").strip().lower()
     )
@@ -492,8 +526,12 @@ def parse_file_part(part: dict[str, Any], *, max_file_size_mb: int) -> MarkItDow
     extension = Path(filename).suffix.lower()
     _validate_supported_file(filename, mime_type)
 
-    data = _decode_data(data_value)
     max_bytes = max_file_size_mb * 1024 * 1024
+    data = (
+        _download_file_url(file_url, max_bytes=max_bytes)
+        if file_url and not data_value
+        else _decode_data(data_value)
+    )
     if len(data) > max_bytes:
         raise MarkItDownRequestError(
             f"Attached file exceeds the {max_file_size_mb}MB limit: {filename}",
@@ -504,6 +542,68 @@ def parse_file_part(part: dict[str, Any], *, max_file_size_mb: int) -> MarkItDow
         mime_type = _mime_type_for_extension(extension)
 
     return MarkItDownFile(filename=filename, mime_type=mime_type, data=data)
+
+
+def _download_file_url(file_url: Any, *, max_bytes: int) -> bytes:
+    if not isinstance(file_url, str) or not file_url.strip():
+        raise MarkItDownRequestError("File content part file_url must be a URL.")
+    url = file_url.strip()
+    import urllib.error
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    try:
+        from ..utils.url_security import validate_public_http_url
+
+        validate_public_http_url(url, field_name="file_url")
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(url, timeout=30) as response:
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > max_bytes:
+                        raise MarkItDownRequestError(
+                            "Downloaded file_url exceeds the configured file size limit.",
+                            status_code=400,
+                        )
+                except ValueError:
+                    pass
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise MarkItDownRequestError(
+                        "Downloaded file_url exceeds the configured file size limit.",
+                        status_code=400,
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except ValueError as exc:
+        raise MarkItDownRequestError(str(exc), status_code=400) from exc
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise MarkItDownRequestError(
+                "file_url redirects are not supported.",
+                status_code=400,
+            ) from exc
+        raise MarkItDownRequestError(
+            f"Failed to download file_url '{url}': HTTP {exc.code}",
+            status_code=400,
+        ) from exc
+    except MarkItDownRequestError:
+        raise
+    except Exception as exc:
+        raise MarkItDownRequestError(
+            f"Failed to download file_url '{url}': {exc}",
+            status_code=400,
+        ) from exc
 
 
 def _latest_user_index(messages: list[Message]) -> int:

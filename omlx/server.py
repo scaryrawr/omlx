@@ -153,6 +153,7 @@ from .api.responses_utils import (
     convert_responses_input_to_messages,
     convert_responses_tools,
     format_sse_event,
+    normalize_chat_messages_for_response_store,
     normalize_response_output_to_messages,
 )
 from .api.thinking import ThinkingParser, extract_thinking
@@ -188,6 +189,12 @@ from .exceptions import (
     PrefillMemoryExceededError,
     SchedulerQueueFullError,
 )
+from .api.media_inputs import (
+    has_audio_video_parts,
+    normalize_media_file_parts_in_messages,
+)
+from .api.openai_models import Message
+from .model_discovery import format_size
 from .server_metrics import get_server_metrics, reset_server_metrics
 
 logging.basicConfig(level=logging.INFO)
@@ -2207,24 +2214,72 @@ def _with_markitdown_status(status: dict) -> dict:
 async def _preprocess_markitdown_files_for_llm(
     request: ChatCompletionRequest,
 ) -> ChatCompletionRequest:
-    if not request_has_file_parts(request.messages):
-        return request
+    try:
+        messages = normalize_media_file_parts_in_messages(
+            request.messages,
+            allow_file_url=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not request_has_file_parts(messages):
+        if messages is request.messages:
+            return request
+        return request.model_copy(update={"messages": messages})
 
     try:
         messages = await preprocess_markitdown_file_parts_async(
-            request.messages,
+            messages,
             global_settings=_server_state.global_settings,
             engine_pool=_server_state.engine_pool,
             settings_manager=_server_state.settings_manager,
             get_sampling_params=get_sampling_params,
             fail_when_disabled=True,
             allow_missing_historical_files=True,
+            allow_file_url=False,
         )
     except MarkItDownRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return request.model_copy(update={"messages": messages})
+
+
+async def _preprocess_response_files_for_llm(
+    messages: list[dict],
+) -> list[dict]:
+    pydantic_messages = [Message.model_validate(msg) for msg in messages]
+    try:
+        pydantic_messages = normalize_media_file_parts_in_messages(
+            pydantic_messages,
+            allow_file_url=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not request_has_file_parts(pydantic_messages):
+        return normalize_chat_messages_for_response_store(
+            [msg.model_dump(exclude_none=True) for msg in pydantic_messages]
+        )
+
+    try:
+        processed = await preprocess_markitdown_file_parts_async(
+            pydantic_messages,
+            global_settings=_server_state.global_settings,
+            engine_pool=_server_state.engine_pool,
+            settings_manager=_server_state.settings_manager,
+            get_sampling_params=get_sampling_params,
+            fail_when_disabled=True,
+            allow_missing_historical_files=True,
+            allow_file_url=True,
+        )
+    except MarkItDownRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return normalize_chat_messages_for_response_store(
+        [msg.model_dump(exclude_none=True) for msg in processed]
+    )
 
 
 def _build_markitdown_chat_response(
@@ -2957,6 +3012,11 @@ async def create_chat_completion(
     is_dflash_vlm = not is_vlm and getattr(
         engine, "supports_multimodal_fallback", False
     )
+    if has_audio_video_parts(request.messages) and not (is_vlm or is_dflash_vlm):
+        raise HTTPException(
+            status_code=400,
+            detail="Audio/video inputs require a multimodal VLM model.",
+        )
     extractor = getattr(engine, "message_extractor", None)
     merge_system_fallback_roles = not (is_vlm or is_dflash_vlm)
     if extractor is not None:
@@ -5150,9 +5210,11 @@ async def create_response(
 
     resolved_model = resolve_model_id(request.model) or request.model
 
-    current_input_messages = convert_responses_input_to_messages(
-        request.input,
-        consolidate_system_messages=False,
+    current_input_messages = normalize_chat_messages_for_response_store(
+        convert_responses_input_to_messages(
+            request.input,
+            consolidate_system_messages=False,
+        )
     )
 
     # Build previous context from previous_response_id
@@ -5169,6 +5231,7 @@ async def create_response(
         previous_messages,
         consolidate_system_messages=False,
     )
+    messages = await _preprocess_response_files_for_llm(messages)
 
     # Convert tools: flat → nested
     openai_tools = convert_responses_tools(request.tools)
@@ -5270,6 +5333,17 @@ async def create_response(
         merge_consecutive_roles=True,
         unsupported_mid_system_policy=_unsupported_mid_system_policy(),
     )
+
+    is_vlm = isinstance(engine, VLMBatchedEngine) or getattr(
+        engine,
+        "supports_multimodal_fallback",
+        False,
+    )
+    if has_audio_video_parts(messages) and not is_vlm:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio/video inputs require a multimodal VLM model.",
+        )
 
     # Validate context window
     try:
