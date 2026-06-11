@@ -13,7 +13,7 @@ These models define the request and response schemas for:
 import json
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 from omlx.api.shared_models import (
     BaseUsage,
@@ -41,6 +41,12 @@ class InputAudio(BaseModel):
     url: Optional[str] = None  # Internal oMLX extension for file_url passthrough
     format: str = "wav"  # Audio format: wav, mp3, etc.
 
+    @model_validator(mode="after")
+    def validate_source(self) -> "InputAudio":
+        if not _has_non_empty_string(self.data) and not _has_non_empty_string(self.url):
+            raise ValueError("input_audio must include non-empty data or url")
+        return self
+
 
 class InputVideo(BaseModel):
     """Video input data for multimodal models (oMLX extension)."""
@@ -50,6 +56,16 @@ class InputVideo(BaseModel):
     filename: Optional[str] = None
     mime_type: Optional[str] = None
     format: str = "mp4"
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "InputVideo":
+        if not _has_non_empty_string(self.data) and not _has_non_empty_string(self.url):
+            raise ValueError("input_video must include non-empty data or url")
+        return self
+
+
+def _has_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 class FileContent(BaseModel):

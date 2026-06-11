@@ -238,7 +238,9 @@ def extract_media_from_messages(
                                     )
                                 )
                             except (binascii.Error, ValueError) as exc:
-                                logger.warning(f"Failed to decode input_video base64: {exc}")
+                                logger.warning(
+                                    "Failed to decode input_video base64: %s", exc
+                                )
 
         new_msg = {"role": role, "content": "\n".join(text_parts) if text_parts else ""}
         # Preserve extra fields
@@ -334,6 +336,8 @@ def _video_data_to_temp_path(
     with os.fdopen(fd, "wb") as f:
         f.write(decoded)
     return TemporaryMediaPath(path)
+
+
 def compute_image_hash(images: List[Image.Image]) -> Optional[str]:
     """
     Compute a SHA256 hash from a list of images for prefix cache deduplication.

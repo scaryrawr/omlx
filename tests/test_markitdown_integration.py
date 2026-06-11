@@ -487,6 +487,24 @@ def test_preprocess_still_rejects_missing_latest_file_part():
         )
 
 
+def test_parse_file_part_missing_responses_source_mentions_file_url():
+    with pytest.raises(
+        MarkItDownRequestError,
+        match=r"file\.file_data or file\.file_url",
+    ):
+        parse_file_part(
+            {
+                "type": "file",
+                "file": {
+                    "filename": "paper.pdf",
+                    "mime_type": "application/pdf",
+                },
+            },
+            max_file_size_mb=10,
+            allow_file_url=True,
+        )
+
+
 def test_async_preprocess_allows_missing_historical_file_parts(monkeypatch):
     def fake_convert(file: MarkItDownFile, **kwargs) -> str:
         raise AssertionError("missing historical files should not be converted")

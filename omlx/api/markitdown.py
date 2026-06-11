@@ -478,6 +478,11 @@ def parse_file_part(
 
     data_value = file_obj.get("file_data") or file_obj.get("data")
     file_url = file_obj.get("file_url")
+    required_source_message = (
+        "File content part requires file.file_data or file.file_url."
+        if allow_file_url
+        else "File content part requires file.file_data."
+    )
     if not data_value and file_url and not allow_file_url:
         raise MarkItDownRequestError(
             "File URLs are not supported for Chat Completions file parts. "
@@ -492,14 +497,14 @@ def parse_file_part(
         )
     if not data_value and not file_url:
         raise MarkItDownRequestError(
-            "File content part requires file.file_data.",
+            required_source_message,
             status_code=400,
         )
     if data_value is not None and (
         not isinstance(data_value, str) or not data_value.strip()
     ):
         raise MarkItDownRequestError(
-            "File content part requires file.file_data.",
+            required_source_message,
             status_code=400,
         )
 

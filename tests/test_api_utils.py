@@ -2496,6 +2496,14 @@ class TestExtractMultimodalContent:
             {"type": "image_url"},
         ])
         assert len(parts) == 0
+
+    def test_input_video_string_form_pass_through(self):
+        """input_video string paths survive multimodal content extraction."""
+        parts = _extract_multimodal_content_list([
+            {"type": "input_video", "input_video": "/tmp/clip.mp4"},
+        ])
+        assert parts == [{"type": "input_video", "input_video": "/tmp/clip.mp4"}]
+
     def test_input_audio_pass_through(self):
         """input_audio parts survive multimodal content extraction."""
         parts = _extract_multimodal_content_list([
