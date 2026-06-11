@@ -10,18 +10,16 @@ import logging
 
 import pytest
 
-from omlx.api.utils import (
-    SPECIAL_TOKENS_PATTERN,
-    _chat_template_supports_tool_role,
-    _consolidate_system_messages,
-    _drop_void_assistant_messages,
-    _extract_multimodal_content_list,
-    _merge_consecutive_roles,
-    clean_output_text,
-    detect_and_strip_partial,
-    extract_harmony_messages,
-    extract_multimodal_content,
-    extract_text_content,
+from omlx.api.anthropic_models import (
+    AnthropicMessage,
+    AnthropicTool,
+    ContentBlockDocument,
+    ContentBlockText,
+    ContentBlockThinking,
+    ContentBlockToolResult,
+    ContentBlockToolUse,
+    MessagesRequest,
+    SystemContent,
 )
 from omlx.api.anthropic_utils import (
     convert_anthropic_to_internal,
@@ -40,17 +38,20 @@ from omlx.api.anthropic_utils import (
     map_finish_reason_to_stop_reason,
     request_has_cache_control,
 )
+from omlx.api.media_inputs import normalize_media_file_parts_in_messages
 from omlx.api.openai_models import ContentPart, FunctionCall, Message, ToolCall
-from omlx.api.anthropic_models import (
-    AnthropicMessage,
-    AnthropicTool,
-    ContentBlockDocument,
-    ContentBlockText,
-    ContentBlockThinking,
-    ContentBlockToolResult,
-    ContentBlockToolUse,
-    MessagesRequest,
-    SystemContent,
+from omlx.api.utils import (
+    SPECIAL_TOKENS_PATTERN,
+    _chat_template_supports_tool_role,
+    _consolidate_system_messages,
+    _drop_void_assistant_messages,
+    _extract_multimodal_content_list,
+    _merge_consecutive_roles,
+    clean_output_text,
+    detect_and_strip_partial,
+    extract_harmony_messages,
+    extract_multimodal_content,
+    extract_text_content,
 )
 
 
@@ -581,6 +582,126 @@ class TestExtractTextContentNativeReasoningContent:
         assert len(result) == 1
         assert result[0]["content"] == "A"
         assert "reasoning_content" not in result[0]
+
+
+class TestExtractMultimodalVideoContent:
+    def test_extract_multimodal_preserves_input_video(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": "Describe this clip"},
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "https://example.com/clip.mp4",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            )
+        ]
+
+        result = extract_multimodal_content(messages)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][1]["type"] == "input_video"
+        assert result[0]["content"][1]["input_video"]["format"] == "mp4"
+
+    def test_audio_file_part_normalizes_to_input_audio(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "sound.wav",
+                            "mime_type": "audio/wav",
+                            "file_data": "data:audio/wav;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_audio"
+        assert content[0]["input_audio"]["format"] == "wav"
+
+    def test_audio_webm_mime_overrides_ambiguous_extension(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "recording.webm",
+                            "mime_type": "audio/webm",
+                            "file_data": "data:audio/webm;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_audio"
+        assert content[0]["input_audio"]["mime_type"] == "audio/webm"
+
+    def test_video_file_part_normalizes_to_input_video(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": "data:video/mp4;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_video"
+        assert content[0]["input_video"]["filename"] == "clip.mp4"
+
+    def test_dict_file_part_normalizes_to_input_video(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": "data:video/mp4;base64,ZA==",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0]["content"]
+
+        assert content[0]["type"] == "input_video"
+        assert content[0]["input_video"]["filename"] == "clip.mp4"
 
 
 class TestConvertAnthropicToInternal:

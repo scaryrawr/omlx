@@ -484,11 +484,11 @@ class TestApplyOcrPrompt:
 class TestProcessChatMessages:
     """Tests for VLMBatchedEngine._process_chat_messages()."""
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_text_only_uses_vlm_prepare_path(self, mock_extract):
         """Text-only turns on a VLM model still use _prepare_vision_inputs()."""
         text_msgs = [{"role": "user", "content": "Hello"}]
-        mock_extract.return_value = (text_msgs, [], [])
+        mock_extract.return_value = (text_msgs, [], [], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -509,15 +509,16 @@ class TestProcessChatMessages:
             text_msgs,
             [],
             audio=None,
+            videos=None,
             chat_template_kwargs=None,
             tools=None,
         )
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_text_only_passes_tools_to_prepare_vision(self, mock_extract):
         """Text-only + tools still convert and pass tools through VLM path."""
         text_msgs = [{"role": "user", "content": "Hello"}]
-        mock_extract.return_value = (text_msgs, [], [])
+        mock_extract.return_value = (text_msgs, [], [], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -535,14 +536,14 @@ class TestProcessChatMessages:
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] == [{"converted": True}]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_calls_prepare_vision(self, mock_extract):
         """Messages with images → _prepare_vision_inputs() called."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -564,14 +565,14 @@ class TestProcessChatMessages:
         assert image_cache_key_start == 12
         assert image_cache_key_ranges == [(12, "hash123")]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_passes_tools(self, mock_extract):
         """Image + tools → tools converted and passed to _prepare_vision_inputs()."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -591,14 +592,14 @@ class TestProcessChatMessages:
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] == [{"converted": True}]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_without_tools(self, mock_extract):
         """Image + tools=None → _prepare_vision_inputs(tools=None)."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -611,6 +612,80 @@ class TestProcessChatMessages:
 
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] is None
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_video_path_adds_media_cache_key(self, mock_extract):
+        """Video requests use a media-specific prefix-cache key."""
+        text_msgs = [{"role": "user", "content": "Describe"}]
+        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(
+            return_value=([1, 2, 3], None, None, None, 0, [])
+        )
+
+        result = engine._process_chat_messages(
+            [{"role": "user", "content": "Describe"}],
+            tools=None,
+            kwargs={},
+        )
+
+        _, _, _, image_hash, image_cache_key_start, image_cache_key_ranges = result
+        assert image_hash is not None
+        assert image_hash.startswith("av:")
+        assert image_cache_key_start == 0
+        assert image_cache_key_ranges == []
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_audio_video_preserve_explicit_turn_association(self, mock_extract):
+        """Audio/video-only requests keep structured turns for media placement."""
+        text_msgs = [{"role": "user", "content": "First\nSecond"}]
+        original_messages = [
+            {"role": "user", "content": "First"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Second"},
+                    {
+                        "type": "input_video",
+                        "input_video": {"url": "/tmp/clip.mp4"},
+                    },
+                ],
+            },
+        ]
+        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(
+            return_value=([1, 2, 3], None, None, None, 0, [])
+        )
+
+        engine._process_chat_messages(original_messages, tools=None, kwargs={})
+
+        assert engine._prepare_vision_inputs.call_args.args[0] is original_messages
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_video_temp_paths_cleaned_when_prepare_raises(self, mock_extract):
+        """Decoded video temp paths are cleaned if VLM formatting/prep fails."""
+        temp_video = MagicMock()
+        mock_extract.return_value = (
+            [{"role": "user", "content": "Describe"}],
+            [],
+            [],
+            [temp_video],
+        )
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            engine._process_chat_messages(
+                [{"role": "user", "content": "Describe"}],
+                tools=None,
+                kwargs={},
+            )
+
+        temp_video.cleanup.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +877,27 @@ class TestPrepareVisionInputs:
 
         call_kwargs = mock_prepare.call_args[1]
         assert call_kwargs.get("audio") is None
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+    @patch("mlx_vlm.utils.prepare_inputs")
+    @patch("mlx_vlm.prompt_utils.apply_chat_template")
+    def test_video_passed_to_prepare_inputs(self, mock_vlm_act, mock_prepare):
+        """When video is provided, it is passed as videos= to prepare_inputs."""
+        engine = self._setup_engine_for_vision(model_type="qwen2_5_vl")
+
+        mock_vlm_act.return_value = [{"role": "user", "content": "formatted"}]
+        mock_prepare.return_value = {
+            "input_ids": mx.array([[1, 2, 3]]),
+            "pixel_values": None,
+        }
+
+        messages = [{"role": "user", "content": "Describe this clip"}]
+        videos = ["/tmp/clip.mp4"]
+
+        engine._prepare_vision_inputs(messages, [], videos=videos)
+
+        call_kwargs = mock_prepare.call_args[1]
+        assert call_kwargs.get("videos") == videos
 
 
 class TestFormatMessagesForVLMTemplate:
@@ -1083,6 +1179,33 @@ class TestFormatMessagesForVLMTemplate:
         assert "audio" in types
         # Image range should be recorded
         assert len(image_ranges) == 1
+
+    def test_format_messages_with_video_parts(self):
+        """Video-bearing messages receive video content entries."""
+        engine = _make_loaded_engine(model_type="qwen2_5_vl")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_video", "input_video": {"url": "/tmp/clip.mp4"}},
+                    {"type": "text", "text": "Describe this clip"},
+                ],
+            },
+        ]
+
+        formatted, image_ranges = engine._format_messages_for_vlm_template(
+            messages,
+            num_images=0,
+            num_audios=0,
+            num_videos=1,
+            videos=["/tmp/clip.mp4"],
+        )
+
+        content = formatted[0]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "video"
+        assert content[0]["video"] == "/tmp/clip.mp4"
+        assert image_ranges == []
 
     def test_text_only_messages_with_zero_audio(self):
         """Text-only messages with num_audios=0 should produce string content."""

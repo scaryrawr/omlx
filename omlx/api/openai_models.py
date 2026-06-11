@@ -37,8 +37,19 @@ class ImageURL(BaseModel):
 class InputAudio(BaseModel):
     """Audio input data for multimodal models (OpenAI format)."""
 
-    data: str  # Base64-encoded audio or data URI
+    data: Optional[str] = None  # Base64-encoded audio or data URI
+    url: Optional[str] = None  # Internal oMLX extension for file_url passthrough
     format: str = "wav"  # Audio format: wav, mp3, etc.
+
+
+class InputVideo(BaseModel):
+    """Video input data for multimodal models (oMLX extension)."""
+
+    data: Optional[str] = None  # Base64-encoded video or data URI
+    url: Optional[str] = None
+    filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    format: str = "mp4"
 
 
 class FileContent(BaseModel):
@@ -53,6 +64,7 @@ class FileContent(BaseModel):
     file_data: Optional[str] = None
     data: Optional[str] = None
     file_id: Optional[str] = None
+    file_url: Optional[str] = None
 
 
 class ContentPart(BaseModel):
@@ -63,13 +75,15 @@ class ContentPart(BaseModel):
     - text: Plain text content
     - image_url: Image input for vision models
     - input_audio: Audio input for multimodal audio models
+    - input_video: Video input for multimodal video models (oMLX extension)
     - file: Document or text input for attachment preprocessing
     """
 
-    type: str  # "text", "image_url", "input_audio", or "file"
+    type: str  # "text", "image_url", "input_audio", "input_video", or "file"
     text: Optional[str] = None
     image_url: Optional[ImageURL] = None
     input_audio: Optional[InputAudio] = None
+    input_video: Optional[InputVideo] = None
     file: Optional[FileContent] = None
 
 

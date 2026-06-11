@@ -114,7 +114,7 @@ def extract_gemma4_messages(
     raw: list[dict] = []
     for msg in messages:
         if hasattr(msg, "model_dump"):
-            raw.append(msg.model_dump())
+            raw.append(msg.model_dump(exclude_none=True))
         elif isinstance(msg, dict):
             raw.append(dict(msg))
         else:
@@ -255,13 +255,13 @@ def extract_gemma4_messages(
             continue
 
         # All other roles (user, system)
-        # Preserve image_url and input_audio parts for VLM processing
+        # Preserve image_url, input_audio, and input_video parts for VLM processing
         content = msg.get("content", "")
         if isinstance(content, list):
             from ..api.utils import _extract_multimodal_content_list
 
             multimodal_parts = _extract_multimodal_content_list(content)
-            multimodal_types = {"image_url", "input_audio"}
+            multimodal_types = {"image_url", "input_audio", "input_video"}
             has_multimodal = any(
                 p.get("type") in multimodal_types for p in multimodal_parts
             )

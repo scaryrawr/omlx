@@ -9,12 +9,13 @@ import pytest
 from PIL import Image
 
 from omlx.utils.image import (
+    cleanup_temporary_media,
     compute_image_hash,
     compute_per_image_hashes,
     extract_images_from_messages,
+    extract_media_from_messages,
     load_image,
 )
-
 
 # =============================================================================
 # Helper: create small test images
@@ -375,6 +376,96 @@ class TestExtractImagesFromMessages:
         assert len(audio) == 1
         # Text content should be preserved
         assert "Describe this image and audio" in text_msgs[0]["content"]
+
+    def test_input_video_data_uri_extracts_temp_path(self):
+        """Video data URIs are decoded to temporary paths for mlx-vlm load_video."""
+        video_b64 = base64.b64encode(b"fake mp4 bytes").decode("ascii")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "data": f"data:video/mp4;base64,{video_b64}",
+                            "format": "mp4",
+                            "filename": "clip.mp4",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this clip"},
+                ],
+            }
+        ]
+
+        text_msgs, images, audio, videos = extract_media_from_messages(messages)
+        try:
+            assert len(images) == 0
+            assert len(audio) == 0
+            assert len(videos) == 1
+            assert str(videos[0]).endswith(".mp4")
+            with open(videos[0], "rb") as f:
+                assert f.read() == b"fake mp4 bytes"
+            assert text_msgs[0]["content"] == "Describe this clip"
+        finally:
+            cleanup_temporary_media(videos)
+
+    def test_input_video_url_extracts_url(self):
+        """Video URLs are passed through for mlx-vlm load_video."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "https://example.com/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        _, _, _, videos = extract_media_from_messages(messages)
+
+        assert videos == ["https://example.com/clip.mp4"]
+
+    def test_input_video_private_url_rejected(self):
+        """Private HTTP URLs are rejected before server-side media loading."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "http://127.0.0.1/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected(self):
+        """String-form video URLs go through the same URL safety checks."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "http://127.0.0.1/clip.mp4",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="non-public"):
+            extract_media_from_messages(messages)
 
 
 # =============================================================================
