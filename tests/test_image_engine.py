@@ -110,6 +110,8 @@ def fake_mflux(monkeypatch):
     install_module("mflux.models.qwen.variants.edit.qwen_image_edit", "QwenImageEdit")
     install_module("mflux.models.fibo.variants.txt2img.fibo", "FIBO")
     install_module("mflux.models.fibo.variants.edit.fibo_edit", "FIBOEdit")
+    install_module("mflux.models.ernie_image.variants.txt2img.ernie_image", "ErnieImage")
+    install_module("mflux.models.ideogram4.variants.txt2img.ideogram4", "Ideogram4")
 
     monkeypatch.setattr(
         image_module.mx, "synchronize", lambda: cleanup_calls.append("synchronize")
@@ -250,6 +252,75 @@ async def test_fibo_edit_routes_single_image_and_mask(fake_mflux):
         await engine.edit("remove background", image_paths=["a.png", "b.png"])
 
 
+async def test_ernie_edit_routes_single_image_to_image_path(fake_mflux):
+    engine = ImageEngine(
+        model_name="ernie-edit",
+        image_metadata={"backend": "mflux", "base_model": "ernie-image-turbo"},
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit(
+        "make it watercolor",
+        image_paths=["input.png"],
+        image_strength=0.6,
+        width=1024,
+        height=576,
+    )
+
+    ernie_cls = fake_mflux.classes["ErnieImage"]
+    model = ernie_cls.instances[0]
+    assert model.model_config == _FakeConfig("ernie-image-turbo")
+    assert model.calls[-1] == {
+        "prompt": "make it watercolor",
+        "seed": 0,
+        "width": 1024,
+        "height": 576,
+        "num_inference_steps": 8,
+        "guidance": 1.0,
+        "image_path": "input.png",
+        "image_strength": 0.6,
+    }
+
+    with pytest.raises(ValueError, match="does not support mask_path"):
+        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
+
+    with pytest.raises(ValueError, match="exactly one input image"):
+        await engine.edit("combine these", image_paths=["a.png", "b.png"])
+
+
+async def test_ideogram_generation_uses_fp8_config(fake_mflux):
+    engine = ImageEngine(
+        model_name="ideogram",
+        image_metadata={"backend": "mflux", "base_model": "ideogram4"},
+        tasks=["generation"],
+    )
+
+    await engine.start()
+    await engine.generate("a typographic poster", seed=99, width=1024, height=1024)
+
+    ideogram_cls = fake_mflux.classes["Ideogram4"]
+    model = ideogram_cls.instances[0]
+    assert model.model_config == _FakeConfig("ideogram-4-fp8")
+    assert model.calls[-1] == {
+        "prompt": "a typographic poster",
+        "seed": 99,
+        "width": 1024,
+        "height": 1024,
+    }
+
+
+async def test_ideogram_edit_is_not_supported(fake_mflux):
+    engine = ImageEngine(
+        model_name="ideogram",
+        image_metadata={"backend": "mflux", "base_model": "ideogram4"},
+        tasks=["edit"],
+    )
+
+    with pytest.raises(ValueError, match="Unsupported mflux image base_model"):
+        await engine.start()
+
+
 async def test_start_rejects_unsupported_base_model(fake_mflux):
     engine = ImageEngine(
         model_name="unsupported",
@@ -268,6 +339,8 @@ async def test_start_rejects_unsupported_base_model(fake_mflux):
     [
         ("FLUX.2-klein-4B", "Flux2Klein"),
         ("Z_Image_Turbo", "ZImage"),
+        ("Ernie_Image_Turbo", "ErnieImage"),
+        ("Ideogram4", "Ideogram4"),
     ],
 )
 async def test_start_accepts_lmstudio_style_base_aliases(

@@ -95,7 +95,7 @@ grammar = [
 image = [
   # Image generation via mflux; may pull heavy transitive deps such as torch.
   # Pin to scaryrawr/mflux HEAD for image model transition fixes.
-  "mflux @ git+https://github.com/scaryrawr/mflux@03c378c57b72b0d32fd1f05531e536a87bec001e",
+  "mflux @ git+https://github.com/scaryrawr/mflux@e1c93615acc4f05d028422e49ac1360a0028d84e",
 ]
 mcp = ["mcp>=1.0.0"]
 modelscope = ["modelscope>=1.10.0"]

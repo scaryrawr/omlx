@@ -34,6 +34,15 @@ IMAGE_ENGINE_ALIASES: dict[tuple[ImageTask, str], tuple[str, ...]] = {
     ("generation", "z-image-turbo"): ("z-image-turbo", "zimage-turbo"),
     ("generation", "qwen-image"): ("qwen-image", "qwen"),
     ("generation", "fibo"): ("fibo",),
+    ("generation", "ernie-image-turbo"): ("ernie-image-turbo",),
+    ("generation", "ernie-image"): ("ernie-image",),
+    ("generation", "ideogram-4-fp8"): (
+        "ideogram-4-fp8",
+        "ideogram4-fp8",
+        "ideogram4",
+        "ideogram-4",
+        "ideogram",
+    ),
     ("edit", "flux2-klein-4b"): (
         "flux2-klein-4b",
         "flux2-klein-4b-edit",
@@ -54,6 +63,8 @@ IMAGE_ENGINE_ALIASES: dict[tuple[ImageTask, str], tuple[str, ...]] = {
         "qwen-edit-2509",
     ),
     ("edit", "fibo-edit"): ("fibo-edit", "fiboedit"),
+    ("edit", "ernie-image-turbo"): ("ernie-image-turbo",),
+    ("edit", "ernie-image"): ("ernie-image",),
 }
 
 
@@ -118,6 +129,30 @@ IMAGE_MODEL_SPECS: tuple[ImageModelSpec, ...] = (
         estimated_size=12 * 1024**3,
         discovery_aliases=("fibo",),
     ),
+    ImageModelSpec(
+        base_model="ernie-image-turbo",
+        tasks=("generation", "edit"),
+        estimated_size=22 * 1024**3,
+        discovery_aliases=("ernie-image-turbo",),
+    ),
+    ImageModelSpec(
+        base_model="ernie-image",
+        tasks=("generation", "edit"),
+        estimated_size=22 * 1024**3,
+        discovery_aliases=("ernie-image",),
+    ),
+    ImageModelSpec(
+        base_model="ideogram-4-fp8",
+        tasks=("generation",),
+        estimated_size=28 * 1024**3,
+        discovery_aliases=(
+            "ideogram-4-fp8",
+            "ideogram4-fp8",
+            "ideogram4",
+            "ideogram-4",
+            "ideogram",
+        ),
+    ),
 )
 
 IMAGE_DEFAULT_ESTIMATED_SIZES = {
@@ -147,6 +182,14 @@ IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
         "default_steps": 50,
         "default_guidance": 10.0,
     },
+    "ernie-image-turbo": {
+        "default_steps": 8,
+        "default_guidance": 1.0,
+    },
+    "ernie-image": {
+        "default_steps": 50,
+        "default_guidance": 4.0,
+    },
 }
 
 
@@ -160,7 +203,7 @@ def get_image_defaults(base_model: str) -> dict[str, int | float]:
 
     Falls back to empty dict when no model-specific defaults exist.
     """
-    return IMAGE_DEFAULTS.get(base_model, {})
+    return IMAGE_DEFAULTS.get(normalize_image_alias(base_model), {})
 
 
 
