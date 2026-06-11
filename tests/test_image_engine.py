@@ -184,6 +184,51 @@ async def test_generate_loads_flux2_with_manifest_defaults(fake_mflux, tmp_path)
     assert "clear_cache" in fake_mflux.cleanup_calls
 
 
+@pytest.mark.parametrize(
+    ("base_model", "class_name", "expected_config", "expected_steps"),
+    [
+        ("z-image-turbo", "ZImage", "z-image-turbo", 8),
+        ("z-image", "ZImage", "z-image", 50),
+        ("flux2-klein-4b", "Flux2Klein", "flux2-klein-4b", 8),
+    ],
+)
+async def test_generate_uses_registry_step_defaults_without_manifest_defaults(
+    fake_mflux,
+    base_model,
+    class_name,
+    expected_config,
+    expected_steps,
+):
+    engine = ImageEngine(
+        model_name=base_model,
+        image_metadata={"backend": "mflux", "base_model": base_model},
+        tasks=["generation"],
+    )
+
+    await engine.start()
+    result = await engine.generate("a cat")
+
+    model = fake_mflux.classes[class_name].instances[-1]
+    assert model.model_config == _FakeConfig(expected_config)
+    assert model.calls[-1]["num_inference_steps"] == expected_steps
+    assert result.metadata["steps"] == expected_steps
+
+
+async def test_generate_request_steps_override_registry_defaults(fake_mflux):
+    engine = ImageEngine(
+        model_name="z-image-turbo",
+        image_metadata={"backend": "mflux", "base_model": "z-image-turbo"},
+        tasks=["generation"],
+    )
+
+    await engine.start()
+    result = await engine.generate("a cat", steps=12)
+
+    model = fake_mflux.classes["ZImage"].instances[-1]
+    assert model.calls[-1]["num_inference_steps"] == 12
+    assert result.metadata["steps"] == 12
+
+
 async def test_edit_uses_qwen_image_paths_and_request_overrides(fake_mflux):
     engine = ImageEngine(
         model_name="qwen-edit",
