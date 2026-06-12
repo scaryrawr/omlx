@@ -35,7 +35,7 @@ Use `uv run` for Python tooling and tests. If dependencies are missing, start wi
 
 `pytest.ini` defaults to verbose tests excluding `slow` and `integration`. Mark tests that require real model files with `@pytest.mark.slow`, and tests that require a live server with `@pytest.mark.integration`.
 
-For manual server smoke tests, remember `omlx serve` persists non-default CLI flags to `~/.omlx/settings.json`. Snapshot or avoid changing user-tuned settings before temporary runs with flags such as `--model-dir`, `--memory-guard`, or `--max-concurrent-requests`; restart any stopped Homebrew service afterward.
+For manual server smoke tests, remember `omlx serve` persists non-default CLI flags to `~/.omlx/settings.json`. Snapshot or avoid changing user-tuned settings before temporary runs with flags such as `--model-dir`, `--memory-guard`, or `--max-concurrent-requests`; restart any stopped Homebrew service afterward. For lightweight image-generation smoke tests with local mflux/FLUX models, use at least two steps because `steps=1` can fail inside backend progress math rather than validating route behavior.
 
 ## Code conventions
 
