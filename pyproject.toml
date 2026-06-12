@@ -76,8 +76,8 @@ dependencies = [
   "openai-harmony",
   # Cohere Command/Cohere2 output parser for reasoning and tool calls
   "cohere_melody>=0.9.0",
-  # mlx-vlm from latest main commit (5a4222a)
-  "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@5a4222a15c70cb3725179d591442b1fbe1044b60",
+  # mlx-vlm from latest main commit (1c1c2c7)
+  "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@1c1c2c7a3e2854462a41f82a7c01f7d1466a1589",
   "Pillow>=9.0.0",
   # dflash-mlx from latest upstream main commit (7f88438)
   "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@7f884380954037984f0ac89244b9fe14142744df",
