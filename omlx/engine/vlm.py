@@ -1812,7 +1812,7 @@ class VLMBatchedEngine(BaseEngine):
             )
 
         # Normalize audio to numpy float32 arrays expected by processor.
-        # extract_images_from_messages produces BytesIO / file-path strings, but
+        # extract_media_from_messages produces BytesIO / file-path strings, but
         # the processor's __call__ expects numpy arrays or (array, sample_rate)
         # tuples. load_audio handles all three source types.
         if audio:
@@ -2578,7 +2578,7 @@ class VLMBatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
         if self.is_diffusion_model:
-            _, _, audio = extract_images_from_messages(messages)
+            _, _, audio, _ = extract_media_from_messages(messages)
             self._validate_diffusion_request(
                 tools=tools,
                 audio=audio if audio else None,
@@ -3066,7 +3066,7 @@ class VLMBatchedEngine(BaseEngine):
         tools: list[dict] | None,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        text_messages, images, audio = extract_images_from_messages(messages)
+        text_messages, images, audio, _ = extract_media_from_messages(messages)
         self._validate_diffusion_request(
             tools=tools,
             audio=audio if audio else None,

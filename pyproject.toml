@@ -77,9 +77,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from commit (5a4222a, main) - includes DiffusionGemma support
+    # mlx-vlm from commit (1c1c2c7, main) - includes DiffusionGemma support
     # plus prior Gemma4/Qwen/Qwen3-VL/Phi VLM fixes.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@5a4222a15c70cb3725179d591442b1fbe1044b60",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@1c1c2c7a3e2854462a41f82a7c01f7d1466a1589",
     "Pillow>=9.0.0",
     # dflash-mlx git pin - latest upstream speculative decoding fixes.
     "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@7f884380954037984f0ac89244b9fe14142744df",

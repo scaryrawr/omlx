@@ -294,6 +294,49 @@ class TestVLMDiffusionLane:
         engine._diffusion_family = "block"
         assert engine.supports_tool_calling is False
 
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
+    )
+    async def test_diffusion_preflight_rejects_audio_without_name_error(self):
+        from omlx.exceptions import InvalidRequestError
+
+        engine = _make_loaded_engine(model_type="diffusion_gemma")
+        engine._diffusion_family = "block"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "input_audio", "input_audio": {"data": "not-base64"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="Audio input"):
+            await engine.preflight_chat(messages)
+
+    @pytest.mark.skipif(
+        not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
+    )
+    def test_process_diffusion_chat_rejects_audio_without_name_error(self):
+        from omlx.exceptions import InvalidRequestError
+
+        engine = _make_loaded_engine(model_type="diffusion_gemma")
+        engine._diffusion_family = "block"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "input_audio", "input_audio": {"data": "not-base64"}},
+                ],
+            }
+        ]
+        with pytest.raises(InvalidRequestError, match="Audio input"):
+            engine._process_diffusion_chat_messages(messages, tools=None, kwargs={})
+            engine._process_diffusion_chat_messages(messages, tools=None, kwargs={})
+
     @pytest.mark.skipif(
         not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
     )
