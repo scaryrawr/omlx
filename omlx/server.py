@@ -53,7 +53,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi import Request as FastAPIRequest
@@ -110,6 +110,10 @@ from .api.markitdown import (
     request_has_file_parts,
     stream_messages_to_markdown_async,
 )
+from .api.media_inputs import (
+    has_audio_video_parts,
+    normalize_media_file_parts_in_messages,
+)
 
 # Import from new modular API
 from .api.openai_models import (
@@ -124,6 +128,7 @@ from .api.openai_models import (
     CompletionRequest,
     CompletionResponse,
     FunctionCall,
+    Message,
     ModelInfo,
     ModelsResponse,
     PromptTokensDetails,
@@ -189,11 +194,6 @@ from .exceptions import (
     PrefillMemoryExceededError,
     SchedulerQueueFullError,
 )
-from .api.media_inputs import (
-    has_audio_video_parts,
-    normalize_media_file_parts_in_messages,
-)
-from .api.openai_models import Message
 from .model_discovery import format_size
 from .server_metrics import get_server_metrics, reset_server_metrics
 
@@ -272,20 +272,20 @@ class ServerState:
     to manage and test.
     """
 
-    engine_pool: Optional[EnginePool] = None
-    default_model: Optional[str] = None
-    mcp_manager: Optional[object] = None
-    mcp_executor: Optional[object] = None
+    engine_pool: EnginePool | None = None
+    default_model: str | None = None
+    mcp_manager: object | None = None
+    mcp_executor: object | None = None
     sampling: SamplingDefaults = field(default_factory=SamplingDefaults)
-    api_key: Optional[str] = None
-    settings_manager: Optional[object] = None  # ModelSettingsManager
-    global_settings: Optional[object] = None  # GlobalSettings
-    hf_downloader: Optional[object] = None  # HFDownloader
-    ms_downloader: Optional[object] = None  # MSDownloader
-    process_memory_enforcer: Optional[object] = None  # ProcessMemoryEnforcer
+    api_key: str | None = None
+    settings_manager: object | None = None  # ModelSettingsManager
+    global_settings: object | None = None  # GlobalSettings
+    hf_downloader: object | None = None  # HFDownloader
+    ms_downloader: object | None = None  # MSDownloader
+    process_memory_enforcer: object | None = None  # ProcessMemoryEnforcer
     responses_store: ResponseStore = field(default_factory=ResponseStore)
-    oq_manager: Optional[object] = None  # OQManager
-    hf_uploader: Optional[object] = None  # HFUploader
+    oq_manager: object | None = None  # OQManager
+    hf_uploader: object | None = None  # HFUploader
 
 
 # Global server state instance
@@ -517,6 +517,7 @@ app.include_router(mcp_router, dependencies=[Depends(verify_api_key)])
 # Keep image routes registered even when optional mflux/image support is absent;
 # handlers return a 503 install hint so OpenAI-compatible paths remain stable.
 from .api.image_routes import router as image_router
+
 app.include_router(image_router, dependencies=[Depends(verify_api_key)])
 
 # Include audio routes only when mlx-audio is installed.
@@ -853,7 +854,7 @@ async def get_engine(
     engine_type: EngineType = EngineType.LLM,
     _lease: bool = False,
     _leased_out: list | None = None,
-) -> Union[BaseEngine, EmbeddingEngine, RerankerEngine]:
+) -> BaseEngine | EmbeddingEngine | RerankerEngine:
     """
     Get engine for the specified model and type.
 
@@ -1808,7 +1809,7 @@ _KEEPALIVE_COMPLETION_CHUNK = (
 _KEEPALIVE_ANTHROPIC_PING = 'event: ping\ndata: {"type":"ping"}\n\n'
 
 
-def _resolve_keepalive(protocol: str) -> Optional[str]:
+def _resolve_keepalive(protocol: str) -> str | None:
     """Pick a wire-level keepalive frame for the given API protocol.
 
     Returns None when the configured mode disables keepalive for this protocol.
@@ -1872,7 +1873,7 @@ async def _with_sse_keepalive(
     http_request: Optional["FastAPIRequest"] = None,
     interval: float = 10.0,
     disconnect_poll: float = 2.0,
-    keepalive_chunk: Optional[str] = _KEEPALIVE_COMMENT,
+    keepalive_chunk: str | None = _KEEPALIVE_COMMENT,
 ) -> AsyncIterator[str]:
     """Wrap an SSE generator to send periodic keepalive frames.
 
@@ -2094,7 +2095,6 @@ async def health():
 @app.get("/api/status")
 async def server_status(_: bool = Depends(verify_api_key)):
     """Lightweight status endpoint for external tool polling (statuslines, scripts)."""
-    from .model_discovery import format_size
     from .server_metrics import get_server_metrics
 
     metrics = get_server_metrics()
@@ -3996,8 +3996,8 @@ async def stream_chat_completion(
     messages: list,
     request: ChatCompletionRequest,
     model_load_duration: float = 0.0,
-    resolved_model: Optional[str] = None,
-    response_id: Optional[str] = None,
+    resolved_model: str | None = None,
+    response_id: str | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream chat completion response.
@@ -4373,7 +4373,7 @@ async def stream_anthropic_messages(
     engine: BaseEngine,
     messages: list,
     request: AnthropicMessagesRequest,
-    resolved_model: Optional[str] = None,
+    resolved_model: str | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """
@@ -5142,7 +5142,7 @@ async def count_anthropic_tokens(
 # =============================================================================
 
 
-def _should_store_response(store_flag: Optional[bool]) -> bool:
+def _should_store_response(store_flag: bool | None) -> bool:
     """OpenAI Responses defaults to storing responses unless explicitly disabled."""
     return store_flag is not False
 
@@ -5601,10 +5601,10 @@ async def stream_responses_api(
     engine: BaseEngine,
     messages: list,
     request: ResponsesRequest,
-    input_messages: Optional[list[dict]] = None,
+    input_messages: list[dict] | None = None,
     store_response: bool = True,
     model_load_duration: float = 0.0,
-    resolved_model: Optional[str] = None,
+    resolved_model: str | None = None,
     response_format=None,
     native_reasoning: bool = False,
     **kwargs,
@@ -5630,7 +5630,7 @@ async def stream_responses_api(
     reasoning_closed = False
     message_opened = False
     next_output_index = 0
-    reasoning_output_index: Optional[int] = None  # captured when reasoning opens
+    reasoning_output_index: int | None = None  # captured when reasoning opens
 
     # Build initial response object (in_progress, empty output)
     initial_response = ResponseObject(
