@@ -45,6 +45,7 @@ For manual server smoke tests, remember `omlx serve` persists non-default CLI fl
 - Preserve async boundaries: FastAPI handlers and engine orchestration are async, while MLX generation is isolated through scheduler/engine abstractions.
 - Keep optional dependency behavior explicit. Extras such as `mcp`, `audio`, `grammar`, `image`, `modelscope`, and `paroquant` are intentionally separated; use availability helpers such as `omlx/utils/optional_deps.py` rather than importing heavy optional packages in core paths.
 - For image generation defaults, keep request-level `steps`/`guidance` overrides ahead of manifest `default_*` values, and manifest values ahead of `omlx/image_registry.py` family defaults; cover changes with focused `tests/test_image_engine.py` cases.
+- For VLM/chat media handling, prefer `omlx/utils/image.py`'s `extract_media_from_messages()` in engine paths so image, audio, and video handling stays aligned; keep `extract_images_from_messages()` as compatibility-only unless a three-value API is specifically required.
 - For model-family patches under `omlx/patches/`, keep changes narrow and covered by focused regression tests. These files mirror upstream behavior and can be brittle across dependency updates.
 - When changing cache, scheduler, streaming, adapters, or tool-call behavior, add focused tests for token accounting, finish reasons, cancellation/disconnect behavior, cache reuse/regression paths, and protocol output shape.
 
