@@ -445,6 +445,7 @@ class ImageEngine(BaseNonStreamingEngine):
                 spec = self._resolve_spec("edit")
                 resolved_steps = self._resolve_steps(steps)
                 resolved_guidance = self._resolve_guidance(guidance)
+                request_image_strength = kwargs.pop("image_strength", None)
                 resolved_seed = 0 if seed is None else int(seed)
 
                 gen_kwargs: dict[str, Any] = {
@@ -472,10 +473,15 @@ class ImageEngine(BaseNonStreamingEngine):
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
                     gen_kwargs["image_path"] = image_paths[0]
+                    resolved_image_strength = self._resolve_image_strength(request_image_strength)
+                    if resolved_image_strength is not None:
+                        gen_kwargs["image_strength"] = resolved_image_strength
                 else:
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
                     gen_kwargs["image_paths"] = image_paths
+                    if request_image_strength is not None:
+                        gen_kwargs["image_strength"] = _coerce_float(request_image_strength, "image_strength")
 
                 gen_kwargs.update(kwargs)
 
@@ -624,6 +630,19 @@ class ImageEngine(BaseNonStreamingEngine):
         base_model = self.base_model
         model_defaults = get_image_defaults(base_model)
         return model_defaults.get("default_guidance")
+
+    def _resolve_image_strength(self, image_strength: object) -> float | None:
+        if image_strength is not None:
+            return _coerce_float(image_strength, "image_strength")
+        manifest_image_strength = _coerce_float(
+            self._image_metadata.get("default_image_strength"), "default_image_strength"
+        )
+        if manifest_image_strength is not None:
+            return manifest_image_strength
+        model_defaults = get_image_defaults(self.base_model)
+        return _coerce_float(
+            model_defaults.get("default_image_strength"), "default_image_strength"
+        )
 
     async def _load_model_for_task(
         self,

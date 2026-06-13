@@ -334,6 +334,39 @@ async def test_ernie_edit_routes_single_image_to_image_path(fake_mflux):
         await engine.edit("combine these", image_paths=["a.png", "b.png"])
 
 
+async def test_ernie_edit_uses_default_image_strength_for_reference_image(fake_mflux):
+    engine = ImageEngine(
+        model_name="ernie-edit",
+        image_metadata={"backend": "mflux", "base_model": "ernie-image-turbo"},
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit("make it watercolor", image_paths=["input.png"])
+
+    ernie_cls = fake_mflux.classes["ErnieImage"]
+    assert ernie_cls.instances[0].calls[-1]["image_path"] == "input.png"
+    assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.4
+
+
+async def test_ernie_edit_manifest_image_strength_overrides_registry_default(fake_mflux):
+    engine = ImageEngine(
+        model_name="ernie-edit",
+        image_metadata={
+            "backend": "mflux",
+            "base_model": "ernie-image-turbo",
+            "default_image_strength": 0.7,
+        },
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit("make it watercolor", image_paths=["input.png"])
+
+    ernie_cls = fake_mflux.classes["ErnieImage"]
+    assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.7
+
+
 async def test_ideogram_generation_uses_fp8_config(fake_mflux):
     engine = ImageEngine(
         model_name="ideogram",
