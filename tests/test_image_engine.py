@@ -256,6 +256,8 @@ async def test_edit_uses_qwen_image_paths_and_request_overrides(fake_mflux):
     assert model.calls[-1] == {
         "prompt": "make it brighter",
         "seed": 123,
+        "width": None,
+        "height": None,
         "num_inference_steps": 9,
         "guidance": 2.5,
         "image_paths": ["input-a.png", "input-b.png"],
@@ -265,6 +267,52 @@ async def test_edit_uses_qwen_image_paths_and_request_overrides(fake_mflux):
 
     with pytest.raises(ValueError, match="does not support mask_path"):
         await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
+
+
+async def test_klein_edit_uses_auto_dimensions_and_registry_defaults(fake_mflux):
+    engine = ImageEngine(
+        model_name="klein-edit",
+        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    result = await engine.edit("keep the same composition", image_paths=["input.png"])
+
+    klein_cls = fake_mflux.classes["Flux2KleinEdit"]
+    model = klein_cls.instances[0]
+    assert model.model_config == _FakeConfig("flux2-klein-4b")
+    assert model.calls[-1] == {
+        "prompt": "keep the same composition",
+        "seed": 0,
+        "width": None,
+        "height": None,
+        "num_inference_steps": 8,
+        "image_paths": ["input.png"],
+        "image_strength": 0.35,
+    }
+    assert result.metadata["steps"] == 8
+    assert "width" not in result.metadata
+    assert "height" not in result.metadata
+
+
+async def test_klein_edit_manifest_image_strength_overrides_registry_default(fake_mflux):
+    engine = ImageEngine(
+        model_name="klein-edit",
+        image_metadata={
+            "backend": "mflux",
+            "base_model": "flux2-klein-9b",
+            "default_image_strength": 0.2,
+        },
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit("subtle cleanup", image_paths=["input.png"])
+
+    klein_cls = fake_mflux.classes["Flux2KleinEdit"]
+    assert klein_cls.instances[0].model_config == _FakeConfig("flux2-klein-9b")
+    assert klein_cls.instances[0].calls[-1]["image_strength"] == 0.2
 
 
 async def test_fibo_edit_routes_single_image_and_mask(fake_mflux):

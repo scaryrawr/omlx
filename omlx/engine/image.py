@@ -452,10 +452,8 @@ class ImageEngine(BaseNonStreamingEngine):
                     "prompt": prompt,
                     "seed": resolved_seed,
                 }
-                if width is not None:
-                    gen_kwargs["width"] = int(width)
-                if height is not None:
-                    gen_kwargs["height"] = int(height)
+                gen_kwargs["width"] = None if width is None else int(width)
+                gen_kwargs["height"] = None if height is None else int(height)
                 if resolved_steps is not None:
                     gen_kwargs["num_inference_steps"] = resolved_steps
                 if resolved_guidance is not None:
@@ -480,8 +478,9 @@ class ImageEngine(BaseNonStreamingEngine):
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
                     gen_kwargs["image_paths"] = image_paths
-                    if request_image_strength is not None:
-                        gen_kwargs["image_strength"] = _coerce_float(request_image_strength, "image_strength")
+                    resolved_image_strength = self._resolve_image_strength(request_image_strength)
+                    if resolved_image_strength is not None:
+                        gen_kwargs["image_strength"] = resolved_image_strength
 
                 gen_kwargs.update(kwargs)
 

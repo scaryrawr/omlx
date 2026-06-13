@@ -174,9 +174,11 @@ IMAGE_DEFAULT_ESTIMATED_SIZES = {
 IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
     "flux2-klein-4b": {
         "default_steps": 8,
+        "default_image_strength": 0.35,
     },
     "flux2-klein-9b": {
         "default_steps": 8,
+        "default_image_strength": 0.35,
     },
     "z-image-turbo": {
         "default_steps": 8,
