@@ -195,10 +195,12 @@ IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
     "ernie-image-turbo": {
         "default_steps": 8,
         "default_guidance": 1.0,
+        "default_image_strength": 0.4,
     },
     "ernie-image": {
         "default_steps": 50,
         "default_guidance": 4.0,
+        "default_image_strength": 0.4,
     },
 }
 
