@@ -820,8 +820,9 @@ class TestGlobalSettings:
         assert settings.memory.memory_guard_tier == "custom"
         assert settings.memory.memory_guard_custom_ceiling_gb == 48.0
 
-    def test_load_from_file(self):
+    def test_load_from_file(self, monkeypatch):
         """Test loading settings from JSON file."""
+        monkeypatch.delenv("OMLX_API_KEY", raising=False)
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create settings file
             settings_file = Path(tmpdir) / "settings.json"
@@ -839,8 +840,9 @@ class TestGlobalSettings:
             assert settings.server.port == 9000
             assert settings.auth.api_key == "test-key"
 
-    def test_load_from_file_all_sections(self):
+    def test_load_from_file_all_sections(self, monkeypatch):
         """Test loading all settings sections from file."""
+        monkeypatch.delenv("OMLX_API_KEY", raising=False)
         with tempfile.TemporaryDirectory() as tmpdir:
             settings_file = Path(tmpdir) / "settings.json"
             settings_file.write_text(
@@ -1791,8 +1793,9 @@ class TestSettingsEdgeCases:
             # Other settings should be defaults
             assert settings.server.host == "127.0.0.1"
 
-    def test_save_with_unicode_api_key(self):
+    def test_save_with_unicode_api_key(self, monkeypatch):
         """Test saving settings with unicode in values."""
+        monkeypatch.delenv("OMLX_API_KEY", raising=False)
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = GlobalSettings(base_path=Path(tmpdir))
             settings.auth.api_key = "key-with-unicode-\u4e2d\u6587"

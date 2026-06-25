@@ -18,12 +18,79 @@ from omlx.server import (
     _reject_diffusion_structured_outputs,
     _resolve_metric_durations,
     _reset_boundary_snapshots_for_server,
+    _select_default_chat_model,
     app,
     get_engine,
     get_max_context_window,
     get_sampling_params,
 )
 from omlx.settings import GlobalSettings, ModelSettings as GlobalModelSettings
+
+
+class _DefaultModelPool:
+    def __init__(self, entries: dict[str, EngineEntry]):
+        self._entries = entries
+
+    def get_model_ids(self) -> list[str]:
+        return list(self._entries)
+
+    def get_entry(self, model_id: str) -> EngineEntry | None:
+        return self._entries.get(model_id)
+
+
+def _entry(model_id: str, model_type: str) -> EngineEntry:
+    engine_type = "batched" if model_type == "llm" else model_type
+    return EngineEntry(
+        model_id=model_id,
+        model_path=f"/models/{model_id}",
+        model_type=model_type,
+        engine_type=engine_type,
+        estimated_size=1,
+    )
+
+
+class TestDefaultChatModelSelection:
+    def test_missing_default_skips_image_first_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "qwen-chat": _entry("qwen-chat", "vlm"),
+                "embedding": _entry("embedding", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "missing-model")
+
+        assert model_id == "qwen-chat"
+        assert reason == "Default model 'missing-model' not found"
+
+    def test_image_default_falls_back_to_chat_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "llama-chat": _entry("llama-chat", "llm"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "flux-image")
+
+        assert model_id == "llama-chat"
+        assert reason == (
+            "Default model 'flux-image' is a image model, not a chat-capable model"
+        )
+
+    def test_no_chat_capable_models_returns_none(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "embed": _entry("embed", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, None)
+
+        assert model_id is None
+        assert reason is None
 
 
 class TestBoundarySnapshotLifecycle:
@@ -765,6 +832,11 @@ class TestExposedProfileModels:
                 if source:
                     return source
             return model_id
+
+        def get_active_model_aliases(self, settings_manager):
+            settings = settings_manager.get_settings("qwen-base")
+            alias = settings.model_alias.strip() if settings.model_alias else ""
+            return {"qwen-base": alias} if alias else {}
 
     @staticmethod
     def _save_exposed_profile(manager, settings):
