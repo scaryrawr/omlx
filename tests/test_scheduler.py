@@ -1494,6 +1494,15 @@ class TestSchedulerStopTokens:
         # MockTokenizer has eos_token_id = 2
         assert mock_tokenizer.eos_token_id in stop_tokens
 
+    def test_deepseek_v4_includes_required_eos_tokens(self, mock_model, mock_tokenizer):
+        """DeepSeek-V4 requires EOS IDs that upstream configs may omit."""
+        mock_model.config.model_type = "deepseek_v4"
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+
+        stop_tokens = scheduler._get_stop_tokens()
+
+        assert {1, 128803, 128804}.issubset(stop_tokens)
+
     def test_includes_eot_token_id(self, mock_model, mock_tokenizer):
         """Test _get_stop_tokens() includes end-of-turn token when available."""
         # eot_token_id as a single int

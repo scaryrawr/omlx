@@ -46,6 +46,7 @@ from ..api.utils import (
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError
 from ..models.vlm import VLMModelAdapter
+from ..utils.generation_config import load_generation_config_token_ids
 from ..utils.image import (
     compute_image_hash,
     compute_per_image_hashes,
@@ -62,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 # OCR model types that require special handling.
 OCR_MODEL_TYPES = {"deepseekocr", "deepseekocr_2", "dots_ocr", "glm_ocr"}
+_DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
 
 # OCR model types and their default markdown conversion prompts.
 # When an OCR model receives a generic user prompt with an image,
@@ -144,6 +146,47 @@ def _apply_minimax_m3_thinking_mode(
         template_kwargs["thinking_mode"] = "disabled"
 
 
+def _iter_token_ids(value: Any):
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        yield value
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, int) and not isinstance(item, bool):
+                yield item
+
+
+def _resolve_vlm_eos_token_ids(
+    model_path: Path,
+    eos_token_id: Any,
+) -> list[int] | int | None:
+    merged: list[int] = []
+    seen: set[int] = set()
+    preserve_sequence = isinstance(eos_token_id, (list, tuple, set)) and not isinstance(
+        eos_token_id,
+        (str, bytes, bytearray),
+    )
+
+    def add(value: Any) -> None:
+        for token_id in _iter_token_ids(value) or ():
+            if token_id not in seen:
+                seen.add(token_id)
+                merged.append(token_id)
+
+    add(eos_token_id)
+    generation_eos = load_generation_config_token_ids(model_path, "eos_token_id")
+    if generation_eos:
+        add(sorted(generation_eos))
+    if _read_config_model_type(model_path) == "deepseek_v4":
+        add(sorted(_DEEPSEEK_V4_EOS_TOKEN_IDS))
+
+    if not merged:
+        return None
+    return merged if preserve_sequence or len(merged) > 1 else merged[0]
+
+
 def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id: Any):
     from mlx_vlm.tokenizer_utils import load_tokenizer
     from mlx_vlm.utils import StoppingCriteria
@@ -154,10 +197,11 @@ def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id
     detokenizer_class = load_tokenizer(model_path, return_tokenizer=False)
     tokenizer.detokenizer = detokenizer_class(tokenizer)
 
-    final_eos_token_ids = (
+    final_eos_token_ids = _resolve_vlm_eos_token_ids(
+        model_path,
         eos_token_id
         or getattr(tokenizer, "eos_token_ids", None)
-        or getattr(tokenizer, "eos_token_id", None)
+        or getattr(tokenizer, "eos_token_id", None),
     )
     tokenizer.stopping_criteria = StoppingCriteria(final_eos_token_ids, tokenizer)
     return tokenizer
@@ -180,7 +224,10 @@ def _load_cohere2_moe_text_model(
         trust_remote_code=trust_remote_code,
     )
 
-    eos_token_id = getattr(getattr(model, "config", None), "eos_token_id", None)
+    eos_token_id = _resolve_vlm_eos_token_ids(
+        model_path,
+        getattr(getattr(model, "config", None), "eos_token_id", None),
+    )
     try:
         processor = load_processor(
             model_path,

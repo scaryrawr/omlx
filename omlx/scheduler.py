@@ -15,6 +15,7 @@ import concurrent.futures
 import copy
 import gc
 import importlib
+import json
 import logging
 import os
 import threading
@@ -346,6 +347,8 @@ except ImportError:
     HAS_OUTPUT_PARSER = False
 
 logger = logging.getLogger(__name__)
+
+_DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
 
 
 class _PrefillAbortedError(Exception):
@@ -838,12 +841,19 @@ _mlx_lm_generate_module = importlib.import_module("mlx_lm.generate")
 _original_merge_caches = _mlx_lm_generate_module._merge_caches
 _original_ppb_split = PromptProcessingBatch.split
 _REGULAR_SINGLETON_CACHE_TYPES = (_MLXKVCache, _MLXRotatingKVCache)
+_SINGLETON_PASSTHROUGH_CACHE_TYPE_NAMES = frozenset(
+    {
+        "PoolQuantizedV4Cache",
+    }
+)
 
 
 def _cache_layer_supports_singleton_passthrough(cache_obj: Any) -> bool:
     sub_caches = getattr(cache_obj, "caches", None)
     if isinstance(sub_caches, (list, tuple)):
         return all(_cache_layer_supports_singleton_passthrough(c) for c in sub_caches)
+    if type(cache_obj).__name__ in _SINGLETON_PASSTHROUGH_CACHE_TYPE_NAMES:
+        return True
     return hasattr(cache_obj, "filter") and hasattr(cache_obj, "extract")
 
 
@@ -1185,6 +1195,40 @@ def _collect_cache_storage_arrays(cache_obj: Any) -> list[mx.array]:
             arrays.append(value)
 
     return arrays
+
+
+def _collect_arrays_from_tree(value: Any, seen: dict[int, Any] | None = None) -> list[mx.array]:
+    """Collect mx arrays from nested cache-state containers."""
+    if seen is None:
+        seen = {}
+    obj_id = id(value)
+    if obj_id in seen:
+        return []
+    seen[obj_id] = value
+
+    if isinstance(value, mx.array):
+        return [value]
+
+    arrays: list[mx.array] = []
+    if isinstance(value, dict):
+        iterable = value.values()
+    elif isinstance(value, (list, tuple)):
+        iterable = value
+    else:
+        iterable = ()
+    for item in iterable:
+        arrays.extend(_collect_arrays_from_tree(item, seen))
+    return arrays
+
+
+def _eval_cache_states(cache_list: list[Any]) -> None:
+    """Evaluate cache state arrays without relying on mx.eval pytree handling."""
+    arrays: list[mx.array] = []
+    seen: dict[int, Any] = {}
+    for cache_obj in cache_list:
+        arrays.extend(_collect_arrays_from_tree(cache_obj.state, seen))
+    if arrays:
+        mx.eval(*arrays)
 
 
 def _materialize_cache_storage(cache_list: list[Any]) -> None:
@@ -2322,17 +2366,42 @@ class Scheduler:
             )
         return type(cache_obj).__name__ in ("ArraysCache", "SizedArraysCache")
 
+    def _declares_deepseek_v4(self, model_ref: str | None) -> bool:
+        """Return true when model metadata identifies DeepSeek-V4."""
+        model_config = getattr(self.model, "config", None)
+        model_type = getattr(model_config, "model_type", None)
+        if model_type == "deepseek_v4":
+            return True
+
+        if model_ref is None:
+            return False
+
+        config_path = Path(model_ref) / "config.json"
+        if not config_path.is_file():
+            return False
+
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read model config from %s: %s", config_path, exc)
+            return False
+        return config.get("model_type") == "deepseek_v4"
+
     def _load_generation_config_eos(self) -> set[int] | None:
         """Load EOS token IDs from generation_config.json if available."""
         try:
             model_ref = getattr(self.tokenizer, "name_or_path", None) or getattr(
                 self.config, "model_name", None
             )
-            if not model_ref:
-                return None
-
             result = load_generation_config_token_ids(model_ref, "eos_token_id")
             if result is None:
+                result = set()
+
+            if self._declares_deepseek_v4(model_ref):
+                result.update(_DEEPSEEK_V4_EOS_TOKEN_IDS)
+
+            if not result:
                 return None
 
             # Only return if there are tokens beyond what tokenizer already provides
@@ -2878,7 +2947,11 @@ class Scheduler:
         n_tokens = len(tokens)
         if n_tokens <= 1:
             # Nothing to prefill, return cache + tokens as-is.
-            cache = existing_cache or make_prompt_cache(self.model)
+            if existing_cache is not None:
+                cache = existing_cache
+            else:
+                with mx.stream(self._stream):
+                    cache = make_prompt_cache(self.model)
             # TurboQuant: a TQ cache here makes _merge_caches() build a
             # BatchTurboQuantKVCache (via the monkey-patched merge), so the
             # one decode token quantizes against TQ history. An empty fresh
@@ -2896,7 +2969,8 @@ class Scheduler:
         if existing_cache is not None:
             prompt_cache = existing_cache
         else:
-            prompt_cache = make_prompt_cache(self.model)
+            with mx.stream(self._stream):
+                prompt_cache = make_prompt_cache(self.model)
 
         # Fresh TurboQuant requests run fp16 during the cold prefill loop and
         # are quantized once at the end. Restored TurboQuant prefix caches stay
@@ -2968,7 +3042,8 @@ class Scheduler:
         last_token = tokens[-1:]
         total_length = len(tokens)
 
-        input_arr = mx.array(prefill_tokens)[None]  # (1, seq_len)
+        with mx.stream(self._stream):
+            input_arr = mx.array(prefill_tokens)[None]  # (1, seq_len)
         processed_tokens = 0
         uid = self.request_id_to_uid.get(request.request_id)
 
@@ -3028,8 +3103,11 @@ class Scheduler:
                     )
 
             _throttle_pre = get_phys_footprint()
-            self.model(input_arr[:, :n_to_process], cache=prompt_cache, **model_kwargs)
-            mx.eval([c.state for c in prompt_cache])
+            with mx.stream(self._stream):
+                self.model(
+                    input_arr[:, :n_to_process], cache=prompt_cache, **model_kwargs
+                )
+                _eval_cache_states(prompt_cache)
             _throttle_post = get_phys_footprint()
             self._record_chunk_transient(
                 n_to_process,
@@ -3898,8 +3976,11 @@ class Scheduler:
         prompt_cache = (
             existing_cache
             if existing_cache is not None
-            else make_prompt_cache(self.model)
+            else None
         )
+        if prompt_cache is None:
+            with mx.stream(self._stream):
+                prompt_cache = make_prompt_cache(self.model)
 
         block_size = self.config.paged_cache_block_size
         boundary_enabled = (
@@ -3924,7 +4005,8 @@ class Scheduler:
 
         prefill_tokens = tokens[:-1]
         last_token = tokens[-1:]
-        input_arr = mx.array(prefill_tokens)[None]  # (1, N-1)
+        with mx.stream(self._stream):
+            input_arr = mx.array(prefill_tokens)[None]  # (1, N-1)
 
         return _PrefillState(
             request=request,
@@ -3997,8 +4079,9 @@ class Scheduler:
         chunk = state.tokens_remaining[:, :n]
         state.tokens_remaining = state.tokens_remaining[:, n:]
         _throttle_pre = get_phys_footprint()
-        self.model(chunk, cache=state.cache)
-        mx.eval([c.state for c in state.cache])
+        with mx.stream(self._stream):
+            self.model(chunk, cache=state.cache)
+            _eval_cache_states(state.cache)
         _throttle_post = get_phys_footprint()
         self._record_chunk_transient(
             n,
@@ -6129,7 +6212,7 @@ class Scheduler:
                     return_hidden=True,
                     return_shared_kv=True,
                 )
-                mx.eval([c.state for c in prefilled_cache])
+                _eval_cache_states(prefilled_cache)
         except Exception as e:
             logger.warning(
                 "vlm_mtp final-prefill forward failed (%s); falling back "
@@ -7776,8 +7859,9 @@ class Scheduler:
                                 detail="system prompt prefill",
                                 extra=spec_sparse_extra,
                             )
-                            self.model(sys_arr[:step][None], cache=sp_cache)
-                            mx.eval([c.state for c in sp_cache])
+                            with mx.stream(self._stream):
+                                self.model(sys_arr[:step][None], cache=sp_cache)
+                                _eval_cache_states(sp_cache)
                             sys_processed += step
                             _check_specprefill_abort(sys_processed)
                             tracker.update(
@@ -7810,8 +7894,9 @@ class Scheduler:
                                 detail="system prompt prefill",
                                 extra=spec_sparse_extra,
                             )
-                            self.model(sys_arr[None], cache=sp_cache)
-                            mx.eval([c.state for c in sp_cache])
+                            with mx.stream(self._stream):
+                                self.model(sys_arr[None], cache=sp_cache)
+                                _eval_cache_states(sp_cache)
                             sys_processed += final_sys
                             _check_specprefill_abort(sys_processed)
                             tracker.update(
@@ -8074,7 +8159,9 @@ class Scheduler:
                     # singleton, so the dashboard entry leaks across model
                     # reload (#1405). Mirrors the cleanup in
                     # _advance_chunked_prefills (d736bfd).
-                    logger.error("Prefill failed for %s: %s", request.request_id, e)
+                    logger.exception(
+                        "Prefill failed for %s: %s", request.request_id, e
+                    )
                     self.uid_to_request_id.pop(temp_uid, None)
                     self.request_id_to_uid.pop(request.request_id, None)
                     self._release_paged_cache_for_request(request.request_id)

@@ -12,21 +12,57 @@ Supports:
 - Reranker models: Use RerankerEngine for document reranking
 - Audio STT models: Use STTEngine for speech-to-text (Whisper, Qwen3-ASR, ...)
 - Audio TTS models: Use TTSEngine for text-to-speech (Qwen3-TTS, Kokoro, ...)
+- Image models: Use ImageEngine for mflux-backed image generation/editing
 """
 
 import contextlib
+import importlib
 import json
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .image_registry import (
+    IMAGE_DEFAULT_ESTIMATED_SIZES,
+    IMAGE_UNKNOWN_FALLBACK_SIZE,
+    infer_image_model_spec_from_name,
+    normalize_image_alias,
+)
+from .utils.safetensors_shards import select_safetensors_weight_files
+
 logger = logging.getLogger(__name__)
 
-ModelType = Literal["llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
-EngineType = Literal["batched", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
+ModelType = Literal[
+    "llm",
+    "vlm",
+    "embedding",
+    "reranker",
+    "audio_stt",
+    "audio_tts",
+    "audio_sts",
+    "image",
+]
+EngineType = Literal[
+    "batched",
+    "vlm",
+    "embedding",
+    "reranker",
+    "audio_stt",
+    "audio_tts",
+    "audio_sts",
+    "image",
+]
+
+IMAGE_MANIFEST_NAME = "omlx-image-model.json"
+JANG_CONFIG_FILENAMES = (
+    "jang_config.json",
+    "jjqf_config.json",
+    "jang_cfg.json",
+    "mxq_config.json",
+)
 
 # Known VLM (Vision-Language Model) types from mlx-vlm
 VLM_MODEL_TYPES = {
@@ -173,7 +209,9 @@ UNSUPPORTED_RERANKER_ARCHITECTURES = {
 }
 
 # All known reranker architectures (for model type detection)
-RERANKER_ARCHITECTURES = SUPPORTED_RERANKER_ARCHITECTURES | UNSUPPORTED_RERANKER_ARCHITECTURES
+RERANKER_ARCHITECTURES = (
+    SUPPORTED_RERANKER_ARCHITECTURES | UNSUPPORTED_RERANKER_ARCHITECTURES
+)
 
 # Unsupported model types — detected and skipped during discovery.
 # Only top-level config fields are checked; nested audio_config/tts_config in
@@ -208,26 +246,27 @@ def _build_audio_detection_sets():
     model_type strings that should trigger audio detection.
     """
     try:
-        from pathlib import Path as _P
-
         import mlx_audio as _mla
 
-        _base = _P(_mla.__file__).parent
+        _base = Path(_mla.__file__).parent
 
         def _dir_names(subdir: str) -> set:
             d = _base / subdir / "models"
             if d.is_dir():
-                return {p.name for p in d.iterdir()
-                        if p.is_dir() and not p.name.startswith("__")}
+                return {
+                    p.name
+                    for p in d.iterdir()
+                    if p.is_dir() and not p.name.startswith("__")
+                }
             return set()
 
         # TTS: MODEL_REMAPPING keys + model dir names
-        from mlx_audio.tts.utils import MODEL_REMAPPING as _tts_remap
-        tts = set(_tts_remap.keys()) | _dir_names("tts")
+        tts_utils = importlib.import_module("mlx_audio.tts.utils")
+        tts = set(tts_utils.MODEL_REMAPPING.keys()) | _dir_names("tts")
 
         # STT: MODEL_REMAPPING keys + model dir names
-        from mlx_audio.stt.utils import MODEL_REMAPPING as _stt_remap
-        stt = set(_stt_remap.keys()) | _dir_names("stt")
+        stt_utils = importlib.import_module("mlx_audio.stt.utils")
+        stt = set(stt_utils.MODEL_REMAPPING.keys()) | _dir_names("stt")
 
         # STS: model dir names only (no unified utils/remapping)
         sts = _dir_names("sts")
@@ -237,8 +276,10 @@ def _build_audio_detection_sets():
         stt -= _LLM_TYPE_COLLISIONS
 
         logger.debug(
-            "Audio detection sets loaded from mlx-audio: "
-            "STT=%d, TTS=%d, STS=%d", len(stt), len(tts), len(sts),
+            "Audio detection sets loaded from mlx-audio: STT=%d, TTS=%d, STS=%d",
+            len(stt),
+            len(tts),
+            len(sts),
         )
         return stt, tts, sts
 
@@ -246,7 +287,15 @@ def _build_audio_detection_sets():
         logger.debug("mlx-audio not available — using static audio detection sets")
         # Static fallback so model discovery still works without mlx-audio
         _stt = {"whisper", "qwen3_asr", "parakeet", "qwen2_audio"}
-        _tts = {"qwen3_tts", "kokoro", "chatterbox", "vibevoice", "vibevoice_streaming", "kugelaudio", "audiodit"}
+        _tts = {
+            "qwen3_tts",
+            "kokoro",
+            "chatterbox",
+            "vibevoice",
+            "vibevoice_streaming",
+            "kugelaudio",
+            "audiodit",
+        }
         _sts = {"deepfilternet", "mossformer2_se", "sam_audio", "lfm_audio"}
         return _stt, _tts, _sts
 
@@ -287,15 +336,28 @@ class DiscoveredModel:
 
     model_id: str  # Directory name (e.g., "llama-3b")
     model_path: str  # Full path to model directory
-    model_type: ModelType  # "llm", "vlm", "embedding", or "reranker"
-    engine_type: EngineType  # "batched", "vlm", "embedding", or "reranker"
+    # "llm", "vlm", "embedding", "reranker", "audio_*", or "image"
+    model_type: ModelType
+    # "batched", "vlm", "embedding", "reranker", "audio_*", or "image"
+    engine_type: EngineType
     estimated_size: int  # Estimated memory usage in bytes
-    config_model_type: str = ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
-    thinking_default: bool | None = None  # True if model thinks by default, False if not, None if unknown
-    preserve_thinking_default: bool | None = None  # True when template supports preserve_thinking (Qwen 3.6+)
-    model_context_length: int | None = None  # Declared context length from config.json (None if unknown)
+    config_model_type: str = (
+        ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
+    )
+    thinking_default: bool | None = (
+        None  # True if model thinks by default, False if not, None if unknown
+    )
+    preserve_thinking_default: bool | None = (
+        None  # True when template supports preserve_thinking (Qwen 3.6+)
+    )
+    model_context_length: int | None = (
+        None  # Declared context length from config.json (None if unknown)
+    )
     source_type: str = "local"  # "local" or "hf_cache"
     source_repo_id: str | None = None  # HuggingFace repo id for cache-backed models
+    capabilities: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
+    image_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -305,6 +367,224 @@ class HfCacheEntry:
     snapshot_path: Path
     model_id: str
     source_repo_id: str
+
+
+@dataclass
+class ImageModelManifest:
+    """Validated mflux image model manifest."""
+
+    backend: str
+    base_model: str
+    tasks: list[str]
+    metadata: dict[str, object]
+    model_path: str | None = None
+    estimated_size: int | None = None
+
+
+def _normalize_image_tasks(raw_task: object) -> list[str] | None:
+    """Normalize manifest task values to supported image capabilities."""
+    if raw_task is None:
+        return ["generation"]
+
+    raw_tasks: list[object]
+    if isinstance(raw_task, str):
+        raw_tasks = [raw_task]
+    elif isinstance(raw_task, list):
+        raw_tasks = raw_task
+    else:
+        return None
+
+    aliases = {
+        "generation": "generation",
+        "generate": "generation",
+        "text-to-image": "generation",
+        "txt2img": "generation",
+        "edit": "edit",
+        "editing": "edit",
+        "image-to-image": "edit",
+        "img2img": "edit",
+        "inpaint": "edit",
+        "inpainting": "edit",
+    }
+    normalized: set[str] = set()
+    for task in raw_tasks:
+        if not isinstance(task, str):
+            return None
+        key = task.strip().lower().replace("_", "-")
+        capability = aliases.get(key)
+        if capability is None:
+            return None
+        normalized.add(capability)
+
+    order = {"generation": 0, "edit": 1}
+    return sorted(normalized, key=lambda task: order[task])
+
+
+def _normalize_image_base_model(value: object) -> str:
+    return normalize_image_alias(value)
+
+
+def _adjust_image_size_for_quantize(size: int, quantize: object) -> int:
+    """Keep fallback estimates conservative when manifests request quantization."""
+    if quantize is None:
+        return size
+    if isinstance(quantize, bool):
+        return size
+    if isinstance(quantize, int):
+        quantized = quantize
+    elif isinstance(quantize, float) and quantize.is_integer():
+        quantized = int(quantize)
+    elif isinstance(quantize, str) and quantize.strip().isdigit():
+        quantized = int(quantize.strip())
+    else:
+        return size
+    if quantized <= 4:
+        return max(1 * 1024**3, int(size * 0.45))
+    if quantized <= 8:
+        return max(1 * 1024**3, int(size * 0.70))
+    return size
+
+
+def _validate_positive_int(value: object, field_name: str) -> int | None:
+    """Validate a positive integer-ish manifest value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        logger.warning(f"Invalid image manifest {field_name}: {value!r}")
+        return None
+    return int(value)
+
+
+def _has_local_image_layout(model_path: Path) -> bool:
+    """Detect local mflux/LM Studio image weights without assuming component names."""
+    if not (model_path / "tokenizer").is_dir() and not any(
+        (model_path / name).exists()
+        for name in ("tokenizer.json", "tokenizer_config.json")
+    ):
+        return False
+
+    weight_parents = {
+        path.parent for path in model_path.rglob("*.safetensors") if path.is_file()
+    }
+    return len(weight_parents) >= 2
+
+
+def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
+    """Infer an mflux image manifest from known local model layouts."""
+    spec = infer_image_model_spec_from_name(model_path.name)
+    if spec is None:
+        return None
+    if not _has_local_image_layout(model_path):
+        return None
+
+    tasks = list(spec.tasks)
+    metadata: dict[str, object] = {
+        "backend": "mflux",
+        "base_model": spec.base_model,
+        "model_path": ".",
+        "tasks": tasks,
+        "capabilities": tasks,
+        "inferred": True,
+    }
+    return ImageModelManifest(
+        backend="mflux",
+        base_model=spec.base_model,
+        tasks=tasks,
+        metadata=metadata,
+        model_path=".",
+    )
+
+
+def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
+    """Load and validate an mflux image model manifest, or infer one if absent."""
+    manifest_path = model_path / IMAGE_MANIFEST_NAME
+    if not manifest_path.exists():
+        return _infer_image_manifest(model_path)
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Invalid image manifest at {manifest_path}: {e}")
+        return None
+
+    if not isinstance(manifest, dict):
+        logger.warning(f"Invalid image manifest at {manifest_path}: expected object")
+        return None
+
+    backend = manifest.get("backend")
+    if not isinstance(backend, str) or backend.strip().lower() != "mflux":
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: backend must be 'mflux'"
+        )
+        return None
+
+    base_model = manifest.get("base_model")
+    if not isinstance(base_model, str) or not base_model.strip():
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: base_model must be a string"
+        )
+        return None
+
+    tasks = _normalize_image_tasks(manifest.get("task"))
+    if tasks is None:
+        logger.warning(f"Invalid image manifest at {manifest_path}: unsupported task")
+        return None
+
+    model_path_value = manifest.get("model_path")
+    if model_path_value is not None and (
+        not isinstance(model_path_value, str) or not model_path_value.strip()
+    ):
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: model_path must be a string"
+        )
+        return None
+
+    estimated_size = None
+    if "estimated_size" in manifest:
+        estimated_size = _validate_positive_int(
+            manifest["estimated_size"], "estimated_size"
+        )
+        if estimated_size is None:
+            return None
+
+    default_steps = manifest.get("default_steps")
+    if (
+        default_steps is not None
+        and _validate_positive_int(default_steps, "default_steps") is None
+    ):
+        return None
+
+    default_guidance = manifest.get("default_guidance")
+    if default_guidance is not None and (
+        isinstance(default_guidance, bool)
+        or not isinstance(default_guidance, (int, float))
+    ):
+        logger.warning(f"Invalid image manifest default_guidance: {default_guidance!r}")
+        return None
+
+    metadata_keys = (
+        "backend",
+        "base_model",
+        "model_path",
+        "quantize",
+        "default_steps",
+        "default_guidance",
+        "estimated_size",
+    )
+    metadata = {key: manifest[key] for key in metadata_keys if key in manifest}
+    metadata["tasks"] = list(tasks)
+    metadata["capabilities"] = list(tasks)
+    metadata["manifest_path"] = str(manifest_path)
+
+    return ImageModelManifest(
+        backend="mflux",
+        base_model=base_model.strip(),
+        tasks=tasks,
+        metadata=metadata,
+        model_path=(
+            model_path_value.strip() if isinstance(model_path_value, str) else None
+        ),
+        estimated_size=estimated_size,
+    )
 
 
 def _is_unsupported_model(model_path: Path) -> bool:
@@ -325,7 +605,7 @@ def _is_unsupported_model(model_path: Path) -> bool:
     try:
         with open(config_path) as f:
             config = json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, OSError):
         return False
 
     architectures = config.get("architectures", [])
@@ -335,7 +615,9 @@ def _is_unsupported_model(model_path: Path) -> bool:
 
     model_type = config.get("model_type", "")
     normalized = model_type.lower().replace("-", "_")
-    return normalized in UNSUPPORTED_MODEL_TYPES or model_type in UNSUPPORTED_MODEL_TYPES
+    return (
+        normalized in UNSUPPORTED_MODEL_TYPES or model_type in UNSUPPORTED_MODEL_TYPES
+    )
 
 
 def _is_causal_lm_reranker(model_path: Path) -> bool:
@@ -379,16 +661,14 @@ def _has_sentence_transformers_embedding_pipeline(model_path: Path) -> bool:
     try:
         with open(modules_path) as f:
             modules = json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, OSError):
         return False
 
     if not isinstance(modules, list):
         return False
 
     module_types = {
-        module.get("type", "")
-        for module in modules
-        if isinstance(module, dict)
+        module.get("type", "") for module in modules if isinstance(module, dict)
     }
     if "sentence_transformers.models.Transformer" not in module_types:
         return False
@@ -464,6 +744,337 @@ def _has_vision_subconfig(config: dict) -> bool:
     )
 
 
+def _iter_jang_sidecar_objects(model_path: Path):
+    for parent in (model_path, model_path / "target"):
+        for name in JANG_CONFIG_FILENAMES:
+            path = parent / name
+            if not path.exists():
+                continue
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                yield None
+                return
+            yield data if isinstance(data, dict) else None
+            return
+
+    for config_path in (model_path / "config.json", model_path / "target" / "config.json"):
+        if not config_path.exists():
+            continue
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(config, dict) and isinstance(config.get("jang"), dict):
+            yield config["jang"]
+            return
+        if isinstance(config, dict) and _config_declares_jang_metadata(config):
+            yield config
+            return
+
+
+_JANG_MEDIA_MODALITIES = {
+    "audio",
+    "image",
+    "images",
+    "image_text",
+    "multimodal",
+    "video",
+    "vision",
+    "vision_language",
+    "visual",
+    "vl",
+    "vlm",
+}
+_JANG_TEXT_RUNTIME_STATUSES = {
+    "weights_preserved_text_runtime",
+    "preserved_weights_text_runtime",
+    "preserved_disabled",
+    "text_only",
+    "text_runtime",
+    "unwired",
+}
+
+
+def _normalize_jang_marker(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    normalized = "".join(ch if ch.isalnum() else "_" for ch in text)
+    normalized = "_".join(part for part in normalized.split("_") if part)
+    return normalized or None
+
+
+def _iter_nested_dicts(value: object):
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from _iter_nested_dicts(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _iter_nested_dicts(nested)
+
+
+def _config_declares_jang_metadata(config: dict[str, object]) -> bool:
+    """Return True when config.json itself carries JANG-format evidence."""
+
+    marker_keys = {
+        "family",
+        "format",
+        "jangProfile",
+        "jang_profile",
+        "profile",
+        "tqLayout",
+        "tq_layout",
+        "weightFormat",
+        "weight_format",
+    }
+    known_markers = {
+        "affine",
+        "affinemxtq",
+        "fp4",
+        "fp8",
+        "jang",
+        "jangaffine",
+        "jangq",
+        "jangtq",
+        "jjqf",
+        "mxfp4",
+        "mxfp8",
+        "mxtq",
+        "mxq",
+        "nvfp4",
+    }
+    for item in _iter_nested_dicts(config):
+        for key in marker_keys:
+            marker = _normalize_jang_marker(item.get(key))
+            if marker is None:
+                continue
+            canonical = marker.replace("_", "")
+            if (
+                marker.startswith("jang_")
+                or marker.startswith("jangtq")
+                or canonical in known_markers
+            ):
+                return canonical != "mlx"
+
+    bit_keys = {
+        "mxtqBits",
+        "mxtqDownBits",
+        "mxtqGateUpBits",
+        "mxtq_bits",
+        "mxtq_down_bits",
+        "mxtq_gate_up_bits",
+        "routedExpertBits",
+        "routedExpertLayerBits",
+        "routed_expert_bits",
+        "routed_expert_layer_bits",
+        "tqLayout",
+        "tq_layout",
+    }
+    for item in _iter_nested_dicts(config):
+        if any(item.get(key) is not None for key in bit_keys):
+            return True
+    return False
+
+
+def _coerce_jang_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _mapping_value(source: dict[str, object] | None, *keys: str) -> object | None:
+    if not isinstance(source, dict):
+        return None
+    for key in keys:
+        value = source.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _jang_modalities_declare_active_media(modalities: object) -> bool:
+    if isinstance(modalities, str):
+        marker = _normalize_jang_marker(modalities)
+        return marker in _JANG_MEDIA_MODALITIES
+    if isinstance(modalities, dict):
+        for key, value in modalities.items():
+            marker = _normalize_jang_marker(key)
+            if marker in _JANG_MEDIA_MODALITIES and _coerce_jang_bool(value) is True:
+                return True
+        return False
+    if isinstance(modalities, (list, tuple, set)):
+        return any(
+            (
+                (_normalize_jang_marker(item) in _JANG_MEDIA_MODALITIES)
+                if isinstance(item, str)
+                else False
+            )
+            for item in modalities
+        )
+    return False
+
+
+def _jang_modalities_declare_no_active_media(modalities: object) -> bool:
+    if not isinstance(modalities, dict):
+        return False
+    saw_disabled_media = False
+    for key, value in modalities.items():
+        marker = _normalize_jang_marker(key)
+        if marker not in _JANG_MEDIA_MODALITIES:
+            continue
+        flag = _coerce_jang_bool(value)
+        if flag is True:
+            return False
+        if flag is False:
+            saw_disabled_media = True
+    return saw_disabled_media
+
+
+def _jang_config_declares_active_media(data: dict[str, object]) -> bool:
+    if _coerce_jang_bool(_mapping_value(data, "has_audio", "hasAudio")) is True:
+        return True
+    if _coerce_jang_bool(_mapping_value(data, "has_image", "hasImage")) is True:
+        return True
+    if _coerce_jang_bool(_mapping_value(data, "has_vision", "hasVision")) is True:
+        return True
+    if _coerce_jang_bool(_mapping_value(data, "has_video", "hasVideo")) is True:
+        return True
+    return _jang_modalities_declare_active_media(
+        _mapping_value(data, "modalities", "modality")
+    )
+
+
+def _jang_capabilities_have_active_multimodal_runtime(
+    capabilities: dict[str, object],
+) -> bool:
+    status = _mapping_value(capabilities, "multimodal_status", "multimodalStatus")
+    if (
+        isinstance(status, str)
+        and status.strip().lower() in _JANG_TEXT_RUNTIME_STATUSES
+    ):
+        return False
+    unwired = _mapping_value(capabilities, "unwired_modalities", "unwiredModalities")
+    return not (isinstance(unwired, (list, tuple, set)) and len(unwired) > 0)
+
+
+def _jang_capabilities_declares_active_media(
+    capabilities: dict[str, object],
+) -> bool:
+    if not _jang_capabilities_have_active_multimodal_runtime(capabilities):
+        return False
+    if (
+        _coerce_jang_bool(_mapping_value(capabilities, "has_vision", "hasVision"))
+        is True
+    ):
+        return True
+    if _coerce_jang_bool(_mapping_value(capabilities, "has_image", "hasImage")) is True:
+        return True
+    if _coerce_jang_bool(_mapping_value(capabilities, "has_video", "hasVideo")) is True:
+        return True
+    if (
+        _coerce_jang_bool(
+            _mapping_value(capabilities, "supports_audio", "supportsAudio")
+        )
+        is True
+    ):
+        return True
+    if (
+        _coerce_jang_bool(
+            _mapping_value(capabilities, "supports_image", "supportsImage")
+        )
+        is True
+    ):
+        return True
+    if (
+        _coerce_jang_bool(
+            _mapping_value(capabilities, "supports_vision", "supportsVision")
+        )
+        is True
+    ):
+        return True
+    if (
+        _coerce_jang_bool(
+            _mapping_value(capabilities, "supports_video", "supportsVideo")
+        )
+        is True
+    ):
+        return True
+    if _jang_modalities_declare_active_media(capabilities.get("modalities")):
+        return True
+    return _jang_modalities_declare_active_media(capabilities.get("modality"))
+
+
+def _jang_sidecar_has_vision(model_path: Path) -> bool:
+    """Return True when a JANG sidecar declares a vision-capable artifact."""
+    has_sidecar = False
+    payload_path = _effective_model_dir(model_path)
+    for data in _iter_jang_sidecar_objects(model_path):
+        has_sidecar = True
+        if not isinstance(data, dict):
+            return False
+        architecture = data.get("architecture")
+        if (
+            isinstance(architecture, dict)
+            and _coerce_jang_bool(
+                _mapping_value(architecture, "has_vision", "hasVision")
+            )
+            is True
+        ):
+            return True
+        if _jang_config_declares_active_media(data):
+            return True
+        capabilities = data.get("capabilities")
+        if isinstance(capabilities, dict) and _jang_capabilities_declares_active_media(
+            capabilities
+        ):
+            return True
+    return has_sidecar and (
+        (payload_path / "preprocessor_config.json").exists()
+        or (payload_path / "video_preprocessor_config.json").exists()
+    )
+
+
+def _jang_sidecar_declares_no_active_vision(model_path: Path) -> bool:
+    """Return True when a JANG sidecar explicitly marks media as inactive."""
+
+    for data in _iter_jang_sidecar_objects(model_path):
+        if not isinstance(data, dict):
+            return False
+        if _coerce_jang_bool(_mapping_value(data, "has_vision", "hasVision")) is False:
+            return True
+        if _jang_modalities_declare_no_active_media(data.get("modalities")):
+            return True
+        architecture = data.get("architecture")
+        if (
+            isinstance(architecture, dict)
+            and _coerce_jang_bool(
+                _mapping_value(architecture, "has_vision", "hasVision")
+            )
+            is False
+        ):
+            return True
+        capabilities = data.get("capabilities")
+        if isinstance(
+            capabilities, dict
+        ) and not _jang_capabilities_have_active_multimodal_runtime(capabilities):
+            return True
+    return False
+
+
 def _architecture_indicates_causal_lm(architectures: list[str]) -> bool:
     """True when ``architectures`` describe a text causal LM (not mlx-audio STS).
 
@@ -479,22 +1090,29 @@ def detect_model_type(model_path: Path) -> ModelType:
     Detect model type from config.json.
 
     Checks:
-    1. architectures field for reranker-specific classes (SequenceClassification)
-    2. CausalLM-based reranker/embedding detection (architecture + directory name)
-    3. sentence-transformers pipeline detection via modules.json
-    4. architectures field for embedding-specific classes
-    5. model_type field against known embedding types (unambiguous only)
-    6. VLM detection via architectures, model_type, or vision sub-config
+    1. mflux image manifest (omlx-image-model.json)
+    2. architectures field for reranker-specific classes (SequenceClassification)
+    3. CausalLM-based reranker/embedding detection (architecture + directory name)
+    4. sentence-transformers pipeline detection via modules.json
+    5. architectures field for embedding-specific classes
+    6. model_type field against known embedding types (unambiguous only)
+    7. VLM detection via architectures, model_type, or vision sub-config
        presence (``vision_config`` / ``vit_config`` / non-empty
        ``mm_vision_tower`` — see :func:`_has_vision_subconfig`)
-    7. Audio model detection (STT/TTS/STS)
+    8. Audio model detection (STT/TTS/STS)
 
     Args:
         model_path: Path to model directory
 
     Returns:
-        Model type: "llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", or "audio_sts"
+        Model type: "llm", "vlm", "embedding", "reranker", "audio_stt",
+        "audio_tts", "audio_sts", or "image"
     """
+    original_model_path = model_path
+    if _load_image_manifest(model_path) is not None:
+        return "image"
+
+    model_path = _effective_model_dir(model_path)
     config_path = model_path / "config.json"
     if not config_path.exists():
         return "llm"
@@ -502,7 +1120,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     try:
         with open(config_path) as f:
             config = json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, OSError):
         return "llm"
 
     # Check architectures field for reranker first (more specific)
@@ -515,26 +1133,32 @@ def detect_model_type(model_path: Path) -> ModelType:
     # These use a standard CausalLM architecture but are fine-tuned for reranking
     # via yes/no logit scoring. Detected by architecture + model directory name hint.
     for arch in architectures:
-        if arch in CAUSAL_LM_RERANKER_ARCHITECTURES:
-            if _is_causal_lm_reranker(model_path):
-                return "reranker"
+        if arch in CAUSAL_LM_RERANKER_ARCHITECTURES and _is_causal_lm_reranker(
+            original_model_path
+        ):
+            return "reranker"
 
     # Check for CausalLM-based embeddings (e.g., Qwen3-Embedding).
     # These use a standard CausalLM architecture but are fine-tuned for embeddings
     # and ship without lm_head weights. Detected by architecture + directory name hint.
     for arch in architectures:
-        if arch in CAUSAL_LM_EMBEDDING_ARCHITECTURES:
-            if _is_causal_lm_embedding(model_path):
-                return "embedding"
+        if arch in CAUSAL_LM_EMBEDDING_ARCHITECTURES and _is_causal_lm_embedding(
+            original_model_path
+        ):
+            return "embedding"
 
     # Check for multimodal (VLM-based) rerankers and embeddings.
     # Same architecture string as VLM chat models; distinguished by the
     # directory name heuristic. Must come before VLM detection below so
     # the reranker/embedding hint wins over default VLM classification.
     for arch in architectures:
-        if arch in MULTIMODAL_RERANKER_ARCHITECTURES and _is_causal_lm_reranker(model_path):
+        if arch in MULTIMODAL_RERANKER_ARCHITECTURES and _is_causal_lm_reranker(
+            original_model_path
+        ):
             return "reranker"
-        if arch in MULTIMODAL_EMBEDDING_ARCHITECTURES and _is_causal_lm_embedding(model_path):
+        if arch in MULTIMODAL_EMBEDDING_ARCHITECTURES and _is_causal_lm_embedding(
+            original_model_path
+        ):
             return "embedding"
 
     if _has_sentence_transformers_embedding_pipeline(model_path):
@@ -567,10 +1191,18 @@ def detect_model_type(model_path: Path) -> ModelType:
         )
 
     if normalized_type in VLM_NATIVE_TEXT_MODEL_TYPES:
-        logger.info(
-            f"{model_type} detected as mlx-vlm native text model"
-        )
+        logger.info(f"{model_type} detected as mlx-vlm native text model")
         return "vlm"
+
+    jang_declares_no_vision = _jang_sidecar_declares_no_active_vision(
+        original_model_path
+    )
+    if jang_declares_no_vision:
+        logger.info(
+            "JANG sidecar for %s declares architecture.has_vision=false; "
+            "ignoring vision_config / VLM heuristics",
+            original_model_path,
+        )
 
     # Check for VLM: architectures field
     # Some text-only quants (e.g., unsloth/gemma-4-31b-it-MLX-8bit) keep the VLM
@@ -580,7 +1212,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     # three keys we accept (``vision_config``, ``vit_config``,
     # ``mm_vision_tower``).
     for arch in architectures:
-        if arch in VLM_ARCHITECTURES:
+        if arch in VLM_ARCHITECTURES and not jang_declares_no_vision:
             if normalized_type in VLM_MODEL_TYPES and not _has_vision_subconfig(config):
                 logger.info(
                     f"Architecture '{arch}' is a VLM architecture but no "
@@ -595,11 +1227,9 @@ def detect_model_type(model_path: Path) -> ModelType:
     # Text-only quants won't carry a vision sub-config. gemma4_unified and
     # diffusion_gemma are exceptions: they are served by mlx-vlm regardless of
     # vision_config presence in config.json.
-    if normalized_type in VLM_MODEL_TYPES:
+    if normalized_type in VLM_MODEL_TYPES and not jang_declares_no_vision:
         if normalized_type in {"gemma4_unified", "diffusion_gemma"}:
-            logger.info(
-                f"{model_type} detected as VLM (mlx-vlm native model)"
-            )
+            logger.info(f"{model_type} detected as VLM (mlx-vlm native model)")
             return "vlm"
         if _has_vision_subconfig(config):
             return "vlm"
@@ -609,9 +1239,12 @@ def detect_model_type(model_path: Path) -> ModelType:
             "treating as LLM (text-only quant)"
         )
 
+    if not jang_declares_no_vision and _jang_sidecar_has_vision(original_model_path):
+        return "vlm"
+
     # Check for VLM: presence of a vision sub-config (fallback heuristic).
     # Catch-all for VLMs that aren't yet listed in VLM_MODEL_TYPES.
-    if _has_vision_subconfig(config):
+    if not jang_declares_no_vision and _has_vision_subconfig(config):
         return "vlm"
 
     # Check for audio models — architectures take priority over model_type.
@@ -647,7 +1280,10 @@ def detect_model_type(model_path: Path) -> ModelType:
     # mlx-audio LFM STS may use an "lfm*" model_type without a known architecture
     # string yet. Liquid LFM *text* checkpoints share that prefix — disambiguate
     # with CausalLM architecture names (LFM2 / LFM2.5 MoE, future lfm* LMs).
-    if normalized_type.startswith("lfm") and normalized_type not in EMBEDDING_MODEL_TYPES:
+    if (
+        normalized_type.startswith("lfm")
+        and normalized_type not in EMBEDDING_MODEL_TYPES
+    ):
         if _architecture_indicates_causal_lm(architectures):
             return "llm"
         return "audio_sts"
@@ -825,7 +1461,7 @@ def estimate_model_size(model_path: Path) -> int:
     total_size = 0
 
     # Primary: safetensors files
-    safetensors_files = list(model_path.glob("*.safetensors"))
+    safetensors_files = select_safetensors_weight_files(model_path)
     for f in safetensors_files:
         total_size += f.stat().st_size
 
@@ -852,14 +1488,107 @@ def estimate_model_size(model_path: Path) -> int:
     return int(total_size * overhead_factor)
 
 
+def _resolve_image_model_path(
+    model_dir: Path, manifest: ImageModelManifest
+) -> Path | None:
+    """Resolve a manifest model_path relative to the image model directory."""
+    if manifest.model_path is None:
+        return None
+
+    local_path = Path(manifest.model_path).expanduser()
+    if not local_path.is_absolute():
+        local_path = model_dir / local_path
+    if local_path.exists():
+        return local_path
+    return None
+
+
+def _sum_file_tree_size(path: Path) -> int:
+    """Best-effort size estimate for a file or directory tree."""
+    if path.is_file():
+        return path.stat().st_size
+
+    total = 0
+    for child in path.rglob("*"):
+        if not child.is_file():
+            continue
+        with contextlib.suppress(OSError):
+            total += child.stat().st_size
+    return total
+
+
+def estimate_image_model_size(model_dir: Path, manifest: ImageModelManifest) -> int:
+    """Estimate image model size without importing or loading mflux."""
+    if manifest.estimated_size is not None:
+        return manifest.estimated_size
+
+    local_path = _resolve_image_model_path(model_dir, manifest)
+    if local_path is not None:
+        if local_path.is_dir():
+            with contextlib.suppress(ValueError, OSError):
+                return estimate_model_size(local_path)
+
+        with contextlib.suppress(OSError):
+            total_size = _sum_file_tree_size(local_path)
+            if total_size > 0:
+                return int(total_size * 1.05)
+
+    base_model = _normalize_image_base_model(manifest.base_model)
+    fallback_size = IMAGE_DEFAULT_ESTIMATED_SIZES.get(
+        base_model, IMAGE_UNKNOWN_FALLBACK_SIZE
+    )
+    if base_model not in IMAGE_DEFAULT_ESTIMATED_SIZES:
+        logger.warning(
+            "Using conservative image model size fallback for unknown base_model %r",
+            manifest.base_model,
+        )
+    return _adjust_image_size_for_quantize(
+        fallback_size,
+        manifest.metadata.get("quantize"),
+    )
+
+
 def _is_adapter_dir(path: Path) -> bool:
     """Check if a directory contains a LoRA/PEFT adapter (has adapter_config.json)."""
     return (path / "adapter_config.json").exists()
 
 
+def _is_jangspec_model_dir(path: Path) -> bool:
+    """Return True for JANGSpec bundle roots with target-side model metadata."""
+    target = path / "target"
+    return (
+        (path / "jangspec.json").is_file()
+        and (target / "config.json").exists()
+        and (
+            any((target / name).exists() for name in JANG_CONFIG_FILENAMES)
+            or _config_embeds_jang_sidecar(target / "config.json")
+        )
+    )
+
+
+def _effective_model_dir(path: Path) -> Path:
+    """Return the payload directory used for config-side discovery reads."""
+    return path / "target" if _is_jangspec_model_dir(path) else path
+
+
+def _config_embeds_jang_sidecar(config_path: Path) -> bool:
+    """Return True when a config.json carries embedded JANG metadata."""
+
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+    return isinstance(config, dict) and isinstance(config.get("jang"), dict)
+
+
 def _is_model_dir(path: Path) -> bool:
-    """Check if a directory contains a valid model (has config.json)."""
-    return (path / "config.json").exists() and not _is_adapter_dir(path)
+    """Check if a directory contains a valid model manifest or config.json."""
+    return (
+        _load_image_manifest(path) is not None
+        or (path / "config.json").exists()
+        or _is_jangspec_model_dir(path)
+    ) and not _is_adapter_dir(path)
 
 
 def model_directory_access_error(path: Path) -> str | None:
@@ -871,10 +1600,7 @@ def model_directory_access_error(path: Path) -> str | None:
             return f"Model directory is not a directory: {path}"
         next(path.iterdir(), None)
     except OSError as e:
-        return (
-            f"Model directory is not readable: {path} "
-            f"({type(e).__name__}: {e})"
-        )
+        return f"Model directory is not readable: {path} " f"({type(e).__name__}: {e})"
     return None
 
 
@@ -889,10 +1615,7 @@ def model_directory_write_error(path: Path, *, create: bool = False) -> str | No
         if not path.is_dir():
             return f"Model directory is not a directory: {path}"
     except OSError as e:
-        return (
-            f"Model directory is not writable: {path} "
-            f"({type(e).__name__}: {e})"
-        )
+        return f"Model directory is not writable: {path} " f"({type(e).__name__}: {e})"
 
     access_error = model_directory_access_error(path)
     if access_error is not None:
@@ -907,10 +1630,7 @@ def model_directory_write_error(path: Path, *, create: bool = False) -> str | No
             f.write(b"")
             f.flush()
     except OSError as e:
-        return (
-            f"Model directory is not writable: {path} "
-            f"({type(e).__name__}: {e})"
-        )
+        return f"Model directory is not writable: {path} " f"({type(e).__name__}: {e})"
 
     return None
 
@@ -950,7 +1670,7 @@ def _decode_hf_cache_model_id(path: Path) -> tuple[str, str] | None:
     if not name.startswith("models--"):
         return None
 
-    encoded = name[len("models--"):]
+    encoded = name[len("models--") :]
     if not encoded:
         return None
 
@@ -1007,7 +1727,9 @@ def _safetensors_has_mlx_metadata(path: Path) -> bool:
         logger.debug(f"safetensors import failed while checking {path}: {e}")
         return False
 
-    for shard in sorted(path.glob("model*.safetensors")):
+    for shard in select_safetensors_weight_files(path):
+        if not shard.name.startswith("model"):
+            continue
         try:
             with safe_open(str(shard), framework="numpy") as f:
                 metadata = f.metadata() or {}
@@ -1026,8 +1748,16 @@ def _is_hf_cache_mlx_compatible(model_dir: Path, source_repo_id: str) -> bool:
     """Heuristic for HF cache entries that can be loaded without conversion."""
     if not _is_model_dir(model_dir):
         return False
-    if not list(model_dir.glob("model*.safetensors")):
-        logger.debug(f"Skipping HF cache model without model*.safetensors: {source_repo_id}")
+    if _load_image_manifest(model_dir) is not None:
+        return True
+    if not [
+        path
+        for path in select_safetensors_weight_files(model_dir)
+        if path.name.startswith("model")
+    ]:
+        logger.debug(
+            f"Skipping HF cache model without model*.safetensors: {source_repo_id}"
+        )
         return False
     if _safetensors_has_mlx_metadata(model_dir):
         return True
@@ -1053,13 +1783,45 @@ def _register_model(
 ) -> None:
     """Try to register a single model directory into the models dict."""
     try:
-        if _is_unsupported_model(model_dir):
+        payload_dir = _effective_model_dir(model_dir)
+        engine_type: EngineType
+        if _is_unsupported_model(payload_dir):
             logger.info(f"Skipping unsupported model: {model_id}")
             return
 
-        model_type = detect_model_type(model_dir)
+        image_manifest = _load_image_manifest(model_dir)
+        if image_manifest is not None:
+            model_type: ModelType = "image"
+            engine_type = "image"
+            estimated_size = estimate_image_model_size(model_dir, image_manifest)
+            config_model_type = image_manifest.backend
+            thinking_default = None
+            preserve_thinking_default = None
+            capabilities = list(image_manifest.tasks)
+            tasks = list(image_manifest.tasks)
+            image_metadata = dict(image_manifest.metadata)
+            model_context_length = None
+        else:
+            model_type = detect_model_type(model_dir)
+            estimated_size = estimate_model_size(model_dir)
+
+            # Read raw config model_type for sub-type detection (e.g., OCR models)
+            config_model_type = ""
+            try:
+                with open(payload_dir / "config.json") as f:
+                    config_model_type = json.load(f).get("model_type", "")
+            except Exception:
+                pass
+
+            thinking_default = detect_thinking_default(payload_dir)
+            preserve_thinking_default = detect_preserve_thinking(payload_dir)
+            model_context_length = _read_model_context_length(payload_dir)
+            capabilities = []
+            tasks = []
+            image_metadata = None
+
         if model_type == "embedding":
-            engine_type: EngineType = "embedding"
+            engine_type = "embedding"
         elif model_type == "reranker":
             engine_type = "reranker"
         elif model_type == "vlm":
@@ -1070,22 +1832,10 @@ def _register_model(
             engine_type = "audio_tts"
         elif model_type == "audio_sts":
             engine_type = "audio_sts"
+        elif model_type == "image":
+            engine_type = "image"
         else:
             engine_type = "batched"
-        estimated_size = estimate_model_size(model_dir)
-
-        # Read raw config model_type for sub-type detection (e.g., OCR models)
-        config_model_type = ""
-        try:
-            import json
-            with open(model_dir / "config.json") as f:
-                config_model_type = json.load(f).get("model_type", "")
-        except Exception:
-            pass
-
-        thinking_default = detect_thinking_default(model_dir)
-        preserve_thinking_default = detect_preserve_thinking(model_dir)
-        model_context_length = _read_model_context_length(model_dir)
 
         models[model_id] = DiscoveredModel(
             model_id=model_id,
@@ -1099,6 +1849,9 @@ def _register_model(
             model_context_length=model_context_length,
             source_type=source_type,
             source_repo_id=source_repo_id,
+            capabilities=capabilities,
+            tasks=tasks,
+            image_metadata=image_metadata,
         )
 
         size_gb = estimated_size / (1024**3)
@@ -1181,10 +1934,9 @@ def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
             # Level 2: organization folder — scan children
             has_children = False
             for child in _iter_readable_entries(subdir, "model group"):
-                if (
-                    not _is_readable_dir(child, "model group entry")
-                    or child.name.startswith(".")
-                ):
+                if not _is_readable_dir(
+                    child, "model group entry"
+                ) or child.name.startswith("."):
                     continue
                 if _is_adapter_dir(child):
                     logger.info(
@@ -1253,8 +2005,9 @@ def discover_models_from_dirs(
 
 def format_size(size_bytes: int) -> str:
     """Format byte size as human-readable string."""
+    size = float(size_bytes)
     for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(size_bytes) < 1024.0:
-            return f"{size_bytes:.2f}{unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.2f}PB"
+        if abs(size) < 1024.0:
+            return f"{size:.2f}{unit}"
+        size /= 1024.0
+    return f"{size:.2f}PB"
