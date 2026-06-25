@@ -16,11 +16,11 @@ class Omlx < Formula
   depends_on :macos
   depends_on "python@3.11"
 
-  # mlx-audio pins mlx-lm==0.31.1 which conflicts with omlx's git-pinned
-  # mlx-lm. Fetch source separately so we can patch the pin before install.
+  # Fetch mlx-audio separately so the formula can install audio support without
+  # pulling omlx's optional extras into the core install step.
   resource "mlx-audio" do
     url "https://github.com/Blaizzy/mlx-audio.git",
-      revision: "51753266e0a4f766fd5e6fbc46652224efc23981"
+      revision: "412cf7cd381c2a3f6a8189af04a95af24cb415b6"
   end
 
   # Kokoro's English G2P path uses misaki + spaCy. Bundle the spaCy
@@ -78,9 +78,8 @@ class Omlx < Formula
       PYTHON
     end
 
-    # Install mlx-audio with patched mlx-lm pin to avoid version conflict
+    # Install mlx-audio support into the same virtualenv.
     resource("mlx-audio").stage do
-      inreplace "pyproject.toml", '"mlx-lm==0.31.1"', '"mlx-lm>=0.31.1"'
       system libexec/"bin/pip", "install", ".[all]"
     end
 
