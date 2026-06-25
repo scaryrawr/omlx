@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -128,6 +130,41 @@ class TestEnginePoolInit:
         entry_b = pool.get_entry("model-b")
         assert entry_b is not None
         assert entry_b.is_pinned is False
+
+    def test_discover_image_model_preserves_metadata_in_status(self, tmp_path):
+        """Image manifest metadata is copied into EngineEntry and status."""
+        model_dir = tmp_path / "flux-schnell"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "task": ["txt2img", "edit"],
+                    "estimated_size": 4096,
+                }
+            )
+        )
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(tmp_path))
+
+        entry = pool.get_entry("flux-schnell")
+        assert entry is not None
+        assert entry.model_type == "image"
+        assert entry.engine_type == "image"
+        assert entry.config_model_type == "mflux"
+        assert entry.capabilities == ["generation", "edit"]
+        assert entry.tasks == ["generation", "edit"]
+        assert entry.image_metadata is not None
+        assert entry.image_metadata["base_model"] == "schnell"
+
+        status_model = pool.get_status()["models"][0]
+        assert status_model["model_type"] == "image"
+        assert status_model["engine_type"] == "image"
+        assert status_model["capabilities"] == ["generation", "edit"]
+        assert status_model["tasks"] == ["generation", "edit"]
+        assert status_model["image_metadata"]["backend"] == "mflux"
 
 
 class TestExposedProfileModelResolution:
@@ -294,6 +331,35 @@ class TestEnginePoolErrors:
         assert exc_info.value.model_id == "model-a"
         assert exc_info.value.ceiling == 100
 
+    def test_image_engine_missing_mflux_raises_model_loading_error(self, tmp_path):
+        """Image engine load fails fast with install hint when mflux is missing."""
+        model_dir = tmp_path / "flux-schnell"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "task": ["txt2img"],
+                    "estimated_size": 4096,
+                }
+            )
+        )
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(tmp_path))
+
+        with (
+            patch("omlx.engine_pool.is_mflux_available", return_value=False),
+            pytest.raises(ModelLoadingError) as exc_info,
+        ):
+            asyncio.run(pool.get_engine("flux-schnell"))
+
+        assert exc_info.value.model_id == "flux-schnell"
+        msg = str(exc_info.value)
+        assert "mflux" in msg
+        assert "omlx[image]" in msg
+
 
 class TestEnginePoolStatus:
     """Tests for EnginePool status reporting."""
@@ -335,6 +401,16 @@ class TestEnginePoolStatus:
 
         assert pool.get_loaded_model_ids() == []
 
+    def test_get_status_includes_is_loading(self, small_mock_model_dir):
+        """Test get_status includes is_loading field."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        status = pool.get_status()
+        for model in status["models"]:
+            assert "is_loading" in model
+            assert model["is_loading"] is False
+
 
 class TestEngineEntry:
     """Tests for EngineEntry dataclass."""
@@ -353,6 +429,9 @@ class TestEngineEntry:
         assert entry.last_access == 0.0
         assert entry.is_loading is False
         assert entry.is_pinned is False
+        assert entry.capabilities == []
+        assert entry.tasks == []
+        assert entry.image_metadata is None
 
     def test_entry_with_values(self):
         """Test EngineEntry with custom values."""
@@ -416,6 +495,79 @@ class TestApplySettingsOverrides:
 
         assert pool.get_entry("model-a").model_type == "llm"
         assert pool.get_entry("model-a").engine_type == "batched"
+
+    def test_image_override_maps_to_image_engine(self, small_mock_model_dir):
+        """Test that image override changes both model and engine type."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        from omlx.model_settings import ModelSettings
+
+        settings_manager = MagicMock()
+        settings_manager.get_settings.side_effect = lambda mid: (
+            ModelSettings(model_type_override="image")
+            if mid == "model-a"
+            else ModelSettings()
+        )
+
+        pool.apply_settings_overrides(settings_manager)
+
+        assert pool.get_entry("model-a").model_type == "image"
+        assert pool.get_entry("model-a").engine_type == "image"
+
+
+class TestImageEngineLoading:
+    """Tests for lazy ImageEngine construction."""
+
+    @pytest.mark.asyncio
+    async def test_load_image_engine_passes_manifest_metadata(self, monkeypatch):
+        """ImageEngine is imported lazily and receives discovery metadata."""
+        created_kwargs = {}
+
+        class FakeImageEngine:
+            def __init__(self, **kwargs):
+                created_kwargs.update(kwargs)
+                self.start_calls = 0
+
+            async def start(self):
+                self.start_calls += 1
+                return None
+
+        fake_module = types.ModuleType("omlx.engine.image")
+        fake_module.ImageEngine = FakeImageEngine
+        monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
+        monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
+        monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        entry = EngineEntry(
+            model_id="flux-schnell",
+            model_path="/models/flux-schnell",
+            model_type="image",
+            engine_type="image",
+            estimated_size=4096,
+            config_model_type="mflux",
+            capabilities=["generation"],
+            tasks=["generation"],
+            image_metadata={"backend": "mflux", "base_model": "schnell"},
+        )
+        pool._entries["flux-schnell"] = entry
+
+        await pool._load_engine("flux-schnell")
+
+        assert isinstance(entry.engine, FakeImageEngine)
+        assert entry.engine.start_calls == 1
+        assert pool.current_model_memory == 4096
+        assert created_kwargs["model_name"] == "/models/flux-schnell"
+        assert created_kwargs["model_id"] == "flux-schnell"
+        assert created_kwargs["model_path"] == "/models/flux-schnell"
+        assert created_kwargs["config_model_type"] == "mflux"
+        assert created_kwargs["image_metadata"] == {
+            "backend": "mflux",
+            "base_model": "schnell",
+        }
+        assert created_kwargs["capabilities"] == ["generation"]
+        assert created_kwargs["tasks"] == ["generation"]
 
 
 class TestVLMFallback:
@@ -1265,7 +1417,6 @@ class TestEnginePoolEviction:
             with pytest.raises(InsufficientMemoryError):
                 await pool.get_engine("model-b")
 
-
 class TestEnginePoolPrefillEviction:
     """Tests for request-time idle LRU eviction before prefill throttling."""
 
@@ -1669,6 +1820,37 @@ class TestResolveModelId:
 
         result = pool.resolve_model_id("gpt-4", settings_manager)
         assert result == "model-a"
+
+    def test_alias_conflicting_with_model_id_is_not_active(self, small_mock_model_dir):
+        """Test aliases that collide with model IDs are ignored."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="model-b"),
+            "model-b": ModelSettings(),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("model-b", settings_manager) == "model-b"
+        assert pool.resolve_model_id("omlx/model-b", settings_manager) == "model-b"
+
+    def test_duplicate_alias_is_not_active(self, small_mock_model_dir):
+        """Test duplicate aliases are ignored instead of resolving arbitrarily."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="gpt-4"),
+            "model-b": ModelSettings(model_alias="gpt-4"),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("gpt-4", settings_manager) == "gpt-4"
 
     def test_no_match_returns_original(self, small_mock_model_dir):
         """Test unresolved name returns original string."""

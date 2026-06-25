@@ -670,16 +670,18 @@ def _model_has_mtp_weight_tensors(model_dir) -> bool:
         try:
             index = json.loads(index_path.read_text())
             weight_map = index.get("weight_map", {})
-            return any("mtp." in key for key in weight_map.keys())
+            return any("mtp." in key for key in weight_map)
         except Exception:
             return False
 
     # Single-shard fallback: enumerate keys via safe_open metadata. We
     # short-circuit on the first ``mtp.*`` key.
-    for path in model_dir.glob("*.safetensors"):
+    from ..utils.safetensors_shards import select_safetensors_weight_files
+
+    for path in select_safetensors_weight_files(model_dir):
         try:
             with safe_open(str(path), framework="numpy") as f:  # type: ignore[arg-type]
-                for key in f.keys():
+                for key in f.keys():  # noqa: SIM118 - safe_open exposes keys()
                     if "mtp." in key:
                         return True
         except Exception:
@@ -1407,6 +1409,25 @@ async def chat_page(request: Request, is_admin: bool = Depends(require_admin)):
     return templates.TemplateResponse(request, "chat.html", {"api_key": api_key or ""})
 
 
+@router.get("/imagine", response_class=HTMLResponse)
+async def imagine_page(request: Request, is_admin: bool = Depends(require_admin)):
+    """
+    Render the image generation/editing page for image models.
+
+    Requires admin authentication via session cookie. The API key is injected
+    into the template context so the page can call the OpenAI-compatible image
+    endpoints with the same localStorage flow used by the chat page.
+
+    Returns:
+        HTML Imagine page.
+    """
+    global_settings = _get_global_settings()
+    api_key = global_settings.auth.api_key if global_settings else ""
+    return templates.TemplateResponse(
+        request, "imagine.html", {"api_key": api_key or ""}
+    )
+
+
 @router.get("/static/{path:path}")
 async def admin_static(path: str):
     """Serve static files for admin panel (CSS, JS, fonts, logos, etc.)."""
@@ -1908,6 +1929,9 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "preserve_thinking_default": model_info.get("preserve_thinking_default"),
             "source_type": model_info.get("source_type", "local"),
             "source_repo_id": model_info.get("source_repo_id"),
+            "capabilities": model_info.get("capabilities", []),
+            "tasks": model_info.get("tasks", []),
+            "image_metadata": model_info.get("image_metadata"),
             "last_access": model_info.get("last_access"),
             "dflash_compatible": compat_ok,
             "dflash_compatibility_reason": compat_reason,
@@ -2138,6 +2162,7 @@ async def update_model_settings(
             "audio_stt",
             "audio_tts",
             "audio_sts",
+            "image",
         }
         # Treat empty string as None (auto-detect)
         override_value = request.model_type_override or None
@@ -2156,6 +2181,7 @@ async def update_model_settings(
             "audio_stt": "audio_stt",
             "audio_tts": "audio_tts",
             "audio_sts": "audio_sts",
+            "image": "image",
         }
         if override_value:
             entry.model_type = override_value
@@ -4055,8 +4081,9 @@ def _get_engine_info() -> dict:
     packages = {
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
+        "mflux": "https://github.com/scaryrawr/mflux",
     }
 
     fallback_commits = _load_fallback_commits(packages)
@@ -5275,7 +5302,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
 
-    from ..model_discovery import _resolve_hf_cache_entry
+    from ..model_discovery import _is_model_dir, _resolve_hf_cache_entry
 
     def _add_model(
         model_path: Path,
@@ -5311,14 +5338,14 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
 
-            if (subdir / "config.json").exists():
+            if _is_model_dir(subdir):
                 # Level 1: direct model folder
                 _add_model(subdir, subdir.name)
             else:
                 # HF Hub cache entry: models--Org--Name/snapshots/<hash>/
                 hf_resolved = _resolve_hf_cache_entry(subdir)
                 if hf_resolved is not None:
-                    if (hf_resolved.snapshot_path / "config.json").exists():
+                    if _is_model_dir(hf_resolved.snapshot_path):
                         _add_model(
                             hf_resolved.snapshot_path,
                             hf_resolved.model_id,
@@ -5330,7 +5357,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                 for child in sorted(subdir.iterdir()):
                     if not child.is_dir() or child.name.startswith("."):
                         continue
-                    if (child / "config.json").exists():
+                    if _is_model_dir(child):
                         _add_model(child, child.name)
 
     # Sort by the UI display name so organization prefixes group together.
@@ -5351,6 +5378,7 @@ async def delete_hf_model(
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
+    from ..model_discovery import _is_model_dir
 
     # Search for model across all directories in both flat and org-folder layouts
     model_path = None
@@ -5359,7 +5387,7 @@ async def delete_hf_model(
         if not model_dir.exists():
             continue
         candidate = model_dir / model_name
-        if candidate.is_dir() and (candidate / "config.json").exists():
+        if candidate.is_dir() and _is_model_dir(candidate):
             model_path = candidate
             parent_model_dir = model_dir
             break
@@ -5368,7 +5396,7 @@ async def delete_hf_model(
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
             candidate = subdir / model_name
-            if candidate.is_dir() and (candidate / "config.json").exists():
+            if candidate.is_dir() and _is_model_dir(candidate):
                 model_path = candidate
                 parent_model_dir = model_dir
                 break
