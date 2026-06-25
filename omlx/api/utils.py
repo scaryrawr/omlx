@@ -135,7 +135,7 @@ def _extract_text_from_content_list(content: list) -> str:
     for item in content:
         # Convert Pydantic models to dict
         if hasattr(item, "model_dump"):
-            item = item.model_dump()
+            item = item.model_dump(exclude_none=True)
         elif hasattr(item, "dict"):
             item = item.dict()
 
@@ -150,15 +150,15 @@ def _extract_text_from_content_list(content: list) -> str:
 
 
 def _extract_multimodal_content_list(content: list) -> list:
-    """Extract text, image, and audio parts from a content array.
+    """Extract text, image, audio, and video parts from a content array.
 
-    Keeps text, image_url, and input_audio items for VLM processing.
+    Keeps text, image_url, input_audio, and input_video items for VLM processing.
     Other content types (tool_use, thinking, refusal, etc.) are dropped.
     """
     parts = []
     for item in content:
         if hasattr(item, "model_dump"):
-            item = item.model_dump()
+            item = item.model_dump(exclude_none=True)
         elif hasattr(item, "dict"):
             item = item.dict()
         if isinstance(item, dict):
@@ -216,6 +216,25 @@ def _extract_multimodal_content_list(content: list) -> list:
                         {
                             "type": "input_audio",
                             "input_audio": input_audio,
+                        }
+                    )
+            elif item_type in ("input_video", "video"):
+                # oMLX extension: pass through for engine-side video loading
+                input_video = item.get("input_video") or item.get("video")
+                if input_video is None and item_type == "video":
+                    input_video = item
+                if isinstance(input_video, dict):
+                    parts.append(
+                        {
+                            "type": "input_video",
+                            "input_video": input_video,
+                        }
+                    )
+                elif isinstance(input_video, str) and input_video.strip():
+                    parts.append(
+                        {
+                            "type": "input_video",
+                            "input_video": input_video,
                         }
                     )
     return parts
@@ -1182,9 +1201,9 @@ def extract_multimodal_content(
         if isinstance(content, str):
             processed_messages.append({"role": role, "content": content, **_extra})
         elif isinstance(content, list):
-            # Preserve image_url and input_audio parts for VLM processing
+            # Preserve image_url, input_audio, and input_video parts for VLM processing
             multimodal_parts = _extract_multimodal_content_list(content)
-            multimodal_types = {"image_url", "input_audio"}
+            multimodal_types = {"image_url", "input_audio", "input_video"}
             has_multimodal = any(
                 p.get("type") in multimodal_types for p in multimodal_parts
             )

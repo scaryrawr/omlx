@@ -8,6 +8,7 @@ import base64
 import logging
 import sys
 import types
+import urllib.error
 import warnings
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -506,6 +507,24 @@ def test_preprocess_still_rejects_missing_latest_file_part():
         )
 
 
+def test_parse_file_part_missing_responses_source_mentions_file_url():
+    with pytest.raises(
+        MarkItDownRequestError,
+        match=r"file\.file_data or file\.file_url",
+    ):
+        parse_file_part(
+            {
+                "type": "file",
+                "file": {
+                    "filename": "paper.pdf",
+                    "mime_type": "application/pdf",
+                },
+            },
+            max_file_size_mb=10,
+            allow_file_url=True,
+        )
+
+
 def test_async_preprocess_allows_missing_historical_file_parts(monkeypatch):
     def fake_convert(file: MarkItDownFile, **kwargs) -> str:
         raise AssertionError("missing historical files should not be converted")
@@ -585,6 +604,42 @@ def test_server_llm_preprocess_allows_stored_document_placeholders(monkeypatch):
     assert "Attached file unavailable: paper.pdf" in (parts[0].text or "")
 
 
+def test_server_llm_preprocess_preserves_media_file_parts():
+    state = ServerState()
+    state.engine_pool = _EmptyPool()
+    state.global_settings = GlobalSettings()
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": _data_uri(b"video", mime_type="video/mp4"),
+                        },
+                    },
+                    {"type": "text", "text": "Describe it."},
+                ],
+            )
+        ],
+    )
+
+    async def exercise():
+        with patch("omlx.server._server_state", state):
+            return await server_module._preprocess_markitdown_files_for_llm(request)
+
+    processed = asyncio.run(exercise())
+    content = processed.messages[0].content
+
+    assert isinstance(content, list)
+    assert content[0]["type"] == "input_video"
+    assert content[0]["input_video"]["filename"] == "clip.mp4"
+
+
 def test_preprocess_file_parts_rejects_when_disabled():
     settings = GlobalSettings()
     settings.integrations.markitdown_enabled = False
@@ -594,6 +649,79 @@ def test_preprocess_file_parts_rejects_when_disabled():
             [Message(role="user", content=[_file_part()])],
             global_settings=settings,
         )
+
+
+def test_responses_file_url_rejects_private_hosts():
+    part = {
+        "type": "file",
+        "file": {
+            "filename": "notes.txt",
+            "mime_type": "text/plain",
+            "file_url": "http://127.0.0.1/notes.txt",
+        },
+    }
+
+    with pytest.raises(MarkItDownRequestError, match="non-public"):
+        parse_file_part(part, max_file_size_mb=25, allow_file_url=True)
+
+
+def test_responses_file_url_rejects_redirects():
+    part = {
+        "type": "file",
+        "file": {
+            "filename": "notes.txt",
+            "mime_type": "text/plain",
+            "file_url": "https://example.com/notes.txt",
+        },
+    }
+
+    with (
+        patch("omlx.utils.url_security.validate_public_http_url"),
+        patch("urllib.request.build_opener") as mock_build_opener,
+    ):
+        opener = mock_build_opener.return_value
+        opener.open.side_effect = urllib.error.HTTPError(
+            "https://example.com/notes.txt",
+            302,
+            "Found",
+            {"Location": "http://127.0.0.1/notes.txt"},
+            None,
+        )
+
+        with pytest.raises(MarkItDownRequestError, match="redirects"):
+            parse_file_part(part, max_file_size_mb=25, allow_file_url=True)
+
+
+def test_responses_file_url_enforces_size_while_reading():
+    part = {
+        "type": "file",
+        "file": {
+            "filename": "notes.txt",
+            "mime_type": "text/plain",
+            "file_url": "https://example.com/notes.txt",
+        },
+    }
+
+    class _Response:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, _size):
+            return b"x" * (1024 * 1024 + 1)
+
+    with (
+        patch("omlx.utils.url_security.validate_public_http_url"),
+        patch("urllib.request.build_opener") as mock_build_opener,
+    ):
+        mock_build_opener.return_value.open.return_value = _Response()
+
+        with pytest.raises(MarkItDownRequestError, match="exceeds"):
+            parse_file_part(part, max_file_size_mb=1, allow_file_url=True)
 
 
 def test_xlsx_is_rejected_without_pandas_dependency():
