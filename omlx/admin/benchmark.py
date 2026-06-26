@@ -11,9 +11,10 @@ import logging
 import re
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 
@@ -85,7 +86,7 @@ class BenchmarkRun:
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     terminal: bool = False
-    task: Optional[asyncio.Task] = None
+    task: asyncio.Task | None = None
     results: list[dict] = field(default_factory=list)
     error_message: str = ""
     # Experimental flags active when the benchmark started. When non-empty
@@ -133,12 +134,12 @@ def _detect_experimental_features(model_settings: Any) -> list[str]:
     ]
 
 
-def get_run(bench_id: str) -> Optional[BenchmarkRun]:
+def get_run(bench_id: str) -> BenchmarkRun | None:
     """Get a benchmark run by ID."""
     return _benchmark_runs.get(bench_id)
 
 
-def get_active_run() -> Optional[BenchmarkRun]:
+def get_active_run() -> BenchmarkRun | None:
     """Return the currently-running throughput benchmark, if any.
 
     Discovery surface for clients that need to attach to an in-progress
@@ -280,10 +281,8 @@ async def _run_single_test(
 ) -> dict:
     """Run a single request benchmark test and return metrics."""
     # Reset peak memory tracking
-    try:
+    with suppress(Exception):
         mx.reset_peak_memory()
-    except Exception:
-        pass
 
     start_time = time.perf_counter()
     first_token_time = None
@@ -915,8 +914,6 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         logger.info("Benchmark: warmup complete")
 
         # Phase 3: Single request tests
-        single_pp1024_gen_tps = None
-
         for pp_len in request.prompt_lengths:
             current_test += 1
             await _send_event(run, {
@@ -943,10 +940,6 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             run.results.append(result)
 
             await _send_event(run, {"type": "result", "data": result})
-
-            # Store pp1024 gen_tps for speedup calculation
-            if pp_len == 1024:
-                single_pp1024_gen_tps = metrics["gen_tps"]
 
         # Phase 4: Batch tests
         # Each request has a unique UUID prefix (no cache hits)
@@ -1037,10 +1030,8 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             "message": "Benchmark cancelled by user",
         })
         # Try to unload the model on cancellation
-        try:
+        with suppress(Exception):
             await engine_pool._unload_engine(request.model_id)
-        except Exception:
-            pass
 
     except Exception as e:
         logger.error(f"Benchmark error: {e}", exc_info=True)
@@ -1051,7 +1042,5 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             "message": str(e),
         })
         # Try to unload the model on error
-        try:
+        with suppress(Exception):
             await engine_pool._unload_engine(request.model_id)
-        except Exception:
-            pass
