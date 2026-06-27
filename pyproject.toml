@@ -91,9 +91,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (f40459f). MiniMax M3 support is vendored under
+    # mlx-vlm from latest upstream HEAD (6396565). MiniMax M3 support is vendored under
     # omlx.patches.mlx_vlm_minimax_m3_compat because upstream removed it.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@f40459fe62812ea28c2ba124ec40d61cce91328c",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@63965655aa38f41de4dbb9695b7adacbf285ca89",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
