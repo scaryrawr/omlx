@@ -91,9 +91,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (6396565). MiniMax M3 support is vendored under
+    # mlx-vlm from latest upstream HEAD (ea5ad0e). MiniMax M3 support is vendored under
     # omlx.patches.mlx_vlm_minimax_m3_compat because upstream removed it.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@63965655aa38f41de4dbb9695b7adacbf285ca89",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@ea5ad0e4a7ae83ad528757964c62d6a3bef65d28",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
@@ -121,11 +121,11 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from latest upstream main commit (348e1c0) with tts/stt/sts extras
+    # mlx-audio from latest upstream main commit (9b9616b) with tts/stt/sts extras
     # tts extra: misaki, num2words, spacy, phonemizer-fork, espeakng-loader, sentencepiece
     # stt extra: tiktoken, mistral-common[audio]
     # sts extra: tts deps + stt deps + webrtcvad
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@348e1c0a1689bf0b4afb45c2f15861f0cbe464b8",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@9b9616bdcc51bb97439aa381e77bb02d8cd22ade",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
