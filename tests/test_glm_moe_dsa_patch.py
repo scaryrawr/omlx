@@ -256,8 +256,9 @@ def test_glm_adaptive_prefill_config_env_overrides(monkeypatch):
 def test_glm_patch_keeps_vendored_helpers_private():
     glm_moe_dsa = _load_patched_glm_module()
 
-    from omlx.patches.glm_moe_dsa import deepseek_v32 as vendored_deepseek_v32
     from mlx_lm.models import deepseek_v32 as upstream_deepseek_v32
+
+    from omlx.patches.glm_moe_dsa import deepseek_v32 as vendored_deepseek_v32
 
     assert getattr(glm_moe_dsa, "_OMLX_GLM_DSA_OPTIMIZED", False)
     assert sys.modules["mlx_lm.models.glm_moe_dsa"] is glm_moe_dsa
@@ -387,19 +388,25 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
 
     from omlx.patches.glm_moe_dsa.sparse_mla import fused_indexer_scores
 
-    def assert_padded_indexer_scores_match(L, K, offset_view=False):
-        B, H, D = 1, 32, 128
+    def assert_padded_indexer_scores_match(q_length, k_length, offset_view=False):
+        batch, heads, dims = 1, 32, 128
         if offset_view:
-            q_base = mx.random.normal((B, H, L + 2, D), dtype=mx.float16)
-            k_base = mx.random.normal((B, 1, K + 2, D), dtype=mx.float16)
-            w_base = mx.random.normal((B, L + 2, H), dtype=mx.float16)
-            q = q_base[:, :, 1 : L + 1, :]
-            k = k_base[:, :, 1 : K + 1, :]
-            w = w_base[:, 1 : L + 1, :]
+            q_base = mx.random.normal(
+                (batch, heads, q_length + 2, dims), dtype=mx.float16
+            )
+            k_base = mx.random.normal(
+                (batch, 1, k_length + 2, dims), dtype=mx.float16
+            )
+            w_base = mx.random.normal(
+                (batch, q_length + 2, heads), dtype=mx.float16
+            )
+            q = q_base[:, :, 1 : q_length + 1, :]
+            k = k_base[:, :, 1 : k_length + 1, :]
+            w = w_base[:, 1 : q_length + 1, :]
         else:
-            q = mx.random.normal((B, H, L, D), dtype=mx.float16)
-            k = mx.random.normal((B, 1, K, D), dtype=mx.float16)
-            w = mx.random.normal((B, L, H), dtype=mx.float16)
+            q = mx.random.normal((batch, heads, q_length, dims), dtype=mx.float16)
+            k = mx.random.normal((batch, 1, k_length, dims), dtype=mx.float16)
+            w = mx.random.normal((batch, q_length, heads), dtype=mx.float16)
         y_native = fused_indexer_scores(q, k, w, causal=True)
         head_scores = q @ k.swapaxes(-1, -2)
         y_ref = mx.maximum(head_scores, 0)
@@ -408,8 +415,10 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
             axis=1,
             keepdims=True,
         )
-        q_pos = mx.arange(K - L, K, dtype=mx.uint32).reshape(1, 1, L, 1)
-        k_pos = mx.arange(0, K, dtype=mx.uint32).reshape(1, 1, 1, K)
+        q_pos = mx.arange(k_length - q_length, k_length, dtype=mx.uint32).reshape(
+            1, 1, q_length, 1
+        )
+        k_pos = mx.arange(0, k_length, dtype=mx.uint32).reshape(1, 1, 1, k_length)
         y_ref = mx.where(
             k_pos <= q_pos,
             y_ref,
