@@ -43,6 +43,13 @@ IMAGE_ENGINE_ALIASES: dict[tuple[ImageTask, str], tuple[str, ...]] = {
         "ideogram-4",
         "ideogram",
     ),
+    ("generation", "krea-2"): (
+        "krea-2",
+        "krea2",
+        "krea-2-turbo",
+        "krea2-turbo",
+        "krea/krea-2-turbo",
+    ),
     ("edit", "flux2-klein-4b"): (
         "flux2-klein-4b",
         "flux2-klein-4b-edit",
@@ -65,6 +72,17 @@ IMAGE_ENGINE_ALIASES: dict[tuple[ImageTask, str], tuple[str, ...]] = {
     ("edit", "fibo-edit"): ("fibo-edit", "fiboedit"),
     ("edit", "ernie-image-turbo"): ("ernie-image-turbo",),
     ("edit", "ernie-image"): ("ernie-image",),
+    ("edit", "krea-2"): (
+        "krea-2",
+        "krea-2-edit",
+        "krea2",
+        "krea2-edit",
+        "krea-2-turbo",
+        "krea-2-turbo-edit",
+        "krea2-turbo",
+        "krea2-turbo-edit",
+        "krea/krea-2-turbo",
+    ),
 }
 
 
@@ -153,6 +171,17 @@ IMAGE_MODEL_SPECS: tuple[ImageModelSpec, ...] = (
             "ideogram",
         ),
     ),
+    ImageModelSpec(
+        base_model="krea-2",
+        tasks=("generation", "edit"),
+        estimated_size=33 * 1024**3,
+        discovery_aliases=(
+            "krea-2-turbo",
+            "krea2-turbo",
+            "krea-2",
+            "krea2",
+        ),
+    ),
 )
 
 IMAGE_DEFAULT_ESTIMATED_SIZES = {
@@ -202,6 +231,11 @@ IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
         "default_guidance": 4.0,
         "default_image_strength": 0.4,
     },
+    "krea-2": {
+        "default_steps": 8,
+        "default_guidance": 1.0,
+        "default_image_strength": 0.65,
+    },
 }
 
 
@@ -210,12 +244,23 @@ def image_engine_aliases(task: ImageTask, base_model: str) -> tuple[str, ...]:
     return IMAGE_ENGINE_ALIASES.get((task, normalize_image_alias(base_model)), ())
 
 
+def _canonical_base_model(base_model: str) -> str:
+    """Return the registry base model for a user-facing image alias."""
+    normalized = normalize_image_alias(base_model)
+    for (_, canonical), aliases in IMAGE_ENGINE_ALIASES.items():
+        if normalized == canonical or normalized in {
+            normalize_image_alias(alias) for alias in aliases
+        }:
+            return canonical
+    return normalized
+
+
 def get_image_defaults(base_model: str) -> dict[str, int | float]:
     """Return quality-adjusted defaults for a given base model.
 
     Falls back to empty dict when no model-specific defaults exist.
     """
-    return IMAGE_DEFAULTS.get(normalize_image_alias(base_model), {})
+    return IMAGE_DEFAULTS.get(_canonical_base_model(base_model), {})
 
 
 

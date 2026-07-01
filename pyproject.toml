@@ -111,8 +111,8 @@ grammar = [
 ]
 image = [
     # Image generation via mflux; may pull heavy transitive deps such as torch.
-    # Pin to scaryrawr/mflux HEAD for image model transition fixes.
-    "mflux @ git+https://github.com/scaryrawr/mflux@10b537c907ecbf7987a59a921a824d358287ff5e",
+    # Pin to scaryrawr/mflux HEAD for Krea 2 generation/img2img support.
+    "mflux @ git+https://github.com/scaryrawr/mflux@43383f43e7f1f70e98310a2444301b391755f6e7",
 ]
 mcp = [
     "mcp>=1.5.0",

@@ -211,6 +211,14 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
     )
     add(ideogram4, *image_engine_aliases("generation", "ideogram-4-fp8"))
 
+    krea2 = _MfluxModelSpec(
+        task="generation",
+        module="mflux.models.krea2.variants.txt2img.krea2",
+        class_name="Krea2",
+        config_name="krea-2",
+    )
+    add(krea2, *image_engine_aliases("generation", "krea-2"))
+
     flux2_4b_edit = _MfluxModelSpec(
         task="edit",
         module="mflux.models.flux2.variants.edit.flux2_klein_edit",
@@ -264,6 +272,15 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
         edit_input_style="image_path",
     )
     add(ernie_image_edit, *image_engine_aliases("edit", "ernie-image"))
+
+    krea2_edit = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.krea2.variants.txt2img.krea2",
+        class_name="Krea2",
+        config_name="krea-2",
+        edit_input_style="image_path",
+    )
+    add(krea2_edit, *image_engine_aliases("edit", "krea-2"))
 
     return specs
 

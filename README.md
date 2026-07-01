@@ -73,7 +73,7 @@ omlx start
 
 # Optional: mflux-backed image generation/edit support
 # (pulls heavier transitive dependencies such as torch)
-/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@10b537c907ecbf7987a59a921a824d358287ff5e
+/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@43383f43e7f1f70e98310a2444301b391755f6e7
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
@@ -297,7 +297,7 @@ Models are auto-detected by type. You can also download models directly from the
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
-| Image | mflux models such as Flux.2 Klein, Qwen Image, FIBO, Z-Image |
+| Image | mflux models such as Flux.2 Klein, Krea 2, Qwen Image, FIBO, Z-Image |
 
 ### Image Model Manifests
 
@@ -314,11 +314,12 @@ Add an `omlx-image-model.json` file in a model subdirectory to expose a mflux im
   "quantize": 4,
   "default_steps": 28,
   "default_guidance": 3.5,
+  "default_image_strength": 0.65,
   "estimated_size": 4294967296
 }
 ```
 
-`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`.
+`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `krea-2`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`.
 
 ## CLI Configuration
 

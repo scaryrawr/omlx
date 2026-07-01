@@ -561,6 +561,16 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
         logger.warning(f"Invalid image manifest default_guidance: {default_guidance!r}")
         return None
 
+    default_image_strength = manifest.get("default_image_strength")
+    if default_image_strength is not None and (
+        isinstance(default_image_strength, bool)
+        or not isinstance(default_image_strength, (int, float))
+    ):
+        logger.warning(
+            f"Invalid image manifest default_image_strength: {default_image_strength!r}"
+        )
+        return None
+
     metadata_keys = (
         "backend",
         "base_model",
@@ -568,6 +578,7 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
         "quantize",
         "default_steps",
         "default_guidance",
+        "default_image_strength",
         "estimated_size",
     )
     metadata = {key: manifest[key] for key in metadata_keys if key in manifest}

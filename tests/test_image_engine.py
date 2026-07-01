@@ -151,6 +151,7 @@ def fake_mflux(monkeypatch):
     install_module("mflux.models.fibo.variants.edit.fibo_edit", "FIBOEdit")
     install_module("mflux.models.ernie_image.variants.txt2img.ernie_image", "ErnieImage")
     install_module("mflux.models.ideogram4.variants.txt2img.ideogram4", "Ideogram4")
+    install_module("mflux.models.krea2.variants.txt2img.krea2", "Krea2")
 
     monkeypatch.setattr(
         image_module.mx, "synchronize", lambda: cleanup_calls.append("synchronize")
@@ -229,6 +230,7 @@ async def test_generate_loads_flux2_with_manifest_defaults(fake_mflux, tmp_path)
         ("z-image-turbo", "ZImage", "z-image-turbo", 8),
         ("z-image", "ZImage", "z-image", 50),
         ("flux2-klein-4b", "Flux2Klein", "flux2-klein-4b", 8),
+        ("krea-2", "Krea2", "krea-2", 8),
     ],
 )
 async def test_generate_uses_registry_step_defaults_without_manifest_defaults(
@@ -436,6 +438,42 @@ async def test_ernie_edit_uses_default_image_strength_for_reference_image(fake_m
     assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.4
 
 
+async def test_krea2_edit_routes_single_img2img_input_with_registry_defaults(fake_mflux):
+    engine = ImageEngine(
+        model_name="krea2-edit",
+        image_metadata={"backend": "mflux", "base_model": "Krea_2_Turbo"},
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit(
+        "make it cinematic",
+        image_paths=["input.png"],
+        scheduler="euler",
+    )
+
+    krea2_cls = fake_mflux.classes["Krea2"]
+    model = krea2_cls.instances[0]
+    assert model.model_config == _FakeConfig("krea-2")
+    assert model.calls[-1] == {
+        "prompt": "make it cinematic",
+        "seed": 0,
+        "width": None,
+        "height": None,
+        "num_inference_steps": 8,
+        "guidance": 1.0,
+        "image_path": "input.png",
+        "image_strength": 0.65,
+        "scheduler": "euler",
+    }
+
+    with pytest.raises(ValueError, match="does not support mask_path"):
+        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
+
+    with pytest.raises(ValueError, match="exactly one input image"):
+        await engine.edit("combine these", image_paths=["a.png", "b.png"])
+
+
 async def test_ernie_edit_manifest_image_strength_overrides_registry_default(fake_mflux):
     engine = ImageEngine(
         model_name="ernie-edit",
@@ -506,6 +544,7 @@ async def test_start_rejects_unsupported_base_model(fake_mflux):
         ("Z_Image_Turbo", "ZImage"),
         ("Ernie_Image_Turbo", "ErnieImage"),
         ("Ideogram4", "Ideogram4"),
+        ("Krea_2_Turbo", "Krea2"),
     ],
 )
 async def test_start_accepts_lmstudio_style_base_aliases(

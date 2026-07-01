@@ -1341,6 +1341,7 @@ class TestImageManifestDiscovery:
                     "quantize": 8,
                     "default_steps": 4,
                     "default_guidance": 3.5,
+                    "default_image_strength": 0.65,
                     "estimated_size": 123456,
                 }
             )
@@ -1361,6 +1362,7 @@ class TestImageManifestDiscovery:
         assert model.image_metadata["tasks"] == ["generation", "edit"]
         assert model.image_metadata["capabilities"] == ["generation", "edit"]
         assert model.image_metadata["tasks"] is not model.image_metadata["capabilities"]
+        assert model.image_metadata["default_image_strength"] == 0.65
 
     def test_infers_lmstudio_qwen_image_edit_without_manifest(self, tmp_path):
         """LM Studio Qwen-Image-Edit folders are discovered without a manifest."""
@@ -1433,12 +1435,13 @@ class TestImageManifestDiscovery:
         [
             ("FLUX.2-klein-4B-mxfp8", "flux2-klein-4b"),
             ("FLUX.2-klein-9B-mxfp8", "flux2-klein-9b"),
+            ("Krea-2-Turbo-mxfp8", "krea-2"),
         ],
     )
-    def test_infers_lmstudio_klein_image_models_support_edit(
+    def test_infers_lmstudio_dual_task_image_models_support_edit(
         self, tmp_path, dirname, base_model
     ):
-        """Klein image folders are discovered as generation and edit capable."""
+        """Dual-task image folders are discovered as generation and edit capable."""
         model_dir = tmp_path / dirname
         expected_size = self._make_lmstudio_image_layout(model_dir)
 
