@@ -33,7 +33,7 @@ When bumping git-sourced dependencies, also check mirrors in `packaging/build.py
 - Default fast test run: `uv run pytest`
 - Explicit fast test selection: `uv run pytest -m "not slow and not integration"`
 - Narrow test run: `uv run pytest tests/test_config.py -v`
-- Lint: `uv run ruff check .` is the intended Python lint command, but the current tree may have pre-existing full-repo ruff diagnostics; when a task is not a lint cleanup, prefer `uv run ruff check <touched Python paths>` plus focused tests and call out any baseline failures separately. Do not include non-Python files such as `README.md` or `Formula/*.rb` in Ruff path lists; use `git diff --check` for whitespace on mixed-file changes.
+- Lint: `uv run ruff check .` is the intended Python lint command, but the current tree may have pre-existing full-repo ruff diagnostics; when a task is not a lint cleanup, prefer `uv run ruff check <touched Python paths>` plus focused tests and call out any baseline failures separately. Do not include non-Python files such as `README.md` or `Formula/*.rb` in Ruff path lists; use `git diff --check` for whitespace on mixed-file changes. Ruff's SIM118 suggestion is unsafe for `safetensors.safe_open` handles in this environment; keep `f.keys()` there and add a targeted `# noqa: SIM118` if needed.
 - Type check: `uv run mypy omlx`
 - Format when needed: `uv run black .`
 - macOS app build checks live under `packaging/`; see `packaging/README.md` before running `python build.py`.
