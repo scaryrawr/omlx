@@ -1400,16 +1400,16 @@ class TestImageManifestDiscovery:
         assert model.image_metadata["base_model"] == "qwen-image"
 
     @pytest.mark.parametrize(
-        ("dirname", "base_model"),
+        ("dirname", "base_model", "expected_tasks"),
         [
-            ("Z-Image-mxfp8", "z-image"),
-            ("Z-Image-Turbo-mxfp8", "z-image-turbo"),
-            ("FIBO-mxfp8", "fibo"),
-            ("Ideogram-4-FP8-mxfp8", "ideogram-4-fp8"),
+            ("Z-Image-mxfp8", "z-image", ["generation", "edit"]),
+            ("Z-Image-Turbo-mxfp8", "z-image-turbo", ["generation", "edit"]),
+            ("FIBO-mxfp8", "fibo", ["generation", "edit"]),
+            ("Ideogram-4-FP8-mxfp8", "ideogram-4-fp8", ["generation"]),
         ],
     )
     def test_infers_lmstudio_mflux_image_models_without_manifest(
-        self, tmp_path, dirname, base_model
+        self, tmp_path, dirname, base_model, expected_tasks
     ):
         """LM Studio mflux image folders are discovered without a manifest."""
         model_dir = tmp_path / dirname
@@ -1422,11 +1422,12 @@ class TestImageManifestDiscovery:
         assert model.model_type == "image"
         assert model.engine_type == "image"
         assert model.estimated_size == expected_size
-        assert model.capabilities == ["generation"]
-        assert model.tasks == ["generation"]
+        assert model.capabilities == expected_tasks
+        assert model.tasks == expected_tasks
         assert model.image_metadata is not None
         assert model.image_metadata["backend"] == "mflux"
         assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == expected_tasks
         assert model.image_metadata["model_path"] == "."
         assert model.image_metadata["inferred"] is True
 

@@ -319,7 +319,7 @@ Add an `omlx-image-model.json` file in a model subdirectory to expose a mflux im
 }
 ```
 
-`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `krea-2`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`.
+`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `krea-2`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`. LM Studio-style folders for Flux.2 Klein, Krea 2, FIBO, ERNIE Image, Z-Image, and Z-Image Turbo are inferred as image-to-image edit capable when the local layout is detected; Qwen base folders remain generation-only, so use `qwen-image-edit` for Qwen edit models.
 
 ## CLI Configuration
 

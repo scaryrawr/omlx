@@ -171,6 +171,24 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
     )
     add(z_image_turbo, *image_engine_aliases("generation", "z-image-turbo"))
 
+    z_image_edit = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.z_image.variants.z_image",
+        class_name="ZImage",
+        config_name="z-image",
+        edit_input_style="image_path",
+    )
+    add(z_image_edit, *image_engine_aliases("edit", "z-image"))
+
+    z_image_turbo_edit = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.z_image.variants.z_image",
+        class_name="ZImage",
+        config_name="z-image-turbo",
+        edit_input_style="image_path",
+    )
+    add(z_image_turbo_edit, *image_engine_aliases("edit", "z-image-turbo"))
+
     qwen_image = _MfluxModelSpec(
         task="generation",
         module="mflux.models.qwen.variants.txt2img.qwen_image",
@@ -186,6 +204,15 @@ def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
         config_name="fibo",
     )
     add(fibo, *image_engine_aliases("generation", "fibo"))
+
+    fibo_img2img = _MfluxModelSpec(
+        task="edit",
+        module="mflux.models.fibo.variants.txt2img.fibo",
+        class_name="FIBO",
+        config_name="fibo",
+        edit_input_style="image_path",
+    )
+    add(fibo_img2img, *image_engine_aliases("edit", "fibo"))
 
     ernie_image_turbo = _MfluxModelSpec(
         task="generation",

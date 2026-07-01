@@ -438,6 +438,55 @@ async def test_ernie_edit_uses_default_image_strength_for_reference_image(fake_m
     assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.4
 
 
+@pytest.mark.parametrize(
+    ("base_model", "class_name", "expected_config"),
+    [
+        ("z-image-turbo", "ZImage", "z-image-turbo"),
+        ("z-image", "ZImage", "z-image"),
+        ("fibo", "FIBO", "fibo"),
+    ],
+)
+async def test_img2img_generation_models_route_single_edit_image(
+    fake_mflux,
+    base_model,
+    class_name,
+    expected_config,
+):
+    engine = ImageEngine(
+        model_name=base_model,
+        image_metadata={"backend": "mflux", "base_model": base_model},
+        tasks=["edit"],
+    )
+
+    await engine.start()
+    await engine.edit(
+        "make it cinematic",
+        image_paths=["input.png"],
+        steps=6,
+        guidance=1.2,
+        image_strength=0.55,
+    )
+
+    model = fake_mflux.classes[class_name].instances[-1]
+    assert model.model_config == _FakeConfig(expected_config)
+    assert model.calls[-1] == {
+        "prompt": "make it cinematic",
+        "seed": 0,
+        "width": None,
+        "height": None,
+        "num_inference_steps": 6,
+        "guidance": 1.2,
+        "image_path": "input.png",
+        "image_strength": 0.55,
+    }
+
+    with pytest.raises(ValueError, match="does not support mask_path"):
+        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
+
+    with pytest.raises(ValueError, match="exactly one input image"):
+        await engine.edit("combine these", image_paths=["a.png", "b.png"])
+
+
 async def test_krea2_edit_routes_single_img2img_input_with_registry_defaults(fake_mflux):
     engine = ImageEngine(
         model_name="krea2-edit",
