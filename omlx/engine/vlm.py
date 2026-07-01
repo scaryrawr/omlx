@@ -33,7 +33,7 @@ import logging
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mlx.core as mx
 
@@ -70,7 +70,7 @@ _DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
 # OCR model types and their default markdown conversion prompts.
 # When an OCR model receives a generic user prompt with an image,
 # the prompt is automatically adjusted for markdown output.
-OCR_MODEL_PROMPTS: Dict[str, str] = {
+OCR_MODEL_PROMPTS: dict[str, str] = {
     "deepseekocr": "Convert the document to markdown.",
     "deepseekocr_2": "Convert the document to markdown.",
     "dots_ocr": "Convert this page to clean Markdown while preserving reading order.",
@@ -80,7 +80,7 @@ OCR_MODEL_PROMPTS: Dict[str, str] = {
 # Extra stop sequences for OCR models to prevent degeneration.
 # Many OCR models lack proper EOS handling and generate chat-turn
 # tokens (<|user|>, <|im_start|>, etc.) indefinitely after the OCR output.
-OCR_EXTRA_STOP_SEQUENCES: List[str] = [
+OCR_EXTRA_STOP_SEQUENCES: list[str] = [
     "<|user|>",
     "<|im_start|>",
     "<|im_end|>",
@@ -98,7 +98,7 @@ DIFFUSION_PREFILL_STEP_SIZE = 2048
 
 # Per-model OCR generation defaults from official configs.
 # Applied automatically when no explicit user override is provided.
-OCR_MODEL_GENERATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+OCR_MODEL_GENERATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "glm_ocr": {
         "temperature": 0.0,
         "repetition_penalty": 1.1,
@@ -554,7 +554,7 @@ def _has_audio_weights(model_dir: Path) -> bool:
     for sf in model_dir.glob("*.safetensors"):
         try:
             with safetensors.safe_open(str(sf), framework="np") as f:
-                for k in f.keys():
+                for k in f.keys():  # noqa: SIM118 - safe_open is not iterable.
                     if k.startswith(("audio_tower.", "embed_audio.")):
                         return True
         except Exception:
@@ -1051,8 +1051,12 @@ def _count_image_tokens(
 
 
 def _smart_resize_tokens(
-    h: int, w: int, patch_size: int, merge_size: int,
-    min_pixels: int, max_pixels: int,
+    h: int,
+    w: int,
+    patch_size: int,
+    merge_size: int,
+    min_pixels: int,
+    max_pixels: int,
 ) -> int:
     """Real merged-token count for one image of pixel size (h, w), mirroring
     the Qwen image processor's ``smart_resize`` -> grid_thw ->
@@ -1074,10 +1078,10 @@ def _smart_resize_tokens(
         beta = math.sqrt(min_pixels / (h * w))
         h_bar = math.ceil(h * beta / factor) * factor
         w_bar = math.ceil(w * beta / factor) * factor
-    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size ** 2)
+    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size**2)
 
 
-def _read_image_dims(part: dict) -> Optional[tuple]:
+def _read_image_dims(part: dict) -> tuple | None:
     """Best-effort, decode-free ``(width, height)`` for an OpenAI image part.
 
     Handles ``data:`` base64 URIs, raw base64, and local file paths via a lazy
@@ -1093,7 +1097,11 @@ def _read_image_dims(part: dict) -> Optional[tuple]:
     obj = part.get("image_url")
     if obj is None:
         obj = part.get("input_image") or part.get("image")
-    url = obj if isinstance(obj, str) else (obj.get("url") if isinstance(obj, dict) else None)
+    url = (
+        obj
+        if isinstance(obj, str)
+        else (obj.get("url") if isinstance(obj, dict) else None)
+    )
     if not isinstance(url, str) or not url:
         return None
 
@@ -1140,9 +1148,7 @@ def _count_image_tokens_real(
     ms = getattr(ip, "merge_size", None)
     minp = getattr(ip, "min_pixels", None)
     maxp = getattr(ip, "max_pixels", None)
-    qwen_ok = all(
-        isinstance(x, int) and x > 0 for x in (ps, ms, minp, maxp)
-    )
+    qwen_ok = all(isinstance(x, int) and x > 0 for x in (ps, ms, minp, maxp))
 
     total = 0
     for msg in messages:
@@ -1704,12 +1710,11 @@ class VLMBatchedEngine(BaseEngine):
             false_attrs=("_grammar_compiler_init_attempted",),
         )
 
-        if engine:
-            if hasattr(engine, "engine") and engine.engine is not None:
-                try:
-                    engine.engine.close()
-                except Exception as e:
-                    logger.warning(f"Error closing engine: {e}")
+        if engine and hasattr(engine, "engine") and engine.engine is not None:
+            try:
+                engine.engine.close()
+            except Exception as e:
+                logger.warning(f"Error closing engine: {e}")
         self._diffusion_cancel_events = set()
         self._diffusion_active_requests = 0
         self._loaded = False
@@ -1949,7 +1954,7 @@ class VLMBatchedEngine(BaseEngine):
 
     def _compute_vision_features(
         self, pixel_values: Any, extra_model_inputs: dict
-    ) -> Optional[mx.array]:
+    ) -> mx.array | None:
         """Compute vision features for caching.
 
         Tries multiple strategies based on model architecture:
@@ -2022,7 +2027,10 @@ class VLMBatchedEngine(BaseEngine):
                             inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         )
                     ]
-                    if image_position_ids is not None and len(positional_parameters) >= 2:
+                    if (
+                        image_position_ids is not None
+                        and len(positional_parameters) >= 2
+                    ):
                         return model.encode_image(pixel_values, image_position_ids)
 
             return model.encode_image(pixel_values)
@@ -2080,7 +2088,7 @@ class VLMBatchedEngine(BaseEngine):
         features: mx.array,
         num_images: int,
         extra_model_inputs: dict,
-    ) -> Optional[List[mx.array]]:
+    ) -> list[mx.array] | None:
         """Split batched vision features into per-image tensors for caching.
 
         Returns a list of per-image feature tensors, or None if the model
@@ -2153,7 +2161,7 @@ class VLMBatchedEngine(BaseEngine):
         return None
 
     @staticmethod
-    def _as_int_list(value: Any) -> Optional[List[int]]:
+    def _as_int_list(value: Any) -> list[int] | None:
         if value is None:
             return None
         if hasattr(value, "tolist"):
@@ -2163,7 +2171,7 @@ class VLMBatchedEngine(BaseEngine):
         if not isinstance(value, (list, tuple)):
             return None
 
-        result: List[int] = []
+        result: list[int] = []
         for item in value:
             if hasattr(item, "tolist"):
                 item = item.tolist()
@@ -2178,7 +2186,7 @@ class VLMBatchedEngine(BaseEngine):
         return result
 
     @staticmethod
-    def _vision_feature_token_count(features: Any) -> Optional[int]:
+    def _vision_feature_token_count(features: Any) -> int | None:
         if isinstance(features, (list, tuple)):
             total = 0
             for feature in features:
@@ -2199,7 +2207,7 @@ class VLMBatchedEngine(BaseEngine):
             count *= int(dim)
         return count
 
-    def _image_token_count(self, input_ids: Any) -> Optional[int]:
+    def _image_token_count(self, input_ids: Any) -> int | None:
         config = getattr(self._vlm_model, "config", None)
         image_token_id = getattr(config, "image_token_id", None)
         if image_token_id is None:
@@ -2213,7 +2221,7 @@ class VLMBatchedEngine(BaseEngine):
             return None
 
     def _vision_features_match_image_tokens(
-        self, features: Any, image_token_count: Optional[int]
+        self, features: Any, image_token_count: int | None
     ) -> bool:
         if image_token_count is None:
             return True
@@ -2249,13 +2257,13 @@ class VLMBatchedEngine(BaseEngine):
         videos: list[Any] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         tools: list[dict] | None = None,
-    ) -> Tuple[
-        List[int],
-        Optional[mx.array],
-        Optional[Dict[str, Any]],
-        Optional[str],
+    ) -> tuple[
+        list[int],
+        mx.array | None,
+        dict[str, Any] | None,
+        str | None,
         int,
-        List[Tuple[int, str]],
+        list[tuple[int, str]],
     ]:
         """
         Run the full VLM preprocessing pipeline:
@@ -2433,7 +2441,7 @@ class VLMBatchedEngine(BaseEngine):
         attention_mask = inputs.get("attention_mask")
 
         image_cache_key_start = 0
-        image_cache_key_ranges: list[Tuple[int, str]] = []
+        image_cache_key_ranges: list[tuple[int, str]] = []
         if image_message_ranges:
             try:
                 prefix_template_kwargs = {
@@ -2736,7 +2744,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """Generate a complete response (non-streaming)."""
@@ -2792,9 +2800,9 @@ class VLMBatchedEngine(BaseEngine):
             presence_penalty=presence_penalty,
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
         )
 
         output = await self._engine.generate(
@@ -2833,7 +2841,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generation token by token."""
@@ -2895,9 +2903,9 @@ class VLMBatchedEngine(BaseEngine):
             presence_penalty=presence_penalty,
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
         )
 
         # SpecPrefill: pass per-request overrides
@@ -3339,8 +3347,8 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         tools: list[dict] | None,
         kwargs: dict,
-    ) -> Tuple[
-        str | list[int], Any, dict | None, str | None, int, List[Tuple[int, str]]
+    ) -> tuple[
+        str | list[int], Any, dict | None, str | None, int, list[tuple[int, str]]
     ]:
         """
         Process chat messages, extracting images and preparing VLM inputs.
