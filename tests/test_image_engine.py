@@ -334,7 +334,7 @@ async def test_klein_edit_uses_auto_dimensions_and_registry_defaults(fake_mflux)
     assert "height" not in result.metadata
 
 
-async def test_klein_edit_does_not_pass_image_strength(fake_mflux):
+async def test_klein_edit_passes_manifest_image_strength_when_supported(fake_mflux):
     engine = ImageEngine(
         model_name="klein-edit",
         image_metadata={
@@ -350,7 +350,7 @@ async def test_klein_edit_does_not_pass_image_strength(fake_mflux):
 
     klein_cls = fake_mflux.classes["Flux2KleinEdit"]
     assert klein_cls.instances[0].model_config == _FakeConfig("flux2-klein-9b")
-    assert "image_strength" not in klein_cls.instances[0].calls[-1]
+    assert klein_cls.instances[0].calls[-1]["image_strength"] == 0.2
 
 
 async def test_fibo_edit_routes_single_image_and_mask(fake_mflux):

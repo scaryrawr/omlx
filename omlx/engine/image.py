@@ -469,6 +469,7 @@ class ImageEngine(BaseNonStreamingEngine):
                 resolved_steps = self._resolve_steps(steps)
                 resolved_guidance = self._resolve_guidance(guidance)
                 request_image_strength = kwargs.pop("image_strength", None)
+                resolved_image_strength = self._resolve_image_strength(request_image_strength)
                 resolved_seed = 0 if seed is None else int(seed)
 
                 gen_kwargs: dict[str, Any] = {
@@ -494,14 +495,13 @@ class ImageEngine(BaseNonStreamingEngine):
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
                     gen_kwargs["image_path"] = image_paths[0]
-                    resolved_image_strength = self._resolve_image_strength(request_image_strength)
-                    if resolved_image_strength is not None:
-                        gen_kwargs["image_strength"] = resolved_image_strength
                 else:
                     if mask_path is not None:
                         raise ValueError(f"{self.base_model} edit does not support mask_path")
                     gen_kwargs["image_paths"] = image_paths
 
+                if resolved_image_strength is not None:
+                    gen_kwargs["image_strength"] = resolved_image_strength
                 gen_kwargs.update(kwargs)
 
                 return await self._run_image_call(
