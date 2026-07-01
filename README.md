@@ -73,7 +73,7 @@ omlx start
 
 # Optional: mflux-backed image generation/edit support
 # (pulls heavier transitive dependencies such as torch)
-/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@43383f43e7f1f70e98310a2444301b391755f6e7
+/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@dd374c2a79f38cce42fa51eb532a52ac60d7533e
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
