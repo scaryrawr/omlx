@@ -19,18 +19,11 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import (
     Any,
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
 )
 
 import mlx.core as mx
@@ -103,7 +96,9 @@ def _init_mlx_thread() -> None:
 
     import mlx.core as mx
 
-    stream = mx.new_thread_local_stream(mx.default_device())
+    stream = mx.new_stream(mx.default_device())
+    if hasattr(mx, "set_default_stream"):
+        mx.set_default_stream(stream)
 
     gen_mod = sys.modules.get("mlx_lm.generate")
     if gen_mod is not None:
@@ -114,6 +109,32 @@ def _init_mlx_thread() -> None:
         sched_mod.generation_stream = stream
 
     logger.info(f"MLX executor thread initialized: generation_stream = {stream}")
+
+
+def _create_mlx_thread_stream() -> Any:
+    """Create the per-engine stream on the MLX executor thread that owns it."""
+    stream = mx.new_stream(mx.default_device())
+    if hasattr(mx, "set_default_stream"):
+        mx.set_default_stream(stream)
+    logger.info("MLX engine thread initialized: stream = %s", stream)
+    return stream
+
+
+def _get_mlx_thread_default_stream() -> Any:
+    """Return the current thread's default MLX stream."""
+    return mx.default_stream(mx.default_device())
+
+
+def _model_requires_loader_executor(model: Any) -> bool:
+    """Return True for runtimes that bind lazy work to the loader thread."""
+    candidates = [model, getattr(model, "model", None), getattr(model, "_model", None)]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        module_name = type(candidate).__module__
+        if module_name.startswith("jang_tools.dsv4"):
+            return True
+    return False
 
 
 def get_mlx_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -139,10 +160,10 @@ class EngineConfig:
     """Configuration for the engine."""
 
     model_name: str = ""
-    scheduler_config: Optional[SchedulerConfig] = None
+    scheduler_config: SchedulerConfig | None = None
     step_interval: float = 0.05  # Idle wait timeout; requests wake the loop
     stream_interval: int = 1  # Tokens to batch before streaming (1=every token)
-    prefill_eviction_callback: Optional[Callable[[Any], Awaitable[bool]]] = None
+    prefill_eviction_callback: Callable[[Any], Awaitable[bool]] | None = None
     # Decode burst: run several scheduler.step() calls per run_in_executor
     # hand-off instead of one. Each decode token otherwise bounces back to the
     # event loop, ping-ponging the GIL with the asyncio loop + uvicorn on the
@@ -187,8 +208,8 @@ class EngineCore:
         self,
         model: Any,
         tokenizer: Any,
-        config: Optional[EngineConfig] = None,
-        engine_id: Optional[str] = None,
+        config: EngineConfig | None = None,
+        engine_id: str | None = None,
         force_model_ownership: bool = True,
     ):
         """
@@ -220,14 +241,31 @@ class EngineCore:
         )
         self._owns_model = True
 
-        # Per-engine executor with dedicated mx.Stream (#1248).
-        # Each EngineCore gets its own thread + GPU stream so different
-        # models can run scheduler.step() concurrently.
-        self._mlx_stream = mx.new_thread_local_stream(mx.default_device())
-        self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
-        )
+        self._owns_mlx_executor = True
+        if _model_requires_loader_executor(model):
+            # JANG DSV4 attaches some runtime work to the loader executor's
+            # stream. Running inference on a separate per-engine thread leaves
+            # those arrays bound to a stream that does not exist in the
+            # inference thread ("There is no Stream(gpu, N) in current thread").
+            self._mlx_executor = get_mlx_executor()
+            self._mlx_stream = self._mlx_executor.submit(
+                _get_mlx_thread_default_stream
+            ).result()
+            self._owns_mlx_executor = False
+        else:
+            # Per-engine executor with dedicated mx.Stream (#1248).
+            # Each EngineCore gets its own thread + GPU stream so different
+            # models can run scheduler.step() concurrently. MLX streams must be
+            # created on the same thread that later uses them; creating this on
+            # the server/main thread and using it from the executor raises
+            # "There is no Stream(gpu, N) in current thread".
+            self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
+            )
+            self._mlx_stream = self._mlx_executor.submit(
+                _create_mlx_thread_stream
+            ).result()
 
         # Create scheduler with per-engine stream
         scheduler_config = self.config.scheduler_config or SchedulerConfig()
@@ -239,23 +277,23 @@ class EngineCore:
         )
 
         # Output collectors for low-latency streaming (vLLM pattern)
-        self._output_collectors: Dict[str, RequestOutputCollector] = {}
-        self._stream_states: Dict[str, RequestStreamState] = {}
-        self._finished_events: Dict[str, asyncio.Event] = {}
+        self._output_collectors: dict[str, RequestOutputCollector] = {}
+        self._stream_states: dict[str, RequestStreamState] = {}
+        self._finished_events: dict[str, asyncio.Event] = {}
         # Finish timestamps for orphan-collector reaping (#1154).
         # Normally a consumer drains and removes its own collector, but if the
         # client disconnects mid-stream the SSE generator chain is abandoned and
         # its cleanup finally only runs at GC time, so the collector lingers and
         # the dashboard keeps showing the request as "Generating".
-        self._finished_at: Dict[str, float] = {}
+        self._finished_at: dict[str, float] = {}
         self._last_reap = 0.0
 
         # Engine state
         self._running = False
-        self._task: Optional[asyncio.Task] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._wake_event: Optional[asyncio.Event] = None
-        self._start_time: Optional[float] = None
+        self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._wake_event: asyncio.Event | None = None
+        self._start_time: float | None = None
         self._steps_executed = 0
 
         # Drop transient aliases after ownership moves to the engine/scheduler
@@ -515,20 +553,20 @@ class EngineCore:
 
     async def add_request(
         self,
-        prompt: Union[str, List[int]],
-        sampling_params: Optional[SamplingParams] = None,
-        request_id: Optional[str] = None,
-        images: Optional[List[Any]] = None,
-        videos: Optional[List[Any]] = None,
-        vlm_inputs_embeds: Optional[Any] = None,
-        vlm_extra_kwargs: Optional[Dict[str, Any]] = None,
-        vlm_image_hash: Optional[str] = None,
+        prompt: str | list[int],
+        sampling_params: SamplingParams | None = None,
+        request_id: str | None = None,
+        images: list[Any] | None = None,
+        videos: list[Any] | None = None,
+        vlm_inputs_embeds: Any | None = None,
+        vlm_extra_kwargs: dict[str, Any] | None = None,
+        vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
-        specprefill: Optional[bool] = None,
-        specprefill_keep_pct: Optional[float] = None,
-        specprefill_threshold: Optional[int] = None,
-        specprefill_system_end: Optional[int] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
+        specprefill: bool | None = None,
+        specprefill_keep_pct: float | None = None,
+        specprefill_threshold: int | None = None,
+        specprefill_system_end: int | None = None,
     ) -> str:
         """
         Add a request for processing.
@@ -797,7 +835,7 @@ class EngineCore:
     async def stream_outputs(
         self,
         request_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[RequestOutput]:
         """
         Stream outputs for a request with low-latency non-blocking pattern.
@@ -839,7 +877,7 @@ class EngineCore:
                     if output.finished:
                         break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(f"Timeout waiting for request {request_id}")
                     break
 
@@ -848,9 +886,9 @@ class EngineCore:
 
     async def generate(
         self,
-        prompt: Union[str, List[int]],
-        sampling_params: Optional[SamplingParams] = None,
-        request_id: Optional[str] = None,
+        prompt: str | list[int],
+        sampling_params: SamplingParams | None = None,
+        request_id: str | None = None,
         **kwargs,
     ) -> RequestOutput:
         """
@@ -921,9 +959,9 @@ class EngineCore:
 
     def generate_batch_sync(
         self,
-        prompts: List[Union[str, List[int]]],
-        sampling_params: Optional[SamplingParams] = None,
-    ) -> List[RequestOutput]:
+        prompts: list[str | list[int]],
+        sampling_params: SamplingParams | None = None,
+    ) -> list[RequestOutput]:
         """
         Generate responses synchronously for maximum throughput.
 
@@ -938,41 +976,45 @@ class EngineCore:
         Returns:
             List of RequestOutput in same order as prompts
         """
-        import uuid as uuid_module
-
-        from .request import Request
-
         if sampling_params is None:
             sampling_params = SamplingParams()
 
-        # Add all requests to scheduler
-        request_ids = []
-        for prompt in prompts:
-            request_id = str(uuid_module.uuid4())
-            request = Request(
-                request_id=request_id,
-                prompt=prompt,
-                sampling_params=sampling_params,
-            )
-            self.scheduler.add_request(request)
-            request_ids.append(request_id)
+        def _run_batch_sync() -> list[RequestOutput]:
+            import uuid as uuid_module
 
-        # Process until all done - direct scheduler access, no async overhead
-        results: Dict[str, RequestOutput] = {}
-        while self.scheduler.has_requests():
-            output = self.scheduler.step()
-            for req_output in output.outputs:
-                if req_output.finished:
-                    results[req_output.request_id] = req_output
+            from .request import Request
 
-        # Cleanup
-        for rid in request_ids:
-            self.scheduler.remove_finished_request(rid)
+            # Add all requests to scheduler
+            request_ids = []
+            for prompt in prompts:
+                request_id = str(uuid_module.uuid4())
+                request = Request(
+                    request_id=request_id,
+                    prompt=prompt,
+                    sampling_params=sampling_params,
+                )
+                self.scheduler.add_request(request)
+                request_ids.append(request_id)
 
-        # Return in original order
-        return [results[rid] for rid in request_ids]
+            # Process until all done - direct scheduler access on the engine's
+            # MLX worker thread, where self._mlx_stream is valid.
+            results: dict[str, RequestOutput] = {}
+            while self.scheduler.has_requests():
+                output = self.scheduler.step()
+                for req_output in output.outputs:
+                    if req_output.finished:
+                        results[req_output.request_id] = req_output
 
-    def get_stats(self) -> Dict[str, Any]:
+            # Cleanup
+            for rid in request_ids:
+                self.scheduler.remove_finished_request(rid)
+
+            # Return in original order
+            return [results[rid] for rid in request_ids]
+
+        return self._mlx_executor.submit(_run_batch_sync).result()
+
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         scheduler_stats = self.scheduler.get_stats()
         uptime = time.time() - self._start_time if self._start_time else 0
@@ -986,7 +1028,7 @@ class EngineCore:
             **scheduler_stats,
         }
 
-    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+    def get_cache_stats(self) -> dict[str, Any] | None:
         """Get prefix cache statistics."""
         return self.scheduler.get_cache_stats()
 
@@ -1125,6 +1167,7 @@ class EngineCore:
                     exc_info=True,
                 )
 
+        if self._mlx_executor is not None and self._owns_mlx_executor:
             # MLX's @mx.compile cache is a C++ thread_local CompilerCache. If
             # this worker thread exits with a non-empty cache, ~CompilerCache
             # frees the cached graphs' Python objects from a thread-exit handler
@@ -1155,16 +1198,15 @@ class EngineCore:
                 _immortal_mlx_executors.append(self._mlx_executor)
                 _immortal_mlx_streams.append(self._mlx_stream)
             self._mlx_executor = None
+        elif self._mlx_executor is not None:
+            self._mlx_executor = None
 
         logger.debug(f"Engine {self._engine_id} closed")
 
     def __del__(self):
         """Cleanup on destruction."""
-        try:
+        with suppress(Exception):
             self._release_model()
-        except Exception:
-            # Ignore errors during garbage collection
-            pass
 
     @property
     def engine_id(self) -> str:
@@ -1187,7 +1229,7 @@ class AsyncEngineCore:
         self,
         model: Any,
         tokenizer: Any,
-        config: Optional[EngineConfig] = None,
+        config: EngineConfig | None = None,
     ):
         self.engine = EngineCore(model, tokenizer, config)
         # Drop wrapper-local aliases after EngineCore takes ownership.
@@ -1219,9 +1261,9 @@ class AsyncEngineCore:
 
     async def add_request(
         self,
-        prompt: Union[str, List[int]],
-        sampling_params: Optional[SamplingParams] = None,
-        request_id: Optional[str] = None,
+        prompt: str | list[int],
+        sampling_params: SamplingParams | None = None,
+        request_id: str | None = None,
         **kwargs,
     ) -> str:
         """Add a request."""
@@ -1253,7 +1295,7 @@ class AsyncEngineCore:
     async def stream_outputs(
         self,
         request_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[RequestOutput]:
         """Stream outputs."""
         async for output in self.engine.stream_outputs(request_id, timeout):
@@ -1261,8 +1303,8 @@ class AsyncEngineCore:
 
     async def generate(
         self,
-        prompt: Union[str, List[int]],
-        sampling_params: Optional[SamplingParams] = None,
+        prompt: str | list[int],
+        sampling_params: SamplingParams | None = None,
         **kwargs,
     ) -> RequestOutput:
         """Generate complete response."""
@@ -1272,10 +1314,10 @@ class AsyncEngineCore:
             **kwargs,
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine stats."""
         return self.engine.get_stats()
 
-    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+    def get_cache_stats(self) -> dict[str, Any] | None:
         """Get prefix cache statistics."""
         return self.engine.get_cache_stats()

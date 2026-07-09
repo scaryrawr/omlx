@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from omlx.model_discovery import (
+    IMAGE_DEFAULT_ESTIMATED_SIZES,
+    IMAGE_UNKNOWN_FALLBACK_SIZE,
     DiscoveredModel,
     _is_adapter_dir,
     _is_helper_checkpoint,
@@ -366,6 +368,514 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "vlm"
 
+    def test_detect_jang_vlm_by_sidecar(self, tmp_path):
+        """JANG VLMs can declare vision support in the JANG sidecar."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "architecture": {"has_vision": True}})
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_top_level_has_vision(self, tmp_path):
+        """Newer JANG sidecars may stamp media flags at the top level."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "mxfp4", "has_vision": True})
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_top_level_modalities_dict(self, tmp_path):
+        """JANG converter metadata may use a bool-valued top-level modalities map."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "mxfp4",
+                    "modalities": {
+                        "text": True,
+                        "image": True,
+                        "vision": True,
+                        "video": False,
+                    },
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_embedded_sidecar(self, tmp_path):
+        """JANG sidecars may be embedded in config.json under the jang key."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "jang": {"format": "jang", "architecture": {"has_vision": True}},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_config_only_jang_vlm_metadata(self, tmp_path):
+        """Some current bundles stamp JANG metadata directly in config.json."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "weight_format": "mxtq",
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_config_only_jang_v2_metadata_without_format(self, tmp_path):
+        """JANG v2 config stamps may omit format and rely on versioned quant metadata."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "format_version": "2.0",
+            "quantization": {
+                "profile": "JANG_2L",
+                "block_size": 64,
+                "bit_widths_used": [2, 6, 8],
+            },
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_config_only_jang_v2_metadata_with_effective_bits_alias(
+        self, tmp_path
+    ):
+        """JANG v2 average-bit aliases are enough to identify inline metadata."""
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+            "version": "2.0",
+            "quantization": {
+                "effectiveBitsPerWeight": 2.75,
+                "blockSize": 64,
+            },
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_config_only_mxtq_profile_alias_for_vlm(self, tmp_path):
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "quantization": {"family": "mxtq4"},
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_config_only_plain_mlx_metadata_is_not_jang(self, tmp_path):
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+            "weight_format": "mlx",
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_vlm_by_camel_case_capability(self, tmp_path):
+        """Current JANG stamps may use camel-case capability aliases."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "weightFormat": "mxtq",
+                    "capabilities": {"supportsVision": True},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jangspec_bundle_root_uses_target_metadata(self, tmp_path):
+        """JANGSpec roots keep config and sidecars under target/."""
+        bundle = tmp_path / "bundle.jangspec"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (target / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "some_jang_model",
+                    "architectures": ["SomeJangForCausalLM"],
+                }
+            )
+        )
+        (target / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "architecture": {"hasVision": True}})
+        )
+
+        assert detect_model_type(bundle) == "vlm"
+
+    def test_detect_jangspec_bundle_root_uses_embedded_target_metadata(self, tmp_path):
+        """JANGSpec target config.json may embed the JANG sidecar."""
+        bundle = tmp_path / "bundle.jangspec"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (target / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "some_jang_model",
+                    "architectures": ["SomeJangForCausalLM"],
+                    "jang": {"format": "jang", "architecture": {"hasVision": True}},
+                }
+            )
+        )
+
+        assert detect_model_type(bundle) == "vlm"
+
+    def test_discover_jangspec_bundle_root_registers_root_path(self, tmp_path):
+        """Discovered JANGSpec models should be served from the bundle root."""
+        bundle = tmp_path / "my-jangspec-model"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (target / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (target / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (target / "hot_core.safetensors").write_bytes(b"0" * 1000)
+
+        models = discover_models(tmp_path)
+
+        model = models["my-jangspec-model"]
+        assert model.model_path == str(bundle)
+        assert model.model_type == "llm"
+        assert model.estimated_size == 1050
+
+    def test_discover_jangspec_embedded_sidecar_registers_root_path(self, tmp_path):
+        """Embedded JANGSpec metadata should still discover the bundle root."""
+        bundle = tmp_path / "my-embedded-jangspec-model"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (target / "config.json").write_text(
+            json.dumps({"model_type": "llama", "jang": {"format": "jang"}})
+        )
+        (target / "model-00001-of-00001.safetensors").write_bytes(b"0" * 1000)
+
+        models = discover_models(tmp_path)
+
+        model = models["my-embedded-jangspec-model"]
+        assert model.model_path == str(bundle)
+        assert model.model_type == "llm"
+        assert model.estimated_size == 1050
+
+    def test_detect_jang_preserved_unwired_vision_runtime_is_llm(self, tmp_path):
+        """Preserved VLM weights without active runtime should not advertise VLM."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "supports_vision": True,
+                        "multimodal_status": "weights_preserved_text_runtime",
+                        "unwired_modalities": ["vision"],
+                    },
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_vlm_by_supports_video_capability(self, tmp_path):
+        """JANG video-capable bundles should use the VLM engine."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"supports_video": True},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_supports_audio_capability(self, tmp_path):
+        """JANG audio-capable multimodal bundles should use the VLM engine."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"supports_audio": True},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_supports_image_capability(self, tmp_path):
+        """JANG image-capable multimodal bundles should use the VLM engine."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"supports_image": True},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_active_modalities_list(self, tmp_path):
+        """Current JANG stamps may use capabilities.modalities instead of modality."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"modalities": ["text", "vision"]},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_modality_alias(self, tmp_path):
+        """JANG capability stamps may use normalized vision-language aliases."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"modality": "vision-language"},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_capabilities_modalities_dict(self, tmp_path):
+        """Capabilities may carry the same bool-valued modalities schema."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "modalities": {
+                            "text": True,
+                            "audio": True,
+                            "vision": False,
+                        }
+                    },
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_preserved_modalities_override_vision_config(self, tmp_path):
+        """Preserved media weights with text runtime should stay on the LLM path."""
+        config = {
+            "model_type": "mimo_v2",
+            "architectures": ["MiMoV2ForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "modalities": ["text"],
+                        "preserved_modalities": ["vision", "audio"],
+                        "unwired_modalities": ["vision", "audio"],
+                        "multimodal_status": "weights_preserved_text_runtime",
+                    },
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_disabled_capabilities_override_vision_config(self, tmp_path):
+        """Current text-runtime JANG stamps may explicitly disable every media lane."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "supportsText": True,
+                        "supportsVision": False,
+                        "supportsVideo": False,
+                        "supportsAudio": False,
+                    },
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_omni_modality_without_media_metadata_is_llm(self, tmp_path):
+        """A broad omni stamp alone should not force VLM routing."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {"modality": "omni"},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_text_sidecar_without_vision_is_llm(self, tmp_path):
+        """A JANG sidecar alone should not make a text model a VLM."""
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jangtq_sidecar_without_vision_is_llm(self, tmp_path):
+        """JANGTQ artifacts do not change discovery to VLM without a vision signal."""
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "quantization": {"profile": "JANGTQ_2L"}})
+        )
+        (tmp_path / "jangtq_runtime.safetensors").write_text("")
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_vlm_by_preprocessor_config(self, tmp_path):
+        """JANG VLMs can use preprocessor_config.json as the vision signal."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (tmp_path / "preprocessor_config.json").write_text(json.dumps({}))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_vlm_by_video_preprocessor_config(self, tmp_path):
+        """JANG video bundles can use video_preprocessor_config.json as the signal."""
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (tmp_path / "video_preprocessor_config.json").write_text(json.dumps({}))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_has_vision_false_overrides_vision_config(self, tmp_path):
+        """JANG sidecars can explicitly mark vision-config-bearing models text-only."""
+        config = {
+            "model_type": "mistral4",
+            "architectures": ["Mistral4ForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "architecture": {"has_vision": False}})
+        )
+
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_string_has_vision_false_overrides_vision_config(
+        self, tmp_path
+    ):
+        """String bools in evolved JANG metadata should stay authoritative."""
+        config = {
+            "model_type": "mistral4",
+            "architectures": ["Mistral4ForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "architecture": {"has_vision": "false"}})
+        )
+
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_top_level_has_vision_false_overrides_vision_config(
+        self, tmp_path
+    ):
+        """Top-level JANG has_vision=false suppresses stale config vision hints."""
+        config = {
+            "model_type": "mistral4",
+            "architectures": ["Mistral4ForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "mxfp4", "has_vision": False})
+        )
+
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_numeric_has_vision_false_overrides_vision_config(
+        self, tmp_path
+    ):
+        """Numeric bools from evolved sidecars should stay authoritative."""
+        config = {
+            "model_type": "mistral4",
+            "architectures": ["Mistral4ForCausalLM"],
+            "vision_config": {"hidden_size": 1024},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"format": "jang", "has_vision": 0})
+        )
+
+        assert detect_model_type(tmp_path) == "llm"
+
     def test_detect_vlm_gemma3(self, tmp_path):
         """Test detection of Gemma3 as VLM."""
         config = {
@@ -424,6 +934,26 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "vlm"
 
+    @pytest.mark.parametrize(
+        ("model_type", "architecture"),
+        [
+            ("gemma4_assistant", "Gemma4AssistantForCausalLM"),
+            ("gemma4_unified_assistant", "Gemma4UnifiedAssistantForCausalLM"),
+            ("qwen3_5_mtp", None),
+        ],
+    )
+    def test_mtp_drafters_are_unsupported(self, tmp_path, model_type, architecture):
+        """MTP drafter artifacts are not standalone chat models."""
+        config = {
+            "model_type": model_type,
+            "text_config": {"model_type": model_type.replace("_assistant", "_text")},
+        }
+        if architecture:
+            config["architectures"] = [architecture]
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert _is_unsupported_model(tmp_path)
+
     def test_detect_vlm_qwen3_5_moe(self, tmp_path):
         """Test detection of Qwen3.5 MoE as VLM."""
         config = {
@@ -478,7 +1008,9 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "llm"
 
-    def test_detect_gemma3_text_model_without_sentence_transformers_modules_is_llm(self, tmp_path):
+    def test_detect_gemma3_text_model_without_sentence_transformers_modules_is_llm(
+        self, tmp_path
+    ):
         """gemma3_text base transformer without sentence-transformers modules stays LLM."""
         config = {
             "model_type": "gemma3_text",
@@ -818,10 +1350,12 @@ class TestDiscoverModels:
         reranker_dir = tmp_path / "bge-reranker"
         reranker_dir.mkdir()
         (reranker_dir / "config.json").write_text(
-            json.dumps({
-                "model_type": "modernbert",
-                "architectures": ["ModernBertForSequenceClassification"]
-            })
+            json.dumps(
+                {
+                    "model_type": "modernbert",
+                    "architectures": ["ModernBertForSequenceClassification"],
+                }
+            )
         )
         (reranker_dir / "model.safetensors").write_bytes(b"0" * 500)
 
@@ -934,6 +1468,35 @@ class TestDiscoverModels:
         models = discover_models(tmp_path)
         assert len(models) == 0
 
+    @pytest.mark.parametrize(
+        ("directory_name", "model_type", "architecture", "text_model_type"),
+        [
+            (
+                "gemma-4-E4B-it-qat-assistant-bf16",
+                "gemma4_assistant",
+                "Gemma4AssistantForCausalLM",
+                "gemma4_text",
+            ),
+            ("Qwen3.5-4B-MTP-bf16", "qwen3_5_mtp", None, "qwen3_5_text"),
+        ],
+    )
+    def test_mtp_drafter_skipped(
+        self, tmp_path, directory_name, model_type, architecture, text_model_type
+    ):
+        """MTP drafters should not be advertised as LLMs."""
+        drafter_dir = tmp_path / directory_name
+        drafter_dir.mkdir()
+        config = {
+            "model_type": model_type,
+            "text_config": {"model_type": text_model_type},
+        }
+        if architecture:
+            config["architectures"] = [architecture]
+        (drafter_dir / "config.json").write_text(json.dumps(config))
+        (drafter_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        assert discover_models(tmp_path) == {}
+
     def test_discovered_model_fields(self, tmp_path):
         """Test that DiscoveredModel has all expected fields."""
         model_dir = tmp_path / "test-model"
@@ -949,6 +1512,341 @@ class TestDiscoverModels:
         assert model.model_type == "llm"
         assert model.engine_type == "batched"
         assert model.estimated_size == int(1000 * 1.05)
+
+
+class TestImageManifestDiscovery:
+    """Tests for mflux image model manifest discovery."""
+
+    def _make_lmstudio_image_layout(
+        self,
+        model_dir: Path,
+        weights: dict[str, int] | None = None,
+    ) -> int:
+        """Create a small LM Studio-style image directory."""
+        weights = weights or {
+            "text_encoder": 1000,
+            "transformer": 2000,
+            "vae": 3000,
+        }
+        for component in (*weights, "tokenizer"):
+            (model_dir / component).mkdir(parents=True, exist_ok=True)
+        (model_dir / "tokenizer" / "tokenizer.json").write_text("{}")
+        for component, size in weights.items():
+            (model_dir / component / "0.safetensors").write_bytes(b"0" * size)
+        return int(sum(weights.values()) * 1.05)
+
+    def test_discover_valid_image_manifest_without_config(self, tmp_path):
+        """Image manifest is enough to discover a mflux image model."""
+        model_dir = tmp_path / "flux-dev"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "task": ["txt2img", "edit"],
+                    "quantize": 8,
+                    "default_steps": 4,
+                    "default_guidance": 3.5,
+                    "default_image_strength": 0.65,
+                    "estimated_size": 123456,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert len(models) == 1
+        model = models["flux-dev"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == 123456
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == "schnell"
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["capabilities"] == ["generation", "edit"]
+        assert model.image_metadata["tasks"] is not model.image_metadata["capabilities"]
+        assert model.image_metadata["default_image_strength"] == 0.65
+
+    def test_infers_lmstudio_qwen_image_edit_without_manifest(self, tmp_path):
+        """LM Studio Qwen-Image-Edit folders are discovered without a manifest."""
+        model_dir = tmp_path / "Qwen-Image-Edit-2511-6bit"
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models["Qwen-Image-Edit-2511-6bit"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["edit"]
+        assert model.tasks == ["edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == "qwen-image-edit"
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    def test_infers_nested_lmstudio_qwen_image_without_manifest(self, tmp_path):
+        """Two-level LM Studio Qwen-Image folders are discovered as generation."""
+        model_dir = tmp_path / "mlx-community" / "Qwen-Image-2512-4bit"
+        self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        model = models["Qwen-Image-2512-4bit"]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.capabilities == ["generation"]
+        assert model.tasks == ["generation"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["base_model"] == "qwen-image"
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model", "expected_tasks"),
+        [
+            ("Z-Image-mxfp8", "z-image", ["generation", "edit"]),
+            ("Z-Image-Turbo-mxfp8", "z-image-turbo", ["generation", "edit"]),
+            ("FIBO-mxfp8", "fibo", ["generation", "edit"]),
+            ("Ideogram-4-FP8-mxfp8", "ideogram-4-fp8", ["generation"]),
+        ],
+    )
+    def test_infers_lmstudio_mflux_image_models_without_manifest(
+        self, tmp_path, dirname, base_model, expected_tasks
+    ):
+        """LM Studio mflux image folders are discovered without a manifest."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == expected_tasks
+        assert model.tasks == expected_tasks
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == expected_tasks
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("FLUX.2-klein-4B-mxfp8", "flux2-klein-4b"),
+            ("FLUX.2-klein-9B-mxfp8", "flux2-klein-9b"),
+            ("Krea-2-Turbo-mxfp8", "krea-2"),
+        ],
+    )
+    def test_infers_lmstudio_dual_task_image_models_support_edit(
+        self, tmp_path, dirname, base_model
+    ):
+        """Dual-task image folders are discovered as generation and edit capable."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    @pytest.mark.parametrize(
+        ("dirname", "base_model"),
+        [
+            ("ERNIE-Image-Turbo-mxfp8", "ernie-image-turbo"),
+            ("ERNIE-Image-mxfp8", "ernie-image"),
+        ],
+    )
+    def test_infers_lmstudio_ernie_image_models_support_edit(
+        self, tmp_path, dirname, base_model
+    ):
+        """ERNIE image folders are discovered as generation and image-to-image capable."""
+        model_dir = tmp_path / dirname
+        expected_size = self._make_lmstudio_image_layout(model_dir)
+
+        models = discover_models(tmp_path)
+
+        assert detect_model_type(model_dir) == "image"
+        model = models[dirname]
+        assert model.model_type == "image"
+        assert model.engine_type == "image"
+        assert model.estimated_size == expected_size
+        assert model.capabilities == ["generation", "edit"]
+        assert model.tasks == ["generation", "edit"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["backend"] == "mflux"
+        assert model.image_metadata["base_model"] == base_model
+        assert model.image_metadata["tasks"] == ["generation", "edit"]
+        assert model.image_metadata["model_path"] == "."
+        assert model.image_metadata["inferred"] is True
+
+    def test_inferred_image_layout_does_not_require_specific_component_names(
+        self, tmp_path
+    ):
+        """Inference is based on supported aliases plus local weights, not component names."""
+        model_dir = tmp_path / "Z-Image-mxfp8"
+        self._make_lmstudio_image_layout(
+            model_dir,
+            weights={"encoder": 1000, "diffusion_model": 2000},
+        )
+
+        models = discover_models(tmp_path)
+
+        model = models["Z-Image-mxfp8"]
+        assert model.model_type == "image"
+        assert model.image_metadata is not None
+        assert model.image_metadata["base_model"] == "z-image"
+
+    def test_qwen_image_name_without_local_layout_is_skipped(self, tmp_path):
+        """Names alone are not enough to infer image models."""
+        model_dir = tmp_path / "Qwen-Image-not-a-model"
+        model_dir.mkdir()
+        (model_dir / "README.md").write_text("notes")
+
+        assert discover_models(tmp_path) == {}
+
+    def test_invalid_image_manifest_without_config_is_skipped(self, tmp_path):
+        """Invalid image manifests do not make a directory discoverable."""
+        model_dir = tmp_path / "not-image"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "other", "base_model": "schnell"})
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models == {}
+
+    def test_image_manifest_defaults_to_generation_task(self, tmp_path):
+        """Omitting task defaults image manifests to generation support."""
+        model_dir = tmp_path / "flux-default-task"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "mflux", "base_model": "dev"})
+        )
+
+        models = discover_models(tmp_path)
+
+        model = models["flux-default-task"]
+        assert model.model_type == "image"
+        assert model.capabilities == ["generation"]
+        assert model.tasks == ["generation"]
+        assert model.image_metadata is not None
+        assert model.image_metadata["tasks"] == ["generation"]
+
+    def test_image_manifest_with_unsupported_task_is_skipped(self, tmp_path):
+        """Unsupported image manifest tasks do not register image models."""
+        model_dir = tmp_path / "flux-upscaler"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "dev",
+                    "task": "upscale",
+                }
+            )
+        )
+
+        assert discover_models(tmp_path) == {}
+
+    def test_image_manifest_estimates_size_from_local_model_path(self, tmp_path):
+        """Image model size falls back to local model_path weights."""
+        model_dir = tmp_path / "flux-local"
+        weights_dir = model_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        (weights_dir / "model.safetensors").write_bytes(b"0" * 2000)
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "dev",
+                    "model_path": "weights",
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["flux-local"].estimated_size == int(2000 * 1.05)
+
+    def test_image_manifest_uses_conservative_base_model_size(self, tmp_path):
+        """Image models without local weights use conservative memory estimates."""
+        model_dir = tmp_path / "flux-no-local"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "flux2-klein-4b",
+                    "quantize": 4,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["flux-no-local"].estimated_size == int(
+            IMAGE_DEFAULT_ESTIMATED_SIZES["flux2-klein-4b"] * 0.45
+        )
+
+    def test_image_manifest_unknown_base_model_uses_unknown_fallback(self, tmp_path):
+        """Unknown image aliases still register with a safe non-tiny estimate."""
+        model_dir = tmp_path / "future-image"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps({"backend": "mflux", "base_model": "future-image"})
+        )
+
+        models = discover_models(tmp_path)
+
+        assert models["future-image"].estimated_size == IMAGE_UNKNOWN_FALLBACK_SIZE
+
+    def test_image_manifest_coexists_with_normal_config_models(self, tmp_path):
+        """Image and normal config.json models can be discovered together."""
+        llm_dir = tmp_path / "llama-3b"
+        llm_dir.mkdir()
+        (llm_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (llm_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        image_dir = tmp_path / "flux-with-config"
+        image_dir.mkdir()
+        (image_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (image_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mflux",
+                    "base_model": "schnell",
+                    "estimated_size": 2048,
+                }
+            )
+        )
+
+        models = discover_models(tmp_path)
+
+        assert len(models) == 2
+        assert models["llama-3b"].model_type == "llm"
+        assert models["flux-with-config"].model_type == "image"
+        assert models["flux-with-config"].engine_type == "image"
 
 
 class TestFormatSize:
@@ -1078,7 +1976,9 @@ class TestReadModelContextLength:
         if config is not None:
             (tmp_path / "config.json").write_text(json.dumps(config))
         if tokenizer_config is not None:
-            (tmp_path / "tokenizer_config.json").write_text(json.dumps(tokenizer_config))
+            (tmp_path / "tokenizer_config.json").write_text(
+                json.dumps(tokenizer_config)
+            )
 
     def test_max_position_embeddings_wins(self, tmp_path):
         self._write(tmp_path, config={"max_position_embeddings": 262144})
@@ -1092,25 +1992,36 @@ class TestReadModelContextLength:
             assert _read_model_context_length(sub) == 8192, key
 
     def test_top_level_takes_precedence_over_nested(self, tmp_path):
-        self._write(tmp_path, config={
-            "max_position_embeddings": 200000,
-            "text_config": {"max_position_embeddings": 32768},
-        })
+        self._write(
+            tmp_path,
+            config={
+                "max_position_embeddings": 200000,
+                "text_config": {"max_position_embeddings": 32768},
+            },
+        )
         assert _read_model_context_length(tmp_path) == 200000
 
     def test_text_config_fallback(self, tmp_path):
         """VLM wrappers stash the language head's ctx in text_config."""
-        self._write(tmp_path, config={"text_config": {"max_position_embeddings": 131072}})
+        self._write(
+            tmp_path, config={"text_config": {"max_position_embeddings": 131072}}
+        )
         assert _read_model_context_length(tmp_path) == 131072
 
     def test_language_config_fallback(self, tmp_path):
         """Some Qwen-style configs use language_config instead."""
-        self._write(tmp_path, config={"language_config": {"max_position_embeddings": 65536}})
+        self._write(
+            tmp_path, config={"language_config": {"max_position_embeddings": 65536}}
+        )
         assert _read_model_context_length(tmp_path) == 65536
 
     def test_tokenizer_max_length_fallback(self, tmp_path):
         """When config.json doesn't expose a length, tokenizer_config wins."""
-        self._write(tmp_path, config={"model_type": "llama"}, tokenizer_config={"model_max_length": 4096})
+        self._write(
+            tmp_path,
+            config={"model_type": "llama"},
+            tokenizer_config={"model_max_length": 4096},
+        )
         assert _read_model_context_length(tmp_path) == 4096
 
     def test_tokenizer_sentinel_rejected(self, tmp_path):
@@ -1364,9 +2275,7 @@ class TestUnsupportedModels:
         # Create a TTS model
         tts_dir = tmp_path / "Qwen3-TTS"
         tts_dir.mkdir()
-        (tts_dir / "config.json").write_text(
-            json.dumps({"model_type": "qwen3_tts"})
-        )
+        (tts_dir / "config.json").write_text(json.dumps({"model_type": "qwen3_tts"}))
         (tts_dir / "model.safetensors").write_bytes(b"0" * 1500)
 
         models = discover_models(tmp_path)
@@ -1399,7 +2308,9 @@ class TestHfCacheDiscovery:
         snapshot.mkdir(parents=True)
         return entry, snapshot
 
-    def _make_hf_cache_model(self, parent: Path, org: str, name: str, model_type: str = "llama"):
+    def _make_hf_cache_model(
+        self, parent: Path, org: str, name: str, model_type: str = "llama"
+    ):
         """Helper to create an HF cache entry with a valid model in the snapshot."""
         _, snapshot = self._make_hf_cache_entry(parent, org, name)
         (snapshot / "config.json").write_text(json.dumps({"model_type": model_type}))
@@ -1407,7 +2318,9 @@ class TestHfCacheDiscovery:
 
     def test_resolve_valid_entry(self, tmp_path):
         """Valid HF cache entry resolves to snapshot path and repo metadata."""
-        entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B-4bit")
+        entry, snapshot = self._make_hf_cache_entry(
+            tmp_path, "mlx-community", "Qwen3-8B-4bit"
+        )
 
         result = _resolve_hf_cache_entry(entry)
         assert result is not None
@@ -1450,7 +2363,9 @@ class TestHfCacheDiscovery:
 
     def test_resolve_strips_whitespace_from_refs(self, tmp_path):
         """Trailing newline in refs/main is stripped (matches real HF cache)."""
-        entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B")
+        entry, snapshot = self._make_hf_cache_entry(
+            tmp_path, "mlx-community", "Qwen3-8B"
+        )
         # Overwrite with trailing newline (like real HF cache)
         (entry / "refs" / "main").write_text(self.FAKE_COMMIT + "\n")
 
@@ -1488,7 +2403,10 @@ class TestHfCacheDiscovery:
 
         models = discover_models(tmp_path)
         assert models["mlx-community--Qwen3-8B-4bit"].model_path == str(
-            tmp_path / "models--mlx-community--Qwen3-8B-4bit" / "snapshots" / self.FAKE_COMMIT
+            tmp_path
+            / "models--mlx-community--Qwen3-8B-4bit"
+            / "snapshots"
+            / self.FAKE_COMMIT
         )
 
     def test_hf_cache_without_config_json_skipped(self, tmp_path):

@@ -1,5 +1,6 @@
 # Copyright © 2025 Apple Inc.
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E722, F401, N806, UP006, UP007, UP032, UP035, UP045
 """DeepSeek V4 DSML chat template (derived from mlx-lm deepseek_v32).
 
 This file is a near-verbatim copy of

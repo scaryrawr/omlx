@@ -211,11 +211,25 @@ def apply_load_patch() -> bool:
             return wrapper
 
         from . import chat_template_v4 as _ct
+        from . import dsv4_chat_encoder as _canonical
         from . import tool_parser_v4 as _tp
 
-        # Skip if the published tokenizer_config already wired up V4 by
-        # itself — leave whatever the user / publisher chose alone.
-        if wrapper._chat_template is None:
+        canonical_installed = False
+        try:
+            canonical_installed = _canonical.install_canonical_chat_template(
+                wrapper, model_path
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not install canonical DSV4 chat-template shim for %s: %s",
+                model_path,
+                e,
+            )
+
+        # Fallback for test fixtures or stripped bundles without the canonical
+        # encoding module.  Keep the existing DSML template rather than leaving
+        # DSV4 with a minimal Jinja template that lacks tool grammar.
+        if not canonical_installed and wrapper._chat_template is None:
             wrapper._chat_template = _ct.apply_chat_template
             wrapper.has_chat_template = True
         if wrapper._tool_parser is None:
