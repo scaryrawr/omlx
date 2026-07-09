@@ -33,7 +33,7 @@ import logging
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mlx.core as mx
 
@@ -46,10 +46,13 @@ from ..api.utils import (
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError
 from ..models.vlm import VLMModelAdapter
+from ..utils.generation_config import load_generation_config_token_ids
 from ..utils.image import (
+    cleanup_temporary_media,
+    compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
-    extract_images_from_messages,
+    extract_media_from_messages,
 )
 from .base import (
     BaseEngine,
@@ -62,11 +65,12 @@ logger = logging.getLogger(__name__)
 
 # OCR model types that require special handling.
 OCR_MODEL_TYPES = {"deepseekocr", "deepseekocr_2", "dots_ocr", "glm_ocr"}
+_DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
 
 # OCR model types and their default markdown conversion prompts.
 # When an OCR model receives a generic user prompt with an image,
 # the prompt is automatically adjusted for markdown output.
-OCR_MODEL_PROMPTS: Dict[str, str] = {
+OCR_MODEL_PROMPTS: dict[str, str] = {
     "deepseekocr": "Convert the document to markdown.",
     "deepseekocr_2": "Convert the document to markdown.",
     "dots_ocr": "Convert this page to clean Markdown while preserving reading order.",
@@ -76,7 +80,7 @@ OCR_MODEL_PROMPTS: Dict[str, str] = {
 # Extra stop sequences for OCR models to prevent degeneration.
 # Many OCR models lack proper EOS handling and generate chat-turn
 # tokens (<|user|>, <|im_start|>, etc.) indefinitely after the OCR output.
-OCR_EXTRA_STOP_SEQUENCES: List[str] = [
+OCR_EXTRA_STOP_SEQUENCES: list[str] = [
     "<|user|>",
     "<|im_start|>",
     "<|im_end|>",
@@ -94,7 +98,7 @@ DIFFUSION_PREFILL_STEP_SIZE = 2048
 
 # Per-model OCR generation defaults from official configs.
 # Applied automatically when no explicit user override is provided.
-OCR_MODEL_GENERATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+OCR_MODEL_GENERATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "glm_ocr": {
         "temperature": 0.0,
         "repetition_penalty": 1.1,
@@ -144,6 +148,47 @@ def _apply_minimax_m3_thinking_mode(
         template_kwargs["thinking_mode"] = "disabled"
 
 
+def _iter_token_ids(value: Any):
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        yield value
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, int) and not isinstance(item, bool):
+                yield item
+
+
+def _resolve_vlm_eos_token_ids(
+    model_path: Path,
+    eos_token_id: Any,
+) -> list[int] | int | None:
+    merged: list[int] = []
+    seen: set[int] = set()
+    preserve_sequence = isinstance(eos_token_id, (list, tuple, set)) and not isinstance(
+        eos_token_id,
+        (str, bytes, bytearray),
+    )
+
+    def add(value: Any) -> None:
+        for token_id in _iter_token_ids(value) or ():
+            if token_id not in seen:
+                seen.add(token_id)
+                merged.append(token_id)
+
+    add(eos_token_id)
+    generation_eos = load_generation_config_token_ids(model_path, "eos_token_id")
+    if generation_eos:
+        add(sorted(generation_eos))
+    if _read_config_model_type(model_path) == "deepseek_v4":
+        add(sorted(_DEEPSEEK_V4_EOS_TOKEN_IDS))
+
+    if not merged:
+        return None
+    return merged if preserve_sequence or len(merged) > 1 else merged[0]
+
+
 def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id: Any):
     from mlx_vlm.tokenizer_utils import load_tokenizer
     from mlx_vlm.utils import StoppingCriteria
@@ -154,10 +199,11 @@ def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id
     detokenizer_class = load_tokenizer(model_path, return_tokenizer=False)
     tokenizer.detokenizer = detokenizer_class(tokenizer)
 
-    final_eos_token_ids = (
+    final_eos_token_ids = _resolve_vlm_eos_token_ids(
+        model_path,
         eos_token_id
         or getattr(tokenizer, "eos_token_ids", None)
-        or getattr(tokenizer, "eos_token_id", None)
+        or getattr(tokenizer, "eos_token_id", None),
     )
     tokenizer.stopping_criteria = StoppingCriteria(final_eos_token_ids, tokenizer)
     return tokenizer
@@ -180,7 +226,10 @@ def _load_cohere2_moe_text_model(
         trust_remote_code=trust_remote_code,
     )
 
-    eos_token_id = getattr(getattr(model, "config", None), "eos_token_id", None)
+    eos_token_id = _resolve_vlm_eos_token_ids(
+        model_path,
+        getattr(getattr(model, "config", None), "eos_token_id", None),
+    )
     try:
         processor = load_processor(
             model_path,
@@ -505,7 +554,7 @@ def _has_audio_weights(model_dir: Path) -> bool:
     for sf in model_dir.glob("*.safetensors"):
         try:
             with safetensors.safe_open(str(sf), framework="np") as f:
-                for k in f.keys():
+                for k in f.keys():  # noqa: SIM118 - safe_open is not iterable.
                     if k.startswith(("audio_tower.", "embed_audio.")):
                         return True
         except Exception:
@@ -1002,8 +1051,12 @@ def _count_image_tokens(
 
 
 def _smart_resize_tokens(
-    h: int, w: int, patch_size: int, merge_size: int,
-    min_pixels: int, max_pixels: int,
+    h: int,
+    w: int,
+    patch_size: int,
+    merge_size: int,
+    min_pixels: int,
+    max_pixels: int,
 ) -> int:
     """Real merged-token count for one image of pixel size (h, w), mirroring
     the Qwen image processor's ``smart_resize`` -> grid_thw ->
@@ -1025,10 +1078,10 @@ def _smart_resize_tokens(
         beta = math.sqrt(min_pixels / (h * w))
         h_bar = math.ceil(h * beta / factor) * factor
         w_bar = math.ceil(w * beta / factor) * factor
-    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size ** 2)
+    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size**2)
 
 
-def _read_image_dims(part: dict) -> Optional[tuple]:
+def _read_image_dims(part: dict) -> tuple | None:
     """Best-effort, decode-free ``(width, height)`` for an OpenAI image part.
 
     Handles only ``data:`` base64 URIs. Returns ``None`` for anything else so
@@ -1092,9 +1145,7 @@ def _count_image_tokens_real(
     ms = getattr(ip, "merge_size", None)
     minp = getattr(ip, "min_pixels", None)
     maxp = getattr(ip, "max_pixels", None)
-    qwen_ok = all(
-        isinstance(x, int) and x > 0 for x in (ps, ms, minp, maxp)
-    )
+    qwen_ok = all(isinstance(x, int) and x > 0 for x in (ps, ms, minp, maxp))
 
     total = 0
     for msg in messages:
@@ -1596,6 +1647,8 @@ class VLMBatchedEngine(BaseEngine):
                 try:
                     from ..utils.model_loading import (
                         lm_load_compat as mlx_lm_load,
+                    )
+                    from ..utils.model_loading import (
                         maybe_load_custom_quantization,
                     )
                     from ..utils.tokenizer import get_tokenizer_config
@@ -1724,12 +1777,11 @@ class VLMBatchedEngine(BaseEngine):
             false_attrs=("_grammar_compiler_init_attempted",),
         )
 
-        if engine:
-            if hasattr(engine, "engine") and engine.engine is not None:
-                try:
-                    engine.engine.close()
-                except Exception as e:
-                    logger.warning(f"Error closing engine: {e}")
+        if engine and hasattr(engine, "engine") and engine.engine is not None:
+            try:
+                engine.engine.close()
+            except Exception as e:
+                logger.warning(f"Error closing engine: {e}")
         self._diffusion_cancel_events = set()
         self._diffusion_active_requests = 0
         self._loaded = False
@@ -1825,8 +1877,10 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         num_images: int,
         num_audios: int = 0,
+        num_videos: int = 0,
+        videos: list[Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[tuple[int, int]]]:
-        """Format VLM messages with image/audio tokens on media-bearing user turns."""
+        """Format VLM messages with image/audio/video tokens on media-bearing user turns."""
         from mlx_vlm.prompt_utils import extract_text_from_content, get_message_json
 
         model_type = self.model_type or getattr(
@@ -1837,6 +1891,7 @@ class VLMBatchedEngine(BaseEngine):
 
         image_part_types = {"image", "image_url", "input_image"}
         audio_part_types = {"input_audio"}
+        video_part_types = {"input_video", "video"}
         has_explicit_images = any(
             isinstance(msg, dict)
             and self._count_content_parts(msg.get("content"), image_part_types) > 0
@@ -1848,11 +1903,18 @@ class VLMBatchedEngine(BaseEngine):
             and self._count_content_parts(msg.get("content"), audio_part_types) > 0
             for msg in messages
         )
+        has_explicit_video = any(
+            isinstance(msg, dict)
+            and self._count_content_parts(msg.get("content"), video_part_types) > 0
+            for msg in messages
+        )
 
         remaining_images = num_images
         remaining_audios = num_audios
+        remaining_videos = list(videos or [])
         assigned_fallback_images = False
         assigned_fallback_audios = False
+        assigned_fallback_videos = False
         formatted_messages: list[dict[str, Any]] = []
         image_message_ranges: list[tuple[int, int]] = []
 
@@ -1866,12 +1928,17 @@ class VLMBatchedEngine(BaseEngine):
 
             msg_num_images = 0
             msg_num_audios = 0
+            msg_num_videos = 0
+            msg_videos: list[Any] = []
             if role == "user":
                 explicit_images = self._count_content_parts(
                     raw_content, image_part_types
                 )
                 explicit_audios = self._count_content_parts(
                     raw_content, audio_part_types
+                )
+                explicit_videos = self._count_content_parts(
+                    raw_content, video_part_types
                 )
                 if explicit_images > 0 and remaining_images > 0:
                     msg_num_images = min(explicit_images, remaining_images)
@@ -1896,6 +1963,20 @@ class VLMBatchedEngine(BaseEngine):
                     msg_num_audios = remaining_audios
                     remaining_audios = 0
                     assigned_fallback_audios = True
+
+                if explicit_videos > 0 and remaining_videos:
+                    msg_num_videos = min(explicit_videos, len(remaining_videos))
+                    msg_videos = remaining_videos[:msg_num_videos]
+                    remaining_videos = remaining_videos[msg_num_videos:]
+                elif (
+                    not has_explicit_video
+                    and remaining_videos
+                    and not assigned_fallback_videos
+                ):
+                    msg_num_videos = len(remaining_videos)
+                    msg_videos = remaining_videos
+                    remaining_videos = []
+                    assigned_fallback_videos = True
 
             if msg_num_images > 0:
                 image_message_ranges.append((idx, msg_num_images))
@@ -1924,6 +2005,7 @@ class VLMBatchedEngine(BaseEngine):
                     skip_audio_token=role != "user" or msg_num_audios == 0,
                     num_images=msg_num_images,
                     num_audios=msg_num_audios,
+                    **({"video": msg_videos} if msg_num_videos > 0 else {}),
                 )
                 # Collapse text-only list content to plain string so that
                 # simplified chat templates (without render_content macro)
@@ -1939,7 +2021,7 @@ class VLMBatchedEngine(BaseEngine):
 
     def _compute_vision_features(
         self, pixel_values: Any, extra_model_inputs: dict
-    ) -> Optional[mx.array]:
+    ) -> mx.array | None:
         """Compute vision features for caching.
 
         Tries multiple strategies based on model architecture:
@@ -2012,7 +2094,10 @@ class VLMBatchedEngine(BaseEngine):
                             inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         )
                     ]
-                    if image_position_ids is not None and len(positional_parameters) >= 2:
+                    if (
+                        image_position_ids is not None
+                        and len(positional_parameters) >= 2
+                    ):
                         return model.encode_image(pixel_values, image_position_ids)
 
             return model.encode_image(pixel_values)
@@ -2070,7 +2155,7 @@ class VLMBatchedEngine(BaseEngine):
         features: mx.array,
         num_images: int,
         extra_model_inputs: dict,
-    ) -> Optional[List[mx.array]]:
+    ) -> list[mx.array] | None:
         """Split batched vision features into per-image tensors for caching.
 
         Returns a list of per-image feature tensors, or None if the model
@@ -2143,7 +2228,7 @@ class VLMBatchedEngine(BaseEngine):
         return None
 
     @staticmethod
-    def _as_int_list(value: Any) -> Optional[List[int]]:
+    def _as_int_list(value: Any) -> list[int] | None:
         if value is None:
             return None
         if hasattr(value, "tolist"):
@@ -2153,7 +2238,7 @@ class VLMBatchedEngine(BaseEngine):
         if not isinstance(value, (list, tuple)):
             return None
 
-        result: List[int] = []
+        result: list[int] = []
         for item in value:
             if hasattr(item, "tolist"):
                 item = item.tolist()
@@ -2168,7 +2253,7 @@ class VLMBatchedEngine(BaseEngine):
         return result
 
     @staticmethod
-    def _vision_feature_token_count(features: Any) -> Optional[int]:
+    def _vision_feature_token_count(features: Any) -> int | None:
         if isinstance(features, (list, tuple)):
             total = 0
             for feature in features:
@@ -2189,7 +2274,7 @@ class VLMBatchedEngine(BaseEngine):
             count *= int(dim)
         return count
 
-    def _image_token_count(self, input_ids: Any) -> Optional[int]:
+    def _image_token_count(self, input_ids: Any) -> int | None:
         config = getattr(self._vlm_model, "config", None)
         image_token_id = getattr(config, "image_token_id", None)
         if image_token_id is None:
@@ -2203,7 +2288,7 @@ class VLMBatchedEngine(BaseEngine):
             return None
 
     def _vision_features_match_image_tokens(
-        self, features: Any, image_token_count: Optional[int]
+        self, features: Any, image_token_count: int | None
     ) -> bool:
         if image_token_count is None:
             return True
@@ -2236,15 +2321,16 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         images: list[Any],
         audio: list | None = None,
+        videos: list[Any] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         tools: list[dict] | None = None,
-    ) -> Tuple[
-        List[int],
-        Optional[mx.array],
-        Optional[Dict[str, Any]],
-        Optional[str],
+    ) -> tuple[
+        list[int],
+        mx.array | None,
+        dict[str, Any] | None,
+        str | None,
         int,
-        List[Tuple[int, str]],
+        list[tuple[int, str]],
     ]:
         """
         Run the full VLM preprocessing pipeline:
@@ -2257,6 +2343,7 @@ class VLMBatchedEngine(BaseEngine):
             messages: Chat messages (text-only, media already extracted)
             images: List of PIL Image objects
             audio: List of audio data (BytesIO buffers, tuples, or numpy arrays)
+            videos: List of video paths, arrays, or temporary paths
 
         Returns:
             Tuple of (
@@ -2281,6 +2368,7 @@ class VLMBatchedEngine(BaseEngine):
 
         num_images = len(images)
         num_audios = len(audio) if audio else 0
+        num_videos = len(videos) if videos else 0
 
         model_type = self.model_type or ""
         if model_type == COHERE2_MOE_MODEL_TYPE and (num_images > 0 or num_audios > 0):
@@ -2316,7 +2404,11 @@ class VLMBatchedEngine(BaseEngine):
         try:
             formatted_messages, image_message_ranges = (
                 self._format_messages_for_vlm_template(
-                    messages, num_images=num_images, num_audios=num_audios
+                    messages,
+                    num_images=num_images,
+                    num_audios=num_audios,
+                    num_videos=num_videos,
+                    videos=videos,
                 )
             )
         except Exception as e:
@@ -2331,6 +2423,7 @@ class VLMBatchedEngine(BaseEngine):
                 messages,
                 num_images=num_images,
                 num_audios=num_audios,
+                video=videos if videos else None,
                 return_messages=True,
             )
             image_message_ranges = []
@@ -2397,20 +2490,24 @@ class VLMBatchedEngine(BaseEngine):
             else:
                 raise
 
-        # Tokenize text and preprocess images and audio
-        inputs = prepare_inputs(
-            self._processor,
-            images=images if images else None,
-            audio=audio if audio else None,
-            prompts=[prompt] if isinstance(prompt, str) else prompt,
-        )
+        # Tokenize text and preprocess images, audio, and video.
+        try:
+            inputs = prepare_inputs(
+                self._processor,
+                images=images if images else None,
+                audio=audio if audio else None,
+                videos=videos if videos else None,
+                prompts=[prompt] if isinstance(prompt, str) else prompt,
+            )
+        finally:
+            cleanup_temporary_media(videos or [])
 
         input_ids = inputs["input_ids"]
         pixel_values = inputs.get("pixel_values")
         attention_mask = inputs.get("attention_mask")
 
         image_cache_key_start = 0
-        image_cache_key_ranges: list[Tuple[int, str]] = []
+        image_cache_key_ranges: list[tuple[int, str]] = []
         if image_message_ranges:
             try:
                 prefix_template_kwargs = {
@@ -2485,9 +2582,11 @@ class VLMBatchedEngine(BaseEngine):
             and v is not None
         }
 
-        # Check for any multimodal inputs: images or audio
+        # Check for any multimodal inputs: images, audio, or video
         has_audio = "input_features" in extra_model_inputs
-        has_multimodal = (pixel_values is not None and num_images > 0) or has_audio
+        has_multimodal = (
+            pixel_values is not None and (num_images > 0 or num_videos > 0)
+        ) or has_audio
 
         if has_multimodal:
             # Build call kwargs from extra_model_inputs (includes input_features
@@ -2711,7 +2810,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """Generate a complete response (non-streaming)."""
@@ -2767,9 +2866,9 @@ class VLMBatchedEngine(BaseEngine):
             presence_penalty=presence_penalty,
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
         )
 
         output = await self._engine.generate(
@@ -2808,7 +2907,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generation token by token."""
@@ -2870,9 +2969,9 @@ class VLMBatchedEngine(BaseEngine):
             presence_penalty=presence_penalty,
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
         )
 
         # SpecPrefill: pass per-request overrides
@@ -3050,7 +3149,7 @@ class VLMBatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
         if self.is_diffusion_model:
-            _, _, audio = extract_images_from_messages(messages)
+            _, _, audio, _ = extract_media_from_messages(messages)
             self._validate_diffusion_request(
                 tools=tools,
                 audio=audio if audio else None,
@@ -3069,23 +3168,23 @@ class VLMBatchedEngine(BaseEngine):
         # tokens AND we then add the per-image budget on top — a double
         # count that rejects borderline image-bearing prompts the real
         # chat path would have handled. The real ``chat`` flow itself
-        # strips images first via ``extract_images_from_messages`` (see
+        # strips media first via ``extract_media_from_messages`` (see
         # ``_process_chat_messages``), so mirroring that here keeps
         # preflight and execution on the same template input.
-        text_messages, _, _ = extract_images_from_messages(messages)
-        prompt = self._apply_chat_template(
-            text_messages,
-            template_tools,
-            chat_template_kwargs=ct_kwargs,
-            is_partial=partial,
-        )
-        # Tokenizer errors propagate as 500 today regardless of where they
-        # fire; the real chat path's add_request → tokenize call has no
-        # path-specific 400 handler. Don't introduce a NEW failure mode
-        # in preflight: skip the memory check on tokenizer error and let
-        # the real chat path surface the same error through the existing
-        # handler chain.
         try:
+            text_messages, _, _, videos = extract_media_from_messages(messages)
+            prompt = self._apply_chat_template(
+                text_messages,
+                template_tools,
+                chat_template_kwargs=ct_kwargs,
+                is_partial=partial,
+            )
+            # Tokenizer errors propagate as 500 today regardless of where they
+            # fire; the real chat path's add_request → tokenize call has no
+            # path-specific 400 handler. Don't introduce a NEW failure mode
+            # in preflight: skip the memory check on tokenizer error and let
+            # the real chat path surface the same error through the existing
+            # handler chain.
             num_tokens = len(self._tokenizer.encode(prompt))
         except Exception as e:
             logger.warning(
@@ -3095,6 +3194,8 @@ class VLMBatchedEngine(BaseEngine):
                 type(e).__name__,
             )
             return
+        finally:
+            cleanup_temporary_media(locals().get("videos", []))
         # Count images from the ORIGINAL messages (the stripped
         # ``text_messages`` no longer has the image content-parts).
         num_tokens += _count_image_tokens_real(
@@ -3312,8 +3413,8 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         tools: list[dict] | None,
         kwargs: dict,
-    ) -> Tuple[
-        str | list[int], Any, dict | None, str | None, int, List[Tuple[int, str]]
+    ) -> tuple[
+        str | list[int], Any, dict | None, str | None, int, list[tuple[int, str]]
     ]:
         """
         Process chat messages, extracting images and preparing VLM inputs.
@@ -3321,33 +3422,51 @@ class VLMBatchedEngine(BaseEngine):
         Returns:
             Tuple of (prompt_or_token_ids, vlm_embeds, vlm_kwargs, image_hash)
         """
-        # Extract images from messages
-        text_messages, images, audio = extract_images_from_messages(messages)
+        # Extract media from messages
+        text_messages, images, audio, videos = extract_media_from_messages(messages)
+        try:
+            audio_video_hash = compute_audio_video_hash(audio, videos)
 
-        ct_kwargs = kwargs.pop("chat_template_kwargs", None)
+            ct_kwargs = kwargs.pop("chat_template_kwargs", None)
 
-        # Keep VLM-capable models on one prompt-rendering path, even before the
-        # first image arrives. Otherwise the conversation switches prompt families
-        # on the first image-bearing turn and invalidates early prefix blocks.
-        vlm_messages = self._apply_ocr_prompt(messages) if images else text_messages
-        template_tools = convert_tools_for_template(tools) if tools else None
-        (
-            token_ids,
-            vlm_embeds,
-            vlm_kwargs,
-            image_hash,
-            image_cache_key_start,
-            image_cache_key_ranges,
-        ) = self._prepare_vision_inputs(
-            vlm_messages,
-            images,
-            audio=audio if audio else None,
-            chat_template_kwargs=ct_kwargs,
-            tools=template_tools,
-        )
+            # Keep VLM-capable models on one prompt-rendering path, even before the
+            # first image arrives. Otherwise the conversation switches prompt families
+            # on the first image-bearing turn and invalidates early prefix blocks.
+            if images:
+                vlm_messages = self._apply_ocr_prompt(messages)
+            elif audio or videos:
+                vlm_messages = messages
+            else:
+                vlm_messages = text_messages
+            template_tools = convert_tools_for_template(tools) if tools else None
+            (
+                token_ids,
+                vlm_embeds,
+                vlm_kwargs,
+                image_hash,
+                image_cache_key_start,
+                image_cache_key_ranges,
+            ) = self._prepare_vision_inputs(
+                vlm_messages,
+                images,
+                audio=audio if audio else None,
+                videos=videos if videos else None,
+                chat_template_kwargs=ct_kwargs,
+                tools=template_tools,
+            )
+        finally:
+            cleanup_temporary_media(videos)
+        if audio_video_hash is not None:
+            image_hash = (
+                f"av:{audio_video_hash}:img:{image_hash}"
+                if image_hash
+                else f"av:{audio_video_hash}"
+            )
+            image_cache_key_start = 0
+            image_cache_key_ranges = []
 
-        if images:
-            # Free Metal intermediates from vision encoding.
+        if images or videos:
+            # Free Metal intermediates from multimodal encoding.
             mx.synchronize()
             mx.clear_cache()
 
@@ -3520,7 +3639,7 @@ class VLMBatchedEngine(BaseEngine):
         tools: list[dict] | None,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        text_messages, images, audio = extract_images_from_messages(messages)
+        text_messages, images, audio, _ = extract_media_from_messages(messages)
         self._validate_diffusion_request(
             tools=tools,
             audio=audio if audio else None,
@@ -3779,18 +3898,20 @@ class VLMBatchedEngine(BaseEngine):
         Image tokens are added during vision encoding and vary by model.
         """
         # Extract text-only version for token counting
-        from ..utils.image import extract_images_from_messages
+        from ..utils.image import extract_media_from_messages
 
-        text_messages, _, _ = extract_images_from_messages(messages)
-
-        template_tools = convert_tools_for_template(tools) if tools else None
-        prompt = self._apply_chat_template(
-            text_messages,
-            template_tools,
-            chat_template_kwargs=chat_template_kwargs,
-            is_partial=is_partial,
-        )
-        return len(self._tokenizer.encode(prompt))
+        text_messages, _, _, videos = extract_media_from_messages(messages)
+        try:
+            template_tools = convert_tools_for_template(tools) if tools else None
+            prompt = self._apply_chat_template(
+                text_messages,
+                template_tools,
+                chat_template_kwargs=chat_template_kwargs,
+                is_partial=is_partial,
+            )
+            return len(self._tokenizer.encode(prompt))
+        finally:
+            cleanup_temporary_media(videos)
 
     def has_active_requests(self) -> bool:
         """Check if the engine has active in-flight requests."""
