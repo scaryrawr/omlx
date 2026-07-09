@@ -31,6 +31,8 @@ The server provides:
     - POST /v1/chat/completions - Chat completions
     - POST /v1/messages - Anthropic Messages API
     - POST /v1/responses - OpenAI Responses API (Codex compatibility)
+    - POST /v1/images/generations - Image generation
+    - POST /v1/images/edits - Image editing
     - GET /v1/models - List available models (with load status)
     - GET /health - Health check
     - GET /v1/mcp/tools - List MCP tools
@@ -51,7 +53,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi import Request as FastAPIRequest
@@ -108,6 +110,10 @@ from .api.markitdown import (
     request_has_file_parts,
     stream_messages_to_markdown_async,
 )
+from .api.media_inputs import (
+    has_audio_video_parts,
+    normalize_media_file_parts_in_messages,
+)
 
 # Import from new modular API
 from .api.openai_models import (
@@ -122,6 +128,7 @@ from .api.openai_models import (
     CompletionRequest,
     CompletionResponse,
     FunctionCall,
+    Message,
     ModelInfo,
     ModelsResponse,
     PromptTokensDetails,
@@ -151,6 +158,7 @@ from .api.responses_utils import (
     convert_responses_input_to_messages,
     convert_responses_tools,
     format_sse_event,
+    normalize_chat_messages_for_response_store,
     normalize_response_output_to_messages,
 )
 from .api.thinking import ThinkingParser, extract_thinking, prompt_opens_thinking
@@ -189,6 +197,7 @@ from .exceptions import (
     PrefillMemoryExceededError,
     SchedulerQueueFullError,
 )
+from .model_discovery import format_size
 from .server_metrics import get_server_metrics, reset_server_metrics
 
 logging.basicConfig(level=logging.INFO)
@@ -266,20 +275,20 @@ class ServerState:
     to manage and test.
     """
 
-    engine_pool: Optional[EnginePool] = None
-    default_model: Optional[str] = None
-    mcp_manager: Optional[object] = None
-    mcp_executor: Optional[object] = None
+    engine_pool: EnginePool | None = None
+    default_model: str | None = None
+    mcp_manager: object | None = None
+    mcp_executor: object | None = None
     sampling: SamplingDefaults = field(default_factory=SamplingDefaults)
-    api_key: Optional[str] = None
-    settings_manager: Optional[object] = None  # ModelSettingsManager
-    global_settings: Optional[object] = None  # GlobalSettings
-    hf_downloader: Optional[object] = None  # HFDownloader
-    ms_downloader: Optional[object] = None  # MSDownloader
-    process_memory_enforcer: Optional[object] = None  # ProcessMemoryEnforcer
+    api_key: str | None = None
+    settings_manager: object | None = None  # ModelSettingsManager
+    global_settings: object | None = None  # GlobalSettings
+    hf_downloader: object | None = None  # HFDownloader
+    ms_downloader: object | None = None  # MSDownloader
+    process_memory_enforcer: object | None = None  # ProcessMemoryEnforcer
     responses_store: ResponseStore = field(default_factory=ResponseStore)
-    oq_manager: Optional[object] = None  # OQManager
-    hf_uploader: Optional[object] = None  # HFUploader
+    oq_manager: object | None = None  # OQManager
+    hf_uploader: object | None = None  # HFUploader
 
 
 # Global server state instance
@@ -507,6 +516,12 @@ from .api.mcp_routes import set_mcp_manager_getter
 
 set_mcp_manager_getter(get_mcp_manager)
 app.include_router(mcp_router, dependencies=[Depends(verify_api_key)])
+
+# Keep image routes registered even when optional mflux/image support is absent;
+# handlers return a 503 install hint so OpenAI-compatible paths remain stable.
+from .api.image_routes import router as image_router
+
+app.include_router(image_router, dependencies=[Depends(verify_api_key)])
 
 # Include audio routes only when mlx-audio is installed.
 # audio_routes.py itself only imports fastapi/stdlib at module level, so it
@@ -842,7 +857,7 @@ async def get_engine(
     engine_type: EngineType = EngineType.LLM,
     _lease: bool = False,
     _leased_out: list | None = None,
-) -> Union[BaseEngine, EmbeddingEngine, RerankerEngine]:
+) -> BaseEngine | EmbeddingEngine | RerankerEngine:
     """
     Get engine for the specified model and type.
 
@@ -1482,8 +1497,15 @@ def _resolve_metric_durations(
     generation_tps = float(getattr(output, "generation_tps", 0.0) or 0.0)
     if generation_tps > 0:
         generation_duration = output.completion_tokens / generation_tps
-
     return prefill_duration, generation_duration
+
+def _active_model_aliases() -> dict[str, str]:
+    """Return aliases that the current engine pool can resolve safely."""
+    pool = _server_state.engine_pool
+    settings_manager = _server_state.settings_manager
+    if pool is None or settings_manager is None:
+        return {}
+    return pool.get_active_model_aliases(settings_manager)
 
 
 def _get_ocr_defaults(model_id: str | None) -> dict | None:
@@ -1627,6 +1649,37 @@ def validate_context_window(
         )
 
 
+def _select_default_chat_model(
+    pool: EnginePool,
+    settings_default: str | None,
+) -> tuple[str | None, str | None]:
+    """Select a default model suitable for chat/completions endpoints."""
+    available_models = pool.get_model_ids()
+    if not available_models:
+        return None, None
+
+    if settings_default:
+        entry = pool.get_entry(settings_default)
+        if entry is not None and entry.model_type in {"llm", "vlm"}:
+            return settings_default, None
+        if entry is None:
+            reason = f"Default model '{settings_default}' not found"
+        else:
+            reason = (
+                f"Default model '{settings_default}' is a {entry.model_type} model, "
+                "not a chat-capable model"
+            )
+    else:
+        reason = None
+
+    for model_id in available_models:
+        entry = pool.get_entry(model_id)
+        if entry is not None and entry.model_type in {"llm", "vlm"}:
+            return model_id, reason
+
+    return None, reason
+
+
 def init_server(
     model_dirs: str | list[str],
     scheduler_config=None,
@@ -1757,21 +1810,18 @@ def init_server(
             f"No models found in {', '.join(dir_list)}. Add models to serve them."
         )
 
-    # Set default model (from settings file, fallback to first model)
-    available_models = _server_state.engine_pool.get_model_ids()
-    if available_models:
-        if settings_default:
-            if settings_default in available_models:
-                _server_state.default_model = settings_default
-            else:
-                logger.warning(
-                    f"Default model '{settings_default}' not found, using first model"
-                )
-                _server_state.default_model = available_models[0]
+    # Set default model for chat/completions. Discovery can include image,
+    # embedding, and audio models; never make those the implicit chat default.
+    default_model, default_warning = _select_default_chat_model(
+        _server_state.engine_pool,
+        settings_default,
+    )
+    if default_warning is not None:
+        if default_model is not None:
+            logger.warning(f"{default_warning}, using '{default_model}'")
         else:
-            _server_state.default_model = available_models[0]
-    else:
-        _server_state.default_model = None
+            logger.warning(f"{default_warning}, and no chat-capable models were found")
+    _server_state.default_model = default_model
 
     # Reset server metrics for fresh start (with all-time persistence)
     stats_path = base_path / "stats.json"
@@ -1878,7 +1928,7 @@ _KEEPALIVE_COMPLETION_CHUNK = (
 _KEEPALIVE_ANTHROPIC_PING = 'event: ping\ndata: {"type":"ping"}\n\n'
 
 
-def _resolve_keepalive(protocol: str) -> Optional[str]:
+def _resolve_keepalive(protocol: str) -> str | None:
     """Pick a wire-level keepalive frame for the given API protocol.
 
     Returns None when the configured mode disables keepalive for this protocol.
@@ -1947,7 +1997,7 @@ async def _with_sse_keepalive(
     http_request: Optional["FastAPIRequest"] = None,
     interval: float = 10.0,
     disconnect_poll: float = 2.0,
-    keepalive_chunk: Optional[str] = _KEEPALIVE_COMMENT,
+    keepalive_chunk: str | None = _KEEPALIVE_COMMENT,
 ) -> AsyncIterator[str]:
     """Wrap an SSE generator to send periodic keepalive frames.
 
@@ -2169,7 +2219,6 @@ async def health():
 @app.get("/api/status")
 async def server_status(_: bool = Depends(verify_api_key)):
     """Lightweight status endpoint for external tool polling (statuslines, scripts)."""
-    from .model_discovery import format_size
     from .server_metrics import get_server_metrics
 
     metrics = get_server_metrics()
@@ -2331,24 +2380,72 @@ def _with_exposed_profile_status(status: dict) -> dict:
 async def _preprocess_markitdown_files_for_llm(
     request: ChatCompletionRequest,
 ) -> ChatCompletionRequest:
-    if not request_has_file_parts(request.messages):
-        return request
+    try:
+        messages = normalize_media_file_parts_in_messages(
+            request.messages,
+            allow_file_url=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not request_has_file_parts(messages):
+        if messages is request.messages:
+            return request
+        return request.model_copy(update={"messages": messages})
 
     try:
         messages = await preprocess_markitdown_file_parts_async(
-            request.messages,
+            messages,
             global_settings=_server_state.global_settings,
             engine_pool=_server_state.engine_pool,
             settings_manager=_server_state.settings_manager,
             get_sampling_params=get_sampling_params,
             fail_when_disabled=True,
             allow_missing_historical_files=True,
+            allow_file_url=False,
         )
     except MarkItDownRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return request.model_copy(update={"messages": messages})
+
+
+async def _preprocess_response_files_for_llm(
+    messages: list[dict],
+) -> list[dict]:
+    pydantic_messages = [Message.model_validate(msg) for msg in messages]
+    try:
+        pydantic_messages = normalize_media_file_parts_in_messages(
+            pydantic_messages,
+            allow_file_url=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not request_has_file_parts(pydantic_messages):
+        return normalize_chat_messages_for_response_store(
+            [msg.model_dump(exclude_none=True) for msg in pydantic_messages]
+        )
+
+    try:
+        processed = await preprocess_markitdown_file_parts_async(
+            pydantic_messages,
+            global_settings=_server_state.global_settings,
+            engine_pool=_server_state.engine_pool,
+            settings_manager=_server_state.settings_manager,
+            get_sampling_params=get_sampling_params,
+            fail_when_disabled=True,
+            allow_missing_historical_files=True,
+            allow_file_url=True,
+        )
+    except MarkItDownRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return normalize_chat_messages_for_response_store(
+        [msg.model_dump(exclude_none=True) for msg in processed]
+    )
 
 
 def _build_markitdown_chat_response(
@@ -2507,6 +2604,7 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
 
     if _server_state.engine_pool is not None:
         status = _server_state.engine_pool.get_status()
+        active_aliases = _active_model_aliases()
         settings_manager = _server_state.settings_manager
 
         hide_helpers = bool(
@@ -2530,7 +2628,7 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
         excluded_model_ids: set[str] = set()
         for m in status["models"]:
             model_id = m["id"]
-            display_id = model_id
+            display_id = active_aliases.get(model_id, model_id)
             ms = None
             if settings_manager:
                 ms = settings_manager.get_settings(model_id)
@@ -2599,6 +2697,7 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
     status = _with_exposed_profile_status(
         _with_markitdown_status(_server_state.engine_pool.get_status())
     )
+    active_aliases = _active_model_aliases()
     for m in status["models"]:
         model_id = m["id"]
         if is_markitdown_model(model_id):
@@ -2620,9 +2719,10 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
                 )
             else:
                 ms = sm.get_settings(source_model_id)
-            base_ms = sm.get_settings(source_model_id)
-            if base_ms and base_ms.model_alias and source_model_id == model_id:
-                m["model_alias"] = base_ms.model_alias
+            if source_model_id == model_id and model_id in active_aliases:
+                m["model_alias"] = active_aliases[model_id]
+            else:
+                m.pop("model_alias", None)
             if ms and ms.max_tokens is not None:
                 max_tokens = ms.max_tokens
         m["max_tokens"] = max_tokens
@@ -3201,6 +3301,11 @@ async def create_chat_completion(
         is_dflash_vlm = not is_vlm and getattr(
             engine, "supports_multimodal_fallback", False
         )
+        if has_audio_video_parts(request.messages) and not (is_vlm or is_dflash_vlm):
+            raise HTTPException(
+                status_code=400,
+                detail="Audio/video inputs require a multimodal VLM model.",
+            )
         extractor = getattr(engine, "message_extractor", None)
         merge_system_fallback_roles = not (is_vlm or is_dflash_vlm)
         if extractor is not None:
@@ -4282,8 +4387,8 @@ async def stream_chat_completion(
     messages: list,
     request: ChatCompletionRequest,
     model_load_duration: float = 0.0,
-    resolved_model: Optional[str] = None,
-    response_id: Optional[str] = None,
+    resolved_model: str | None = None,
+    response_id: str | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream chat completion response.
@@ -4671,7 +4776,7 @@ async def stream_anthropic_messages(
     engine: BaseEngine,
     messages: list,
     request: AnthropicMessagesRequest,
-    resolved_model: Optional[str] = None,
+    resolved_model: str | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """
@@ -5498,7 +5603,7 @@ async def count_anthropic_tokens(
 # =============================================================================
 
 
-def _should_store_response(store_flag: Optional[bool]) -> bool:
+def _should_store_response(store_flag: bool | None) -> bool:
     """OpenAI Responses defaults to storing responses unless explicitly disabled."""
     return store_flag is not False
 
@@ -5568,9 +5673,11 @@ async def create_response(
 
         resolved_model = resolve_model_id(request.model) or request.model
 
-        current_input_messages = convert_responses_input_to_messages(
-            request.input,
-            consolidate_system_messages=False,
+        current_input_messages = normalize_chat_messages_for_response_store(
+            convert_responses_input_to_messages(
+                request.input,
+                consolidate_system_messages=False,
+            )
         )
 
         # Build previous context from previous_response_id
@@ -5587,6 +5694,7 @@ async def create_response(
             previous_messages,
             consolidate_system_messages=False,
         )
+        messages = await _preprocess_response_files_for_llm(messages)
 
         # Convert tools: flat → nested
         openai_tools = convert_responses_tools(request.tools)
@@ -5688,6 +5796,17 @@ async def create_response(
             merge_consecutive_roles=True,
             unsupported_mid_system_policy=_unsupported_mid_system_policy(),
         )
+
+        is_vlm = isinstance(engine, VLMBatchedEngine) or getattr(
+            engine,
+            "supports_multimodal_fallback",
+            False,
+        )
+        if has_audio_video_parts(messages) and not is_vlm:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio/video inputs require a multimodal VLM model.",
+            )
 
         # Validate context window
         try:
@@ -5962,10 +6081,10 @@ async def stream_responses_api(
     engine: BaseEngine,
     messages: list,
     request: ResponsesRequest,
-    input_messages: Optional[list[dict]] = None,
+    input_messages: list[dict] | None = None,
     store_response: bool = True,
     model_load_duration: float = 0.0,
-    resolved_model: Optional[str] = None,
+    resolved_model: str | None = None,
     response_format=None,
     native_reasoning: bool = False,
     **kwargs,
@@ -5991,8 +6110,8 @@ async def stream_responses_api(
     reasoning_closed = False
     message_opened = False
     next_output_index = 0
-    reasoning_output_index: Optional[int] = None  # captured when reasoning opens
-    msg_output_index: Optional[int] = None  # captured when message opens
+    reasoning_output_index: int | None = None  # captured when reasoning opens
+    msg_output_index: int | None = None  # captured when message opens
 
     # Build initial response object (in_progress, empty output)
     initial_response = ResponseObject(
