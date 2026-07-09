@@ -751,7 +751,7 @@ def _make_row_batch(
         logits_processors=[
             _row_value(getattr(gen_batch, "logits_processors", None), idx, [])
         ],
-        state_machines=[_row_value(getattr(gen_batch, "state_machines", None), idx)],
+        stop_matchers=[_row_value(getattr(gen_batch, "stop_matchers", None), idx)],
         max_tokens=[_row_value(getattr(gen_batch, "max_tokens", None), idx)],
         _next_tokens=next_tokens[idx : idx + 1] if next_tokens is not None else None,
         _next_logprobs=(
@@ -1704,24 +1704,22 @@ def _emit_batch_responses(gen_batch: Any, batch_state: _MtpBatchState) -> List[A
         _bump_emit_stat(state, source)
 
         finish_reason: Optional[str] = None
-        match_sequence = None
 
         gen_batch.tokens[idx].append(token_id)
         gen_batch._num_tokens[idx] += 1
         if gen_batch._num_tokens[idx] >= gen_batch.max_tokens[idx]:
             finish_reason = "length"
 
-        new_state, match_sequence, current_state = gen_batch.state_machines[idx].match(
-            gen_batch._matcher_states[idx],
-            token_id,
+        matched, match_sequence, current_state = _advance_stop_matcher(
+            gen_batch, idx, token_id
         )
-        gen_batch._matcher_states[idx] = new_state
-        if match_sequence is not None and current_state is None:
+        if matched:
             finish_reason = "stop"
 
         if finish_reason is not None:
             responses.append(
-                Response(
+                _generation_response(
+                    Response,
                     uid=uid,
                     token=token_id,
                     logprobs=logprobs_1d,
@@ -2340,6 +2338,42 @@ def _residual_sample(verify_lp_2d: Any, draft_lp_1d: Any) -> Tuple[int, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _generation_response(Response: Any, **kwargs: Any) -> Any:
+    """Build a GenerationBatch response across mlx-lm response field changes."""
+    fields = getattr(Response, "__dataclass_fields__", None)
+    if fields is None:
+        return Response(**kwargs)
+    return Response(**{name: value for name, value in kwargs.items() if name in fields})
+
+
+def _advance_stop_matcher(
+    gen_batch: Any, idx: int, token_id: int
+) -> tuple[bool, Any, Any]:
+    """Advance mlx-lm's old state machine or new stop matcher for one row."""
+    stop_matchers = getattr(gen_batch, "stop_matchers", None)
+    if stop_matchers is not None:
+        from mlx_lm.generate import StopSequenceMatcher
+
+        new_state, matched = StopSequenceMatcher.match(
+            gen_batch._matcher_states[idx],
+            stop_matchers[idx]._trie,
+            token_id,
+        )
+        gen_batch._matcher_states[idx] = new_state
+        return matched, None, None
+
+    new_state, match_sequence, current_state = gen_batch.state_machines[idx].match(
+        gen_batch._matcher_states[idx],
+        token_id,
+    )
+    gen_batch._matcher_states[idx] = new_state
+    return (
+        match_sequence is not None and current_state is None,
+        match_sequence,
+        current_state,
+    )
+
+
 def _emit_response(
     gen_batch: Any,
     token_id: int,
@@ -2354,24 +2388,23 @@ def _emit_response(
     Response = type(gen_batch).Response
 
     finish_reason: Optional[str] = None
-    match_sequence = None
 
     gen_batch.tokens[0].append(token_id)
     gen_batch._num_tokens[0] += 1
     if gen_batch._num_tokens[0] >= gen_batch.max_tokens[0]:
         finish_reason = "length"
 
-    new_state, match_sequence, current_state = gen_batch.state_machines[0].match(
-        gen_batch._matcher_states[0], token_id
+    matched, match_sequence, current_state = _advance_stop_matcher(
+        gen_batch, 0, token_id
     )
-    gen_batch._matcher_states[0] = new_state
-    if match_sequence is not None and current_state is None:
+    if matched:
         finish_reason = "stop"
 
     if finish_reason is not None:
         prompt_cache = gen_batch.extract_cache(0)
         all_tokens = gen_batch.tokens[0]
-        response = Response(
+        response = _generation_response(
+            Response,
             uid=gen_batch.uids[0],
             token=token_id,
             logprobs=logprobs_1d,

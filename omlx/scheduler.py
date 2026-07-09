@@ -33,7 +33,7 @@ from mlx_lm.generate import (
     BatchGenerator,
     GenerationBatch,
     PromptProcessingBatch,
-    SequenceStateMachine,
+    StopSequenceMatcher,
     generation_stream,
 )
 from mlx_lm.models.cache import (
@@ -133,7 +133,7 @@ class _VLMMTPDecodeState:
     state_machine: Any
     max_tokens: int
     # Plain stop-token set (EOS + request-specific) for direct membership
-    # check; mlx-lm's SequenceStateMachine doesn't expose a "did the last
+    # check; mlx-lm's StopSequenceMatcher doesn't expose a "did the last
     # token finish" helper, so we keep a copy.
     stop_token_ids: set[int] = field(default_factory=set)
     emitted: int = 0
@@ -929,7 +929,7 @@ def _patched_ppb_split(self, indices):
         # Defensive: normalise None → [] to avoid mlx-lm crash in _step
         lps = self.logits_processors if self.logits_processors is not None else []
         new_batch.logits_processors = lps
-        new_batch.state_machines = self.state_machines
+        new_batch.stop_matchers = self.stop_matchers
         new_batch.max_tokens = self.max_tokens
         if hasattr(self, "_omlx_glm_dsa_adaptive_prefill"):
             new_batch._omlx_glm_dsa_adaptive_prefill = (
@@ -941,7 +941,7 @@ def _patched_ppb_split(self, indices):
         self.tokens = []
         self.samplers = []
         self.logits_processors = []
-        self.state_machines = []
+        self.stop_matchers = []
         self.max_tokens = []
         return new_batch
     return _original_ppb_split(self, indices)
@@ -2552,7 +2552,7 @@ class Scheduler:
         return stop_tokens
 
     # _update_stop_tokens deleted — per-request stop tokens are now
-    # handled via SequenceStateMachine passed to insert().
+    # handled via StopSequenceMatcher passed to insert().
 
     def _get_detokenizer(self, request_id: str):
         """Get or create a streaming detokenizer for a request.
@@ -4287,7 +4287,7 @@ class Scheduler:
             all_tokens=[_batch_generator_all_tokens(request)],
             samplers=[state.sampler],
             logits_processors=[per_row_lps],
-            state_machines=[state.sm],
+            stop_matchers=[state.sm],
         )
         if uids:
             _register_uid_rows(self.model, uids, [state.sampler], [per_row_lps])
@@ -4440,8 +4440,8 @@ class Scheduler:
 
         self.prefilling = still_prefilling
 
-    def _build_state_machine(self, request: "Request") -> SequenceStateMachine:
-        """Build a SequenceStateMachine for per-request stop tokens.
+    def _build_state_machine(self, request: "Request") -> StopSequenceMatcher:
+        """Build a StopSequenceMatcher for per-request stop tokens.
 
         Combines base stop tokens (EOS, Harmony) with request-specific
         stop_token_ids and tokenized stop strings into a single state
@@ -4452,12 +4452,10 @@ class Scheduler:
         if request.sampling_params.stop_token_ids:
             stop_tokens_set.update(request.sampling_params.stop_token_ids)
 
-        transitions: dict[str, list] = {
-            "normal": [([t], None) for t in stop_tokens_set]
-        }
+        stop_sequences: list[tuple[int, ...]] = [(int(t),) for t in stop_tokens_set]
 
         # Tokenize stop strings into token sequences. mlx-lm's
-        # SequenceStateMachine uses Aho-Corasick, so per-token match
+        # StopSequenceMatcher uses Aho-Corasick, so per-token match
         # cost stays O(1) regardless of how many sequences are added.
         # BPE merge edge cases (where a stop string boundary lands
         # mid-token) may miss; that is a known limitation.
@@ -4469,11 +4467,9 @@ class Scheduler:
             except TypeError:
                 seq = self.tokenizer.encode(stop_str)
             if seq:
-                transitions["normal"].append((list(seq), None))
+                stop_sequences.append(tuple(int(t) for t in seq))
 
-        if transitions["normal"]:
-            return SequenceStateMachine(transitions, initial="normal")
-        return SequenceStateMachine({}, initial="normal")
+        return StopSequenceMatcher(stop_sequences)
 
     def _emit_prefill_boundary_snapshot(
         self,
@@ -8661,7 +8657,7 @@ class Scheduler:
                 all_tokens=[_batch_generator_all_tokens(request)],
                 samplers=[sampler],
                 logits_processors=[per_row_lps],
-                state_machines=[sm],
+                stop_matchers=[sm],
             )
             if uids:
                 _register_uid_rows(self.model, uids, [sampler], [per_row_lps])

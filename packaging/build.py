@@ -730,7 +730,7 @@ def build_venvstacks():
 
 
 # mlx-audio git commit — aligned with pyproject.toml [audio] extra
-_MLX_AUDIO_GIT = "git+https://github.com/Blaizzy/mlx-audio@c46d15312ad52b0928c0f20dc2d6a880461f32c5"
+_MLX_AUDIO_GIT = "git+https://github.com/Blaizzy/mlx-audio@222a605be00e5ce30c0f8295a39f05acab419d9d"
 
 
 def _install_mlx_audio(export_dir: Path):

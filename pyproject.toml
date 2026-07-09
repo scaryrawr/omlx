@@ -43,11 +43,11 @@ dependencies = [
     # binaries are ABI-coupled to this exact mlx version — bumping the pin
     # requires rebuilding them (OMLX_WITH_CUSTOM_KERNEL=1 setup.py build_ext).
     "mlx==0.32.0",
-    # mlx-lm from commit (ab1806e, v0.31.3) - transformers 5.13+
+    # mlx-lm from commit (a790972, v0.31.3) - transformers 5.7+
     # NewlineTokenizer registration compatibility, DeepSeek/GLM DSA indexer
-    # RoPE fix, trust_remote_code load gate, transformers 5.7.0
-    # compatibility, and prior BatchGenerator/cache fixes.
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    # RoPE fix, trust_remote_code load gate, text-based tool/reasoning
+    # parser state machine, and quantized SDPA padding-mask fixes.
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@a790972f0f844d81067ed45c28b524220a10c019",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
     # mlx-embeddings from latest scaryrawr commit (71329b8)
@@ -98,10 +98,10 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (99c9a59). Includes newer text-model
+    # mlx-vlm from latest upstream HEAD (2b7f1a0). Includes newer text-model
     # adapters, vendored tool parsers, unified diffusion generation, Qwen3
-    # drafter MLP, GLM MoE DSA, and computer-use action parsing fixes.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@99c9a59fff283de25e95e8d2f5edba5e469307df",
+    # drafter MLP, GLM MoE DSA, and Qwen3 Omni/PaddleOCR sanitize fixes.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@2b7f1a00319fccd2b3b3a6d5fac787234a1cfdef",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
@@ -129,12 +129,12 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from latest upstream main commit (c46d153) with MOSS-Music
-    # support and tts/stt/sts extras.
+    # mlx-audio from latest upstream main commit (222a605) with MOSS-Music
+    # support, v0.4.5 metadata, and tts/stt/sts extras.
     # tts extra: mistral-common[audio], sentencepiece
     # stt extra: sentencepiece
     # sts extra: sentencepiece, webrtcvad, setuptools<81
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@c46d15312ad52b0928c0f20dc2d6a880461f32c5",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@222a605be00e5ce30c0f8295a39f05acab419d9d",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
@@ -238,7 +238,7 @@ override-dependencies = [
     # When the [image] extra enables mflux, its Linux cuda extra metadata can
     # otherwise resolve an older mlx; keep oMLX on the core MLX pin.
     "mlx==0.32.0",
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@a790972f0f844d81067ed45c28b524220a10c019",
 ]
 
 [tool.black]
