@@ -70,6 +70,10 @@ omlx start
 
 # Optional: MCP (Model Context Protocol) support
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+
+# Optional: mflux-backed image generation/edit support
+# (pulls heavier transitive dependencies such as torch)
+/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@3d12bae02a175365c765be9882b3d0edec06510d
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
@@ -88,9 +92,12 @@ pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
 # Optional: GLM-5.2 / MiniMax M3 native custom kernels
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+pip install -e ".[image]" # With mflux-backed image generation/edit support
 ```
 
-Requires macOS 15.0+ (Sequoia), Python 3.10+, and Apple Silicon (M1/M2/M3/M4).
+When installing a released package, the same extras are available, e.g. `pip install 'omlx[image]'` or `pip install 'omlx[mcp,image]'`.
+
+Requires macOS 15.0+ (Sequoia), Python 3.10+, and Apple Silicon (M1/M2/M3/M4). Core installs are text/VLM/embedding/reranker only; image generation and editing require the `image` extra, which pulls in `mflux` and heavier transitive dependencies such as torch. MCP support remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -115,7 +122,7 @@ omlx restart
 omlx serve --model-dir ~/models
 ```
 
-The server discovers LLMs, VLMs, embedding models, and rerankers from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
+The server discovers LLMs, VLMs, embedding models, rerankers, and image model manifests from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
 
 ### Homebrew Service
 
@@ -140,7 +147,7 @@ Logs are written to two locations:
 
 ## Features
 
-Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon.
+Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon. mflux-backed image generation/edit models are also supported when the optional `image` extra is installed (see [Install](#install)).
 
 ### Admin Dashboard
 
@@ -175,7 +182,7 @@ Context scaling support for running smaller context models with Claude Code. Sca
 
 ### Multi-Model Serving
 
-Load LLMs, VLMs, embedding models, and rerankers within the same server. Models are managed through a combination of automatic and manual controls:
+Load LLMs, VLMs, embedding models, rerankers, and image models within the same server. Models are managed through a combination of automatic and manual controls:
 
 - **LRU eviction**: Least-recently-used models are evicted automatically when memory runs low.
 - **Manual load/unload**: Interactive status badges in the admin panel let you load or unload models on demand.
@@ -247,6 +254,8 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
+| `POST /v1/images/generations` | Image generation |
+| `POST /v1/images/edits` | Image editing |
 | `GET /v1/models` | List available models |
 
 ### Tool Calling & Structured Output
@@ -288,6 +297,29 @@ Models are auto-detected by type. You can also download models directly from the
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
+| Image | mflux models such as Flux.2 Klein, Krea 2, Qwen Image, FIBO, Z-Image |
+
+### Image Model Manifests
+
+Image generation/editing requires the optional `image` extra (`pip install -e ".[image]"` from source, or `pip install 'omlx[image]'` for released packages). The extra installs `mflux` and may pull heavier transitive dependencies such as torch. Image model manifests are still discovered without the extra, but loading or generating returns a clear error until `mflux` is installed.
+
+Add an `omlx-image-model.json` file in a model subdirectory to expose a mflux image model through `/v1/images/generations` and/or `/v1/images/edits`:
+
+```json
+{
+  "backend": "mflux",
+  "base_model": "flux2-klein-4b",
+  "task": ["generation", "edit"],
+  "model_path": "weights",
+  "quantize": 4,
+  "default_steps": 28,
+  "default_guidance": 3.5,
+  "default_image_strength": 0.4,
+  "estimated_size": 4294967296
+}
+```
+
+`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `krea-2`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`. LM Studio-style folders for Flux.2 Klein, Krea 2, FIBO, ERNIE Image, Z-Image, and Z-Image Turbo are inferred as image-to-image edit capable when the local layout is detected; Qwen base folders remain generation-only, so use `qwen-image-edit` for Qwen edit models.
 
 ## CLI Configuration
 

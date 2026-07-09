@@ -179,12 +179,11 @@ def swap_platform_wheels(
     # Remove existing mlx/mlx-metal from site-packages
     for item in site_packages.iterdir():
         name = item.name.lower()
-        if name in ("mlx", "mlx_metal") or name.startswith(
-            ("mlx-", "mlx_metal-")
+        if item.is_dir() and (
+            name in ("mlx", "mlx_metal") or name.startswith(("mlx-", "mlx_metal-"))
         ):
-            if item.is_dir():
-                shutil.rmtree(item)
-                print(f"    Removed {item.name}")
+            shutil.rmtree(item)
+            print(f"    Removed {item.name}")
 
     # Install downloaded wheels into site-packages
     for whl in wheels_tmp.glob("*.whl"):
@@ -410,8 +409,9 @@ def _write_engine_commits(omlx_pkg_dir: Path):
     repo_urls = {
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
+        "mflux": "https://github.com/scaryrawr/mflux",
     }
 
     commits = {}
@@ -579,7 +579,7 @@ def _create_resolved_toml(version_map: dict[str, str], base_toml: Path) -> Path:
     """
     content = base_toml.read_text()
 
-    for full_req, git_url in _parse_git_requirements(base_toml):
+    for full_req, _git_url in _parse_git_requirements(base_toml):
         pkg_name = full_req.split("@")[0].strip()
         whl = _find_wheel_for_package(pkg_name)
         if whl:
@@ -702,9 +702,8 @@ def build_venvstacks():
     if resolved_toml.exists():
         resolved_toml.unlink()
 
-    # Install mlx-audio separately: build wheel from git, install --no-deps.
-    # mlx-audio pins mlx-lm==0.31.1 which conflicts with our git-pinned mlx-lm,
-    # so it can't go through venvstacks' uv resolver.
+    # Install mlx-audio separately: build wheel from git, install --no-deps so
+    # the framework layer keeps pyproject.toml's git-pinned engine stack.
     _install_mlx_audio(EXPORT_DIR)
 
     # Install paroquant --no-deps. The official [mlx] extra requires
@@ -731,7 +730,7 @@ def build_venvstacks():
 
 
 # mlx-audio git commit — aligned with pyproject.toml [audio] extra
-_MLX_AUDIO_GIT = "git+https://github.com/Blaizzy/mlx-audio@51753266e0a4f766fd5e6fbc46652224efc23981"
+_MLX_AUDIO_GIT = "git+https://github.com/Blaizzy/mlx-audio@c46d15312ad52b0928c0f20dc2d6a880461f32c5"
 
 
 def _install_mlx_audio(export_dir: Path):

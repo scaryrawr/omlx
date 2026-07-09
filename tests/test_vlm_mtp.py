@@ -18,12 +18,10 @@ import pytest
 from omlx.speculative import vlm_mtp
 
 
-def _fake_drafter_model(model_type: str = "gemma4_assistant") -> MagicMock:
+def _fake_drafter_model(model_type: str = "gemma4_assistant") -> SimpleNamespace:
     """Build a stand-in for Gemma4AssistantDraftModel that satisfies the
     minimum API used by VLMMTPDrafter."""
-    drafter = MagicMock()
-    drafter.config = MagicMock(model_type=model_type)
-    return drafter
+    return SimpleNamespace(config=SimpleNamespace(model_type=model_type))
 
 
 def test_load_vlm_mtp_drafter_happy_path():
@@ -318,6 +316,7 @@ class TestMoeConfigPatch:
 def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
     """Dense Qwen3.5 VLM MTP verify must satisfy mlx-vlm's output contract."""
     from mlx_vlm.models.base import LanguageModelOutput
+
     from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
 
     logits = mx.zeros((1, 2, 16))
@@ -575,9 +574,9 @@ class TestCallBackbone:
 
     def test_tuple_2_return(self):
         """mlx-lm dense path returns (logits, hidden) 2-tuple."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
@@ -590,9 +589,9 @@ class TestCallBackbone:
 
     def test_tuple_3_return(self):
         """mlx-vlm MoE path returns (logits, hidden, gdn_states) 3-tuple."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
@@ -606,10 +605,10 @@ class TestCallBackbone:
 
     def test_language_model_output_return(self):
         """LanguageModelOutput is correctly unpacked."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
         from mlx_vlm.models.base import LanguageModelOutput
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
