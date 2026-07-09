@@ -9,7 +9,7 @@ import copy
 import json
 import logging
 import threading
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -48,7 +48,8 @@ class ModelSettings:
         chat_template_kwargs: Extra chat template keyword arguments.
         forced_ct_kwargs: Keys in chat_template_kwargs that cannot be overridden.
         ttl_seconds: Auto-unload after idle seconds (None = no TTL).
-        model_type_override: "llm", "vlm", "embedding", "reranker", or None (auto-detect).
+        model_type_override: "llm", "vlm", "embedding", "reranker",
+            "audio_stt", "audio_tts", "audio_sts", "image", or None (auto-detect).
         model_alias: API-visible alternative to the directory name.
         index_cache_freq: IndexCache: every Nth layer keeps indexer (DeepSeek DSA
             only; GLM-5.2 uses its native checkpoint schedule).
@@ -119,7 +120,7 @@ class ModelSettings:
     )
     ttl_seconds: Optional[int] = None  # Auto-unload after idle seconds (None = no TTL)
     model_type_override: Optional[str] = (
-        None  # "llm", "vlm", "embedding", "reranker", or None (auto-detect)
+        None  # "llm", "vlm", "embedding", "reranker", "audio_*", "image", or None
     )
     model_alias: Optional[str] = (
         None  # API-visible name (alternative to directory name)

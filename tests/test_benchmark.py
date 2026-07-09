@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the admin benchmark module."""
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from omlx.admin.benchmark import (
-    VALID_BATCH_SIZES,
-    VALID_PROMPT_LENGTHS,
     BenchmarkRequest,
     BenchmarkRun,
     _clean_model_name,
@@ -23,7 +20,6 @@ from omlx.admin.benchmark import (
     get_run,
     run_benchmark,
 )
-
 
 # =============================================================================
 # BenchmarkRequest validation tests

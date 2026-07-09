@@ -176,7 +176,7 @@ class GlobalTemplate:
 
 def utcnow() -> datetime:
     """Return current UTC time (single-source helper for testability)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)  # noqa: UP017
 
 
 class InvalidProfileNameError(ValueError):

@@ -14,7 +14,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import mlx.core as mx
 from mlx.utils import tree_flatten
@@ -43,7 +43,7 @@ _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 class EmbeddingOutput:
     """Output from embedding generation."""
 
-    embeddings: List[List[float]]
+    embeddings: list[list[float]]
     """List of embedding vectors, one per input text."""
 
     total_tokens: int
@@ -88,7 +88,7 @@ class MLXEmbeddingModel:
         self.model = None
         self.processor = None
         self._loaded = False
-        self._hidden_size: Optional[int] = None
+        self._hidden_size: int | None = None
         self._using_native = False
         self._is_compiled = False
         self._compiled_embed = None
@@ -111,7 +111,7 @@ class MLXEmbeddingModel:
         try:
             with open(config_path) as f:
                 config_dict = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, OSError):
             logger.debug("Failed to read config.json, native loading skipped")
             return False
 
@@ -136,17 +136,17 @@ class MLXEmbeddingModel:
             from importlib import import_module
 
             native_module = import_module(f"{__package__}.{module_name}")
-            Model = native_module.Model
-            ModelArgs = native_module.ModelArgs
+            model_cls = native_module.Model
+            model_args_cls = native_module.ModelArgs
 
-            known_fields = {f.name for f in ModelArgs.__dataclass_fields__.values()}
-            model_config = {
-                k: v for k, v in config_dict.items() if k in known_fields
+            known_fields = {
+                f.name for f in model_args_cls.__dataclass_fields__.values()
             }
+            model_config = {k: v for k, v in config_dict.items() if k in known_fields}
             model_config["architectures"] = architectures
 
-            config = ModelArgs(**model_config)
-            model_instance = Model(config)
+            config = model_args_cls(**model_config)
+            model_instance = model_cls(config)
 
             weights = {}
             weight_files = list(model_path.glob("*.safetensors"))
@@ -210,7 +210,9 @@ class MLXEmbeddingModel:
             patch_qwen3_vl_processor_for_torch_free_image_loading()
             from mlx_embeddings import load
 
-            logger.info(f"Loading embedding model via mlx-embeddings: {self.model_name}")
+            logger.info(
+                f"Loading embedding model via mlx-embeddings: {self.model_name}"
+            )
 
             self.model, self.processor = load(
                 self.model_name,
@@ -232,18 +234,18 @@ class MLXEmbeddingModel:
                 f"(hidden_size={self._hidden_size}, compiled={self._is_compiled})"
             )
 
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "mlx-embeddings is required for embedding generation. "
                 "Install with: pip install mlx-embeddings"
-            )
-        except FileNotFoundError:
+            ) from exc
+        except FileNotFoundError as exc:
             raise FileNotFoundError(
                 f"No safetensors weight files found for '{self.model_name}'. "
                 f"Embedding models require weights in safetensors format. "
                 f"If this is a PyTorch model, use an MLX-converted version "
                 f"(e.g., from mlx-community on HuggingFace)."
-            )
+            ) from exc
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
             raise
@@ -272,9 +274,7 @@ class MLXEmbeddingModel:
             embeddings = mx.mean(embeddings, axis=1)
         return embeddings
 
-    def _validate_native_weights(
-        self, model_instance, weights: Dict[str, Any]
-    ) -> None:
+    def _validate_native_weights(self, model_instance, weights: dict[str, Any]) -> None:
         """Reject native checkpoints with missing or shape-incompatible core weights."""
         expected_weights = dict(tree_flatten(model_instance.parameters()))
         expected_weight_names = set(expected_weights.keys())
@@ -325,8 +325,8 @@ class MLXEmbeddingModel:
 
     def _normalize_embedding_inputs(
         self,
-        inputs: Union[str, Dict[str, str], List[str], List[Dict[str, str]]],
-    ) -> List[Dict[str, str]]:
+        inputs: str | dict[str, str] | list[str] | list[dict[str, str]],
+    ) -> list[dict[str, str]]:
         """Normalize embedding inputs into item dicts."""
         if not inputs:
             return []
@@ -340,7 +340,7 @@ class MLXEmbeddingModel:
         return [dict(item) for item in inputs]
 
     @staticmethod
-    def _positive_context_length(value: Any) -> Optional[int]:
+    def _positive_context_length(value: Any) -> int | None:
         """Return a usable positive context length from config/tokenizer metadata."""
         if isinstance(value, bool) or not isinstance(value, int):
             return None
@@ -349,7 +349,7 @@ class MLXEmbeddingModel:
         return None
 
     @classmethod
-    def _get_config_value(cls, config: Any, key: str) -> Optional[int]:
+    def _get_config_value(cls, config: Any, key: str) -> int | None:
         if config is None:
             return None
         if isinstance(config, dict):
@@ -357,7 +357,7 @@ class MLXEmbeddingModel:
         return cls._positive_context_length(getattr(config, key, None))
 
     @classmethod
-    def _context_length_from_config(cls, config: Any) -> Optional[int]:
+    def _context_length_from_config(cls, config: Any) -> int | None:
         """Read context length from model config objects or dictionaries."""
         for key in _CONTEXT_LENGTH_ATTRS:
             value = cls._get_config_value(config, key)
@@ -412,7 +412,7 @@ class MLXEmbeddingModel:
     def _prepare_embedding_inputs(
         self,
         processor,
-        inputs: Union[List[str], List[Dict[str, str]]],
+        inputs: list[str] | list[dict[str, str]],
         max_length: int,
         padding: bool,
         truncation: bool,
@@ -464,8 +464,8 @@ class MLXEmbeddingModel:
             self._remap_input_ids_to_inputs = False
 
     def _adapt_model_inputs_for_call(
-        self, model_inputs: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, model_inputs: dict[str, Any]
+    ) -> dict[str, Any]:
         """Rename prepared inputs to match the embedding model call signature."""
         adapted_inputs = dict(model_inputs)
         if self._remap_input_ids_to_inputs and "input_ids" in adapted_inputs:
@@ -493,6 +493,7 @@ class MLXEmbeddingModel:
         base_model = self.model
 
         try:
+
             def _compiled_embed(inputs):
                 outputs = base_model(**self._adapt_model_inputs_for_call(inputs))
                 return self._extract_embeddings_array(outputs)
@@ -520,8 +521,7 @@ class MLXEmbeddingModel:
             return
 
         logger.info(
-            "Releasing embedding model resources: %s "
-            "(compiled=%s, native=%s)",
+            "Releasing embedding model resources: %s " "(compiled=%s, native=%s)",
             self.model_name,
             self._is_compiled,
             self._using_native,
@@ -545,7 +545,7 @@ class MLXEmbeddingModel:
 
     def embed(
         self,
-        inputs: Union[str, List[str], List[Dict[str, str]]],
+        inputs: str | list[str] | list[dict[str, str]],
         max_length: int | None = None,
         padding: bool = True,
         truncation: bool = True,
@@ -583,16 +583,18 @@ class MLXEmbeddingModel:
         if hasattr(processor, "_tokenizer") and not uses_custom_embedding_inputs:
             processor = processor._tokenizer
 
-        if has_image_inputs and (self._using_native or not uses_custom_embedding_inputs):
+        if has_image_inputs and (
+            self._using_native or not uses_custom_embedding_inputs
+        ):
             raise ValueError(
                 f"Embedding model '{self.model_name}' does not support image inputs"
             )
 
         embeddings_array = None
-        total_tokens: Optional[int] = None
+        total_tokens: int | None = None
 
         if self._using_native:
-            if hasattr(processor, "__call__"):
+            if callable(processor):
                 encoded = processor(
                     input_texts,
                     padding=padding,
@@ -686,9 +688,7 @@ class MLXEmbeddingModel:
             dimensions=dimensions,
         )
 
-    def _count_tokens(
-        self, inputs: Union[List[str], List[Dict[str, str]]]
-    ) -> int:
+    def _count_tokens(self, inputs: list[str] | list[dict[str, str]]) -> int:
         """Count total tokens in input texts."""
         total = 0
         processor = self.processor
@@ -718,7 +718,7 @@ class MLXEmbeddingModel:
 
         return total
 
-    def _count_prepared_tokens(self, prepared_inputs: Dict[str, Any]) -> int:
+    def _count_prepared_tokens(self, prepared_inputs: dict[str, Any]) -> int:
         """Count tokens from prepared model inputs, including multimodal tokens."""
         attention_mask = prepared_inputs.get("attention_mask")
         if attention_mask is not None:
@@ -727,7 +727,12 @@ class MLXEmbeddingModel:
             except (TypeError, ValueError):
                 pass
             if isinstance(attention_mask, list):
-                return int(sum(sum(row) if isinstance(row, list) else row for row in attention_mask))
+                return int(
+                    sum(
+                        sum(row) if isinstance(row, list) else row
+                        for row in attention_mask
+                    )
+                )
             if hasattr(attention_mask, "tolist"):
                 values = attention_mask.tolist()
                 if values and isinstance(values[0], list):
@@ -750,7 +755,7 @@ class MLXEmbeddingModel:
         return 0
 
     @property
-    def hidden_size(self) -> Optional[int]:
+    def hidden_size(self) -> int | None:
         """Get the embedding dimension."""
         return self._hidden_size
 
