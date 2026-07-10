@@ -1367,7 +1367,17 @@ _FP8_WEIGHT_DTYPES = frozenset(("F8_E4M3", "F8_E5M2", "I8"))
 
 def _block_dequant_fp8(weight_raw, scale_raw, w_dtype, s_dtype):
     """Block-scaled dequant of a single FP8/I8 weight+scale pair to BF16."""
-    if s_dtype == "F8_E8M0":
+    # MXFP8 checkpoints (e.g. MiniMax-M3) save the e8m0 shared exponents
+    # with safetensors dtype U8: fp8 weight, one scale byte per 32 columns.
+    # Those bytes are exponents, not linear scales. Float-typed scales
+    # (DeepSeek block-128 weight_scale_inv) stay linear.
+    e8m0 = s_dtype == "F8_E8M0" or (
+        s_dtype in ("U8", "UINT8")
+        and w_dtype in ("F8_E4M3", "F8_E5M2")
+        and scale_raw.ndim == 2
+        and weight_raw.shape[-1] == scale_raw.shape[-1] * 32
+    )
+    if e8m0:
         scale = mx.power(mx.array(2.0), scale_raw.astype(mx.float32) - 127.0)
     else:
         scale = scale_raw
@@ -4758,6 +4768,22 @@ def _load_calibration_data(
     Returns:
         MLX array of shape (num_samples, seq_length) or None on failure.
     """
+    if dataset == _OQE_CALIB_DATASET:
+        # oQe (enhanced=True) requests this built-in corpus by name. If the data
+        # file is not present in the installed package, the generic handler below
+        # would swallow the error and silently calibrate the imatrix on a smaller,
+        # different corpus, producing a subtly worse enhanced model with no signal
+        # to the caller. Fail loudly instead: a missing built-in data file is a
+        # broken installation the user cannot fix by retrying. See package-data in
+        # pyproject.toml, which must ship oqe_calibration_data.json.
+        oqe_path = Path(__file__).parent / "oqe_calibration_data.json"
+        if not oqe_path.exists():
+            raise FileNotFoundError(
+                f"oQe calibration corpus not found at {oqe_path}. This file ships "
+                "with omlx but is missing from the current installation, so "
+                "enhanced quantization cannot calibrate correctly. Reinstall omlx "
+                "from a distribution that includes oqe_calibration_data.json."
+            )
     if dataset in ("code_multilingual", "code", "multilingual", _OQE_CALIB_DATASET):
         try:
             return _load_builtin_calibration(

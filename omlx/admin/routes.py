@@ -31,6 +31,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
+from ..api.openai_models import _coerce_tool_call_arguments
+from ..api.utils import _try_parse_json
 from ..model_profiles import EXCLUDED_FROM_PROFILES
 from ..settings import BURST_DECODE_MODES, SubKeyEntry, burst_decode_env
 from ..utils.release_check import normalize_update_channel, select_latest_release
@@ -156,6 +158,7 @@ class ModelSettingsRequest(BaseModel):
     is_pinned: bool | None = None
     is_default: bool | None = None
     is_hidden: bool | None = None
+    is_favorite: bool | None = None
     # Security: per-model opt-in for trust_remote_code (issue #926)
     trust_remote_code: bool | None = None
 
@@ -1943,6 +1946,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
                 server_state.default_model == model_id if server_state else False
             ),
             "is_hidden": bool(settings and settings.is_hidden),
+            "is_favorite": bool(settings and settings.is_favorite),
             "is_helper": (
                 bool(model_info.get("is_helper"))
                 or model_id in referenced_drafts
@@ -2526,6 +2530,8 @@ async def update_model_settings(
             server_state.default_model = model_id
     if request.is_hidden is not None:
         current_settings.is_hidden = request.is_hidden
+    if request.is_favorite is not None:
+        current_settings.is_favorite = request.is_favorite
     if "trust_remote_code" in sent:
         current_settings.trust_remote_code = bool(request.trust_remote_code)
 
@@ -4940,6 +4946,39 @@ async def clear_hot_cache(is_admin: bool = Depends(require_admin)):
     }
 
 
+def _normalize_probe_tool_calls(messages: list[dict]) -> list[dict]:
+    """Parse echoed tool_call arguments (JSON string -> object) for templating.
+
+    Native tool-calling chat templates (GLM, Qwen3.x, MiniMax) iterate
+    ``tool_call.function.arguments.items()``, but the OpenAI wire form sends
+    ``arguments`` as a JSON string. Rendering the string form raises
+    ``'str object' has no attribute 'items'`` and the probe 400s, so any
+    conversation that used tools reports an error (hollow cache dot) instead
+    of a real hit/miss. The chat path parses these before rendering; mirror
+    that here so (a) tool conversations tokenize and (b) the probe's block
+    hashes line up with what a real prefill produced. Returns shallow copies
+    so the caller's message dicts are left untouched.
+    """
+    normalized: list[dict] = []
+    for msg in messages:
+        tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+        if not tool_calls:
+            normalized.append(msg)
+            continue
+        new_calls = []
+        for tc in tool_calls:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and "arguments" in fn:
+                arguments = _coerce_tool_call_arguments(fn["arguments"])
+                tc = {
+                    **tc,
+                    "function": {**fn, "arguments": _try_parse_json(arguments)},
+                }
+            new_calls.append(tc)
+        normalized.append({**msg, "tool_calls": new_calls})
+    return normalized
+
+
 @router.post("/api/cache/probe")
 async def probe_cache(
     request: CacheProbeRequest,
@@ -5007,7 +5046,7 @@ async def probe_cache(
     # Render + tokenize the prompt using the same path as generation so the
     # hashes line up with what the scheduler would produce at prefill.
     try:
-        messages = request.messages
+        messages = _normalize_probe_tool_calls(request.messages)
         if hasattr(engine, "_preprocess_messages"):
             messages = engine._preprocess_messages(messages)
         try:
@@ -5723,16 +5762,18 @@ async def add_to_accuracy_queue(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    entry = engine_pool.get_entry(bench_request.model_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=404, detail=f"Model not found: {bench_request.model_id}"
-        )
-    if entry.model_type not in ("llm", "vlm", None):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
-        )
+    # External runs target a remote model — nothing to validate locally.
+    if bench_request.external is None:
+        entry = engine_pool.get_entry(bench_request.model_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Model not found: {bench_request.model_id}"
+            )
+        if entry.model_type not in ("llm", "vlm", None):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
+            )
 
     add_to_queue(bench_request)
 
@@ -5889,6 +5930,10 @@ async def get_active_benchmark(is_admin: bool = Depends(require_admin)):
         "bench_id": run.bench_id,
         "model_id": run.request.model_id,
         "force_lm_engine": run.request.force_lm_engine,
+        # Reconnecting tabs need this to restore the disabled-dropdown UI
+        # state. Never expose base_url/api_key here — model_id already
+        # carries the external model name.
+        "external": run.request.external is not None,
     }
 
 
@@ -5934,17 +5979,19 @@ async def start_benchmark(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate model exists and is an LLM
-    entry = engine_pool.get_entry(bench_request.model_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=404, detail=f"Model not found: {bench_request.model_id}"
-        )
-    if entry.model_type not in ("llm", "vlm", None):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
-        )
+    # Validate model exists and is an LLM. External runs target a remote
+    # model — nothing to validate locally.
+    if bench_request.external is None:
+        entry = engine_pool.get_entry(bench_request.model_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Model not found: {bench_request.model_id}"
+            )
+        if entry.model_type not in ("llm", "vlm", None):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
+            )
 
     # Cleanup old runs
     cleanup_old_runs()

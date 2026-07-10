@@ -1748,8 +1748,9 @@ class TestSyncAndClearCache:
         Reproduces #888: on some MLX builds mx.synchronize(generation_stream)
         raises 'There is no Stream(gpu, 0) in current thread' when called
         from an executor thread that has not submitted work to that stream
-        (e.g. during _do_external_prefill). The helper must swallow that
-        RuntimeError and still drain the default stream + clear the cache.
+        (e.g. during teardown before the thread submits work). The helper must
+        swallow that RuntimeError and still drain the default stream + clear
+        the cache.
         """
         from omlx import scheduler as sched_mod
 
@@ -2959,7 +2960,10 @@ class TestSchedulerSSDLayerSignature:
     ):
         from mlx_lm.models.cache import KVCache
 
-        from omlx.cache.paged_ssd_cache import PagedSSDBlockMetadata
+        from omlx.cache.paged_ssd_cache import (
+            PagedSSDBlockMetadata,
+            _cache_compat_signature,
+        )
 
         class TwoLayerModel:
             config = SimpleNamespace(
@@ -3009,6 +3013,16 @@ class TestSchedulerSSDLayerSignature:
                 model_name="test-model",
                 block_size=4,
                 layer_cache_types=["TurboQuantKVCache", "KVCache"],
+                # TurboQuant blocks must prove their bit depth to survive a
+                # sweep under an active depth expectation (#2045); this is
+                # the signature the save path stamps since the fix.
+                cache_signature=_cache_compat_signature(
+                    model_name="test-model",
+                    num_layers=2,
+                    block_size=4,
+                    layer_cache_types=["TurboQuantKVCache", "KVCache"],
+                    turboquant_kv_bits=4.0,
+                ),
             )
             manager._index.add(stale)
             manager._index.add(fresh)
@@ -3023,6 +3037,246 @@ class TestSchedulerSSDLayerSignature:
             assert manager._index.get(stale.block_hash) is None
             assert manager._index.get(fresh.block_hash) is not None
         finally:
+            scheduler.shutdown()
+
+    def test_refresh_infers_layout_without_model_make_cache(
+        self, mock_tokenizer, tmp_path
+    ):
+        # Plain dense models (most mlx-lm architectures) define no
+        # make_cache; the request path builds their caches through
+        # make_prompt_cache's per-layer KVCache fallback. The refresh must
+        # infer through the same fallback — requiring model.make_cache made
+        # it a silent no-op for these models, so the manager never learned
+        # the TurboQuant bit depth and mixed-width blocks kept loading
+        # after a turboquant_kv_bits change (#2045).
+        from omlx.cache.paged_ssd_cache import (
+            PagedSSDBlockMetadata,
+            _cache_compat_signature,
+        )
+
+        turbo_types = ["TurboQuantKVCache", "KVCache"]
+
+        class PlainDenseModel:
+            config = SimpleNamespace(
+                num_hidden_layers=2,
+                num_key_value_heads=2,
+                num_attention_heads=2,
+                head_dim=32,
+            )
+            layers = [object(), object()]
+
+        scheduler = Scheduler(
+            model=PlainDenseModel(),
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                paged_ssd_cache_dir=str(tmp_path),
+                paged_cache_block_size=4,
+                model_name="test-model",
+            ),
+        )
+        try:
+            manager = scheduler.paged_ssd_cache_manager
+            assert manager is not None
+
+            def _block(block_hash: bytes, bits: float | None) -> PagedSSDBlockMetadata:
+                return PagedSSDBlockMetadata(
+                    block_hash=block_hash,
+                    file_path=tmp_path / "never-touched.safetensors",
+                    file_size=1024,
+                    token_count=4,
+                    created_at=0.0,
+                    last_access=0.0,
+                    num_layers=2,
+                    model_name="test-model",
+                    block_size=4,
+                    layer_cache_types=turbo_types,
+                    cache_signature=_cache_compat_signature(
+                        model_name="test-model",
+                        num_layers=2,
+                        block_size=4,
+                        layer_cache_types=turbo_types,
+                        turboquant_kv_bits=bits,
+                    ),
+                )
+
+            old_depth = _block(b"old".ljust(32, b"\0"), 4.0)
+            unproven = _block(b"unproven".ljust(32, b"\0"), None)
+            current = _block(b"current".ljust(32, b"\0"), 6.0)
+            manager._index.add(old_depth)
+            manager._index.add(unproven)
+            manager._index.add(current)
+
+            scheduler._turboquant_kv_bits = 6.0
+            scheduler._turboquant_skip_last = True
+
+            layer_cache_types = scheduler.refresh_ssd_layer_signature()
+
+            assert layer_cache_types == turbo_types
+            assert manager._expected_turboquant_kv_bits == 6.0
+            assert manager._index.get(old_depth.block_hash) is None
+            assert manager._index.get(unproven.block_hash) is None
+            assert manager._index.get(current.block_hash) is not None
+        finally:
+            scheduler.shutdown()
+
+
+class TestSpecPrefillDraftCacheSignature:
+    """Regression coverage for SpecPrefill draft-cache isolation (#1925)."""
+
+    def test_draft_cache_reconstructs_with_target_turboquant_enabled(
+        self, mock_tokenizer, tmp_path
+    ):
+        from mlx_lm.models.cache import ArraysCache, KVCache
+
+        from omlx.cache.paged_ssd_cache import _canonicalize_layer_cache_types
+
+        class HybridModel:
+            def __init__(self, repeats: int):
+                self.repeats = repeats
+                self.config = SimpleNamespace(
+                    num_hidden_layers=repeats * 4,
+                    num_key_value_heads=2,
+                    num_attention_heads=2,
+                    head_dim=32,
+                )
+
+            def make_cache(self):
+                return [
+                    cache
+                    for _ in range(self.repeats)
+                    for cache in (
+                        ArraysCache(size=2),
+                        ArraysCache(size=2),
+                        ArraysCache(size=2),
+                        KVCache(),
+                    )
+                ]
+
+        scheduler = Scheduler(
+            model=HybridModel(repeats=2),
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                paged_ssd_cache_dir=str(tmp_path),
+                paged_cache_block_size=4,
+                model_name="target-model",
+            ),
+        )
+        try:
+            scheduler._turboquant_kv_bits = 4.0
+            scheduler._turboquant_skip_last = True
+            target_manager = scheduler.paged_ssd_cache_manager
+            target_types = [
+                "ArraysCache",
+                "ArraysCache",
+                "ArraysCache",
+                "TurboQuantKVCache",
+                "ArraysCache",
+                "ArraysCache",
+                "ArraysCache",
+                "KVCache",
+            ]
+            assert scheduler.refresh_ssd_layer_signature() == target_types
+            assert target_manager is not None
+
+            scheduler.set_specprefill_draft_model(
+                HybridModel(repeats=1), draft_model_name="draft-model"
+            )
+            draft_cache = scheduler._draft_prefix_cache
+            assert draft_cache is not None
+
+            draft_manager = draft_cache.paged_ssd_cache
+            assert draft_manager is not target_manager
+            assert target_manager._expected_model_name == "target-model"
+            assert target_manager._expected_layer_cache_types == target_types
+            assert draft_manager._expected_model_name == "draft-model"
+            assert draft_manager._expected_layer_cache_types == [
+                "ArraysCache", "ArraysCache", "ArraysCache", "KVCache"
+            ]
+            block_size = draft_cache.block_size
+            arrays_state = (
+                mx.ones((1, 3, 8)),
+                mx.ones((1, 2, 8, 8)),
+            )
+            kv_state = (
+                mx.ones((1, 2, 4, 32)),
+                mx.ones((1, 2, 4, 32)),
+            )
+            draft_types = [
+                "ArraysCache",
+                "ArraysCache",
+                "ArraysCache",
+                "KVCache",
+            ]
+            block_metadata = {
+                "model_name": "draft-model",
+                "num_layers": 4,
+                "block_size": block_size,
+                "layer_cache_types": draft_types,
+                "layer_meta_states": [(), (), (), ()],
+            }
+
+            with (
+                patch.object(
+                    draft_cache.paged_ssd_cache,
+                    "has_block",
+                    return_value=True,
+                ),
+                patch.object(
+                    draft_cache.paged_ssd_cache,
+                    "load_block_with_metadata",
+                    return_value=(
+                        [arrays_state, arrays_state, arrays_state, kv_state],
+                        block_metadata,
+                    ),
+                ),
+            ):
+                block_table, remaining_tokens = draft_cache.fetch_cache(
+                    "draft-request", list(range(block_size))
+                )
+                assert block_table is not None
+                assert remaining_tokens == []
+                reconstructed = draft_cache.reconstruct_cache(block_table)
+
+            assert reconstructed is not None
+            reconstructed_types = [type(layer).__name__ for layer in reconstructed]
+            assert _canonicalize_layer_cache_types(reconstructed_types) == draft_types
+            scheduler.deep_reset()
+            assert scheduler._specprefill_draft_model is None
+            assert scheduler._draft_prefix_cache is None
+            assert scheduler._draft_paged_ssd_cache_manager is None
+            assert draft_manager._writer_thread is None or not (
+                draft_manager._writer_thread.is_alive()
+            )
+        finally:
+            scheduler.shutdown()
+
+    def test_replacing_draft_preserves_manager_when_close_fails(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        previous_manager = MagicMock()
+        previous_manager.close.side_effect = RuntimeError("writer still active")
+        previous_model = object()
+        previous_manager._writer_thread = None
+        previous_prefix_cache = object()
+        scheduler._draft_paged_ssd_cache_manager = previous_manager
+        scheduler._specprefill_draft_model = previous_model
+        scheduler._draft_prefix_cache = previous_prefix_cache
+
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match="Could not close the previous SpecPrefill draft SSD cache manager",
+            ):
+                scheduler.set_specprefill_draft_model(
+                    object(), draft_model_name="replacement-draft"
+                )
+
+            assert scheduler._draft_paged_ssd_cache_manager is previous_manager
+            assert scheduler._specprefill_draft_model is previous_model
+            assert scheduler._draft_prefix_cache is previous_prefix_cache
+        finally:
+            previous_manager.close.side_effect = None
             scheduler.shutdown()
 
 
@@ -3144,6 +3398,52 @@ class TestCacheCorruptionRecovery:
         # Verify requests dict is also cleaned up (no memory leak)
         for rid in failed_ids:
             assert rid not in scheduler.requests
+
+    def test_fail_all_requests_republishes_admin_snapshot(
+        self, mock_model, mock_tokenizer
+    ):
+        """fail_all_requests must publish a fresh (empty) admin snapshot.
+
+        The snapshot is normally published at the end of a successful step().
+        When step() raises and fail_all_requests() clears the queues, the
+        stale snapshot would keep listing the dead requests, so the dashboard
+        and the macOS app show them as "generating" forever (#2126).
+        """
+        scheduler = self._make_scheduler(mock_model, mock_tokenizer)
+        # Simulate the last successful step publishing the running requests.
+        scheduler._publish_admin_snapshot()
+        assert len(scheduler.snapshot_for_admin()["running_by_id"]) == 3
+
+        scheduler.fail_all_requests()
+
+        snap = scheduler.snapshot_for_admin()
+        assert snap["running_by_id"] == {}
+        assert snap["waiting"] == []
+
+    def test_fail_all_requests_removes_prefill_tracker_entries(
+        self, mock_model, mock_tokenizer
+    ):
+        """fail_all_requests must drop PrefillProgressTracker entries.
+
+        A request failed mid-prefill never reaches processed >= total, so its
+        tracker entry has no auto-removal path. The local RuntimeError
+        handlers in the prefill paths cover memory errors (#1405), but other
+        exception types bubble up to fail_all_requests and would leave a
+        phantom "PP" row on the dashboard forever (#2126).
+        """
+        from omlx.prefill_progress import get_prefill_tracker
+
+        scheduler = self._make_scheduler(mock_model, mock_tokenizer)
+        tracker = get_prefill_tracker()
+        tracker.clear()
+        tracker.update("req-0", processed=10, total=100, model_id="test")
+        assert tracker.get_model_progress("test"), "tracker entry not set up"
+
+        try:
+            scheduler.fail_all_requests()
+            assert tracker.get_model_progress("test") == []
+        finally:
+            tracker.clear()
 
     def test_fail_all_requests_preserves_cache(self, mock_model, mock_tokenizer):
         """fail_all_requests resets batch_generator but preserves block cache."""

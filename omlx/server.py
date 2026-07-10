@@ -127,13 +127,14 @@ from .api.openai_models import (
     CompletionChoice,
     CompletionRequest,
     CompletionResponse,
-    FunctionCall,
     Message,
     ModelInfo,
     ModelsResponse,
     PromptTokensDetails,
-    ToolCall,
     Usage,
+)
+from .api.parser_tool_calls import (
+    convert_parser_tool_calls as _convert_parser_tool_calls,
 )
 from .api.rerank_models import (
     RerankRequest,
@@ -206,26 +207,6 @@ logger = logging.getLogger(__name__)
 
 # Security bearer for API key authentication
 security = HTTPBearer(auto_error=False)
-
-
-def _convert_parser_tool_calls(tool_calls: list[dict] | None) -> list[ToolCall]:
-    converted: list[ToolCall] = []
-    for tool_call in tool_calls or []:
-        if not isinstance(tool_call, dict):
-            continue
-        converted.append(
-            ToolCall(
-                id=tool_call.get("id")
-                or tool_call.get("call_id")
-                or f"call_{uuid.uuid4().hex[:8]}",
-                type="function",
-                function=FunctionCall(
-                    name=tool_call.get("name", ""),
-                    arguments=tool_call.get("arguments", "{}") or "{}",
-                ),
-            )
-        )
-    return converted
 
 
 # =============================================================================
@@ -2601,6 +2582,7 @@ async def _create_markitdown_chat_completion(
 async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
     """List all available models with load status."""
     models = []
+    favorite_ids: set[str] = set()
 
     if _server_state.engine_pool is not None:
         status = _server_state.engine_pool.get_status()
@@ -2648,6 +2630,8 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
             if is_hidden or is_hidden_helper:
                 excluded_model_ids.add(model_id)
                 continue
+            if ms is not None and ms.is_favorite:
+                favorite_ids.add(display_id)
             models.append(
                 ModelInfo(
                     id=display_id,
@@ -2680,6 +2664,10 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
         m.id == MARKITDOWN_MODEL_ID for m in models
     ):
         models.append(ModelInfo(id=MARKITDOWN_MODEL_ID, owned_by="omlx"))
+
+    # Favorites first; stable sort keeps alphabetical order within groups.
+    if favorite_ids:
+        models.sort(key=lambda m: m.id not in favorite_ids)
 
     return ModelsResponse(data=models)
 
@@ -5963,7 +5951,7 @@ async def create_response(
 
             # Parse tool calls
             if output.tool_calls:
-                tool_calls = output.tool_calls
+                tool_calls = _convert_parser_tool_calls(output.tool_calls)
                 cleaned_text = regular_content
                 cleaned_thinking = sanitize_tool_call_markup(
                     thinking_content, engine.tokenizer
@@ -6438,7 +6426,7 @@ async def stream_responses_api(
     tool_calls = None
     cleaned_text = accumulated_text
     if last_output and last_output.tool_calls:
-        tool_calls = last_output.tool_calls
+        tool_calls = _convert_parser_tool_calls(last_output.tool_calls)
         cleaned_text = ""
     elif has_tools and accumulated_text:
         thinking_content, regular_content = extract_thinking(accumulated_text)

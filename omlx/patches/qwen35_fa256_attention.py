@@ -2,7 +2,8 @@
 """Route Qwen3.5/3.6 head_dim=256 prefill attention to a steel FA kernel.
 
 This patch is intentionally narrow:
-  - Qwen3.5/3.6 dense VLM attention layout: q heads=24, kv heads=4, D=256
+  - Qwen3.5/3.6 head_dim=256 GQA attention (dense 24/4, MoE 16/2, and any
+    other q%kv==0 layout; gqa_factor is a runtime kernel param)
   - causal prefill/chunked-prefill only (q_len >= 16; decode and MTP verify
     stay on the stock path)
   - no array masks and no sinks
@@ -20,6 +21,8 @@ import os
 import sys
 
 import mlx.core as mx
+
+from omlx.custom_kernels.nax import is_nax_available
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +76,15 @@ def _should_route(queries, keys, cache, mask, sinks, min_kv_len: int) -> bool:
     q_len = queries.shape[-2]
     kv_len = keys.shape[-2]
     head_dim = queries.shape[-1]
+    # Any D=256 GQA layout, not just the dense 24/4 one: the steel kernel
+    # takes gqa_factor as a runtime param, and the 16/2 MoE models
+    # (Qwen3.6-35B-A3B etc.) otherwise fall into the tiled sdpa256 prefill
+    # path, which is ~2x slower than even the stock unfused fallback at
+    # long context (issue #2155).
     return (
         head_dim == 256
-        and q_heads == 24
-        and kv_heads == 4
+        and kv_heads > 0
+        and q_heads % kv_heads == 0
         and kv_len >= min_kv_len
         and q_len <= kv_len
     )
@@ -86,7 +94,19 @@ def apply_qwen35_fa256_attention_patch(min_kv_len: int | None = None) -> bool:
     global _PATCHED
     if _PATCHED:
         return True
-    if os.environ.get("OMLX_FA256_STEEL", "1") == "0":
+    steel_env = os.environ.get("OMLX_FA256_STEEL", "").strip()
+    if steel_env == "0":
+        return False
+    if steel_env != "1" and is_nax_available():
+        # Auto: on NAX GPUs (M5 family) stock SDPA's head_dim-256 fallback
+        # runs its matmuls on the tensor units and beats this pre-NAX steel
+        # kernel, so routing it would regress prefill (M5 Max report:
+        # 4k pp 828 -> 400 tok/s on 0.5.0). OMLX_FA256_STEEL=1 forces the
+        # kernel on for benchmarking; a NAX port of this kernel is the
+        # tracked follow-up.
+        logger.info(
+            "Qwen FA-256 steel patch skipped: NAX GPU, stock SDPA is faster"
+        )
         return False
 
     kernel = _native_kernel()
