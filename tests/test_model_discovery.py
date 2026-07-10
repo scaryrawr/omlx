@@ -477,6 +477,29 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "vlm"
 
+    def test_detect_config_only_jang_method_for_vlm(self, tmp_path):
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "quantization": {"method": "jang-importance"},
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
+    @pytest.mark.parametrize("quant_method", ["fp8", "mxfp4", "nvfp4"])
+    def test_detect_config_only_non_jang_quant_method_is_not_jang(
+        self, tmp_path, quant_method
+    ):
+        config = {
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"],
+            "quantization_config": {"quant_method": quant_method},
+            "capabilities": {"supportsVision": True},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "llm"
+
     def test_detect_config_only_plain_mlx_metadata_is_not_jang(self, tmp_path):
         config = {
             "model_type": "llama",
@@ -872,6 +895,39 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         (tmp_path / "jang_config.json").write_text(
             json.dumps({"format": "jang", "has_vision": 0})
+        )
+
+        assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_jang_audio_config_as_active_media(self, tmp_path):
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "audio_config": {"feature_size": 128},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+
+        assert detect_model_type(tmp_path) == "vlm"
+
+    def test_detect_jang_disabled_media_overrides_audio_config(self, tmp_path):
+        config = {
+            "model_type": "some_jang_model",
+            "architectures": ["SomeJangForCausalLM"],
+            "audio_config": {"feature_size": 128},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "supportsAudio": False,
+                        "supportsVision": False,
+                        "supportsVideo": False,
+                    },
+                }
+            )
         )
 
         assert detect_model_type(tmp_path) == "llm"

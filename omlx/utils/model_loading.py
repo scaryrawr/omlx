@@ -1307,6 +1307,7 @@ def _jang_model_family(
 ) -> str | None:
     """Return the JANG-stamped model-family hint when present."""
 
+    sources = (jang_config, model_config)
     for source in (jang_config, model_config):
         if not isinstance(source, dict):
             continue
@@ -1321,16 +1322,40 @@ def _jang_model_family(
             family = capabilities.get("family")
             if isinstance(family, str) and family.strip():
                 return family
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
         source_model = _mapping_value(source, "source_model", "sourceModel")
         if isinstance(source_model, dict):
             family = source_model.get("architecture") or source_model.get("family")
             if isinstance(family, str) and family.strip():
                 return family
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
         architecture = source.get("architecture")
         if isinstance(architecture, dict):
             family = architecture.get("type") or architecture.get("text_model_type")
             if isinstance(family, str) and family.strip():
                 return family
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        text_config = source.get("text_config")
+        if isinstance(text_config, dict):
+            family = text_config.get("model_type")
+            if isinstance(family, str) and family.strip():
+                return family
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        family = source.get("model_type")
+        if isinstance(family, str) and family.strip():
+            return family
     return None
 
 
@@ -1787,6 +1812,10 @@ def _jang_mxtq_bits(sources: tuple[Any, ...]) -> Any | None:
     if bits is not None:
         return normalize(bits)
 
+    routed_plan_default = _jang_routed_expert_bit_plan_default(sources)
+    if routed_plan_default is not None:
+        return normalize(routed_plan_default)
+
     gate_up_bits = _first_nested_value(sources, {"mxtq_gate_up_bits", "mxtqGateUpBits"})
     down_bits = _first_nested_value(sources, {"mxtq_down_bits", "mxtqDownBits"})
     if gate_up_bits is None and down_bits is None:
@@ -1799,6 +1828,22 @@ def _jang_mxtq_bits(sources: tuple[Any, ...]) -> Any | None:
     if down_bits is not None:
         projected["down_proj"] = down_bits
     return {"routed_expert": projected}
+
+
+def _jang_routed_expert_bit_plan_default(sources: tuple[Any, ...]) -> Any | None:
+    """Return the default bits from scoped routed-expert plan metadata."""
+
+    for source in sources:
+        for item in _iter_dicts(source):
+            plan = item.get("routed_expert_bit_plan")
+            if not isinstance(plan, dict):
+                plan = item.get("routedExpertBitPlan")
+            if not isinstance(plan, dict):
+                continue
+            value = _mapping_value(plan, "default", "default_bits", "defaultBits")
+            if value is not None:
+                return value
+    return None
 
 
 def _jang_bit_widths_used(sources: tuple[Any, ...]) -> tuple[int, ...]:
@@ -2033,8 +2078,8 @@ def _classify_jang_codec(
             },
         )
         is not None
+        or _jang_routed_expert_bit_plan_default(sources) is not None
     )
-
     if (
         explicit_jangtq
         or (bit_accounting and not explicit_affine)
@@ -2057,6 +2102,17 @@ def _classify_jang_codec(
         return "affine_jang"
 
     return "unknown_jang"
+
+
+def _jang_method_marker_declares_jang(marker: str) -> bool:
+    """Return True for method names that are exclusive to JANG-family loaders."""
+
+    canonical = _canonical_jang_marker(marker)
+    return (
+        marker.startswith("jang")
+        or marker.startswith("mxtq")
+        or canonical in {"jjqf", "mxq", "turboquant"}
+    )
 
 
 def _config_has_jang_v2_metadata_signal(config: dict[str, Any]) -> bool:
@@ -2190,6 +2246,15 @@ def _config_declares_jang_metadata(
         ):
             return canonical != "mlx"
 
+    method_values = _all_nested_values(
+        sources,
+        {"method", "quant_method", "quantMethod"},
+    )
+    for value in method_values:
+        marker = _normalize_jang_marker(value)
+        if marker is not None and _jang_method_marker_declares_jang(marker):
+            return True
+
     if _first_nested_value(sources, {"tq_layout", "tqLayout"}) is not None:
         return True
     return (
@@ -2298,6 +2363,12 @@ def _model_has_jang_quant_shape_signal(
             "mxq",
             "jjqf",
         }:
+            return True
+    for value in _all_nested_values(
+        (config,), {"method", "quant_method", "quantMethod"}
+    ):
+        marker = _normalize_jang_marker(value)
+        if marker is not None and _jang_method_marker_declares_jang(marker):
             return True
     return _config_declares_jang_metadata(model_path, config)
 
@@ -2689,12 +2760,48 @@ def _quantization_default_pair(
 ) -> tuple[int, int] | None:
     if not isinstance(quantization, Mapping):
         return None
-    try:
-        bits = int(quantization["bits"])
-        group_size = int(quantization["group_size"])
-    except (KeyError, TypeError, ValueError):
+
+    bits = _strict_positive_int_mapping_value(
+        quantization,
+        "bits",
+        "bit_width",
+        "bitWidth",
+    )
+    group_size = _strict_positive_int_mapping_value(
+        quantization,
+        "block_size",
+        "blockSize",
+        "blocksize",
+        "group_size",
+        "groupSize",
+        "groupsize",
+    )
+    if bits is None or group_size is None:
         return None
     return bits, group_size
+
+
+def _strict_positive_int_mapping_value(
+    source: Mapping[str, Any],
+    *keys: str,
+) -> int | None:
+    for key in keys:
+        value = source.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, float):
+            if value.is_integer() and value > 0:
+                return int(value)
+            continue
+        if isinstance(value, str):
+            try:
+                parsed = int(value)
+            except ValueError:
+                continue
+            return parsed if parsed > 0 else None
+    return None
 
 
 def _jang_quantization_key_variants(key: str) -> tuple[str, ...]:
@@ -3030,6 +3137,8 @@ def _detect_jang_vlm_model(
         "vision_config" in model_config
         or "vit_config" in model_config
         or bool(model_config.get("mm_vision_tower"))
+        or "audio_config" in model_config
+        or "video_config" in model_config
     ):
         return True
 
@@ -3555,7 +3664,8 @@ def _has_usable_local_jang_tokenizer(path: Path) -> bool:
     tokenizer_class = tokenizer_config.get("tokenizer_class")
     if (
         isinstance(tokenizer_class, str)
-        and tokenizer_class.lower() == "tiktokentokenizer"
+        and _normalize_jang_marker(tokenizer_class)
+        in {"tiktokentokenizer", "tiktokentokenizerfast", "tokenizersbackend"}
     ):
         return (path / "tokenizer.json").is_file()
     return True
@@ -4064,6 +4174,23 @@ def _dsv4_metadata_routed_projection_bits(
             )
             if isinstance(routed_plan, dict):
                 default_candidates.append(routed_plan.get("default"))
+                default_candidates.append(routed_plan.get("default_bits"))
+                default_candidates.append(routed_plan.get("defaultBits"))
+
+    for source in sources:
+        for item in _iter_dicts(source):
+            plan = item.get("routed_expert_bit_plan")
+            if not isinstance(plan, dict):
+                plan = item.get("routedExpertBitPlan")
+            if not isinstance(plan, dict):
+                continue
+            default_candidates.extend(
+                [
+                    plan.get("default"),
+                    plan.get("default_bits"),
+                    plan.get("defaultBits"),
+                ]
+            )
 
     default_bits: dict[str, int] = {}
     for candidate in default_candidates:
@@ -4130,6 +4257,15 @@ def _dsv4_routed_default_bits(
             return int(routed_bits)
         if isinstance(nested_bits, int):
             return int(nested_bits)
+        routed_plan_default = _jang_routed_expert_bit_plan_default((source,))
+        if routed_plan_default is not None:
+            projection_plan = _dsv4_coerce_projection_bit_plan(routed_plan_default)
+            if projection_plan:
+                return min(projection_plan.values())
+            try:
+                return int(routed_plan_default)
+            except (TypeError, ValueError):
+                pass
         mxtq_bits = source.get("mxtq_bits")
         if isinstance(mxtq_bits, dict) and mxtq_bits.get("routed_expert") is not None:
             return int(mxtq_bits["routed_expert"])

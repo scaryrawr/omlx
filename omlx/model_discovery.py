@@ -965,6 +965,13 @@ def _config_declares_jang_metadata(config: dict[str, object]) -> bool:
             ):
                 return canonical != "mlx"
 
+    method_keys = {"method", "quant_method", "quantMethod"}
+    for item in _iter_nested_dicts(config):
+        for key in method_keys:
+            marker = _normalize_jang_marker(item.get(key))
+            if marker is not None and _jang_method_marker_declares_jang(marker):
+                return True
+
     bit_keys = {
         "mxtqBits",
         "mxtqDownBits",
@@ -983,6 +990,17 @@ def _config_declares_jang_metadata(config: dict[str, object]) -> bool:
         if any(item.get(key) is not None for key in bit_keys):
             return True
     return False
+
+
+def _jang_method_marker_declares_jang(marker: str) -> bool:
+    """Return True for method names that are exclusive to JANG-family loaders."""
+
+    canonical = marker.replace("_", "")
+    return (
+        marker.startswith("jang")
+        or marker.startswith("mxtq")
+        or canonical in {"jjqf", "mxq", "turboquant"}
+    )
 
 
 def _config_has_jang_v2_metadata_signal(config: dict[str, object]) -> bool:
@@ -1248,7 +1266,20 @@ def _jang_sidecar_has_vision(model_path: Path) -> bool:
     return has_sidecar and (
         (payload_path / "preprocessor_config.json").exists()
         or (payload_path / "video_preprocessor_config.json").exists()
+        or _jang_model_config_has_active_media_subconfig(payload_path)
     )
+
+
+def _jang_model_config_has_active_media_subconfig(payload_path: Path) -> bool:
+    config_path = payload_path / "config.json"
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    return any(key in config for key in ("audio_config", "video_config"))
 
 
 def _jang_sidecar_declares_no_active_vision(model_path: Path) -> bool:

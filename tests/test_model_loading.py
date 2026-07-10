@@ -1688,6 +1688,55 @@ class TestJANGDispatch:
             "TOKENIZER",
         )
 
+    def test_config_only_jang_method_dispatches_basic_loader(
+        self, tmp_path, monkeypatch
+    ):
+        def basic_load(model_path):
+            assert model_path == tmp_path
+            return "JANG_METHOD_MODEL", "TOKENIZER"
+
+        _install_jang_loader_stub(monkeypatch, text_load=basic_load)
+        _write_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "model_type": "llama",
+                    "quantization": {"method": "jang-importance"},
+                }
+            ),
+        )
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.codec == "affine_jang"
+        assert metadata.markers == ("jang_importance",)
+        assert maybe_load_custom_quantization(str(tmp_path), is_vlm=False) == (
+            "JANG_METHOD_MODEL",
+            "TOKENIZER",
+        )
+
+    @pytest.mark.parametrize("quant_method", ["fp8", "mxfp4", "nvfp4"])
+    def test_config_only_non_jang_quant_method_uses_standard_loader(
+        self, tmp_path, monkeypatch, quant_method
+    ):
+        def basic_load(model_path):
+            raise AssertionError("non-JANG quant_method must not dispatch JANG loader")
+
+        _install_jang_loader_stub(monkeypatch, text_load=basic_load)
+        _write_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "model_type": "llama",
+                    "quantization_config": {"quant_method": quant_method},
+                }
+            ),
+        )
+
+        assert model_loading.read_jang_metadata(tmp_path) is None
+        assert maybe_load_custom_quantization(str(tmp_path), is_vlm=False) is None
+
     def test_config_only_plain_mlx_format_is_not_jang(self, tmp_path, monkeypatch):
         def basic_load(model_path):
             raise AssertionError("plain MLX config should not use JANG loader")
@@ -1707,6 +1756,52 @@ class TestJANGDispatch:
         assert model_loading.read_jang_metadata(tmp_path) is None
         assert maybe_load_custom_quantization(str(tmp_path), is_vlm=False) is None
 
+    def test_jang_audio_config_marks_loader_metadata_vlm(self, tmp_path):
+        _write_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "model_type": "some_jang_model",
+                    "audio_config": {"feature_size": 128},
+                }
+            ),
+        )
+        _write_jang_config(tmp_path, json.dumps({"format": "jang"}))
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.is_vlm is True
+
+    def test_jang_disabled_media_overrides_audio_config_for_loader(self, tmp_path):
+        _write_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "model_type": "some_jang_model",
+                    "audio_config": {"feature_size": 128},
+                }
+            ),
+        )
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "capabilities": {
+                        "supportsAudio": False,
+                        "supportsVision": False,
+                        "supportsVideo": False,
+                    },
+                }
+            ),
+        )
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.is_vlm is False
+
     def test_jang_source_model_tokenizer_fallback_uses_hf_cache(
         self, tmp_path, monkeypatch
     ):
@@ -1715,6 +1810,56 @@ class TestJANGDispatch:
         snapshot.mkdir(parents=True)
         (snapshot / "tokenizer.json").write_text("{}")
         monkeypatch.setenv("HF_HUB_CACHE", str(hf_cache))
+
+        calls = []
+
+        class AutoTokenizer:
+            @staticmethod
+            def from_pretrained(model_path, *args, **kwargs):
+                calls.append(model_path)
+                return f"TOKENIZER:{model_path}"
+
+        transformers_mod = types.ModuleType("transformers")
+        transformers_mod.AutoTokenizer = AutoTokenizer
+        monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+
+        def fake_load(model_path):
+            tokenizer = transformers_mod.AutoTokenizer.from_pretrained(model_path)
+            return "MODEL", tokenizer
+
+        _install_jang_loader_stub(monkeypatch, text_load=fake_load)
+        _write_config(tmp_path, '{"model_type": "llama"}')
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "source_model": {"org": "Qwen", "name": "Qwen3-8B"},
+                }
+            ),
+        )
+
+        assert maybe_load_custom_quantization(str(tmp_path), is_vlm=False) == (
+            "MODEL",
+            f"TOKENIZER:{snapshot}",
+        )
+        assert calls == [snapshot]
+
+    @pytest.mark.parametrize(
+        "tokenizer_class",
+        ["TikTokenTokenizerFast", "TokenizersBackend"],
+    )
+    def test_jang_source_tokenizer_fallback_for_unsupported_tokenizer_config_only(
+        self, tmp_path, monkeypatch, tokenizer_class
+    ):
+        hf_cache = tmp_path / "hf-cache"
+        snapshot = hf_cache / "models--Qwen--Qwen3-8B" / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        (snapshot / "tokenizer.json").write_text("{}")
+        monkeypatch.setenv("HF_HUB_CACHE", str(hf_cache))
+        (tmp_path / "tokenizer_config.json").write_text(
+            json.dumps({"tokenizer_class": tokenizer_class})
+        )
 
         calls = []
 
@@ -2024,6 +2169,23 @@ class TestJANGDispatch:
         assert metadata.model_family == "deepseek_v4"
         assert metadata.is_deepseek_v4 is True
 
+    def test_jang_metadata_falls_back_to_text_config_family(self, tmp_path):
+        _write_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "model_type": "wrapper",
+                    "text_config": {"model_type": "lfm2_moe"},
+                }
+            ),
+        )
+        _write_jang_config(tmp_path, json.dumps({"format": "jang"}))
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.model_family == "lfm2_moe"
+
     def test_jang_metadata_classifies_mxfp_and_kimi_vlm(self, tmp_path):
         model_dir = tmp_path / "Kimi-K2.6-VL"
         model_dir.mkdir()
@@ -2302,6 +2464,23 @@ class TestJANGDispatch:
             {"runtime": {"routedExpertBitPlan": {"routedExpertLayerBits": {"1": 4}}}},
         ) == {"1": 4}
 
+    def test_dsv4_default_bits_reads_routed_expert_plan_default(self):
+        assert (
+            model_loading._dsv4_routed_default_bits(
+                {},
+                {
+                    "routed_expert_bit_plan": {
+                        "default": {
+                            "gate_proj": 3,
+                            "up_proj": 3,
+                            "down_proj": 5,
+                        }
+                    }
+                },
+            )
+            == 3
+        )
+
     def test_patch_jangtq_artifacts_marks_text_config(self, tmp_path):
         (tmp_path / "jangtq_runtime.safetensors").write_text("")
         config = {
@@ -2320,6 +2499,19 @@ class TestJANGDispatch:
         assert patched["text_config"]["weight_format"] == "mxtq"
         assert patched["text_config"]["quantization"]["weight_format"] == "mxtq"
         assert patched["text_config"]["quantization_config"]["weight_format"] == "mxtq"
+
+    def test_quantization_default_pair_prefers_block_size_alias(self):
+        assert model_loading._quantization_default_pair(
+            {"bit_width": "5", "block_size": 96, "group_size": 64}
+        ) == (5, 96)
+
+    def test_quantization_default_pair_ignores_fractional_target_bits(self):
+        assert (
+            model_loading._quantization_default_pair(
+                {"target_bits": 2.75, "block_size": 64}
+            )
+            is None
+        )
 
     def test_jang_metadata_normalizes_current_capability_and_chat_schema(
         self, tmp_path
@@ -2501,6 +2693,48 @@ class TestJANGDispatch:
         assert metadata is not None
         assert metadata.codec == "jangtq"
         assert metadata.mxtq_bits == {"routed_expert": 3}
+
+    def test_jang_metadata_reads_routed_expert_plan_default_bits(self, tmp_path):
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "routed_expert_bit_plan": {
+                        "default_bits": {
+                            "gate_proj": 2,
+                            "up_proj": 2,
+                            "down_proj": 4,
+                        },
+                    },
+                }
+            ),
+        )
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.codec == "jangtq"
+        assert metadata.mxtq_bits == {
+            "routed_expert": {"gate_proj": 2, "up_proj": 2, "down_proj": 4}
+        }
+
+    def test_jang_metadata_ignores_unscoped_default_key_for_mxtq_bits(self, tmp_path):
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "chat": {"sampling_defaults": {"default": 2}},
+                }
+            ),
+        )
+
+        metadata = model_loading.read_jang_metadata(tmp_path)
+
+        assert metadata is not None
+        assert metadata.codec == "affine_jang"
+        assert metadata.mxtq_bits is None
 
     def test_jang_metadata_wraps_flat_projection_bit_map(self, tmp_path):
         _write_jang_config(
