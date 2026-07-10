@@ -580,6 +580,70 @@ class TestBatchGeneratorDispatch:
         assert hasattr(GenerationBatch, "_omlx_mtp_patched")
         assert hasattr(BatchGenerator, "_omlx_mtp_patched")
 
+    def test_singleton_emit_uses_current_response_fields(self, monkeypatch):
+        import mlx.core as mx
+        from mlx_lm.generate import GenerationBatch
+
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        class _FakeBatch:
+            Response = GenerationBatch.Response
+
+            def __init__(self):
+                self.uids = [7]
+                self.tokens = [[]]
+                self._num_tokens = [0]
+                self.max_tokens = [4]
+
+        monkeypatch.setattr(
+            batch_generator,
+            "_advance_stop_matcher",
+            lambda *_: (False, None, None),
+        )
+
+        response = batch_generator._emit_response(
+            _FakeBatch(),
+            token_id=42,
+            logprobs_1d=mx.zeros((8,)),
+        )[0]
+
+        assert response.uid == 7
+        assert response.token == 42
+        assert response.finish_reason is None
+
+    def test_rowwise_emit_uses_current_response_fields(self, monkeypatch):
+        import mlx.core as mx
+        from mlx_lm.generate import GenerationBatch
+
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        class _FakeBatch:
+            Response = GenerationBatch.Response
+
+            def __init__(self):
+                self.uids = [7]
+                self.tokens = [[]]
+                self._num_tokens = [0]
+                self.max_tokens = [4]
+
+        state = batch_generator._MtpState(uid=7)
+        state.queue.append((42, mx.zeros((8,)), "draft"))
+        batch_state = batch_generator._MtpBatchState(states={7: state})
+        monkeypatch.setattr(
+            batch_generator,
+            "_advance_stop_matcher",
+            lambda *_: (False, None, None),
+        )
+
+        response = batch_generator._emit_batch_responses(
+            _FakeBatch(),
+            batch_state,
+        )[0]
+
+        assert response.uid == 7
+        assert response.token == 42
+        assert response.finish_reason is None
+
     def test_next_realigns_rows_before_mtp_eligibility(self, monkeypatch):
         """Native MTP must not read stale row slots before scheduler realignment."""
         from mlx_lm.generate import GenerationBatch

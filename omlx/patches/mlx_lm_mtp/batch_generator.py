@@ -1889,7 +1889,8 @@ def _emit_batch_responses(gen_batch: Any, batch_state: _MtpBatchState) -> List[A
         else:
             keep.append(idx)
             responses.append(
-                Response(
+                _generation_response(
+                    Response,
                     uid=uid,
                     token=token_id,
                     logprobs=logprobs_1d,
@@ -2581,7 +2582,8 @@ def _emit_response(
         return [response]
 
     return [
-        Response(
+        _generation_response(
+            Response,
             uid=gen_batch.uids[0],
             token=token_id,
             logprobs=logprobs_1d,
