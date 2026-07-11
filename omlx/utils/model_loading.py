@@ -496,12 +496,23 @@ def maybe_apply_pre_load_patches(
     # the resulting model is indistinguishable from a stock model that
     # never had MTP heads.
     jang_dropped_mtp = _jang_sidecar_declares_mtp_dropped(config_path.parent)
+    jang_mtp_runtime_blocked = _jang_sidecar_declares_mtp_runtime_blocked(
+        config_path.parent
+    )
     mtp_config = _config_without_mtp_heads(config) if jang_dropped_mtp else config
 
     if _is_mtp_compatible(mtp_config, model_type):
         mtp_enabled = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
         )
+        if jang_mtp_runtime_blocked and mtp_enabled:
+            logger.warning(
+                "mtp_enabled=True for %s but JANG metadata blocks native MTP "
+                "after runtime validation; loading retained MTP weights without "
+                "speculative execution",
+                model_name,
+            )
+            mtp_enabled = False
         from ..patches.mlx_lm_mtp import (
             apply_mlx_lm_mtp_patch,
             set_mtp_active,
@@ -711,6 +722,21 @@ def _jang_sidecar_declares_mtp_dropped(model_path: Path) -> bool:
     return _jang_metadata_declares_mtp_dropped(metadata.sidecar, metadata.model_config)
 
 
+def _jang_sidecar_declares_mtp_runtime_blocked(model_path: Path) -> bool:
+    """Return True when JANG metadata disables an otherwise intact MTP runtime."""
+
+    try:
+        metadata = read_jang_metadata(model_path)
+    except ValueError as exc:
+        logger.debug("Could not inspect JANG MTP metadata for %s: %s", model_path, exc)
+        return False
+    if metadata is None:
+        return False
+    return _jang_metadata_declares_mtp_runtime_blocked(
+        metadata.sidecar, metadata.model_config
+    )
+
+
 def _jang_metadata_declares_mtp_dropped(
     jang_config: dict[str, Any],
     model_config: dict[str, Any] | None,
@@ -749,6 +775,47 @@ def _jang_metadata_declares_mtp_dropped(
             if normalized_mode == "absent":
                 return True
             if runtime.get("bundle_has_mtp") is False and normalized_mode in drop_modes:
+                return True
+    return False
+
+
+def _jang_metadata_declares_mtp_runtime_blocked(
+    jang_config: dict[str, Any],
+    model_config: dict[str, Any] | None,
+) -> bool:
+    """Return True for a measured native-MTP runtime block.
+
+    ``runtime.native_mtp_blocked`` preserves MTP tensors for compatible
+    loaders while preventing a known regression in speculative throughput.
+    It is distinct from dropped-MTP metadata, which means the artifact has no
+    usable MTP weights at all.
+    """
+
+    for source in (jang_config, model_config):
+        if not isinstance(source, dict):
+            continue
+        for item in _iter_dicts(source):
+            runtime = item.get("runtime")
+            if not isinstance(runtime, dict):
+                continue
+            blocked = _mapping_value(
+                runtime,
+                "native_mtp_blocked",
+                "nativeMtpBlocked",
+            )
+            blocked_bool = _coerce_jang_bool(blocked)
+            if blocked_bool is True:
+                return True
+            if blocked_bool is False:
+                continue
+            if isinstance(blocked, Mapping):
+                if _coerce_jang_bool(
+                    _mapping_value(blocked, "blocked", "disabled")
+                ) is True:
+                    return True
+                if _coerce_jang_bool(_mapping_value(blocked, "enabled")) is False:
+                    return True
+            if isinstance(blocked, str) and blocked.strip():
                 return True
     return False
 
@@ -3791,12 +3858,18 @@ def _scoped_jang_source_tokenizer_fallback(
     metadata: JangQuantizationMetadata,
     loader_path: Path | None = None,
 ) -> Iterator[None]:
-    """Temporarily route tokenizer loading to the cached source-model snapshot."""
+    """Temporarily route tokenizer loading to a local JANG tokenizer source."""
 
     tokenizer_source = _resolve_jang_tokenizer_source(metadata)
-    if tokenizer_source is None or _safe_resolved_path(
-        tokenizer_source
-    ) == _safe_resolved_path(metadata.model_path):
+    if tokenizer_source is None:
+        yield
+        return
+
+    targets = {_safe_resolved_path(metadata.model_path)}
+    if loader_path is not None:
+        targets.add(_safe_resolved_path(loader_path))
+    resolved_source = _safe_resolved_path(tokenizer_source)
+    if all(resolved_source == target for target in targets):
         yield
         return
 
@@ -3806,9 +3879,6 @@ def _scoped_jang_source_tokenizer_fallback(
         yield
         return
 
-    targets = {_safe_resolved_path(metadata.model_path)}
-    if loader_path is not None:
-        targets.add(_safe_resolved_path(loader_path))
     original = transformers.AutoTokenizer.from_pretrained
 
     def _from_pretrained_with_source_fallback(
@@ -5100,10 +5170,13 @@ def _load_jang_quantization(
                         load_path,
                     )
                 else:
-                    return cast(
-                        tuple[Any, Any],
-                        load_jang_model_from_bundle(bundle_path),
-                    )
+                    with _scoped_jang_source_tokenizer_fallback(
+                        jang_metadata, bundle_path
+                    ):
+                        return cast(
+                            tuple[Any, Any],
+                            load_jang_model_from_bundle(bundle_path),
+                        )
 
             load_path, temp_dir = _temporary_jang_loader_path(jang_metadata)
 

@@ -6,7 +6,7 @@ import os
 import sys
 import types
 from contextlib import contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import mlx.core as mx
 import pytest
@@ -2889,6 +2889,54 @@ class TestJANGDispatch:
 
         assert model_loading._jang_sidecar_declares_mtp_dropped(tmp_path) is True
 
+    def test_jang_metadata_recognizes_measured_native_mtp_runtime_block(self, tmp_path):
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "runtime": {
+                        "bundle_has_mtp": True,
+                        "native_mtp_blocked": "measured net slowdown on JANG_2L",
+                    },
+                }
+            ),
+        )
+
+        assert model_loading._jang_sidecar_declares_mtp_dropped(tmp_path) is False
+        assert model_loading._jang_sidecar_declares_mtp_runtime_blocked(tmp_path) is True
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("false", False),
+            ("", False),
+            ({"blocked": True}, True),
+        ],
+    )
+    def test_jang_metadata_honors_boolean_native_mtp_runtime_block(
+        self, tmp_path, value, expected
+    ):
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "runtime": {
+                        "bundle_has_mtp": True,
+                        "native_mtp_blocked": value,
+                    },
+                }
+            ),
+        )
+
+        assert (
+            model_loading._jang_sidecar_declares_mtp_runtime_blocked(tmp_path)
+            is expected
+        )
+
     def test_jang_metadata_classifies_unknown_sidecar(self, tmp_path):
         _write_jang_config(tmp_path, '{"format": "future-jang-family"}')
 
@@ -2974,6 +3022,48 @@ class TestJANGDispatch:
             "TOKENIZER",
         )
         assert calls == [bundle]
+
+    def test_jangspec_bundle_loader_uses_target_tokenizer(self, tmp_path, monkeypatch):
+        bundle = tmp_path
+        target = bundle / "target"
+        target.mkdir()
+        (bundle / "jangspec.json").write_text('{"bundle_version": 1}')
+        _write_config(target, '{"model_type": "llama"}')
+        _write_jang_config(target, '{"format": "jang"}')
+        (target / "tokenizer.json").write_text("{}")
+
+        tokenizer_calls = []
+
+        class AutoTokenizer:
+            @staticmethod
+            def from_pretrained(model_path, *args, **kwargs):
+                tokenizer_calls.append(model_path)
+                return f"TOKENIZER:{model_path}"
+
+        transformers_mod = types.ModuleType("transformers")
+        transformers_mod.AutoTokenizer = AutoTokenizer
+        monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+        monkeypatch.setitem(sys.modules, "jang_tools", types.ModuleType("jang_tools"))
+        jangspec_mod = types.ModuleType("jang_tools.jangspec")
+        jangspec_mod.__path__ = []
+        monkeypatch.setitem(sys.modules, "jang_tools.jangspec", jangspec_mod)
+        bundle_loader_mod = types.ModuleType("jang_tools.jangspec.bundle_loader")
+
+        def load_jang_model_from_bundle(path):
+            return "JANGSPEC_MODEL", AutoTokenizer.from_pretrained(path)
+
+        bundle_loader_mod.load_jang_model_from_bundle = load_jang_model_from_bundle
+        monkeypatch.setitem(
+            sys.modules,
+            "jang_tools.jangspec.bundle_loader",
+            bundle_loader_mod,
+        )
+
+        assert maybe_load_custom_quantization(str(bundle), is_vlm=False) == (
+            "JANGSPEC_MODEL",
+            f"TOKENIZER:{target}",
+        )
+        assert tokenizer_calls == [target]
 
 
 class TestJANGQuantizationShapePatch:
@@ -3896,6 +3986,43 @@ class TestVlmMtpPreLoadDispatch:
         attach_mock.assert_not_called()
         assert calls == []
         assert "JANG metadata marks MTP weights as dropped" in caplog.text
+
+    def test_jang_runtime_block_disables_mtp_but_keeps_vlm_weight_binding(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        calls, sanitize_mock, runtime_mock, attach_mock = self._stub_patches(
+            monkeypatch
+        )
+        path = _write_config(
+            tmp_path,
+            '{"model_type": "qwen3_5", "vision_config": {}, '
+            '"text_config": {"mtp_num_hidden_layers": 1}}',
+        )
+        _write_jang_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "format": "jang",
+                    "runtime": {
+                        "bundle_has_mtp": True,
+                        "native_mtp_blocked": "measured net slowdown",
+                    },
+                }
+            ),
+        )
+        _write_mtp_index(tmp_path, has_mtp=True)
+        settings = types.SimpleNamespace(mtp_enabled=True)
+
+        caplog.set_level("WARNING", logger=model_loading.__name__)
+        maybe_apply_pre_load_patches(path, model_settings=settings, for_vlm=True)
+
+        sanitize_mock.assert_called_once()
+        runtime_mock.assert_called_once()
+        attach_mock.assert_called_once_with(True)
+        mtp_patch = sys.modules["omlx.patches.mlx_lm_mtp"]
+        mtp_patch.set_mtp_active.assert_has_calls([call(False), call(False)])
+        assert "JANG metadata blocks native MTP" in caplog.text
+        assert calls == ["attach=True", "sanitize", "runtime"]
 
     def test_vlm_patches_skipped_when_not_for_vlm(self, tmp_path, monkeypatch):
         # BatchedEngine / DFlashEngine / LLM loader paths must NOT touch
