@@ -1518,7 +1518,6 @@ class VLMBatchedEngine(BaseEngine):
             if self._scheduler_config
             else SchedulerConfig()
         )
-        scheduler_config.model_name = self._model_name
 
         engine_config = EngineConfig(
             model_name=self._model_name,

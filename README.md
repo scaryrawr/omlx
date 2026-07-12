@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License">
-  <img src="https://img.shields.io/badge/python-3.10+-green" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-green" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple" alt="Apple Silicon">
 </p>
 
@@ -90,14 +90,32 @@ cd omlx
 pip install -e .          # Core only
 pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
-# Optional: GLM-5.2 / MiniMax M3 native custom kernels
+# GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
+# if you serve those families -- see note below)
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
 pip install -e ".[image]" # With mflux-backed image generation/edit support
 ```
 
 When installing a released package, the same extras are available, e.g. `pip install 'omlx[image]'` or `pip install 'omlx[mcp,image]'`.
 
-Requires macOS 15.0+ (Sequoia), Python 3.10+, and Apple Silicon (M1/M2/M3/M4). Core installs are text/VLM/embedding/reranker only; image generation and editing require the `image` extra, which pulls in `mflux` and heavier transitive dependencies such as torch. MCP support remains optional via the `mcp` extra.
+Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4).
+
+> **Note on native custom kernels:** a plain `pip install -e .` does NOT build
+> them, and the affected model families then silently fall back to much slower
+> generic paths -- for GLM-5.2 the fused DSA prefill is roughly 30x faster with
+> the kernels (measured 845 vs ~29 tok/s on an M3 Ultra), and the fallback also
+> uses more memory (#2137). Building them requires the Metal toolchain, which
+> Command Line Tools alone do not provide (`xcrun: error: unable to find utility
+> "metal"`): install full Xcode, or use the official DMG which ships the kernels
+> precompiled. Homebrew can build them with `brew install omlx --HEAD
+> --with-custom-kernel`, but that build also needs full Xcode. To verify your
+> install:
+>
+> ```bash
+> python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
+> ```
+
+Core installs are text/VLM/embedding/reranker only; image generation and editing require the `image` extra, which pulls in `mflux` and heavier transitive dependencies such as torch. MCP support remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -436,3 +454,4 @@ Contributions are welcome! See [Contributing Guide](docs/CONTRIBUTING.md) for de
 - [venvstacks](https://venvstacks.lmstudio.ai) - Portable Python environment layering for the macOS app bundle
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Embedding model support for Apple Silicon
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Block diffusion speculative decoding on Apple Silicon
+- [MTPLX](https://github.com/youssofal/mtplx) - Lightning MTP's verify-shape Metal kernels are powered by MTPLX by Youssof Altoukhi, which also inspired the depth-k pipeline
