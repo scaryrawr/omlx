@@ -5117,6 +5117,64 @@ def _load_deepseek_v4_jang(
     return model, tokenizer
 
 
+def _is_laguna_jang_model(metadata: JangQuantizationMetadata) -> bool:
+    """Return whether metadata identifies the text-only Laguna runtime."""
+
+    model_config = metadata.model_config or {}
+    model_types = [model_config.get("model_type")]
+    text_config = model_config.get("text_config")
+    if isinstance(text_config, Mapping):
+        model_types.append(text_config.get("model_type"))
+
+    return any(
+        _normalize_jang_marker(value) == "laguna"
+        for value in (*model_types, metadata.model_family)
+    )
+
+
+def _load_laguna_jang(metadata: JangQuantizationMetadata) -> tuple[Any, Any]:
+    """Load a Laguna JANG bundle through its architecture-specific runtime."""
+
+    try:
+        from jang_tools.laguna.runtime import load as load_laguna
+    except ImportError as exc:
+        raise ImportError(
+            "Laguna JANG loading requires the jang_tools.laguna runtime. "
+            'Install or upgrade with: pip install "jang[vlm]>=2.5.31".'
+        ) from exc
+
+    model, _, bundle_format = load_laguna(str(metadata.model_path))
+    model.config = dict(metadata.model_config or {"model_type": "laguna"})
+
+    from transformers import AutoTokenizer
+
+    tokenizer: Any = AutoTokenizer.from_pretrained(
+        str(metadata.model_path),
+        trust_remote_code=False,
+    )
+
+    from .generation_config import load_generation_config_token_ids
+
+    eos_token_ids = load_generation_config_token_ids(
+        metadata.model_path,
+        "eos_token_id",
+    )
+    if eos_token_ids:
+        from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+        tokenizer = TokenizerWrapper(
+            tokenizer,
+            eos_token_ids=sorted(eos_token_ids),
+        )
+
+    logger.info(
+        "Loaded Laguna JANG bundle %s with %s format",
+        metadata.model_path,
+        bundle_format,
+    )
+    return model, tokenizer
+
+
 def _load_jang_quantization(
     model_path: Path,
     *,
@@ -5157,6 +5215,9 @@ def _load_jang_quantization(
         _preflight_jangtq_runtime_sidecar(jang_metadata)
 
     try:
+        if _is_laguna_jang_model(jang_metadata):
+            return _load_laguna_jang(jang_metadata)
+
         _materialize_embedded_jang_sidecar(jang_metadata)
         with _scoped_jang_grouped_conv1d_load_weights_sanitize():
             if bundle_path is not None:

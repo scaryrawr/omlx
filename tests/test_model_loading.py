@@ -528,6 +528,70 @@ class TestJANGDispatch:
             "TOKENIZER",
         )
 
+    def test_laguna_jang_uses_architecture_specific_runtime(
+        self, tmp_path, monkeypatch
+    ):
+        class LoadedModel:
+            pass
+
+        model = LoadedModel()
+        runtime_calls = []
+        tokenizer_calls = []
+        wrapper_calls = []
+
+        _write_config(tmp_path, '{"model_type": "laguna", "hidden_size": 4096}')
+        _write_jang_config(tmp_path, '{"format": "jang"}')
+        (tmp_path / "generation_config.json").write_text(
+            '{"eos_token_id": [2, 24]}'
+        )
+
+        jang_tools_mod = types.ModuleType("jang_tools")
+        jang_tools_mod.__path__ = []
+        laguna_mod = types.ModuleType("jang_tools.laguna")
+        laguna_mod.__path__ = []
+        runtime_mod = types.ModuleType("jang_tools.laguna.runtime")
+
+        def load_laguna(path):
+            runtime_calls.append(path)
+            return model, object(), "jang"
+
+        runtime_mod.load = load_laguna
+        monkeypatch.setitem(sys.modules, "jang_tools", jang_tools_mod)
+        monkeypatch.setitem(sys.modules, "jang_tools.laguna", laguna_mod)
+        monkeypatch.setitem(sys.modules, "jang_tools.laguna.runtime", runtime_mod)
+
+        transformers_mod = types.ModuleType("transformers")
+
+        class AutoTokenizer:
+            @staticmethod
+            def from_pretrained(path, **kwargs):
+                tokenizer_calls.append((path, kwargs))
+                return "HF_TOKENIZER"
+
+        transformers_mod.AutoTokenizer = AutoTokenizer
+        monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+
+        tokenizer_utils_mod = types.ModuleType("mlx_lm.tokenizer_utils")
+
+        class TokenizerWrapper:
+            def __init__(self, tokenizer, *, eos_token_ids):
+                wrapper_calls.append((tokenizer, eos_token_ids))
+
+        tokenizer_utils_mod.TokenizerWrapper = TokenizerWrapper
+        monkeypatch.setitem(sys.modules, "mlx_lm.tokenizer_utils", tokenizer_utils_mod)
+
+        loaded_model, tokenizer = maybe_load_custom_quantization(
+            str(tmp_path),
+            is_vlm=False,
+        )
+
+        assert loaded_model is model
+        assert isinstance(tokenizer, TokenizerWrapper)
+        assert runtime_calls == [str(tmp_path)]
+        assert tokenizer_calls == [(str(tmp_path), {"trust_remote_code": False})]
+        assert wrapper_calls == [("HF_TOKENIZER", [2, 24])]
+        assert model.config == {"model_type": "laguna", "hidden_size": 4096}
+
     def test_jang_v2_sidecar_without_format_dispatches_basic_loader(
         self, tmp_path, monkeypatch
     ):
