@@ -4625,6 +4625,54 @@ class TestVLMPositionStateClearing:
 
         model.clear_vlm_position_state.assert_not_called()
 
+    def test_schedule_waiting_captures_first_batched_rope_delta(self, mock_tokenizer):
+        """A single request keeps its first row from batched VLM rope deltas."""
+        model = self._make_vlm_model()
+        scheduler = Scheduler(model=model, tokenizer=mock_tokenizer)
+        scheduler.batch_generator = MagicMock()
+        scheduler.batch_generator.insert.return_value = [42]
+
+        request = Request(
+            request_id="vlm-batched-rope-001",
+            prompt="describe this image",
+            sampling_params=SamplingParams(max_tokens=50),
+        )
+        request.prompt_token_ids = [1, 2, 3, 4, 5]
+        request.num_prompt_tokens = 5
+        request.vlm_inputs_embeds = mx.zeros((1, 5, 64))
+        request.vlm_extra_kwargs = {
+            "_captured_rope_deltas": mx.array([[-42], [-7]])
+        }
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+
+        scheduler._schedule_waiting()
+
+        assert request.rope_deltas == -42.0
+
+    def test_schedule_waiting_treats_empty_rope_deltas_as_zero(self, mock_tokenizer):
+        """An empty optional RoPE delta means no decode position adjustment."""
+        model = self._make_vlm_model()
+        scheduler = Scheduler(model=model, tokenizer=mock_tokenizer)
+        scheduler.batch_generator = MagicMock()
+        scheduler.batch_generator.insert.return_value = [42]
+
+        request = Request(
+            request_id="vlm-empty-rope-001",
+            prompt="describe this image",
+            sampling_params=SamplingParams(max_tokens=50),
+        )
+        request.prompt_token_ids = [1, 2, 3, 4, 5]
+        request.num_prompt_tokens = 5
+        request.vlm_inputs_embeds = mx.zeros((1, 5, 64))
+        request.vlm_extra_kwargs = {"_captured_rope_deltas": mx.array([])}
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+
+        scheduler._schedule_waiting()
+
+        assert request.rope_deltas == 0.0
+
     def test_schedule_waiting_clears_text_only_position_state(self, mock_tokenizer):
         """Text-only request in _schedule_waiting should clear position state.
 

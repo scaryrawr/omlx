@@ -28,6 +28,20 @@ import mlx.nn as nn
 logger = logging.getLogger(__name__)
 
 
+def rope_delta_to_float(value: Any) -> float:
+    """Normalize optional scalar or batched RoPE state for one request.
+
+    Empty arrays represent no position adjustment and therefore map to zero.
+    """
+    if hasattr(value, "reshape") and hasattr(value, "size"):
+        if value.size == 0:
+            return 0.0
+        value = value.reshape(-1)[0]
+    if hasattr(value, "item"):
+        value = value.item()
+    return float(value)
+
+
 class VLMModelAdapter(nn.Module):
     """
     Adapter wrapping a VLM's language_model for BatchGenerator compatibility.
@@ -269,9 +283,7 @@ class VLMModelAdapter(nn.Module):
         rd = getattr(self._language_model, "_rope_deltas", None)
         if rd is None:
             return 0.0
-        if hasattr(rd, "item"):
-            return float(rd.item())
-        return float(rd)
+        return rope_delta_to_float(rd)
 
     @property
     def has_pending_embeddings(self) -> bool:

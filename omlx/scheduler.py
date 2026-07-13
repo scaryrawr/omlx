@@ -51,6 +51,7 @@ from .cache.observability import CacheRateTracker
 from .cache.paged_cache import PagedCacheManager
 from .cache.prefix_cache import BlockAwarePrefixCache
 from .exceptions import PrefillMemoryExceededError, is_cache_corruption_error
+from .models.vlm import rope_delta_to_float
 from .patches.sdpa256_attention import set_unfused_headroom_provider
 from .prefill_progress import get_prefill_tracker
 from .prefill_transient_tracker import PrefillTransientTracker
@@ -8486,10 +8487,7 @@ class Scheduler:
                 extra = request.vlm_extra_kwargs or {}
                 captured = extra.get("_captured_rope_deltas")
                 if captured is not None:
-                    if hasattr(captured, "item"):
-                        request.rope_deltas = float(captured.item())
-                    else:
-                        request.rope_deltas = float(captured)
+                    request.rope_deltas = rope_delta_to_float(captured)
                 elif hasattr(self.model, "get_last_rope_deltas"):
                     request.rope_deltas = self.model.get_last_rope_deltas()
 
