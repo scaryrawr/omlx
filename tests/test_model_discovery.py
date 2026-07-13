@@ -582,6 +582,42 @@ class TestDetectModelType:
         assert model.model_type == "llm"
         assert model.estimated_size == 1050
 
+    def test_discover_jangspec_bundle_counts_fat_experts_and_hot_core(
+        self, tmp_path
+    ):
+        """JANGSpec's root expert snapshot supplements target hot-core weights."""
+        bundle = tmp_path / "fat-jangspec-model"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (bundle / "experts.safetensors").write_bytes(b"0" * 2000)
+        (target / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (target / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (target / "hot_core.safetensors").write_bytes(b"0" * 1000)
+        # Optional streaming artifacts duplicate the fat expert snapshot.
+        (target / "experts.jsidx").write_text("{}")
+        (target / "experts-00000.bin").write_bytes(b"0" * 4000)
+
+        model = discover_models(tmp_path)["fat-jangspec-model"]
+
+        assert model.estimated_size == 3150
+
+    def test_discover_jangspec_streaming_bundle_counts_expert_blobs(self, tmp_path):
+        """Streaming JANGSpec bundles store expert payloads outside safetensors."""
+        bundle = tmp_path / "streaming-jangspec-model"
+        target = bundle / "target"
+        target.mkdir(parents=True)
+        (bundle / "jangspec.json").write_text(json.dumps({"bundle_version": 1}))
+        (target / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        (target / "jang_config.json").write_text(json.dumps({"format": "jang"}))
+        (target / "hot_core.safetensors").write_bytes(b"0" * 1000)
+        (target / "experts.jsidx").write_text("{}")
+        (target / "experts-00000.bin").write_bytes(b"0" * 2000)
+
+        model = discover_models(tmp_path)["streaming-jangspec-model"]
+
+        assert model.estimated_size == 3150
+
     def test_discover_jangspec_embedded_sidecar_registers_root_path(self, tmp_path):
         """Embedded JANGSpec metadata should still discover the bundle root."""
         bundle = tmp_path / "my-embedded-jangspec-model"

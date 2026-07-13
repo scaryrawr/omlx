@@ -1699,6 +1699,13 @@ def estimate_model_size(model_path: Path) -> int:
     Returns:
         Estimated memory usage in bytes
     """
+    if _is_jangspec_model_dir(model_path):
+        weight_files = _jangspec_weight_files(model_path)
+        total_size = sum(path.stat().st_size for path in weight_files)
+        if total_size == 0:
+            raise ValueError(f"No model weights found in {model_path}")
+        return int(total_size * 1.05)
+
     total_size = 0
 
     # Primary: safetensors files
@@ -1805,6 +1812,25 @@ def _is_jangspec_model_dir(path: Path) -> bool:
             or _config_embeds_jang_sidecar(target / "config.json")
         )
     )
+
+
+def _jangspec_weight_files(bundle_path: Path) -> list[Path]:
+    """Return non-duplicated JANGSpec hot-core and expert weight files."""
+
+    target_path = bundle_path / "target"
+    weight_files = {
+        *select_safetensors_weight_files(bundle_path),
+        *select_safetensors_weight_files(target_path),
+    }
+
+    # Current JANGSpec bundles include a fat root expert snapshot. Older
+    # streaming bundles retain only the target-side index and expert blobs.
+    if not (bundle_path / "experts.safetensors").is_file() and (
+        target_path / "experts.jsidx"
+    ).is_file():
+        weight_files.update(target_path.glob("experts-*.bin"))
+
+    return sorted(weight_files)
 
 
 def _effective_model_dir(path: Path) -> Path:
