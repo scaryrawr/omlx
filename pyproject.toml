@@ -103,11 +103,12 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (8e2638b). Includes APC tracing and
-    # quantized-KV batching, Qwen3.5 padded-row handling, Qwen3 Omni request
-    # state isolation, and SAM3 geometry prompts on top of the existing
-    # text-model, tool-parser, diffusion, and MTP support.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@8e2638b71f1834f3aead54acac5118e333d2175d",
+    # mlx-vlm from latest upstream HEAD (ff2c9a3). Includes guarded Qwen3.5
+    # norm-weight shifts, APC tracing, quantized-KV batching, padded-row
+    # handling, Qwen3 Omni request state isolation, and SAM3 geometry prompts
+    # on top of the existing text-model, tool-parser, diffusion, and MTP
+    # support.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@ff2c9a3d06237c6c4d093598cd6935a955bdd4d0",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
