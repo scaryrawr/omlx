@@ -605,8 +605,8 @@ def _patch_text_model(q35: Any) -> None:
         should_shift_norm_weights = has_unsanitized_conv1d
 
         # MTP-head norms can use a *different* convention than the backbone,
-        # and can even be MIXED within the head itself. Observed in JANG MXFP4
-        # Qwen3.6 bundles: ``mtp.norm`` is already in MLX's +1 convention
+        # and can even be MIXED within the head itself. Some converted Qwen3.6
+        # bundles have ``mtp.norm`` already in MLX's +1 convention
         # (mean ~= 1.27) while the per-layer head norms (input_layernorm /
         # post_attention_layernorm / pre_fc_norm_*) are still in raw-HF
         # convention (mean ~= 0). The backbone-only ``has_unsanitized_conv1d``
@@ -687,7 +687,7 @@ def _patch_text_model(q35: Any) -> None:
                         weights[k] = v + 1.0
                     # Pre-converted checkpoints: per-key decision — a head
                     # norm may still be raw-HF even when a sibling is
-                    # already +1 (JANG mixed bundles).
+                    # already +1 (mixed-convention bundles).
                     elif _is_oq_tracked_tensor(v):
                         weights[k] = _mark_mtp_norm_conditional_add(v)
                     elif _mtp_norm_is_raw_hf(v, should_shift_norm_weights):

@@ -113,9 +113,6 @@ dependencies = [
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
     "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@9ca002898b48e14c9727dec17299f497e8467870",
     "markitdown[pdf,docx,pptx]==0.1.6",
-    # JANG mixed-precision quantized model runtime. Package installs as `jang`
-    # and imports as `jang_tools`.
-    "jang[vlm]>=2.5.31",
 ]
 
 [project.optional-dependencies]

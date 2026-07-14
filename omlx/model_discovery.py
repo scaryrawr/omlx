@@ -57,12 +57,6 @@ EngineType = Literal[
 ]
 
 IMAGE_MANIFEST_NAME = "omlx-image-model.json"
-JANG_CONFIG_FILENAMES = (
-    "jang_config.json",
-    "jjqf_config.json",
-    "jang_cfg.json",
-    "mxq_config.json",
-)
 
 # Known VLM (Vision-Language Model) types from mlx-vlm
 VLM_MODEL_TYPES = {
@@ -836,483 +830,6 @@ def _has_vision_subconfig(config: dict) -> bool:
         or bool(config.get("mm_vision_tower"))
     )
 
-
-def _iter_jang_sidecar_objects(model_path: Path):
-    for parent in (model_path, model_path / "target"):
-        for name in JANG_CONFIG_FILENAMES:
-            path = parent / name
-            if not path.exists():
-                continue
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                yield None
-                return
-            yield data if isinstance(data, dict) else None
-            return
-
-    for config_path in (
-        model_path / "config.json",
-        model_path / "target" / "config.json",
-    ):
-        if not config_path.exists():
-            continue
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        if isinstance(config, dict) and isinstance(config.get("jang"), dict):
-            yield config["jang"]
-            return
-        if isinstance(config, dict) and _config_declares_jang_metadata(config):
-            yield config
-            return
-
-
-_JANG_MEDIA_MODALITIES = {
-    "audio",
-    "image",
-    "images",
-    "image_text",
-    "multimodal",
-    "video",
-    "vision",
-    "vision_language",
-    "visual",
-    "vl",
-    "vlm",
-}
-_JANG_TEXT_RUNTIME_STATUSES = {
-    "weights_preserved_text_runtime",
-    "preserved_weights_text_runtime",
-    "preserved_disabled",
-    "text_only",
-    "text_runtime",
-    "unwired",
-}
-
-
-def _normalize_jang_marker(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip().lower()
-    if not text:
-        return None
-    normalized = "".join(ch if ch.isalnum() else "_" for ch in text)
-    normalized = "_".join(part for part in normalized.split("_") if part)
-    return normalized or None
-
-
-def _iter_nested_dicts(value: object):
-    if isinstance(value, dict):
-        yield value
-        for nested in value.values():
-            yield from _iter_nested_dicts(nested)
-    elif isinstance(value, list):
-        for nested in value:
-            yield from _iter_nested_dicts(nested)
-
-
-def _config_declares_jang_metadata(config: dict[str, object]) -> bool:
-    """Return True when config.json itself carries JANG-format evidence."""
-
-    if _config_has_jang_v2_metadata_signal(config):
-        return True
-
-    marker_keys = {
-        "family",
-        "format",
-        "jangProfile",
-        "jang_profile",
-        "profile",
-        "tqLayout",
-        "tq_layout",
-        "weightFormat",
-        "weight_format",
-    }
-    known_markers = {
-        "affine",
-        "affinemxtq",
-        "fp4",
-        "fp8",
-        "jang",
-        "jangaffine",
-        "jangq",
-        "jangtq",
-        "jjqf",
-        "mxfp4",
-        "mxfp8",
-        "mxtq",
-        "mxtq2",
-        "mxtq4",
-        "turboquant",
-        "mxq",
-        "nvfp4",
-    }
-    for item in _iter_nested_dicts(config):
-        for key in marker_keys:
-            marker = _normalize_jang_marker(item.get(key))
-            if marker is None:
-                continue
-            canonical = marker.replace("_", "")
-            if (
-                marker.startswith("jang_")
-                or marker.startswith("jangtq")
-                or marker.startswith("mxtq")
-                or canonical in known_markers
-            ):
-                return canonical != "mlx"
-
-    method_keys = {"method", "quant_method", "quantMethod"}
-    for item in _iter_nested_dicts(config):
-        for key in method_keys:
-            marker = _normalize_jang_marker(item.get(key))
-            if marker is not None and _jang_method_marker_declares_jang(marker):
-                return True
-
-    bit_keys = {
-        "mxtqBits",
-        "mxtqDownBits",
-        "mxtqGateUpBits",
-        "mxtq_bits",
-        "mxtq_down_bits",
-        "mxtq_gate_up_bits",
-        "routedExpertBits",
-        "routedExpertLayerBits",
-        "routed_expert_bits",
-        "routed_expert_layer_bits",
-        "tqLayout",
-        "tq_layout",
-    }
-    for item in _iter_nested_dicts(config):
-        if any(item.get(key) is not None for key in bit_keys):
-            return True
-    return False
-
-
-def _jang_method_marker_declares_jang(marker: str) -> bool:
-    """Return True for method names that are exclusive to JANG-family loaders."""
-
-    canonical = marker.replace("_", "")
-    return (
-        marker.startswith("jang")
-        or marker.startswith("mxtq")
-        or canonical in {"jjqf", "mxq", "turboquant"}
-    )
-
-
-def _config_has_jang_v2_metadata_signal(config: dict[str, object]) -> bool:
-    """Return True when config.json carries modern JANG v2 metadata only."""
-
-    if (
-        _mapping_value(
-            config,
-            "version",
-            "format_version",
-            "formatVersion",
-            "jang_version",
-            "jangVersion",
-        )
-        is None
-    ):
-        return False
-
-    quantization = config.get("quantization")
-    if not isinstance(quantization, dict):
-        quantization = config.get("quantization_config")
-    if not isinstance(quantization, dict):
-        return False
-
-    bit_widths = _mapping_value(quantization, "bit_widths_used", "bitWidthsUsed")
-    if isinstance(bit_widths, (list, tuple, set)) and bit_widths:
-        return True
-
-    profile = _normalize_jang_marker(_mapping_value(quantization, "profile"))
-    if profile is not None and (
-        profile.startswith("jang_") or profile.startswith("jangtq")
-    ):
-        return True
-
-    backend = _normalize_jang_marker(
-        _mapping_value(
-            quantization,
-            "quantization_backend",
-            "quantizationBackend",
-        )
-    )
-    if backend == "mx_quantize":
-        return True
-
-    has_average_bits = (
-        _mapping_value(
-            quantization,
-            "target_bits",
-            "targetBits",
-            "target_bit_width",
-            "targetBitWidth",
-            "actual_bits",
-            "actualBits",
-            "actual_bits_per_weight",
-            "actualBitsPerWeight",
-            "actual_bit_width",
-            "actualBitWidth",
-            "effective_bits",
-            "effectiveBits",
-            "effective_bits_per_weight",
-            "effectiveBitsPerWeight",
-        )
-        is not None
-    )
-    has_group_size = (
-        _mapping_value(
-            quantization,
-            "block_size",
-            "blockSize",
-            "group_size",
-            "groupSize",
-        )
-        is not None
-    )
-    return has_average_bits and has_group_size
-
-
-def _coerce_jang_bool(value: object) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return None
-
-
-def _mapping_value(source: dict[str, object] | None, *keys: str) -> object | None:
-    if not isinstance(source, dict):
-        return None
-    for key in keys:
-        value = source.get(key)
-        if value is not None:
-            return value
-    return None
-
-
-def _jang_modalities_declare_active_media(modalities: object) -> bool:
-    if isinstance(modalities, str):
-        marker = _normalize_jang_marker(modalities)
-        return marker in _JANG_MEDIA_MODALITIES
-    if isinstance(modalities, dict):
-        for key, value in modalities.items():
-            marker = _normalize_jang_marker(key)
-            if marker in _JANG_MEDIA_MODALITIES and _coerce_jang_bool(value) is True:
-                return True
-        return False
-    if isinstance(modalities, (list, tuple, set)):
-        return any(
-            (
-                (_normalize_jang_marker(item) in _JANG_MEDIA_MODALITIES)
-                if isinstance(item, str)
-                else False
-            )
-            for item in modalities
-        )
-    return False
-
-
-def _jang_modalities_declare_no_active_media(modalities: object) -> bool:
-    if not isinstance(modalities, dict):
-        return False
-    saw_disabled_media = False
-    for key, value in modalities.items():
-        marker = _normalize_jang_marker(key)
-        if marker not in _JANG_MEDIA_MODALITIES:
-            continue
-        flag = _coerce_jang_bool(value)
-        if flag is True:
-            return False
-        if flag is False:
-            saw_disabled_media = True
-    return saw_disabled_media
-
-
-def _jang_config_declares_active_media(data: dict[str, object]) -> bool:
-    if _coerce_jang_bool(_mapping_value(data, "has_audio", "hasAudio")) is True:
-        return True
-    if _coerce_jang_bool(_mapping_value(data, "has_image", "hasImage")) is True:
-        return True
-    if _coerce_jang_bool(_mapping_value(data, "has_vision", "hasVision")) is True:
-        return True
-    if _coerce_jang_bool(_mapping_value(data, "has_video", "hasVideo")) is True:
-        return True
-    return _jang_modalities_declare_active_media(
-        _mapping_value(data, "modalities", "modality")
-    )
-
-
-def _jang_capabilities_have_active_multimodal_runtime(
-    capabilities: dict[str, object],
-) -> bool:
-    status = _mapping_value(capabilities, "multimodal_status", "multimodalStatus")
-    if (
-        isinstance(status, str)
-        and status.strip().lower() in _JANG_TEXT_RUNTIME_STATUSES
-    ):
-        return False
-    unwired = _mapping_value(capabilities, "unwired_modalities", "unwiredModalities")
-    return not (isinstance(unwired, (list, tuple, set)) and len(unwired) > 0)
-
-
-def _jang_capabilities_declares_active_media(
-    capabilities: dict[str, object],
-) -> bool:
-    if not _jang_capabilities_have_active_multimodal_runtime(capabilities):
-        return False
-    if (
-        _coerce_jang_bool(_mapping_value(capabilities, "has_vision", "hasVision"))
-        is True
-    ):
-        return True
-    if _coerce_jang_bool(_mapping_value(capabilities, "has_image", "hasImage")) is True:
-        return True
-    if _coerce_jang_bool(_mapping_value(capabilities, "has_video", "hasVideo")) is True:
-        return True
-    if (
-        _coerce_jang_bool(
-            _mapping_value(capabilities, "supports_audio", "supportsAudio")
-        )
-        is True
-    ):
-        return True
-    if (
-        _coerce_jang_bool(
-            _mapping_value(capabilities, "supports_image", "supportsImage")
-        )
-        is True
-    ):
-        return True
-    if (
-        _coerce_jang_bool(
-            _mapping_value(capabilities, "supports_vision", "supportsVision")
-        )
-        is True
-    ):
-        return True
-    if (
-        _coerce_jang_bool(
-            _mapping_value(capabilities, "supports_video", "supportsVideo")
-        )
-        is True
-    ):
-        return True
-    if _jang_modalities_declare_active_media(capabilities.get("modalities")):
-        return True
-    return _jang_modalities_declare_active_media(capabilities.get("modality"))
-
-
-def _jang_capabilities_declare_no_active_media(
-    capabilities: dict[str, object],
-) -> bool:
-    if _jang_modalities_declare_no_active_media(capabilities.get("modalities")):
-        return True
-
-    saw_disabled_media = False
-    for key in (
-        ("has_audio", "hasAudio"),
-        ("has_image", "hasImage"),
-        ("has_vision", "hasVision"),
-        ("has_video", "hasVideo"),
-        ("supports_audio", "supportsAudio"),
-        ("supports_image", "supportsImage"),
-        ("supports_vision", "supportsVision"),
-        ("supports_video", "supportsVideo"),
-    ):
-        flag = _coerce_jang_bool(_mapping_value(capabilities, *key))
-        if flag is True:
-            return False
-        if flag is False:
-            saw_disabled_media = True
-    return saw_disabled_media
-
-
-def _jang_sidecar_has_vision(model_path: Path) -> bool:
-    """Return True when a JANG sidecar declares a vision-capable artifact."""
-    has_sidecar = False
-    payload_path = _effective_model_dir(model_path)
-    for data in _iter_jang_sidecar_objects(model_path):
-        has_sidecar = True
-        if not isinstance(data, dict):
-            return False
-        architecture = data.get("architecture")
-        if (
-            isinstance(architecture, dict)
-            and _coerce_jang_bool(
-                _mapping_value(architecture, "has_vision", "hasVision")
-            )
-            is True
-        ):
-            return True
-        if _jang_config_declares_active_media(data):
-            return True
-        capabilities = data.get("capabilities")
-        if isinstance(capabilities, dict) and _jang_capabilities_declares_active_media(
-            capabilities
-        ):
-            return True
-    return has_sidecar and (
-        (payload_path / "preprocessor_config.json").exists()
-        or (payload_path / "video_preprocessor_config.json").exists()
-        or _jang_model_config_has_active_media_subconfig(payload_path)
-    )
-
-
-def _jang_model_config_has_active_media_subconfig(payload_path: Path) -> bool:
-    config_path = payload_path / "config.json"
-    try:
-        with open(config_path) as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return False
-    if not isinstance(config, dict):
-        return False
-    return any(key in config for key in ("audio_config", "video_config"))
-
-
-def _jang_sidecar_declares_no_active_vision(model_path: Path) -> bool:
-    """Return True when a JANG sidecar explicitly marks media as inactive."""
-
-    for data in _iter_jang_sidecar_objects(model_path):
-        if not isinstance(data, dict):
-            return False
-        if _coerce_jang_bool(_mapping_value(data, "has_vision", "hasVision")) is False:
-            return True
-        if _jang_modalities_declare_no_active_media(data.get("modalities")):
-            return True
-        architecture = data.get("architecture")
-        if (
-            isinstance(architecture, dict)
-            and _coerce_jang_bool(
-                _mapping_value(architecture, "has_vision", "hasVision")
-            )
-            is False
-        ):
-            return True
-        capabilities = data.get("capabilities")
-        if isinstance(
-            capabilities, dict
-        ) and not _jang_capabilities_have_active_multimodal_runtime(capabilities):
-            return True
-        if isinstance(
-            capabilities, dict
-        ) and _jang_capabilities_declare_no_active_media(capabilities):
-            return True
-    return False
-
-
 def _architecture_indicates_causal_lm(architectures: list[str]) -> bool:
     """True when ``architectures`` describe a text causal LM (not mlx-audio STS).
 
@@ -1346,11 +863,9 @@ def detect_model_type(model_path: Path) -> ModelType:
         Model type: "llm", "vlm", "embedding", "reranker", "audio_stt",
         "audio_tts", "audio_sts", or "image"
     """
-    original_model_path = model_path
     if _load_image_manifest(model_path) is not None:
         return "image"
 
-    model_path = _effective_model_dir(model_path)
     config_path = model_path / "config.json"
     if not config_path.exists():
         return "llm"
@@ -1372,7 +887,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     # via yes/no logit scoring. Detected by architecture + model directory name hint.
     for arch in architectures:
         if arch in CAUSAL_LM_RERANKER_ARCHITECTURES and _is_causal_lm_reranker(
-            original_model_path
+            model_path
         ):
             return "reranker"
 
@@ -1381,7 +896,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     # and ship without lm_head weights. Detected by architecture + directory name hint.
     for arch in architectures:
         if arch in CAUSAL_LM_EMBEDDING_ARCHITECTURES and _is_causal_lm_embedding(
-            original_model_path
+            model_path
         ):
             return "embedding"
 
@@ -1391,11 +906,11 @@ def detect_model_type(model_path: Path) -> ModelType:
     # the reranker/embedding hint wins over default VLM classification.
     for arch in architectures:
         if arch in MULTIMODAL_RERANKER_ARCHITECTURES and _is_causal_lm_reranker(
-            original_model_path
+            model_path
         ):
             return "reranker"
         if arch in MULTIMODAL_EMBEDDING_ARCHITECTURES and _is_causal_lm_embedding(
-            original_model_path
+            model_path
         ):
             return "embedding"
 
@@ -1432,16 +947,6 @@ def detect_model_type(model_path: Path) -> ModelType:
         logger.info(f"{model_type} detected as mlx-vlm native text model")
         return "vlm"
 
-    jang_declares_no_vision = _jang_sidecar_declares_no_active_vision(
-        original_model_path
-    )
-    if jang_declares_no_vision:
-        logger.info(
-            "JANG sidecar for %s declares architecture.has_vision=false; "
-            "ignoring vision_config / VLM heuristics",
-            original_model_path,
-        )
-
     # Check for VLM: architectures field
     # Some text-only quants (e.g., unsloth/gemma-4-31b-it-MLX-8bit) keep the VLM
     # architecture name but strip vision_config and vision weights.
@@ -1450,7 +955,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     # three keys we accept (``vision_config``, ``vit_config``,
     # ``mm_vision_tower``).
     for arch in architectures:
-        if arch in VLM_ARCHITECTURES and not jang_declares_no_vision:
+        if arch in VLM_ARCHITECTURES:
             if normalized_type in VLM_MODEL_TYPES and not _has_vision_subconfig(config):
                 logger.info(
                     f"Architecture '{arch}' is a VLM architecture but no "
@@ -1465,7 +970,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     # Text-only quants won't carry a vision sub-config. gemma4_unified and
     # diffusion_gemma are exceptions: they are served by mlx-vlm regardless of
     # vision_config presence in config.json.
-    if normalized_type in VLM_MODEL_TYPES and not jang_declares_no_vision:
+    if normalized_type in VLM_MODEL_TYPES:
         if normalized_type in {"gemma4_unified", "diffusion_gemma"}:
             logger.info(f"{model_type} detected as VLM (mlx-vlm native model)")
             return "vlm"
@@ -1477,12 +982,9 @@ def detect_model_type(model_path: Path) -> ModelType:
             "treating as LLM (text-only quant)"
         )
 
-    if not jang_declares_no_vision and _jang_sidecar_has_vision(original_model_path):
-        return "vlm"
-
     # Check for VLM: presence of a vision sub-config (fallback heuristic).
     # Catch-all for VLMs that aren't yet listed in VLM_MODEL_TYPES.
-    if not jang_declares_no_vision and _has_vision_subconfig(config):
+    if _has_vision_subconfig(config):
         return "vlm"
 
     # Check for audio models — architectures take priority over model_type.
@@ -1699,13 +1201,6 @@ def estimate_model_size(model_path: Path) -> int:
     Returns:
         Estimated memory usage in bytes
     """
-    if _is_jangspec_model_dir(model_path):
-        weight_files = _jangspec_weight_files(model_path)
-        total_size = sum(path.stat().st_size for path in weight_files)
-        if total_size == 0:
-            raise ValueError(f"No model weights found in {model_path}")
-        return int(total_size * 1.05)
-
     total_size = 0
 
     # Primary: safetensors files
@@ -1801,60 +1296,11 @@ def _is_adapter_dir(path: Path) -> bool:
     return (path / "adapter_config.json").exists()
 
 
-def _is_jangspec_model_dir(path: Path) -> bool:
-    """Return True for JANGSpec bundle roots with target-side model metadata."""
-    target = path / "target"
-    return (
-        (path / "jangspec.json").is_file()
-        and (target / "config.json").exists()
-        and (
-            any((target / name).exists() for name in JANG_CONFIG_FILENAMES)
-            or _config_embeds_jang_sidecar(target / "config.json")
-        )
-    )
-
-
-def _jangspec_weight_files(bundle_path: Path) -> list[Path]:
-    """Return non-duplicated JANGSpec hot-core and expert weight files."""
-
-    target_path = bundle_path / "target"
-    weight_files = {
-        *select_safetensors_weight_files(bundle_path),
-        *select_safetensors_weight_files(target_path),
-    }
-
-    # Current JANGSpec bundles include a fat root expert snapshot. Older
-    # streaming bundles retain only the target-side index and expert blobs.
-    if not (bundle_path / "experts.safetensors").is_file() and (
-        target_path / "experts.jsidx"
-    ).is_file():
-        weight_files.update(target_path.glob("experts-*.bin"))
-
-    return sorted(weight_files)
-
-
-def _effective_model_dir(path: Path) -> Path:
-    """Return the payload directory used for config-side discovery reads."""
-    return path / "target" if _is_jangspec_model_dir(path) else path
-
-
-def _config_embeds_jang_sidecar(config_path: Path) -> bool:
-    """Return True when a config.json carries embedded JANG metadata."""
-
-    try:
-        with open(config_path) as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return False
-    return isinstance(config, dict) and isinstance(config.get("jang"), dict)
-
-
 def _is_model_dir(path: Path) -> bool:
     """Check if a directory contains a valid model manifest or config.json."""
     return (
         _load_image_manifest(path) is not None
         or (path / "config.json").exists()
-        or _is_jangspec_model_dir(path)
     ) and not _is_adapter_dir(path)
 
 
@@ -2088,7 +1534,7 @@ def _register_model(
         )
         return
     try:
-        payload_dir = _effective_model_dir(model_dir)
+        payload_dir = model_dir
         engine_type: EngineType
         if _is_unsupported_model(payload_dir):
             logger.info(f"Skipping unsupported model: {model_id}")

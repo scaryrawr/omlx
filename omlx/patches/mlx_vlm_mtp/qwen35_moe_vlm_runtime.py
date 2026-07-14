@@ -490,7 +490,7 @@ def _patch_vlm_outer_model_sanitize(q35moe_outer: Any) -> None:
         )
 
         # MTP-head norms can ship in a different convention than the backbone,
-        # even MIXED within the head (JANG MXFP4 Qwen3.6 bundles keep
+        # even MIXED within the head (some Qwen3.6 bundles keep
         # ``mtp.norm`` in MLX's +1 convention while the per-layer head norms
         # remain raw-HF, mean ~= 0). The backbone-only conv1d signal never
         # shifts those head norms, so every head RMSNorm multiplies by ~0 and

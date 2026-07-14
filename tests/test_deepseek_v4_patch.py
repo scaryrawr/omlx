@@ -4,7 +4,6 @@
 import importlib
 import inspect
 import sys
-import types
 from types import SimpleNamespace
 
 import pytest
@@ -684,28 +683,6 @@ class TestDSV4CanonicalChatEncoder:
         ) == "canonical"
         assert fake.calls[-1]["thinking_mode"] == "chat"
         assert fake.calls[-1]["reasoning_effort"] is None
-
-    def test_encoding_loader_falls_back_to_jang_adapter(self, monkeypatch):
-        from omlx.patches.deepseek_v4 import dsv4_chat_encoder as enc
-
-        sentinel = object()
-        calls = []
-        adapter = types.ModuleType("jang_tools.dsv4.encoding_adapter")
-        adapter._load_encoding_module = lambda encoding_dir=None: (
-            calls.append(encoding_dir) or sentinel
-        )
-        monkeypatch.delenv("DSV4_ENCODING_DIR", raising=False)
-        monkeypatch.setitem(sys.modules, "jang_tools", types.ModuleType("jang_tools"))
-        monkeypatch.setitem(
-            sys.modules, "jang_tools.dsv4", types.ModuleType("jang_tools.dsv4")
-        )
-        monkeypatch.setitem(
-            sys.modules, "jang_tools.dsv4.encoding_adapter", adapter
-        )
-
-        assert enc._load_encoding_dsv4_module(model_path="/missing/dsv4") is sentinel
-        assert calls == [None]
-
 
 class TestChatTemplateModuleRegistration:
     """sys.modules registration so mlx-lm's importlib path picks up our types."""

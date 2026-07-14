@@ -123,7 +123,7 @@ def apply() -> bool:
         # MTP-head norm conventions: raw-HF sources (unsanitized conv1d
         # present) shift every head norm uniformly with the backbone — see
         # the raw-HF branch below. Pre-converted checkpoints can ship MIXED
-        # head conventions (JANG MXFP4 Qwen3.6 bundles keep ``mtp.norm`` in
+        # head conventions (some Qwen3.6 bundles keep ``mtp.norm`` in
         # MLX's +1 convention while the per-layer head norms remain raw-HF),
         # so that branch decides PER-KEY from each weight's own magnitude
         # (raw-HF center ~0, MLX-shifted ~1). Mirrors
@@ -177,8 +177,8 @@ def apply() -> bool:
                         # (raw ~0.87 on 35B-A3B), and mtp.norm (raw ~1.3-1.9),
                         # costing tens of points of draft acceptance.
                         value = value + 1.0
-                    # Pre-converted checkpoints: per-key decision (JANG
-                    # mixed-convention bundles).
+                    # Pre-converted checkpoints: per-key decision for
+                    # mixed-convention bundles.
                     elif _is_oq_tracked_tensor(value):
                         value = _mark_mtp_norm_conditional_add(value)
                     elif _mtp_norm_is_raw_hf(value, should_shift_norm_weights):

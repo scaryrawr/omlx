@@ -33,8 +33,7 @@ def _load_encoding_dsv4_module(
     Lookup order is intentionally narrow and DSV4-specific:
     1. explicit ``encoding_dir``;
     2. ``DSV4_ENCODING_DIR``;
-    3. ``{model_path}/encoding``;
-    4. ``jang_tools.dsv4.encoding_adapter``.
+    3. ``{model_path}/encoding``.
     """
     candidates: list[Path] = []
     if encoding_dir is not None:
@@ -61,15 +60,10 @@ def _load_encoding_dsv4_module(
         logger.info("Loaded canonical DSV4 chat encoder from %s", source)
         return module
 
-    try:
-        from jang_tools.dsv4.encoding_adapter import _load_encoding_module
-    except ImportError as exc:
-        raise RuntimeError(
-            "DSV4 canonical chat encoder unavailable: no encoding_dsv4.py found "
-            "via DSV4_ENCODING_DIR or {model_path}/encoding, and "
-            "jang_tools.dsv4.encoding_adapter is not installed."
-        ) from exc
-    return _load_encoding_module(Path(encoding_dir).expanduser() if encoding_dir else None)
+    raise RuntimeError(
+        "DSV4 canonical chat encoder unavailable: no encoding_dsv4.py found "
+        "via an explicit directory, DSV4_ENCODING_DIR, or {model_path}/encoding."
+    )
 
 
 def _get_encoding(model_path: str | Path | None = None) -> Any:

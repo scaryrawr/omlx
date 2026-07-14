@@ -120,23 +120,6 @@ def _create_mlx_thread_stream() -> Any:
     return stream
 
 
-def _get_mlx_thread_default_stream() -> Any:
-    """Return the current thread's default MLX stream."""
-    return mx.default_stream(mx.default_device())
-
-
-def _model_requires_loader_executor(model: Any) -> bool:
-    """Return True for runtimes that bind lazy work to the loader thread."""
-    candidates = [model, getattr(model, "model", None), getattr(model, "_model", None)]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        module_name = type(candidate).__module__
-        if module_name.startswith("jang_tools.dsv4"):
-            return True
-    return False
-
-
 def get_mlx_executor() -> concurrent.futures.ThreadPoolExecutor:
     """Get or create the global MLX executor (lazy singleton).
 
@@ -242,30 +225,19 @@ class EngineCore:
         self._owns_model = True
 
         self._owns_mlx_executor = True
-        if _model_requires_loader_executor(model):
-            # JANG DSV4 attaches some runtime work to the loader executor's
-            # stream. Running inference on a separate per-engine thread leaves
-            # those arrays bound to a stream that does not exist in the
-            # inference thread ("There is no Stream(gpu, N) in current thread").
-            self._mlx_executor = get_mlx_executor()
-            self._mlx_stream = self._mlx_executor.submit(
-                _get_mlx_thread_default_stream
-            ).result()
-            self._owns_mlx_executor = False
-        else:
-            # Per-engine executor with dedicated mx.Stream (#1248).
-            # Each EngineCore gets its own thread + GPU stream so different
-            # models can run scheduler.step() concurrently. MLX streams must be
-            # created on the same thread that later uses them; creating this on
-            # the server/main thread and using it from the executor raises
-            # "There is no Stream(gpu, N) in current thread".
-            self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
-            )
-            self._mlx_stream = self._mlx_executor.submit(
-                _create_mlx_thread_stream
-            ).result()
+        # Per-engine executor with dedicated mx.Stream (#1248).
+        # Each EngineCore gets its own thread + GPU stream so different
+        # models can run scheduler.step() concurrently. MLX streams must be
+        # created on the same thread that later uses them; creating this on
+        # the server/main thread and using it from the executor raises
+        # "There is no Stream(gpu, N) in current thread".
+        self._mlx_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
+        )
+        self._mlx_stream = self._mlx_executor.submit(
+            _create_mlx_thread_stream
+        ).result()
 
         # Create scheduler with per-engine stream
         scheduler_config = self.config.scheduler_config or SchedulerConfig()
