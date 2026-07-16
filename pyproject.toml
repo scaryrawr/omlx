@@ -53,11 +53,10 @@ dependencies = [
     "regex",
     # mlx-embeddings from latest scaryrawr commit (71329b8)
     "mlx-embeddings @ git+https://github.com/scaryrawr/mlx-embeddings@71329b8a18f02273279ca766afb66ed0665a97f9",
-    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
-    # Keep <5.13 until the broader dependency set gets a dedicated resolver
-    # smoke test with transformers 5.13+. The mlx-lm pin above includes the
-    # known NewlineTokenizer registration fix.
-    "transformers>=5.7.0,<5.13",
+    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required.
+    # Current mlx-vlm requires Transformers 5.14+ for its native text-model
+    # loaders and attention-mask handling.
+    "transformers>=5.14.0",
     # transformers 5.x's tokenization_mistral_common module imports
     # ReasoningEffort from mistral_common (added in 1.10). The audio extras
     # transitively pull mistral-common via mlx-audio[stt], which historically
@@ -103,13 +102,10 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (bd0c77e). Includes the existing
-    # Transformers 5.13 AutoProcessor registration compatibility,
-    # quantized-KV batch fixes, SAM3 conversion handling, generation-batch
-    # alignment, text-model/tool-parser/diffusion/MTP support, and the latest
-    # 1-bit inference, fused greedy-routing, and concurrent thinking-budget
-    # generation fixes.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@bd0c77ea05e7cb224e4722522e215ff906ac6024",
+    # mlx-vlm from latest upstream HEAD (84f4375). Includes native text-model
+    # loaders, Transformers 5.14+ compatibility, shared attention/MLP modules,
+    # tool_choice handling, and async prefill/cache evaluation.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@84f43753380355c0455a2bafb291d4b7cbcf81d1",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
@@ -244,6 +240,10 @@ override-dependencies = [
     # otherwise resolve an older mlx; keep oMLX on the core MLX pin.
     "mlx==0.32.0",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@15b522f593b7ca5fbc0cac6f7572d40859d2d8fe",
+    # mlx-audio's current metadata still caps Transformers below 5.13, but
+    # current mlx-vlm requires 5.14+; its runtime paths are compatible with
+    # the newer tokenizer APIs used by the shared stack.
+    "transformers>=5.14.0",
 ]
 
 [tool.black]
