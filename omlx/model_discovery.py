@@ -263,17 +263,10 @@ RERANKER_ARCHITECTURES = (
 )
 
 # Unsupported model types — detected and skipped during discovery.
-# Only top-level config fields are checked; nested audio_config/tts_config in
-# multimodal models (e.g., MiniCPM-o) won't trigger this.
-# Note: "whisper" and "qwen3_tts" were previously listed here but are now
-# handled as audio types (audio_stt / audio_tts) — see AUDIO_* sets below.
-UNSUPPORTED_MODEL_TYPES: set[str] = {
-    # MTP drafter artifacts are consumed through a parent VLM, not standalone
-    # chat models that mlx-lm can load directly.
-    "gemma4_assistant",
-    "gemma4_unified_assistant",
-    "qwen3_5_mtp",
-}
+# Speculative drafters are intentionally not included here: they must be
+# discoverable as helpers so status endpoints and drafter selectors can expose
+# them, even though a parent model consumes them instead of serving them alone.
+UNSUPPORTED_MODEL_TYPES: set[str] = set()
 
 UNSUPPORTED_ARCHITECTURES: set[str] = set()
 
@@ -675,7 +668,11 @@ def _is_unsupported_model(model_path: Path) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
 
-    architectures = config.get("architectures", [])
+    architectures = config.get("architectures") or []
+    if isinstance(architectures, str):
+        architectures = [architectures]
+    elif not isinstance(architectures, list | tuple | set):
+        architectures = []
     for arch in architectures:
         if arch in UNSUPPORTED_ARCHITECTURES:
             return True
@@ -877,7 +874,11 @@ def detect_model_type(model_path: Path) -> ModelType:
         return "llm"
 
     # Check architectures field for reranker first (more specific)
-    architectures = config.get("architectures", [])
+    architectures = config.get("architectures") or []
+    if isinstance(architectures, str):
+        architectures = [architectures]
+    elif not isinstance(architectures, list | tuple | set):
+        architectures = []
     for arch in architectures:
         if arch in RERANKER_ARCHITECTURES:
             return "reranker"

@@ -1290,6 +1290,32 @@ class TestDiscoverModelsFromDirs:
 class TestUnsupportedModels:
     """Tests for _is_unsupported_model() — audio models are now supported."""
 
+    @pytest.mark.parametrize(
+        ("model_type", "architectures"),
+        [
+            ("gemma4_assistant", ["Gemma4AssistantForCausalLM"]),
+            ("gemma4_unified_assistant", ["Gemma4UnifiedAssistantForCausalLM"]),
+            ("qwen3_5_mtp", None),
+        ],
+    )
+    def test_vlm_mtp_helpers_are_discovered(
+        self, tmp_path, model_type, architectures
+    ):
+        """Assistant/MTP checkpoints must reach status and drafter selectors."""
+        model_dir = tmp_path / model_type
+        model_dir.mkdir()
+        config = {"model_type": model_type}
+        if architectures is not None:
+            config["architectures"] = architectures
+        (model_dir / "config.json").write_text(json.dumps(config))
+        (model_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        models = discover_models(tmp_path)
+
+        assert _is_unsupported_model(model_dir) is False
+        assert models[model_type].is_helper is True
+        assert models[model_type].config_model_type == model_type
+
     def test_whisper_not_unsupported(self, tmp_path):
         """Whisper is now an audio_stt model, not unsupported."""
         config = {
