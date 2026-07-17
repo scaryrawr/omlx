@@ -102,10 +102,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (84f4375). Includes native text-model
-    # loaders, Transformers 5.14+ compatibility, shared attention/MLP modules,
-    # tool_choice handling, and async prefill/cache evaluation.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@84f43753380355c0455a2bafb291d4b7cbcf81d1",
+    # mlx-vlm from latest upstream HEAD (e4a7867). Includes vendor text-model
+    # implementations plus APC/TurboQuant warm-cache layout fixes.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@e4a7867b7a2ba3c51b165256afff55285a58b1d5",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
