@@ -12,6 +12,7 @@ import mlx.core as mx
 import pytest
 
 import omlx.specprefill.target as target_workflow
+from omlx.patches.specprefill import _OffsetAdjustedRoPE
 from omlx.specprefill.planning import plan_specprefill_target
 
 
@@ -67,9 +68,8 @@ def _run(
     model = _Model()
     prompt_cache = [_CacheLayer()]
     selected_array = mx.array(selected_indices)
-    rope_type = type("Rope", (), {"_adjustment": 10})
-    rope = rope_type()
-    attention_module = SimpleNamespace(rope=rope)
+    original_rope = object()
+    attention_module = SimpleNamespace(rope=original_rope)
     attention_layer = SimpleNamespace(self_attn=attention_module)
     model.layers = [attention_layer]
     logger = _Logger()
@@ -114,6 +114,9 @@ def _run(
                 "tokens": list(tokens),
             }
         )
+        rope = _OffsetAdjustedRoPE(attention_module.rope, adjustment=10)
+        attention_module.rope = rope
+        trace["rope"] = rope
         kwargs["progress_callback"](0, len(tokens))
 
     def use_stream(selected_stream: Any):
@@ -133,7 +136,6 @@ def _run(
             "omlx.patches.specprefill._get_attn_module",
             return_value=attention_module,
         ),
-        patch("omlx.patches.specprefill._OffsetAdjustedRoPE", rope_type),
         patch("omlx.patches.specprefill.sparse_prefill", side_effect=sparse_prefill),
     ):
         result = target_workflow.run_specprefill_target_prefill(
@@ -159,7 +161,6 @@ def _run(
             "all_tokens": all_tokens,
             "model": model,
             "prompt_cache": prompt_cache,
-            "rope": rope,
             "selected_indices": selected_array,
             "stream": stream,
         }

@@ -93,6 +93,7 @@ class GenerationOutput:
     diffusion_work_tps: float = 0.0
     generated_at: float | None = None
     generated_until: float | None = None
+    first_token_at: Optional[float] = None
 
 
 class BaseEngine(ABC):
