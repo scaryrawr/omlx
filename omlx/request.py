@@ -286,7 +286,7 @@ class RequestOutput:
     generated_until: float | None = None
     # Timestamp of the very first generated token for this request (perf_counter).
     # Set by non-streaming generate() to allow TTFT / prefill-duration estimation.
-    first_token_at: Optional[float] = None
+    first_token_at: float | None = None
 
     # Tool calls (for Harmony and other models with tool calling support)
     tool_calls: list[dict[str, str]] | None = None
