@@ -105,10 +105,10 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (6d5603b). Includes vendor text-model
-    # implementations, llguidance fused masking, and Qwen3.5 speculative
-    # decoding compatibility.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@6d5603b36902e0742a8273f0b0e6fa4a60d2a201",
+    # mlx-vlm from latest upstream HEAD (84ebae6). Includes vendor text-model
+    # implementations, llguidance fused masking, Qwen3.5 speculative decoding
+    # compatibility, and streaming reasoning classification fixes.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@84ebae6e85fe240151956d0d64814c246ea0d75f",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
