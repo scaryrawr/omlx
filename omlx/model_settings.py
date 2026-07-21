@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, Optional
 
 from .model_profiles import (
     MODEL_SPECIFIC_PROFILE_FIELDS,
+    UNIVERSAL_FIELDS_SET,
     filter_profile_fields,
     filter_universal_fields,
     slugify_profile_api_name,
@@ -1036,9 +1037,16 @@ class ModelSettingsManager:
             current = self._settings.get(model_id)
             if current is None:
                 current = ModelSettings()
-            merged = current.to_dict()
-            for k, v in profile_settings.items():
-                merged[k] = v
+            # Universal fields: the profile is authoritative — absent keys
+            # reset to ModelSettings defaults. Model-specific fields keep
+            # additive overlay so preset/template chips (materialized as
+            # universal-only profiles) never disturb engine settings.
+            merged = {
+                k: v
+                for k, v in current.to_dict().items()
+                if k not in UNIVERSAL_FIELDS_SET
+            }
+            merged.update(filter_profile_fields(profile_settings))
             merged["active_profile_name"] = name
             if settings_sanitizer is not None:
                 settings_sanitizer(merged)
@@ -1204,21 +1212,16 @@ def forced_ct_keys(settings: "ModelSettings | None") -> set[str]:
     return set(settings.forced_ct_kwargs or [])
 
 
-def merge_chat_template_kwargs(
+def merge_chat_template_request_kwargs(
     settings: "ModelSettings | None",
     request_ct_kwargs: "dict[str, Any] | None" = None,
-    *,
-    thinking_budget: "int | None" = None,
-    preserve_thinking_default: "bool | None" = None,
 ) -> "dict[str, Any]":
-    """Resolve the effective chat_template_kwargs for prompt rendering.
+    """Merge model/profile defaults with per-request chat-template kwargs.
 
     Precedence, lowest to highest:
       1. ``settings.chat_template_kwargs``
       2. the dedicated ``enable_thinking`` / ``preserve_thinking`` toggles
       3. per-request kwargs, except keys listed in ``forced_ct_kwargs``
-      4. thinking budget activation when ``enable_thinking`` is still unset
-      5. the model's preserve-thinking default when it is supported and unset
     """
     merged: dict[str, Any] = {}
     forced_keys = forced_ct_keys(settings)
@@ -1237,6 +1240,27 @@ def merge_chat_template_kwargs(
         for key, value in request_ct_kwargs.items():
             if key not in forced_keys:
                 merged[key] = value
+
+    return merged
+
+
+def merge_chat_template_kwargs(
+    settings: "ModelSettings | None",
+    request_ct_kwargs: "dict[str, Any] | None" = None,
+    *,
+    thinking_budget: "int | None" = None,
+    preserve_thinking_default: "bool | None" = None,
+) -> "dict[str, Any]":
+    """Resolve the effective chat_template_kwargs for prompt rendering.
+
+    Precedence, lowest to highest:
+      1. ``settings.chat_template_kwargs``
+      2. the dedicated ``enable_thinking`` / ``preserve_thinking`` toggles
+      3. per-request kwargs, except keys listed in ``forced_ct_kwargs``
+      4. thinking budget activation when ``enable_thinking`` is still unset
+      5. the model's preserve-thinking default when it is supported and unset
+    """
+    merged = merge_chat_template_request_kwargs(settings, request_ct_kwargs)
 
     if (
         thinking_budget is None
