@@ -505,6 +505,7 @@ class Model(nn.Module):
         weights = self._remap_router_weights(weights)
         weights = self._stack_experts(weights)
         weights = self._repack_compressed_nvfp4_weights(weights)
+        weights = self._repack_compressed_mxfp4_weights(weights)
         weights = self._unpack_compressed_tensors(weights)
         weights = self._dequantize_fp8_block_weights(weights)
         return {
@@ -578,6 +579,30 @@ class Model(nn.Module):
             weights[f"{base}weight"] = weights.pop(pk).view(mx.uint32)
             weights[f"{base}scales"] = scales
             weights[f"{base}biases"] = (-8 * scales).astype(scales.dtype)
+            weights.pop(f"{base}weight_shape", None)
+        return weights
+
+    def _repack_compressed_mxfp4_weights(self, weights):
+        """Convert compressed-tensors MXFP4 pairs to MLX's native layout.
+
+        MXFP4 stores two E2M1 codes per uint8 ``weight_packed`` element and an
+        E8M0 exponent byte per group in ``weight_scale``. MLX uses the same
+        layouts after viewing the packed codes as uint32, so preserve the scale
+        bytes instead of treating them as affine scales.
+        """
+        packed_keys = [k for k in weights if k.endswith(".weight_packed")]
+        for pk in packed_keys:
+            base = pk[: -len("weight_packed")]
+            scale_key = f"{base}weight_scale"
+            if (
+                scale_key not in weights
+                or weights[scale_key].dtype != mx.uint8
+                or f"{base}weight_global_scale" in weights
+                or f"{base}weight_zero_point" in weights
+            ):
+                continue
+            weights[f"{base}weight"] = weights.pop(pk).view(mx.uint32)
+            weights[f"{base}scales"] = weights.pop(scale_key)
             weights.pop(f"{base}weight_shape", None)
         return weights
 

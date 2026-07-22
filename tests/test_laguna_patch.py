@@ -632,6 +632,50 @@ def test_sanitize_repacks_compressed_nvfp4_experts():
         assert mx.array_equal(out[f"{stacked}.scales"][e], scales).item()
 
 
+def test_sanitize_repacks_compressed_mxfp4_experts():
+    """MXFP4 scale bytes stay E8M0 values instead of becoming affine biases."""
+    from omlx.patches.laguna import apply_laguna_patch
+
+    apply_laguna_patch()
+
+    from mlx_lm.models import laguna
+
+    args = laguna.ModelArgs(
+        **_minimal_laguna_config(
+            num_experts=2,
+            num_experts_per_tok=1,
+            moe_intermediate_size=128,
+            shared_expert_intermediate_size=128,
+        )
+    )
+    model = laguna.Model(args)
+
+    weights = {}
+    expected = {}
+    for expert_idx in range(2):
+        w_true = (
+            (mx.arange(128 * 64).reshape(128, 64) % 23) - 11
+        ).astype(mx.float32) / (3.0 + expert_idx)
+        packed, scales = mx.quantize(w_true, group_size=32, bits=4, mode="mxfp4")
+        expected[expert_idx] = (packed, scales)
+        base = f"model.layers.0.mlp.experts.{expert_idx}.gate_proj"
+        weights[f"{base}.weight_packed"] = packed.view(mx.uint8)
+        weights[f"{base}.weight_scale"] = scales
+
+    out = model.sanitize(weights)
+
+    stacked = "model.layers.0.mlp.switch_mlp.gate_proj"
+    assert out[f"{stacked}.weight"].dtype == mx.uint32
+    assert out[f"{stacked}.scales"].dtype == mx.uint8
+    assert f"{stacked}.biases" not in out
+    assert not any(k.endswith(".weight_packed") for k in out)
+    assert not any(k.endswith(".weight_scale") for k in out)
+    for expert_idx in range(2):
+        packed, scales = expected[expert_idx]
+        assert mx.array_equal(out[f"{stacked}.weight"][expert_idx], packed).item()
+        assert mx.array_equal(out[f"{stacked}.scales"][expert_idx], scales).item()
+
+
 def test_normalize_laguna_compressed_quant_formats():
     """Each compressed-tensors format maps to its mlx quantization target."""
     from omlx.utils.model_loading import normalize_laguna_compressed_quant
@@ -650,6 +694,11 @@ def test_normalize_laguna_compressed_quant_formats():
         cfg("float-quantized", {"num_bits": 8, "type": "float"})
     )
     assert fp8["quantization"] == {"group_size": 64, "bits": 8}
+
+    mxfp4 = normalize_laguna_compressed_quant(
+        cfg("mxfp4-pack-quantized", {"num_bits": 4, "group_size": 32})
+    )
+    assert mxfp4["quantization"] == {"group_size": 32, "bits": 4, "mode": "mxfp4"}
 
     nvfp4 = normalize_laguna_compressed_quant(
         cfg("nvfp4-pack-quantized", {"num_bits": 4, "group_size": 16})
