@@ -617,13 +617,20 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
 
     The check is conservative: even when the config declares MTP layers
     we also peek at the safetensors weight index to verify that the
-    converter actually preserved the ``mtp.*`` tensors. Default mlx-lm
-    converters strip them; PR 990 ships a separate path that keeps them.
+    converter actually preserved the MTP tensors, using the loader's
+    ``_checkpoint_has_mtp_weights`` so native nextn layouts
+    (``model.layers.<num_hidden_layers + i>.*``, e.g. GLM-5.2) count as
+    present (issue #2326). Default mlx-lm converters strip ``mtp.*``;
+    PR 990 ships a separate path that keeps them.
     """
     import json
     from pathlib import Path
 
-    from ..utils.model_loading import _has_mtp_heads, _is_mtp_compatible
+    from ..utils.model_loading import (
+        _checkpoint_has_mtp_weights,
+        _has_mtp_heads,
+        _is_mtp_compatible,
+    )
 
     is_paro, paro_reason = _paroquant_compat_for_model(model_info)
     if is_paro:
@@ -647,11 +654,11 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
             f"model_type={model_type!r} is not on the MTP whitelist "
             "(supported: qwen3_5*, qwen3_6*, deepseek_v4*, glm_moe_dsa)"
         )
-    if not _model_has_mtp_weight_tensors(Path(model_path)):
+    if not _checkpoint_has_mtp_weights(model_path):
         return False, (
-            "Config declares MTP layers but the converted weights are missing "
-            "mtp.* tensors. Re-convert from HF with a converter that preserves "
-            "MTP weights."
+            "Config declares MTP layers but the weight files contain neither "
+            "mtp.* tensors nor native nextn layers. Re-convert from HF with a "
+            "converter that preserves MTP weights."
         )
     return True, ""
 
@@ -2409,13 +2416,17 @@ async def update_model_settings(
         if new_mtp_enabled:
             # Compatibility check: the model needs MTP heads in config.json AND
             # the model_type must be one PR 990 / PR 15 covers AND the weight
-            # files must actually contain mtp.* tensors. The last check is
-            # the one that catches mlx-community converted weights where the
-            # default sanitize path stripped the MTP heads.
+            # files must actually contain MTP tensors (mtp.* or the native
+            # nextn layers). The last check is the one that catches
+            # mlx-community converted weights where the default sanitize
+            # path stripped the MTP heads.
             import json
             from pathlib import Path
 
-            from ..utils.model_loading import _is_mtp_compatible
+            from ..utils.model_loading import (
+                _checkpoint_has_mtp_weights,
+                _is_mtp_compatible,
+            )
 
             cfg_path = Path(entry.model_path) / "config.json"
             if not cfg_path.exists():
@@ -2444,14 +2455,14 @@ async def update_model_settings(
                         "GLM-5.2 checkpoint with MTP heads."
                     ),
                 )
-            if not _model_has_mtp_weight_tensors(Path(entry.model_path)):
+            if not _checkpoint_has_mtp_weights(entry.model_path):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "Config declares MTP layers but the converted weights are "
-                        "missing mtp.* tensors. Re-convert from HF with a converter "
-                        "that preserves MTP weights. The default "
-                        "mlx-lm sanitize() path strips them."
+                        "Config declares MTP layers but the weight files contain "
+                        "neither mtp.* tensors nor native nextn layers. Re-convert "
+                        "from HF with a converter that preserves MTP weights. The "
+                        "default mlx-lm sanitize() path strips them."
                     ),
                 )
             # Mutual exclusion with DFlash — ModelSettings.__post_init__

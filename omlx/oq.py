@@ -368,6 +368,11 @@ def _is_vision_tensor(name: str) -> bool:
         for p in (
             "visual.",
             "vision_",
+            # DeepSeek-OCR / Unlimited-OCR SAM encoder. Kept full precision like
+            # the rest of the vision tower: its neck/net_2/net_3 are nn.Conv2d,
+            # which mlx cannot quantize at all, so quantizing them yields
+            # unloadable .scales/.biases the model has no slot for.
+            "sam_model",
             "patch_embed",
             "pos_embed",
             "image_newline",
@@ -2114,6 +2119,14 @@ def validate_quantizable(config: dict) -> bool:
             # FP8 models are full-precision weights stored in FP8 format
             if quant_method == "fp8":
                 return True
+            # compressed-tensors float-quantized (e.g. Laguna FP8) is the same
+            # situation with a different container: fp8 weights + block scales
+            # that the lazy index dequantizes on the fly.
+            if quant_method == "compressed-tensors":
+                group = qc.get("config_groups", {}).get("group_0", {})
+                fmt = qc.get("format") or group.get("format")
+                if fmt == "float-quantized":
+                    return True
             # QAT models record training-time quant_type but weights are fp16/bf16
             if _is_qat_unquantized_config(qc):
                 return True
@@ -2597,9 +2610,16 @@ def _build_model_sanitizer(config: dict, text_only: bool = False):
         or None if the model class can't be loaded.
     """
     architectures = config.get("architectures", [])
+    # Detect VLMs by the canonical vision-subconfig predicate (used everywhere
+    # else in oq.py), not just the ForConditionalGeneration arch name. OCR VLMs
+    # like baidu/Unlimited-OCR (UnlimitedOCRForCausalLM) and DeepSeek-OCR
+    # (DeepseekOCR2ForCausalLM) carry a vision_config but a ForCausalLM arch, so
+    # the arch-only heuristic dropped them to the mlx-lm sanitize path (which
+    # can't resolve their model_type) and shipped unsanitized vision weights.
     is_vlm = (
-        any("ForConditionalGeneration" in a for a in architectures) and not text_only
-    )
+        any("ForConditionalGeneration" in a for a in architectures)
+        or _has_vision_subconfig(config)
+    ) and not text_only
 
     if is_vlm:
         try:
@@ -2695,7 +2715,16 @@ def _build_model_sanitizer(config: dict, text_only: bool = False):
                 _lm_proxy = type("_LMProxy", (), {})()
                 _lm_proxy.args = text_config
                 proxy.language_model = _lm_proxy
-                w = model_module.Model.sanitize(proxy, weights)
+                # Model.sanitize is an instance method (self, weights) for most
+                # VLMs, but a @staticmethod (weights) for the DeepSeek-OCR family
+                # (deepseekocr / unlimited_ocr). Dispatch on the arg count so the
+                # proxy is only passed when sanitize actually takes a self.
+                _san = model_module.Model.sanitize
+                _san_argc = getattr(getattr(_san, "__code__", None), "co_argcount", 2)
+                if _san_argc >= 2:
+                    w = _san(proxy, weights)
+                else:
+                    w = _san(weights)
 
                 w = sanitize_weights(model_module.VisionModel, w, vision_config)
                 w = sanitize_weights(model_module.LanguageModel, w, text_config)
@@ -2732,6 +2761,16 @@ def _build_model_sanitizer(config: dict, text_only: bool = False):
                 apply_deepseek_v4_patch()
             except Exception as patch_err:
                 logger.debug(f"deepseek_v4 base patch not applied: {patch_err}")
+
+        # Laguna is likewise vendored into ``sys.modules`` by its pre-load
+        # patch; register it so sanitizer/proxy builds resolve the class.
+        if config.get("model_type") == "laguna":
+            try:
+                from omlx.patches.laguna import apply_laguna_patch
+
+                apply_laguna_patch()
+            except Exception as patch_err:
+                logger.debug(f"laguna patch not applied: {patch_err}")
 
         # Apply mlx-lm MTP patch so the patched __init__/sanitize handle
         # mtp.* tensors correctly. Idempotent — apply() is a no-op once
@@ -3022,6 +3061,17 @@ class _LazyTensorIndex:
                     seen.add(wk)
             elif k.endswith(".scale"):
                 wk = k[: -len(".scale")] + ".weight"
+                if (
+                    wk in self._index
+                    and wk not in seen
+                    and self._index[wk][5] in _FP8_WEIGHT_DTYPES
+                ):
+                    self._fp8_pairs[wk] = k
+                    seen.add(wk)
+            elif k.endswith(".weight_scale"):
+                # compressed-tensors float-quantized (e.g. Laguna FP8):
+                # X.weight (F8_E4M3) + X.weight_scale (f32 block scales).
+                wk = k[: -len("_scale")]
                 if (
                     wk in self._index
                     and wk not in seen
