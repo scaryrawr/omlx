@@ -104,10 +104,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (c9e27b08). Includes vendor text-model
-    # implementations, llguidance fused masking, Qwen3.5 speculative decoding
-    # compatibility, OpenAI reasoning controls, and PIL video-frame handling.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@c9e27b08311f9c1f38690c46034b04c7598d73ee",
+    # mlx-vlm from latest upstream HEAD (336795b7). Adds native Laguna S
+    # support while retaining the current text-model and media integrations.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@336795b752ab5baa113f063faf5dec1ec49cab47",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
@@ -123,7 +122,7 @@ grammar = [
 image = [
     # Image generation via mflux; may pull heavy transitive deps such as torch.
     # Pin to scaryrawr/mflux for Krea 2 support and MLX 0.32 compatibility.
-    "mflux @ git+https://github.com/scaryrawr/mflux@5c948a61e7e7c749b9248d54495191433fc90d37",
+    "mflux @ git+https://github.com/scaryrawr/mflux@58cc3569484727e8f7ab28e73632f78a5b92989a",
 ]
 mcp = [
     "mcp>=1.5.0",
@@ -132,12 +131,13 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from latest upstream main commit (64e8416) with MOSS-Music
-    # support, MOSS-TD performance fixes, v0.4.5 metadata, and tts/stt/sts extras.
+    # mlx-audio from latest upstream main commit (50a82018) with Granite
+    # Speech NAR and STS performance fixes, S3Gen sanitization checks, and
+    # tts/stt/sts extras.
     # tts extra: mistral-common[audio], sentencepiece
     # stt extra: sentencepiece
     # sts extra: sentencepiece, webrtcvad, setuptools<81
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@64e8416c303fb3b3463dab8eb4ebd78c55a87c1a",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@50a820186edf04a21ccbd2cedb01c2b3a75fbae0",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
