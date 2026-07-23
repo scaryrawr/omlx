@@ -134,7 +134,7 @@ def normalize_laguna_compressed_quant(cfg: dict) -> dict:
 
     mlx-lm's legacy compressed-tensors handling assumes int4 affine
     ``{group_size: 32, bits: 4}``, which is wrong for Laguna's float-quantized
-    (FP8), mxfp4-pack-quantized, and nvfp4-pack-quantized checkpoints. Setting
+    (FP8) and nvfp4-pack-quantized checkpoints. Setting
     ``config["quantization"]`` short-circuits that legacy branch; the vendored
     Laguna ``sanitize`` converts the tensors to match these settings.
 
@@ -154,12 +154,6 @@ def normalize_laguna_compressed_quant(cfg: dict) -> dict:
     if fmt == "float-quantized":
         # FP8 block weights are requantized to 8-bit affine by sanitize.
         cfg["quantization"] = {"group_size": 64, "bits": 8}
-    elif fmt == "mxfp4-pack-quantized":
-        cfg["quantization"] = {
-            "group_size": weights.get("group_size", 32),
-            "bits": weights.get("num_bits", 4),
-            "mode": "mxfp4",
-        }
     elif fmt == "nvfp4-pack-quantized":
         cfg["quantization"] = {
             "group_size": weights.get("group_size", 16),
