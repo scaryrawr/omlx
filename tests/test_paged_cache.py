@@ -134,6 +134,7 @@ class TestCacheBlock:
     def test_default_values(self):
         """Test default values on initialization."""
         block = CacheBlock(block_id=0)
+        assert not hasattr(block, "__dict__")
         assert block.block_id == 0
         assert block.ref_count == 0
         assert block.block_hash is None
@@ -429,6 +430,7 @@ class TestBlockTable:
     def test_default_values(self):
         """Test default values."""
         table = BlockTable(request_id="req-001")
+        assert not hasattr(table, "__dict__")
         assert table.request_id == "req-001"
         assert table.block_ids == []
         assert table.num_tokens == 0

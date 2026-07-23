@@ -4563,6 +4563,36 @@ class TestOutputParserSmoke:
 
             return parse_tool_call(text, tools)
 
+    def test_cumulative_token_ids_are_only_materialized_on_finish(self, mock_model):
+        tokenizer = self._GemmaTokenizer({11: "hello", 12: " world"})
+        scheduler = Scheduler(model=mock_model, tokenizer=tokenizer)
+        request = Request(
+            request_id="token-snapshot-req",
+            prompt="prompt",
+            sampling_params=SamplingParams(max_tokens=2),
+            prompt_token_ids=[1],
+            num_prompt_tokens=1,
+            status=RequestStatus.RUNNING,
+            batch_uid=99,
+        )
+        scheduler.running[request.request_id] = request
+        scheduler.requests[request.request_id] = request
+        scheduler.uid_to_request_id[99] = request.request_id
+        scheduler.request_id_to_uid[request.request_id] = 99
+
+        responses = [
+            type("Resp", (), {"uid": 99, "token": 11, "finish_reason": None})(),
+            type("Resp", (), {"uid": 99, "token": 12, "finish_reason": "length"})(),
+        ]
+
+        outputs, finished_ids = scheduler._process_batch_responses(responses)
+
+        assert finished_ids == {"token-snapshot-req"}
+        assert outputs[0].new_token_ids == [11]
+        assert outputs[0].output_token_ids == []
+        assert outputs[-1].new_token_ids == [12]
+        assert outputs[-1].output_token_ids == [11, 12]
+
     def test_gemma4_session_selected_and_markers_hidden(self, mock_model):
         mock_model.config.model_type = "gemma4"
         tokenizer = self._GemmaTokenizer(

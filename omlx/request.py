@@ -268,7 +268,7 @@ class RequestOutput:
     # New tokens generated in this step
     new_token_ids: list[int] = field(default_factory=list)
     new_text: str = ""
-    # Cumulative output
+    # Cumulative output, materialized on the terminal output.
     output_token_ids: list[int] = field(default_factory=list)
     output_text: str = ""
     # Status

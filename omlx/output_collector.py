@@ -129,38 +129,38 @@ class RequestOutputCollector:
             new: The new output to merge
 
         Returns:
-            Merged RequestOutput
+            The existing collector-owned output, updated in place.
         """
-        # Combine new tokens
-        merged_new_token_ids = existing.new_token_ids + new.new_token_ids
-        merged_new_text = existing.new_text + new.new_text
-
-        return RequestOutput(
-            request_id=new.request_id,
-            new_token_ids=merged_new_token_ids,
-            new_text=merged_new_text,
-            output_token_ids=new.output_token_ids,  # Use latest cumulative
-            output_text=new.output_text,  # Use latest cumulative
-            finished=new.finished,
-            finish_reason=new.finish_reason,
-            prompt_tokens=new.prompt_tokens,
-            completion_tokens=new.completion_tokens,
-            generated_at=(
-                existing.generated_at
-                if existing.generated_at is not None
-                else new.generated_at
-            ),
-            generated_until=(
-                new.generated_until
-                if new.generated_until is not None
-                else existing.generated_until
-            ),
-            tool_calls=new.tool_calls,  # Preserve tool_calls for Harmony models
-            cached_tokens=new.cached_tokens,
-            error=new.error or existing.error,
-            error_code=new.error_code or existing.error_code,
-            error_metadata=new.error_metadata or existing.error_metadata,
+        existing.new_token_ids.extend(new.new_token_ids)
+        existing.new_text += new.new_text
+        existing.request_id = new.request_id
+        existing.output_token_ids = new.output_token_ids
+        existing.output_text = new.output_text
+        existing.finished = new.finished
+        existing.finish_reason = new.finish_reason
+        existing.prompt_tokens = new.prompt_tokens
+        existing.completion_tokens = new.completion_tokens
+        existing.generated_at = (
+            existing.generated_at
+            if existing.generated_at is not None
+            else new.generated_at
         )
+        existing.generated_until = (
+            new.generated_until
+            if new.generated_until is not None
+            else existing.generated_until
+        )
+        existing.first_token_at = (
+            existing.first_token_at
+            if existing.first_token_at is not None
+            else new.first_token_at
+        )
+        existing.tool_calls = new.tool_calls
+        existing.cached_tokens = new.cached_tokens
+        existing.error = new.error or existing.error
+        existing.error_code = new.error_code or existing.error_code
+        existing.error_metadata = new.error_metadata or existing.error_metadata
+        return existing
 
     def clear(self) -> None:
         """Clear any pending output."""

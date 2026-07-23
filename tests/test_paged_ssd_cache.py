@@ -118,6 +118,7 @@ class TestPagedSSDBlockMetadata:
             model_name="test-model",
         )
 
+        assert not hasattr(metadata, "__dict__")
         assert metadata.block_hash == b"test_hash_bytes_1234"
         assert metadata.file_size == 1024
         assert metadata.token_count == 64

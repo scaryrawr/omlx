@@ -1,8 +1,10 @@
 import json
 import math
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+import mlx.core as mx
 import numpy as np
 from PIL import Image
 from transformers.feature_extraction_utils import BatchFeature
@@ -241,6 +243,7 @@ class PixtralImageProcessor(ImageProcessingMixin):
 
     def preprocess(self, images: ImageInput, **kwargs) -> BatchFeature:
         return_tensors = kwargs.pop("return_tensors", None)
+        use_mlx = return_tensors == "mlx"
         size = _size_to_pair(kwargs.pop("size", self.size))
         patch_size = _patch_size_to_pair(kwargs.pop("patch_size", self.patch_size))
         do_resize = kwargs.pop("do_resize", self.do_resize)
@@ -250,6 +253,16 @@ class PixtralImageProcessor(ImageProcessingMixin):
         image_mean = kwargs.pop("image_mean", self.image_mean)
         image_std = kwargs.pop("image_std", self.image_std)
         resample = kwargs.pop("resample", self.resample)
+        mean = (
+            mx.array(image_mean, dtype=mx.float32)
+            if use_mlx
+            else np.array(image_mean, dtype=np.float32)
+        )
+        std = (
+            mx.array(image_std, dtype=mx.float32)
+            if use_mlx
+            else np.array(image_std, dtype=np.float32)
+        )
 
         pixel_values = []
         image_sizes = []
@@ -264,14 +277,20 @@ class PixtralImageProcessor(ImageProcessingMixin):
                     (target_size[1], target_size[0]), resample=resample
                 )
 
-            image_array = np.array(pil_image).astype(np.float32)
+            image_array = np.asarray(pil_image)
+            if use_mlx:
+                image_array = mx.array(image_array).astype(mx.float32)
+            else:
+                image_array = image_array.astype(np.float32)
             if do_rescale:
                 image_array *= rescale_factor
             if do_normalize:
-                mean = np.array(image_mean, dtype=np.float32)
-                std = np.array(image_std, dtype=np.float32)
                 image_array = (image_array - mean) / std
-            image_array = image_array.transpose(2, 0, 1)
+            image_array = (
+                mx.transpose(image_array, (2, 0, 1))
+                if use_mlx
+                else image_array.transpose(2, 0, 1)
+            )
 
             pixel_values.append(image_array)
             image_sizes.append(target_size)
@@ -281,8 +300,9 @@ class PixtralImageProcessor(ImageProcessingMixin):
 
         max_height = max(image.shape[1] for image in pixel_values)
         max_width = max(image.shape[2] for image in pixel_values)
+        pad = mx.pad if use_mlx else np.pad
         padded_images = [
-            np.pad(
+            pad(
                 image,
                 (
                     (0, 0),
@@ -292,13 +312,18 @@ class PixtralImageProcessor(ImageProcessingMixin):
             )
             for image in pixel_values
         ]
+        stacked = (
+            mx.stack(padded_images)
+            if use_mlx
+            else np.stack(padded_images).astype(np.float32)
+        )
 
         return BatchFeature(
             data={
-                "pixel_values": np.stack(padded_images).astype(np.float32),
+                "pixel_values": stacked,
                 "image_sizes": image_sizes,
             },
-            tensor_type=return_tensors,
+            tensor_type=None if use_mlx else return_tensors,
         )
 
 

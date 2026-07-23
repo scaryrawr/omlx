@@ -601,17 +601,32 @@ def select_chunks(
         sorted mx.array of kept token indices
     """
     M = importance.shape[0]
+    if M == 0:
+        return mx.array([], dtype=mx.int32)
     if keep_pct >= 1.0:
         return mx.arange(M)
 
     n_chunks = math.ceil(M / chunk_size)
     keep_n = max(1, math.ceil(n_chunks * keep_pct))
 
-    chunk_scores = []
-    for i in range(n_chunks):
-        start = i * chunk_size
-        end = min(start + chunk_size, M)
-        chunk_scores.append(mx.mean(importance[start:end]).item())
+    full_chunks, remainder = divmod(M, chunk_size)
+    score_parts = []
+    if full_chunks:
+        score_parts.append(
+            mx.mean(
+                importance[: full_chunks * chunk_size].reshape(
+                    full_chunks, chunk_size
+                ),
+                axis=1,
+            )
+        )
+    if remainder:
+        score_parts.append(mx.mean(importance[full_chunks * chunk_size :]).reshape(1))
+
+    # Transfer all scores once instead of synchronizing MLX once per chunk.
+    chunk_scores = (
+        score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts)
+    ).tolist()
 
     top_chunks = sorted(range(n_chunks), key=lambda i: chunk_scores[i], reverse=True)[
         :keep_n

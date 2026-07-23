@@ -123,7 +123,7 @@ def compute_block_hash(
 # KVCacheBlock - Following vLLM's design
 # =============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class CacheBlock:
     """
     KV cache block metadata following vLLM's design.
@@ -442,7 +442,7 @@ class BlockHashToBlockMap:
 # BlockTable - Per-request block mapping
 # =============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class BlockTable:
     """
     Per-request block table mapping logical to physical blocks.

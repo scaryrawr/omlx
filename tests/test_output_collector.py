@@ -364,6 +364,7 @@ class TestRequestOutputCollectorMergeOutputs:
 
         result = collector._merge_outputs(existing, new)
 
+        assert result is existing
         assert result.new_token_ids == [100, 101, 102]
         assert result.new_text == "Hello world"
         assert result.output_token_ids == [100, 101, 102]  # Uses latest
@@ -422,6 +423,7 @@ class TestRequestOutputCollectorMergeOutputs:
             completion_tokens=1,
             generated_at=10.0,
             generated_until=10.0,
+            first_token_at=9.5,
         )
         new = RequestOutput(
             request_id="test-001",
@@ -429,12 +431,14 @@ class TestRequestOutputCollectorMergeOutputs:
             completion_tokens=2,
             generated_at=11.0,
             generated_until=11.0,
+            first_token_at=10.5,
         )
 
         result = collector._merge_outputs(existing, new)
 
         assert result.generated_at == 10.0
         assert result.generated_until == 11.0
+        assert result.first_token_at == 9.5
 
 
 class TestRequestOutputCollectorHasWaitingConsumers:

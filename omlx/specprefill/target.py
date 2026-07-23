@@ -113,9 +113,12 @@ def run_specprefill_target_prefill(
         selected = selected_indices
         # BatchGenerator processes the generation-kickoff token separately.
         if plan.remove_kickoff_index:
-            selected_indices_list = selected.tolist()
-            selected_indices_list.remove(generation_kickoff_index)
-            selected = mx.array(sorted(selected_indices_list))
+            selected_indices_list = plan.sparse_selected_indices
+            if selected_indices_list is None:
+                selected_indices_list = selected.tolist()
+                selected_indices_list.remove(generation_kickoff_index)
+                selected_indices_list.sort()
+            selected = mx.array(selected_indices_list)
 
         with mx.stream(stream):
             sparse_prefill(

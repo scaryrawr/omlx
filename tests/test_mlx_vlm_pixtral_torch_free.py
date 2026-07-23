@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import mlx.core as mx
 import numpy as np
 import pytest
 from PIL import Image
@@ -80,6 +81,24 @@ class TestVendoredImageProcessor:
 
         assert output["image_sizes"] == [(28, 42), (28, 28)]
         assert output["pixel_values"].shape == (2, 3, 28, 42)
+
+    def test_mlx_preprocessing_matches_numpy_output(self):
+        image_processor = PixtralImageProcessor(
+            size={"longest_edge": 40},
+            patch_size=14,
+        )
+        images = [[_make_image(31, 55), _make_image(20, 20)]]
+
+        numpy_output = image_processor(images)
+        mlx_output = image_processor(images, return_tensors="mlx")
+        mx.eval(mlx_output["pixel_values"])
+
+        assert isinstance(mlx_output["pixel_values"], mx.array)
+        assert mlx_output["image_sizes"] == numpy_output["image_sizes"]
+        np.testing.assert_array_equal(
+            np.asarray(mlx_output["pixel_values"]),
+            numpy_output["pixel_values"],
+        )
 
     def test_split_image_sizes_by_sample_handles_flat_sizes(self):
         images = [[_make_image(), _make_image()], [_make_image()]]
@@ -170,6 +189,7 @@ class TestPatchInstallation:
         assert tok_mock.call_args.kwargs.get("fix_mistral_regex") is True
 
         output = processor(text=["[IMG]Describe"], images=[[_make_image()]])
+        assert isinstance(output["pixel_values"], mx.array)
         assert output["pixel_values"].shape[0] == 1
         assert output["pixel_values"].shape[1] == 3
         assert int(output["image_sizes"][0, 0].item()) % 28 == 0

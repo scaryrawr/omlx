@@ -98,7 +98,9 @@ class PixtralProcessor(ProcessorMixin):
             ]
 
             image_inputs = self.image_processor(
-                images, patch_size=self.patch_size * self.spatial_merge_size
+                images,
+                patch_size=self.patch_size * self.spatial_merge_size,
+                return_tensors="mlx",
             )
 
             if text is not None:

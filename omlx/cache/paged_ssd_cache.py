@@ -680,7 +680,7 @@ def parse_size(size_str: str) -> int:
         raise ValueError(f"Invalid size string: {size_str}")
 
 
-@dataclass
+@dataclass(slots=True)
 class PagedSSDBlockMetadata:
     """
     Metadata for a block stored on SSD.
