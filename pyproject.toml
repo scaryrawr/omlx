@@ -104,9 +104,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (336795b7). Adds native Laguna S
+    # mlx-vlm from latest upstream HEAD (b739dfa4). Adds native Laguna S
     # support while retaining the current text-model and media integrations.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@336795b752ab5baa113f063faf5dec1ec49cab47",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@b739dfa4b681951acd4a2d439f343e002e6b3013",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
