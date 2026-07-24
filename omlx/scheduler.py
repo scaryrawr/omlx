@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+from array import array
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -501,6 +502,12 @@ _uid_row_registry_lock = threading.Lock()
 # rest to DEBUG so the signal survives without flooding the logs.
 _UID_ROW_DRIFT_WARNING_INTERVAL_S = 60.0
 _uid_row_drift_last_warning = float("-inf")
+
+# Headroom sentinel handed to the sdpa256 route gate when the memory guard
+# is explicitly disabled: the user opted out of memory management, so route
+# selection must not slow prefill down on its behalf (#2283). Far above any
+# real unfused-transient estimate, so the gate always picks the fast path.
+_SDPA256_UNBOUNDED_HEADROOM = 1 << 62
 
 
 def _register_uid_rows(model, uids, samplers, lps_rows) -> None:
@@ -1639,6 +1646,15 @@ class Scheduler:
         # enforcer must never touch Metal directly.
         self._pending_reclaim_request: bool = False
 
+        # Set by ProcessMemoryEnforcer.request_pressure_reclaim() when memory
+        # pressure is hard. Unlike _pending_reclaim_request (idle-gated), this
+        # drains at the next step boundary even under load — the pressure
+        # shrink has already dropped hot-cache refs and _sync_and_clear_cache
+        # synchronizes in-flight work before clearing, so it is safe
+        # mid-decode. GIL-atomic flag; the enforcer never touches Metal
+        # directly.
+        self._pending_pressure_clear: bool = False
+
         # Lock-free admin snapshot. Published at the end of each step() while
         # the engine thread is the sole writer of running/waiting; the admin
         # endpoint reads the dict reference atomically (GIL) and never iterates
@@ -1680,6 +1696,14 @@ class Scheduler:
         # must steer the user to that knob instead of "close other apps".
         self._memory_guard_tier: str = "balanced"
         self._prefill_memory_guard: bool = False  # set by ProcessMemoryEnforcer
+        # True once ProcessMemoryEnforcer has pushed guard state at least
+        # once. Until then _prefill_memory_guard=False means "unknown", not
+        # "user disabled the guard", and the sdpa256 route keeps its
+        # memory-safe tiled default (#2283).
+        self._memory_limits_propagated: bool = False
+        # One-shot marker for the guard-off fast-path INFO emitted by
+        # _sdpa256_unfused_headroom.
+        self._sdpa256_unguarded_logged: bool = False
         # Set to True by ProcessMemoryEnforcer when phys_footprint crosses
         # soft_threshold. Schedulers stop admitting new prefills while this is
         # set; in-flight requests proceed.
@@ -1718,8 +1742,9 @@ class Scheduler:
         # DEBUG-only prefix-cache divergence probe (issue #1003): recent
         # stored cache sequences, so a miss can be traced to the exact
         # token where the new prompt diverges from what was cached.
-        # Populated only when debug logging is enabled — zero cost otherwise.
-        self._cache_probe_seqs: deque[tuple[str, list[int]]] = deque(maxlen=4)
+        # Always maintained (int32 arrays, maxlen=4) so large re-prefills
+        # can log their divergence point at INFO (#2333).
+        self._cache_probe_seqs: deque[tuple[str, array | list[int]]] = deque(maxlen=4)
 
         model_name_lower = (self.config.model_name or "").lower()
         default_kv_eval_interval = 256 if "minimax" in model_name_lower else 0
@@ -3426,13 +3451,28 @@ class Scheduler:
     def _sdpa256_unfused_headroom(self) -> int:
         """Live headroom (bytes) for one unfused SDPA transient, under the
         same target the adaptive prefill throttle enforces (hard ceiling x
-        headroom safety, clamped by the abort cap). Negative when no ceiling
-        is active (enforcer not propagated yet / guard disabled), which tells
-        the sdpa256 route to keep its memory-safe tiled default. Called from
+        headroom safety, clamped by the abort cap). Negative when the
+        ceiling is unknown (enforcer not propagated yet), which tells the
+        sdpa256 route to keep its memory-safe tiled default. When the guard
+        is explicitly disabled there is no ceiling to respect: the user
+        opted out of memory management, so the route gets unbounded
+        headroom and keeps the unfused fast path instead of pinning
+        guard-off servers to the ~2x-slower tiled pass (#2283). Called from
         the route gate on the MLX step thread mid-prefill, where refreshing
         the active-memory sample is safe (issue #2204)."""
         hard_cap = self._memory_hard_limit_bytes
         if hard_cap <= 0:
+            if self._memory_limits_propagated and not self._prefill_memory_guard:
+                if not self._sdpa256_unguarded_logged:
+                    self._sdpa256_unguarded_logged = True
+                    logger.info(
+                        "sdpa256: memory guard disabled, head-dim-256 "
+                        "prefill keeps the unfused fast path with no memory "
+                        "ceiling (long-context OOM protection off). Enable "
+                        "the memory guard or set OMLX_SDPA256_TILED=1 for "
+                        "the memory-safe tiled path."
+                    )
+                return _SDPA256_UNBOUNDED_HEADROOM
             return -1
         headroom_safety = getattr(
             self, "_prefill_headroom_safety", self._PREFILL_HEADROOM_SAFETY
@@ -6149,14 +6189,23 @@ class Scheduler:
                 return i
         return n
 
-    def _log_prefix_divergence(self, request: Request) -> None:
-        """DEBUG-only prefix-cache miss diagnostic (issue #1003).
+    # A re-prefill this large is a seconds-long event worth one INFO line
+    # when a recently stored sequence shared at least a full block with the
+    # prompt (i.e. the cache was relevant but could not cover the request).
+    _REPREFILL_INFO_MIN_TOKENS = 4096
 
-        Compares the new prompt against recently stored cache sequences and
-        logs the first divergent token offset with decoded context on both
-        sides, so an always-miss report can be traced to the exact prompt
-        position (template re-render drift, client echo changes, eviction)
-        instead of guessing from hit counters.
+    def _log_prefix_divergence(self, request: Request) -> None:
+        """Prefix-cache miss diagnostics (issues #1003, #2333, #2349).
+
+        Compares the new prompt against recently stored cache sequences.
+        Large re-prefills where a stored sequence shared at least one full
+        block get a single INFO line naming the divergence position and the
+        reused span — the one-line answer to "why did this turn re-prefill"
+        (client prompt drift such as tool-schema changes or transcript
+        edits, vs cache loss where the shared prefix exceeds what was
+        served). Numbers only at INFO; the decoded token context around the
+        divergence stays at DEBUG to keep prompt content out of standard
+        logs.
         """
         prompt = request.prompt_token_ids or []
         if not prompt or not self._cache_probe_seqs:
@@ -6170,19 +6219,35 @@ class Scheduler:
             return
         cached = request.cached_tokens or 0
         reusable = min(len(prompt), len(best_seq))
-        block = self.config.paged_cache_block_size
+        block = max(1, self.config.paged_cache_block_size)
+        reprefill = len(prompt) - cached
+        if reprefill >= self._REPREFILL_INFO_MIN_TOKENS and best_p >= block:
+            logger.info(
+                "prefix cache: request %s re-prefills %d of %d tokens "
+                "(reused %d); closest stored sequence %s shares the first "
+                "%d of %d comparable tokens before diverging",
+                request.request_id,
+                reprefill,
+                len(prompt),
+                cached,
+                best_id,
+                best_p,
+                reusable,
+            )
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
         logger.debug(
             f"Request {request.request_id}: prefix probe vs stored {best_id}: "
             f"common_prefix={best_p}/{reusable} tokens "
-            f"(~{best_p // max(1, block)} blocks of {block}), "
+            f"(~{best_p // block} blocks of {block}), "
             f"served cached_tokens={cached}, prompt={len(prompt)}"
         )
         if best_p < reusable:
             lo = max(0, best_p - 12)
             hi = best_p + 12
             try:
-                stored_ctx = self.tokenizer.decode(best_seq[lo:hi])
-                prompt_ctx = self.tokenizer.decode(prompt[lo:hi])
+                stored_ctx = self.tokenizer.decode(list(best_seq[lo:hi]))
+                prompt_ctx = self.tokenizer.decode(list(prompt[lo:hi]))
             except Exception:
                 stored_ctx = prompt_ctx = "<decode failed>"
             logger.debug(
@@ -6459,10 +6524,10 @@ class Scheduler:
             # No paged SSD cache configured - process all tokens
             request.remaining_tokens = request.prompt_token_ids
 
-        # DEBUG-only: trace where this prompt diverges from recently stored
-        # cache sequences (issue #1003 always-miss diagnosis).
-        if logger.isEnabledFor(logging.DEBUG):
-            self._log_prefix_divergence(request)
+        # Trace where this prompt diverges from recently stored cache
+        # sequences: one INFO line for large re-prefills (#2333/#2349
+        # triage), decoded token context at DEBUG (issue #1003).
+        self._log_prefix_divergence(request)
 
         # SpecPrefill: score remaining tokens with draft model if applicable.
         # Must run AFTER prefix cache check (scoring applies only to uncached suffix).
@@ -7242,6 +7307,34 @@ class Scheduler:
         """
         self._pending_reclaim_request = True
 
+    def request_pressure_reclaim(self) -> None:
+        """Enqueue a hard-pressure Metal cache clear (thread-safe, no Metal touch).
+
+        Called by ProcessMemoryEnforcer on the asyncio thread when memory
+        pressure is hard. Setting the flag is GIL-atomic; the actual
+        ``_sync_and_clear_cache`` runs on the inference thread at the next
+        step() boundary (see the periodic-cleanup block), which synchronizes
+        in-flight GPU work before clearing — so it is safe even while requests
+        are decoding, unlike the idle-gated ``request_idle_reclaim``.
+        ``has_work`` reports True while this is pending so an otherwise-idle
+        engine keeps stepping until the clear fires.
+        """
+        self._pending_pressure_clear = True
+
+    def _consume_pressure_clear(self) -> bool:
+        """Retire a pending hard-pressure clear (inference-thread side).
+
+        Unlike ``_process_pending_reclaim`` this is deliberately NOT
+        idle-gated: it feeds the step-boundary ``_sync_and_clear_cache``,
+        which synchronizes in-flight work before clearing — the same ordering
+        the shipped periodic clear relies on — so draining while requests are
+        running is safe. One-shot: consuming clears the flag.
+        """
+        if not self._pending_pressure_clear:
+            return False
+        self._pending_pressure_clear = False
+        return True
+
     def _process_pending_reclaim(self) -> None:
         """Drain a deferred idle reclaim request (inference-thread side).
 
@@ -7418,6 +7511,7 @@ class Scheduler:
             or self._pending_async_removes
             or self._deferred_clear_at is not None
             or self._pending_reclaim_request
+            or self._pending_pressure_clear
         )
 
     def _refresh_generation_overflow_recovery_ids(self) -> None:
@@ -9076,16 +9170,19 @@ class Scheduler:
                                                 f"{len(intermediate_snapshots) if intermediate_snapshots else 0} "
                                                 f"intermediate snapshots)"
                                             )
-                                # DEBUG-only divergence probe (issue #1003).
-                                # Record the exact token sequence submitted to
+                                # Divergence probe (issues #1003, #2333):
+                                # record the exact token sequence submitted to
                                 # store_cache, including boundary truncation.
-                                if logger.isEnabledFor(logging.DEBUG):
-                                    self._cache_probe_seqs.append(
-                                        (
-                                            request.request_id,
-                                            list(token_sequence_to_store),
-                                        )
+                                # Always maintained so the large-re-prefill
+                                # INFO line can name the divergence point;
+                                # int32 array keeps the deque(maxlen=4) at
+                                # ~400KB per 100k-token sequence.
+                                self._cache_probe_seqs.append(
+                                    (
+                                        request.request_id,
+                                        array("i", token_sequence_to_store),
                                     )
+                                )
                                 with self._phase_timer("store_cache_main_collect"):
                                     pre_eval_arrays = (
                                         self._collect_arrays_from_extracted_cache(
@@ -9906,6 +10003,14 @@ class Scheduler:
         ):
             should_clear = True
             self._deferred_clear_at = None
+        # Hard-pressure reclaim requested by ProcessMemoryEnforcer. Drains via
+        # the same _sync_and_clear_cache path so freed hot-cache / pooled
+        # buffers are returned to the OS at a synchronized, lock-protected
+        # boundary (safe under load) — the idle-gated reclaim above never
+        # fires while requests are running, which leaves the freed bytes
+        # pooled and the enforcer wedged at hard pressure.
+        if self._consume_pressure_clear():
+            should_clear = True
         if should_clear:
             _sync_and_clear_cache(self._stream)
         if (

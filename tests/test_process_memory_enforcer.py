@@ -640,6 +640,36 @@ class TestDisabledWhenCeilingZero:
         assert bg._memory_hard_limit_bytes == 0
 
     @pytest.mark.asyncio
+    async def test_propagate_marks_guard_state_trustworthy(self, mock_engine_pool):
+        """#2283 guard-off routing keys on _prefill_memory_guard, which is
+        only meaningful once the enforcer has pushed state at least once:
+        propagation must set the marker even when the guard is disabled
+        and every ceiling propagates as 0."""
+        enforcer = _make_enforcer(
+            mock_engine_pool,
+            ceiling=0,
+            prefill_memory_guard=False,
+            breakdown={
+                "static": 0,
+                "dynamic": 0,
+                "metal_cap": 0,
+                "hard_limit": 0,
+            },
+        )
+        scheduler = MagicMock(spec=[])
+        scheduler._memory_limits_propagated = False
+        engine = MagicMock(spec=[])
+        engine.scheduler = scheduler
+        entry = _make_entry("model-a", engine=engine)
+        mock_engine_pool._entries = {"model-a": entry}
+
+        enforcer._propagate_memory_limit()
+
+        assert scheduler._memory_limits_propagated is True
+        assert scheduler._prefill_memory_guard is False
+        assert scheduler._memory_hard_limit_bytes == 0
+
+    @pytest.mark.asyncio
     async def test_propagate_ceiling_components_to_scheduler(self, mock_engine_pool):
         """All three component ceilings + the tier name must reach the
         scheduler so the binding-aware rejection message has the inputs
@@ -2656,3 +2686,47 @@ class TestWiredLimitSuggestionClamp:
         ):
             pme._apply_metal_wired_limit(400 * 1024**3)
         assert [r for r in caplog.records if "jetsam" in r.message]
+
+
+class TestPressureCacheReclaim:
+    """_request_scheduler_cache_reclaim — the under-load drain trigger."""
+
+    def _enforcer(self, schedulers):
+        pool = MagicMock()
+        pool._entries = {
+            f"model-{i}": SimpleNamespace(engine=SimpleNamespace(scheduler=s))
+            for i, s in enumerate(schedulers)
+        }
+        return _make_enforcer(engine_pool=pool)
+
+    def test_fires_when_shrink_freed_refs(self):
+        schedulers = [MagicMock(), MagicMock()]
+        enforcer = self._enforcer(schedulers)
+        with patch.object(pme.mx, "get_cache_memory", return_value=0):
+            enforcer._request_scheduler_cache_reclaim(1 * 1024**3)
+        for s in schedulers:
+            s.request_pressure_reclaim.assert_called_once()
+
+    def test_skips_when_nothing_reclaimable(self):
+        schedulers = [MagicMock()]
+        enforcer = self._enforcer(schedulers)
+        with patch.object(pme.mx, "get_cache_memory", return_value=1 * 1024**3):
+            enforcer._request_scheduler_cache_reclaim(0)
+        schedulers[0].request_pressure_reclaim.assert_not_called()
+
+    def test_fires_on_stranded_pool_without_hot_cache(self):
+        """The already-wedged case: hot cache empty, bytes parked in the pool."""
+        schedulers = [MagicMock()]
+        enforcer = self._enforcer(schedulers)
+        with patch.object(pme.mx, "get_cache_memory", return_value=3 * 1024**3):
+            enforcer._request_scheduler_cache_reclaim(0)
+        schedulers[0].request_pressure_reclaim.assert_called_once()
+
+    def test_tolerates_non_numeric_pool_reading(self):
+        """A wholesale-mocked mx (as the wider suite uses) must not break
+        enforcement — a non-numeric cache reading is treated as empty."""
+        schedulers = [MagicMock()]
+        enforcer = self._enforcer(schedulers)
+        with patch.object(pme.mx, "get_cache_memory", return_value=object()):
+            enforcer._request_scheduler_cache_reclaim(0)
+        schedulers[0].request_pressure_reclaim.assert_not_called()
