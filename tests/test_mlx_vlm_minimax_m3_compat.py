@@ -249,7 +249,12 @@ def test_minimax_unpacked_mixed_bit_moe_forward():
 
     apply_mlx_vlm_minimax_m3_compat_patch()
 
-    from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+    try:
+        # Newer mlx-vlm versions own this layer instead of re-exporting the
+        # mlx-lm implementation.
+        from mlx_vlm.models.switch_layers import QuantizedSwitchLinear
+    except ImportError:
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
     from mlx_vlm.models.minimax_m3_vl.language import MiniMaxSparseMoeBlock
 
     block = MiniMaxSparseMoeBlock(_tiny_text_config(pack_shared_expert=False))
