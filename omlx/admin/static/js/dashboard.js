@@ -3073,8 +3073,24 @@
 
             benchGetSpeedup(batchResult) {
                 const baseline = this.benchSingleResults.find(r => r.pp === 1024);
-                if (!baseline || !baseline.gen_tps || baseline.gen_tps <= 0) return 0;
+                if (!baseline || !baseline.gen_tps || baseline.gen_tps <= 0) return null;
+                if (batchResult.tg_tps === null || batchResult.tg_tps === undefined) return null;
                 return batchResult.tg_tps / baseline.gen_tps;
+            },
+
+            // Unmeasured metrics (tpot_ms/gen_tps/tg_tps, plus ttft/pp when
+            // no content delta was ever observed) come through as null
+            // rather than a misleading 0.0 — render them as N/A.
+            benchFmtNum(value, decimals, suffix = '') {
+                if (value === null || value === undefined) return 'N/A';
+                return value.toFixed(decimals) + suffix;
+            },
+
+            // Per-request pp TPS, null when the aggregate itself is unmeasured.
+            benchPpPerReq(batchResult) {
+                const pp = batchResult.pp_tps;
+                if (pp === null || pp === undefined) return null;
+                return pp / batchResult.batch_size;
             },
 
             benchFormatMemory(bytes) {
@@ -3111,10 +3127,10 @@
                     for (const r of this.benchSingleResults) {
                         const row = [
                             rpad(`pp${r.pp}/tg${r.tg}`, 16),
-                            pad(r.ttft_ms.toFixed(1), 10),
-                            pad(r.tpot_ms.toFixed(2), 10),
-                            pad(r.processing_tps.toFixed(1) + ' tok/s', 12),
-                            pad(r.gen_tps.toFixed(1) + ' tok/s', 12),
+                            pad(this.benchFmtNum(r.ttft_ms, 1), 10),
+                            pad(this.benchFmtNum(r.tpot_ms, 2), 10),
+                            pad(this.benchFmtNum(r.processing_tps, 1, ' tok/s'), 12),
+                            pad(this.benchFmtNum(r.gen_tps, 1, ' tok/s'), 12),
                             pad(r.e2e_latency_s.toFixed(3), 10),
                             pad(r.total_throughput.toFixed(1) + ' tok/s', 12),
                             pad(this.benchFormatMemory(r.peak_memory_bytes), 10),
@@ -3136,24 +3152,24 @@
                     if (baseline) {
                         const row = [
                             rpad('1x', 8),
-                            pad(baseline.gen_tps.toFixed(1) + ' tok/s', 12),
+                            pad(this.benchFmtNum(baseline.gen_tps, 1, ' tok/s'), 12),
                             pad('1.00x', 8),
-                            pad(baseline.processing_tps.toFixed(1) + ' tok/s', 12),
-                            pad(baseline.processing_tps.toFixed(1) + ' tok/s', 12),
-                            pad(baseline.ttft_ms.toFixed(1), 10),
+                            pad(this.benchFmtNum(baseline.processing_tps, 1, ' tok/s'), 12),
+                            pad(this.benchFmtNum(baseline.processing_tps, 1, ' tok/s'), 12),
+                            pad(this.benchFmtNum(baseline.ttft_ms, 1), 10),
                             pad(baseline.e2e_latency_s.toFixed(3), 10),
                         ];
                         lines.push(row.join('  '));
                     }
                     for (const r of results) {
-                        const speedup = baseline && baseline.gen_tps > 0 ? (r.tg_tps / baseline.gen_tps).toFixed(2) + 'x' : '-';
+                        const speedup = this.benchGetSpeedup(r);
                         const row = [
                             rpad(r.batch_size + 'x', 8),
-                            pad(r.tg_tps.toFixed(1) + ' tok/s', 12),
-                            pad(speedup, 8),
-                            pad(r.pp_tps.toFixed(1) + ' tok/s', 12),
-                            pad((r.pp_tps / r.batch_size).toFixed(1) + ' tok/s', 12),
-                            pad(r.avg_ttft_ms.toFixed(1), 10),
+                            pad(this.benchFmtNum(r.tg_tps, 1, ' tok/s'), 12),
+                            pad(speedup !== null ? speedup.toFixed(2) + 'x' : 'N/A', 8),
+                            pad(this.benchFmtNum(r.pp_tps, 1, ' tok/s'), 12),
+                            pad(this.benchFmtNum(this.benchPpPerReq(r), 1, ' tok/s'), 12),
+                            pad(this.benchFmtNum(r.avg_ttft_ms, 1), 10),
                             pad(r.e2e_latency_s.toFixed(3), 10),
                         ];
                         lines.push(row.join('  '));
@@ -3995,11 +4011,16 @@
                 const bold = (gb) => `<strong>${fmt(gb)} GB</strong>`;
 
                 // Static / metal cap for the final clamp shown to the user.
+                // The small-system threshold must track
+                // ProcessMemoryEnforcer._SMALL_SYSTEM_THRESHOLD (24 GB): under
+                // it the server reserves a flat 4 GB regardless of tier. This
+                // read 16 and so understated the static ceiling by up to 4 GB
+                // on every 16-23 GB Mac.
                 const totalGB = (sys.total_memory_bytes || 0) / GB;
                 const staticReserveGB =
                     tier === 'custom'
                         ? 2
-                        : totalGB < 16
+                        : totalGB < 24
                             ? 4
                             : { safe: 8, balanced: 6, aggressive: 4 }[tier] ?? 6;
                 const staticCeiling = Math.max(0, totalGB - staticReserveGB);
