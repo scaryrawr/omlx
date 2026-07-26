@@ -43,9 +43,9 @@ dependencies = [
     # binaries are ABI-coupled to this exact mlx version — bumping the pin
     # requires rebuilding them (OMLX_WITH_CUSTOM_KERNEL=1 setup.py build_ext).
     "mlx==0.32.0",
-    # mlx-lm from the latest upstream commit (cf10f96), including the
+    # mlx-lm from the latest upstream commit (e5baded), including the
     # batched XTC threshold fix and the current sampling defaults.
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@cf10f962b7a20e63a6df43dbf0faf06070153d40",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
     # mlx-embeddings from latest scaryrawr commit (71329b8)
@@ -104,9 +104,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (4bf719d8). Adds newer model families
+    # mlx-vlm from latest upstream HEAD (bd6cb123). Adds newer model families
     # and NVFP4 shared-expert handling while retaining current integrations.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4bf719d871e8d0b166dfbedd1b5aa44a438278e7",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@bd6cb1231743a8fa9c44afaea2bf5fe793668d98",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
     # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
@@ -131,12 +131,12 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from latest upstream main commit (835edf37) with Fun-ASR
+    # mlx-audio from latest upstream main commit (d28d68c6) with Fun-ASR
     # context support, batched logits processing, and tts/stt/sts extras.
     # tts extra: mistral-common[audio], sentencepiece
     # stt extra: sentencepiece
     # sts extra: sentencepiece, webrtcvad, setuptools<81
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@835edf3716f5397bbb1c5413a28c8a447f2a21d0",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@d28d68c6ac4e28f7d2d66007f640b06cf3fd8ceb",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
@@ -245,7 +245,7 @@ override-dependencies = [
     # When the [image] extra enables mflux, its Linux cuda extra metadata can
     # otherwise resolve an older mlx; keep oMLX on the core MLX pin.
     "mlx==0.32.0",
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@cf10f962b7a20e63a6df43dbf0faf06070153d40",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
     # mlx-audio's current metadata still caps Transformers below 5.13, but
     # current mlx-vlm requires 5.14+; its runtime paths are compatible with
     # the newer tokenizer APIs used by the shared stack.
