@@ -19,7 +19,7 @@ Usage:
 """
 
 from collections.abc import Callable
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 # Direction of the memory_guard_tier knob. Spelled out everywhere a message
 # names the tier: the admin popup lists Safe first, so "lower the tier" reads
@@ -48,7 +48,7 @@ def describe_ceiling_binding(
     tier: str,
     current: int,
     fmt: Callable[[int], str],
-    tail: Optional[Union[str, list[str]]] = None,
+    tail: str | list[str] | None = None,
 ) -> tuple[str, str]:
     """Name the binding component ceiling and the remedy that actually moves it.
 
