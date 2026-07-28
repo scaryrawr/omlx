@@ -28,7 +28,11 @@ from typing import (
 
 import mlx.core as mx
 
-from .exceptions import PrefillMemoryExceededError, describe_ceiling_binding
+from .exceptions import (
+    PrefillMemoryAbortedError,
+    PrefillMemoryExceededError,
+    describe_ceiling_binding,
+)
 from .model_registry import get_registry
 from .output_collector import RequestOutputCollector, RequestStreamState
 from .request import Request, RequestOutput, SamplingParams
@@ -44,12 +48,20 @@ logger = logging.getLogger(__name__)
 
 
 def _raise_request_output_error(output: RequestOutput) -> None:
-    if output.error_code == "prefill_memory_exceeded":
+    if output.error_code in ("prefill_memory_exceeded", "prefill_memory_aborted"):
         metadata = output.error_metadata or {}
         request_id = metadata.get("request_id")
         estimated_bytes = metadata.get("estimated_bytes")
         limit_bytes = metadata.get("limit_bytes")
-        raise PrefillMemoryExceededError(
+        # Both are memory-guard outcomes and share the HTTP 400 mapping; the
+        # aborted subclass only changes the wording (admitted then killed
+        # mid-prefill vs rejected before it started).
+        error_type = (
+            PrefillMemoryAbortedError
+            if output.error_code == "prefill_memory_aborted"
+            else PrefillMemoryExceededError
+        )
+        raise error_type(
             message=output.error or "Prefill memory exceeded",
             request_id=str(request_id) if request_id is not None else output.request_id,
             estimated_bytes=(
@@ -236,9 +248,7 @@ class EngineCore:
             max_workers=1,
             thread_name_prefix=f"mlx-engine-{self._engine_id[:8]}",
         )
-        self._mlx_stream = self._mlx_executor.submit(
-            _create_mlx_thread_stream
-        ).result()
+        self._mlx_stream = self._mlx_executor.submit(_create_mlx_thread_stream).result()
 
         # Create scheduler with per-engine stream
         scheduler_config = self.config.scheduler_config or SchedulerConfig()
@@ -542,6 +552,7 @@ class EngineCore:
         specprefill_keep_pct: float | None = None,
         specprefill_threshold: int | None = None,
         specprefill_system_end: int | None = None,
+        skip_cache_store: bool = False,
     ) -> str:
         """
         Add a request for processing.
@@ -579,6 +590,7 @@ class EngineCore:
             vlm_image_hash=vlm_image_hash,
             vlm_cache_key_start=vlm_cache_key_start,
             vlm_cache_key_ranges=vlm_cache_key_ranges,
+            skip_cache_store=skip_cache_store,
         )
 
         # SpecPrefill: resolve per-request settings.
@@ -752,6 +764,21 @@ class EngineCore:
                         finish_reason="error",
                         new_text=f"\n\n[Error: {error_msg}]",
                         error=error_msg,
+                        # Without a code this surfaced as a bare RuntimeError:
+                        # the JSON keepalive wrapper never saw a memory error,
+                        # so the response generator died mid-body and the
+                        # client got a truncated read plus a 500 traceback
+                        # instead of the same actionable 400 the pre-flight
+                        # guard returns.
+                        error_code="prefill_memory_aborted",
+                        error_metadata={
+                            "request_id": rid,
+                            # Only the limit is reported: the exception's
+                            # estimated_bytes means "predicted peak", and this
+                            # abort fires on measured usage, which the message
+                            # already states.
+                            "limit_bytes": watermark or ceiling or None,
+                        },
                     )
                 )
             self._mark_request_finished(rid)
