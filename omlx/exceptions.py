@@ -19,7 +19,7 @@ Usage:
 """
 
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 # Direction of the memory_guard_tier knob. Spelled out everywhere a message
 # names the tier: the admin popup lists Safe first, so "lower the tier" reads
@@ -514,8 +514,8 @@ class ModelTooLargeError(EnginePoolError):
         model_size: int,
         ceiling: int,
         *,
-        binding: Optional[str] = None,
-        advice: Optional[str] = None,
+        binding: str | None = None,
+        advice: str | None = None,
     ):
         self.model_id = model_id
         self.model_size = model_size

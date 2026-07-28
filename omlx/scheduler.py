@@ -176,7 +176,7 @@ class _VLMMTPResponse:
 
     uid: int
     token: int
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     logprobs: Any = None
     prompt_cache: Any = None
 

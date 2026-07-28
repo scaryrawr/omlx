@@ -8,7 +8,6 @@ Dataset bundled from math_qa on HuggingFace.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -75,5 +74,5 @@ class MathQABenchmark(BaseBenchmark):
     def check_answer(self, predicted: str, item: dict) -> bool:
         return predicted == item["answer"]
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return item.get("category")

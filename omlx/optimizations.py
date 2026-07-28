@@ -28,6 +28,8 @@ import mlx.core as mx
 from omlx.utils.hardware import (
     HardwareInfo,
     detect_hardware,
+)
+from omlx.utils.hardware import (
     get_total_memory_gb as get_system_memory_gb,
 )
 

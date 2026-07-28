@@ -6,8 +6,9 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,10 @@ class QuestionResult:
     time_seconds: float
     question_text: str = ""
     raw_response: str = ""
-    category: Optional[str] = None
+    category: str | None = None
     # Populated only for external API evaluations.
-    status: Optional[str] = None
-    finish_reason: Optional[str] = None
+    status: str | None = None
+    finish_reason: str | None = None
     reasoning_fields_present: list[str] = field(default_factory=list)
     reasoning_fields_nonempty: list[str] = field(default_factory=list)
     prompt_tokens: int = 0
@@ -48,7 +49,7 @@ class BenchmarkResult:
     correct_count: int
     time_seconds: float
     question_results: list[QuestionResult] = field(default_factory=list)
-    category_scores: Optional[dict[str, float]] = None
+    category_scores: dict[str, float] | None = None
     thinking_used: bool = False
 
 
@@ -93,7 +94,7 @@ class BaseBenchmark(ABC):
         """Max tokens to generate per question. Override for longer answers."""
         return 128
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         """Return category/subject for per-category scoring. None if N/A."""
         return None
 
@@ -182,7 +183,7 @@ class BaseBenchmark(ABC):
         response_text: str,
         item: dict,
         diagnostics: dict[str, Any],
-    ) -> tuple[str, bool, Optional[str]]:
+    ) -> tuple[str, bool, str | None]:
         """Score a response while preserving legacy local-evaluation behavior."""
         external_status = diagnostics.get("status")
         if external_status is None:
@@ -217,7 +218,7 @@ class BaseBenchmark(ABC):
 
     async def _eval_single(
         self, engine: Any, item: dict, index: int,
-        sampling_kwargs: Optional[dict] = None,
+        sampling_kwargs: dict | None = None,
         enable_thinking: bool = False,
     ) -> tuple[int, dict, str, str, str, dict[str, Any]]:
         """Evaluate a single item.
@@ -297,9 +298,9 @@ class BaseBenchmark(ABC):
         self,
         engine: Any,
         items: list[dict],
-        on_progress: Optional[Callable[[int, int], Any]] = None,
+        on_progress: Callable[[int, int], Any] | None = None,
         batch_size: int = 1,
-        sampling_kwargs: Optional[dict] = None,
+        sampling_kwargs: dict | None = None,
         enable_thinking: bool = False,
     ) -> BenchmarkResult:
         """Run the benchmark on all items.

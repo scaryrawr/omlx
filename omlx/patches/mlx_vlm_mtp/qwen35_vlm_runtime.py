@@ -222,8 +222,8 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
     original_call = cls.__call__
 
     def __init__(self, args, config=None):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
+        from . import is_mtp_attach_enabled
 
         original_init(self, args, config)
         # Attach MTPModule when the config declares MTP heads so mlx-vlm's

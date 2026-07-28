@@ -16,7 +16,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import mlx.core as mx
 
@@ -133,13 +133,12 @@ class MLXRerankerModel:
                 config = json.load(f)
             architectures = config.get("architectures", [])
             return architectures[0] if architectures else None
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return None
 
-    def _load_xlm_roberta(self) -> Tuple[Any, Any]:
+    def _load_xlm_roberta(self) -> tuple[Any, Any]:
         """Load XLMRoberta model using omlx native implementation."""
         import mlx.core as mx
-        from mlx.utils import tree_unflatten
         from transformers import AutoTokenizer
 
         from .xlm_roberta import Model, ModelArgs
@@ -188,7 +187,7 @@ class MLXRerankerModel:
 
         return model, tokenizer
 
-    def _load_vl_reranker(self) -> Tuple[Any, Any]:
+    def _load_vl_reranker(self) -> tuple[Any, Any]:
         """Load a multimodal reranker (e.g., Qwen3-VL-Reranker) via mlx-embeddings.
 
         mlx-embeddings exposes a unified `load()` + `model.process()` API that
@@ -203,7 +202,7 @@ class MLXRerankerModel:
             tokenizer_config={"trust_remote_code": self.trust_remote_code},
         )
 
-    def _build_vl_item(self, item: "str | dict[str, Any]") -> Dict[str, Any]:
+    def _build_vl_item(self, item: "str | dict[str, Any]") -> dict[str, Any]:
         """Normalize a rerank input into the mlx-embeddings VL item format.
 
         Accepts either a bare string (text) or a dict with 'text' and/or
@@ -215,7 +214,7 @@ class MLXRerankerModel:
         if not isinstance(item, dict):
             return {"text": str(item)}
 
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         text = item.get("text")
         if text:
             result["text"] = text
@@ -261,10 +260,12 @@ class MLXRerankerModel:
             total_tokens=0,
         )
 
-    def _load_causal_lm(self) -> Tuple[Any, Any]:
+    def _load_causal_lm(self) -> tuple[Any, Any]:
         """Load a CausalLM-based reranker model using mlx-lm."""
         from ..utils.model_loading import (
             lm_load_compat as mlx_lm_load,
+        )
+        from ..utils.model_loading import (
             maybe_load_custom_quantization,
         )
 
@@ -314,7 +315,7 @@ class MLXRerankerModel:
 
         return model, tokenizer
 
-    def _extract_causal_lm_affixes(self, tokenizer: Any) -> Tuple[str, str]:
+    def _extract_causal_lm_affixes(self, tokenizer: Any) -> tuple[str, str]:
         """Extract the static prompt prefix/suffix around the rerank content.
 
         Handles two chat template shapes:
@@ -387,7 +388,7 @@ class MLXRerankerModel:
 
     def _extract_reranker_native_affixes(
         self, tokenizer: Any
-    ) -> "Tuple[Tuple[str, str] | None, str, Exception | None]":
+    ) -> "tuple[tuple[str, str] | None, str, Exception | None]":
         """Extract affixes from a reranker-native chat template, if present.
 
         Returns (affixes, rendered, error). Affixes is None when the template
@@ -434,7 +435,7 @@ class MLXRerankerModel:
         # suffix is used as-is.
         return (parts[0], parts[1]), rendered, None
 
-    def _load_jina_reranker(self) -> Tuple[Any, Any]:
+    def _load_jina_reranker(self) -> tuple[Any, Any]:
         """
         Load a Jina v3 reranker model using mlx-lm.
 
@@ -443,6 +444,8 @@ class MLXRerankerModel:
         """
         from ..utils.model_loading import (
             lm_load_compat as mlx_lm_load,
+        )
+        from ..utils.model_loading import (
             maybe_load_custom_quantization,
         )
 
@@ -1062,7 +1065,7 @@ class MLXRerankerModel:
 
         def _truncate_doc_to_fit(
             query_text: str, doc_text: str
-        ) -> Tuple[str, list[int]]:
+        ) -> tuple[str, list[int]]:
             doc_token_ids = _to_token_ids(doc_text)
             if not doc_token_ids:
                 prompt = self._format_jina_prompt(query_text, [""])
@@ -1346,7 +1349,7 @@ class MLXRerankerModel:
         try:
             with open(config_path) as f:
                 config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Failed to read config.json: {e}")
             return
 

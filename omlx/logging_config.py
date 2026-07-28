@@ -15,10 +15,9 @@ import sys
 from contextvars import ContextVar
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Optional
 
 # Context variable for request ID tracking
-_request_id: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+_request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
 class RequestContextFilter(logging.Filter):
@@ -75,12 +74,12 @@ class ColoredFormatter(logging.Formatter):
         return super().format(record)
 
 
-def get_request_id() -> Optional[str]:
+def get_request_id() -> str | None:
     """Get the current request ID from context."""
     return _request_id.get()
 
 
-def set_request_id(request_id: Optional[str]) -> None:
+def set_request_id(request_id: str | None) -> None:
     """Set the current request ID in context."""
     _request_id.set(request_id)
 
@@ -157,7 +156,6 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format the log record as JSON."""
         import json
-        import time
 
         log_data = {
             "timestamp": self.formatTime(record, self.datefmt),
@@ -185,7 +183,7 @@ class JsonFormatter(logging.Formatter):
 
 def get_logger(
     name: str,
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
 ) -> logging.Logger:
     """
     Get a logger with optional request context.
@@ -214,7 +212,7 @@ class RequestLogContext:
 
     def __init__(self, request_id: str):
         self.request_id = request_id
-        self.previous_id: Optional[str] = None
+        self.previous_id: str | None = None
 
     def __enter__(self) -> "RequestLogContext":
         self.previous_id = _request_id.get()

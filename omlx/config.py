@@ -12,7 +12,7 @@ This module provides unified configuration management with:
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 
 def parse_size(size_str: str) -> int:
@@ -57,7 +57,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
-    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
 
 @dataclass
@@ -68,7 +68,7 @@ class ModelConfig:
     # Security: default off. HuggingFace repos can ship arbitrary modeling_*.py
     # that gets executed at load time when this is True. Issue #926.
     trust_remote_code: bool = False
-    model_path: Optional[str] = None
+    model_path: str | None = None
 
 
 @dataclass
@@ -90,7 +90,7 @@ class SchedulerConfig:
     completion_batch_size: int = 8
     embedding_batch_size: int = 32
     stream_interval: int = 1
-    enable_thinking: Optional[bool] = None
+    enable_thinking: bool | None = None
 
 
 @dataclass
@@ -107,7 +107,7 @@ class PagedSSDCacheConfig:
 
     enabled: bool = False
     hot_cache_only: bool = False
-    cache_dir: Optional[Path] = None
+    cache_dir: Path | None = None
     max_size: str = "100GB"
     hot_cache_max_size: str = "0"  # "0" = disabled, e.g. "8GB"
 
@@ -126,7 +126,7 @@ class PagedSSDCacheConfig:
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
-    config_path: Optional[str] = None
+    config_path: str | None = None
     enabled: bool = False
 
 
@@ -254,7 +254,7 @@ class OMLXConfig:
 
         return config
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary."""
         from dataclasses import asdict
 
@@ -272,7 +272,7 @@ class OMLXConfig:
             "continuous_batching": self.continuous_batching,
         }
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate configuration.
 

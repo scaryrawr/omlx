@@ -9,7 +9,6 @@ Dataset bundled from openai/gsm8k on HuggingFace.
 import logging
 import re
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -126,5 +125,5 @@ class GSM8KBenchmark(BaseBenchmark):
             return False
         return _normalize_number(predicted) == _normalize_number(item["answer"])
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return None

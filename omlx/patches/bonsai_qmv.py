@@ -30,18 +30,18 @@ import mlx.nn as nn
 
 from omlx.custom_kernels.bonsai.fast import (
     _dequant_1bit,
+    _use_qmv_wide,
     bonsai_q1_affine_qmv,
-    bonsai_q2_affine_qmv,
     bonsai_q1_affine_qmv_sym,
-    bonsai_q2_affine_qmv_sym,
     bonsai_q1_affine_qmv_wide_sym,
+    bonsai_q2_affine_qmv,
+    bonsai_q2_affine_qmv_sym,
     bonsai_q2_affine_qmv_wide_sym,
     bonsai_qmv_wide,
+    bonsai_t5_qmm,
     bonsai_t5_qmv,
     bonsai_t5_qmv_wide,
-    bonsai_t5_qmm,
     has_native,
-    _use_qmv_wide,
 )
 
 logger = logging.getLogger(__name__)

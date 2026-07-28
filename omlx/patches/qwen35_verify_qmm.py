@@ -451,7 +451,6 @@ def apply_verify_qmm_patch() -> bool:
     if _QL_PATCHED:
         return True
 
-    import mlx.core as mx
     import mlx.nn as nn
 
     cls = nn.QuantizedLinear

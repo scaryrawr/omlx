@@ -49,7 +49,7 @@ The patch is intentionally limited to ``mlx_lm.models.qwen3_5``; mlx-vlm's
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +291,8 @@ def _patch_gated_delta_net(q35: Any) -> None:
     def __call__(
         self,
         inputs: Any,
-        mask: Optional[Any] = None,
-        cache: Optional[Any] = None,
+        mask: Any | None = None,
+        cache: Any | None = None,
         n_confirmed: int = 0,
     ):
         B, S, _ = inputs.shape

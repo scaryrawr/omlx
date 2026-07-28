@@ -21,7 +21,7 @@ shift the value lands above the anchor, so a second pass is a no-op.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ def _mean(v) -> float:
 
 
 def repair_legacy_head_norms(
-    weights: Union[dict, List[Tuple[str, Any]]],
-) -> Tuple[Union[dict, List[Tuple[str, Any]]], int]:
+    weights: dict | list[tuple[str, Any]],
+) -> tuple[dict | list[tuple[str, Any]], int]:
     """Re-apply the missing +1 shift to raw-stored MTP-head norms.
 
     Accepts and returns either a dict or a list of (key, tensor) pairs (the
@@ -60,7 +60,7 @@ def repair_legacy_head_norms(
     is_list = not isinstance(weights, dict)
     items = list(weights.items()) if isinstance(weights, dict) else list(weights)
 
-    head_indices: List[Tuple[int, str]] = []  # (item index, head suffix)
+    head_indices: list[tuple[int, str]] = []  # (item index, head suffix)
     for i, (k, v) in enumerate(items):
         if "mtp." not in k or getattr(v, "ndim", 0) != 1:
             continue
@@ -72,8 +72,8 @@ def repair_legacy_head_norms(
         return weights, 0
 
     # Backbone anchors: mean-of-means over counterpart tensors.
-    sums: Dict[str, float] = {}
-    counts: Dict[str, int] = {}
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
     needed = {_REPAIR_GROUPS[sfx] for _, sfx in head_indices}
     for k, v in items:
         if "mtp." in k or getattr(v, "ndim", 0) != 1:

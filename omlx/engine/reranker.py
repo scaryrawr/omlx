@@ -11,7 +11,7 @@ or chat completion.
 import asyncio
 import gc
 import logging
-from typing import Any, Dict
+from typing import Any
 
 import mlx.core as mx
 
@@ -160,7 +160,7 @@ class RerankerEngine(BaseNonStreamingEngine):
         finally:
             await self._finish_activity(activity_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         return {
             "model_name": self._model_name,
@@ -168,7 +168,7 @@ class RerankerEngine(BaseNonStreamingEngine):
             "num_labels": self.num_labels,
         }
 
-    def get_model_info(self) -> Dict[str, Any]:
+    def get_model_info(self) -> dict[str, Any]:
         """Get information about the loaded model."""
         if self._model is None:
             return {"loaded": False, "model_name": self._model_name}

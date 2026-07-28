@@ -2,7 +2,8 @@
 """Admin panel for oMLX server configuration."""
 
 from .auth import create_session_token, require_admin, verify_session
-from .routes import router as admin_router, set_admin_getters, set_hf_downloader
+from .routes import router as admin_router
+from .routes import set_admin_getters, set_hf_downloader
 
 __all__ = [
     "admin_router",

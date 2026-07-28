@@ -20,7 +20,7 @@ SAMPLE_SEED = 42
 def load_jsonl(path: Path) -> list[dict]:
     """Load a JSONL file into a list of dicts."""
     items = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

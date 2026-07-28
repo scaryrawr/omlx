@@ -6,8 +6,8 @@ This module provides base classes and utilities for tracking cache performance
 metrics across different cache implementations (prefix, paged, VLM, paged SSD).
 """
 
-from dataclasses import dataclass, asdict, field
-from typing import Any, Dict
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -59,7 +59,7 @@ class BaseCacheStats:
         self.misses = 0
         self.evictions = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert stats to dictionary.
 
@@ -150,7 +150,7 @@ class PagedCacheStats(BaseCacheStats):
         super().reset()
         self.cow_copies = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert stats to dictionary."""
         d = super().to_dict()
         d["utilization"] = self.utilization
@@ -249,7 +249,7 @@ class PagedSSDCacheStats(BaseCacheStats):
         self.ssd_inline_write_fallbacks = 0
         self.evict_unlink_failures = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert stats to dictionary."""
         d = super().to_dict()
         d["save_rate"] = self.save_rate

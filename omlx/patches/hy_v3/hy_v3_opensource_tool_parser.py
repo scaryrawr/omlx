@@ -9,7 +9,6 @@ The full Hy3 release renames the Hy3-preview chat tokens with an
 start and end sentinels differ.
 """
 
-from .hy_v3 import parse_tool_call
 
 tool_call_start = "<tool_calls:opensource>"
 tool_call_end = "</tool_calls:opensource>"

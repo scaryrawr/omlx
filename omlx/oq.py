@@ -16,9 +16,10 @@ import re
 import shutil
 import tempfile
 import time as _time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import numpy as np
 
@@ -296,7 +297,7 @@ def _glm_indexer_q8_override(path: str, config: dict) -> dict | None:
 
 def universal_quant_predicate(
     path: str, module, config: dict, oq_level: int = 4
-) -> Union[bool, dict]:
+) -> bool | dict:
     """Per-tensor quantization decision based on GGUF/unsloth/llama.cpp rules.
 
     Protection levels vary by oQ level:
@@ -2323,7 +2324,7 @@ def _sensitivity_lm_config_override(config: dict) -> dict | None:
 def make_predicate(config: dict, oq_level: int = 4) -> Callable:
     """Create a quant_predicate closure for mlx-lm's quantize_model."""
 
-    def predicate(path: str, module) -> Union[bool, dict]:
+    def predicate(path: str, module) -> bool | dict:
         return universal_quant_predicate(path, module, config, oq_level)
 
     return predicate
@@ -4233,7 +4234,7 @@ def quantize_oq_streaming(
     output_path: str,
     oq_level: int,
     group_size: int = 64,
-    progress_callback: Optional[Callable[[str, float], None]] = None,
+    progress_callback: Callable[[str, float], None] | None = None,
     text_only: bool = False,
     target_bpw: float | None = None,
     hard_cap_bpw: float | None = None,
@@ -6729,8 +6730,10 @@ def _measure_sensitivity_from_quantized_model(
     from omlx.utils.model_loading import (
         _checkpoint_has_mtp_weights,
         _has_mtp_heads,
-        lm_load_compat as lm_load,
         maybe_apply_pre_load_patches,
+    )
+    from omlx.utils.model_loading import (
+        lm_load_compat as lm_load,
     )
 
     # Reuse the centralised pre-load dispatch (DeepSeek V4 base patch,

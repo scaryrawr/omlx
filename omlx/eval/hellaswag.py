@@ -7,9 +7,7 @@ Dataset bundled from Rowan/hellaswag on HuggingFace.
 """
 
 import logging
-import re
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -72,5 +70,5 @@ class HellaSwagBenchmark(BaseBenchmark):
         expected_letter = ANSWER_MAP.get(item["answer"], "")
         return predicted == expected_letter
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return item.get("activity_label")

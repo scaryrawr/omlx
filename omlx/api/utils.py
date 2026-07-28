@@ -6,7 +6,7 @@ Utility functions for text processing.
 
 import json
 import re
-from typing import Any, List
+from typing import Any
 
 from .openai_models import Message
 
@@ -863,12 +863,12 @@ def _apply_reasoning_reconstruction(
 
 
 def extract_text_content(
-    messages: List[Message],
+    messages: list[Message],
     max_tool_result_tokens: int | None = None,
     tokenizer: Any | None = None,
     native_reasoning_content: bool = False,
     consolidate_system_messages: bool = True,
-) -> List[dict]:
+) -> list[dict]:
     """
     Extract text content from OpenAI-format messages.
 
@@ -1050,12 +1050,12 @@ def extract_text_content(
 
 
 def extract_multimodal_content(
-    messages: List[Message],
+    messages: list[Message],
     max_tool_result_tokens: int | None = None,
     tokenizer: Any | None = None,
     native_reasoning_content: bool = False,
     consolidate_system_messages: bool = True,
-) -> List[dict]:
+) -> list[dict]:
     """
     Extract content from messages, preserving image_url parts for VLM.
 
@@ -1287,7 +1287,7 @@ def extract_harmony_messages(
     max_tool_result_tokens: int | None = None,
     tokenizer: Any | None = None,
     consolidate_system_messages: bool = True,
-) -> List[dict]:
+) -> list[dict]:
     """
     Extract messages for Harmony (gpt-oss) models.
 

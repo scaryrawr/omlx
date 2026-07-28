@@ -10,12 +10,10 @@ import enum
 import json
 import logging
 import shutil
-import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +451,7 @@ class HFUploader:
         from huggingface_hub import HfApi
 
         task = self._tasks[task_id]
-        tmp_readme: Optional[Path] = None
+        tmp_readme: Path | None = None
 
         try:
             async with self._upload_sem:

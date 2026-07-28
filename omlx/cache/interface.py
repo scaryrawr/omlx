@@ -7,7 +7,7 @@ should follow for consistency across the codebase.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from .stats import BaseCacheStats
 
@@ -24,7 +24,7 @@ class CacheManager(ABC):
     """
 
     @abstractmethod
-    def fetch(self, key: Any) -> Tuple[Optional[Any], bool]:
+    def fetch(self, key: Any) -> tuple[Any | None, bool]:
         """
         Fetch a value from the cache.
 

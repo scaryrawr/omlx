@@ -15,7 +15,6 @@ When TurboQuantKVCache is detected, routes attention to:
 
 import logging
 from functools import cache
-from typing import Optional
 
 import mlx.core as mx
 
@@ -544,8 +543,8 @@ def apply_turboquant_attention_patch() -> bool:
         values,
         cache,
         scale: float,
-        mask: Optional[mx.array],
-        sinks: Optional[mx.array] = None,
+        mask: mx.array | None,
+        sinks: mx.array | None = None,
     ) -> mx.array:
         from mlx_vlm.turboquant import TurboQuantKVCache as _TQCache
 

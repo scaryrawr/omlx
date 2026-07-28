@@ -18,7 +18,7 @@ of this post-load optimization.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 try:
     import mlx.core as mx
@@ -101,8 +101,8 @@ def _make_patched_attention_call(original_call):
     def patched_call(
         self,
         x: mx.array,
-        mask: Optional[mx.array] = None,
-        cache: Optional[Any] = None,
+        mask: mx.array | None = None,
+        cache: Any | None = None,
     ) -> mx.array:
         # If this instance has no IndexCache flags, run original
         if not hasattr(self, "_ic_is_full"):

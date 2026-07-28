@@ -7,8 +7,8 @@ integrating with vLLM's model execution system.
 """
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 from ..api.utils import detect_and_strip_partial
 from ..utils.tokenizer import get_tokenizer_config

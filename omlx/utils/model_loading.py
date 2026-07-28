@@ -27,6 +27,7 @@ _MLX_LM_LOAD_CONFIG_PATCHED = False
 def _mlx_lm_load_accepts_trust_remote_code() -> bool:
     try:
         import inspect
+
         from mlx_lm import load as _lm_load
         return "trust_remote_code" in inspect.signature(_lm_load).parameters
     except Exception:

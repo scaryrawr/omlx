@@ -37,11 +37,11 @@ generated tokens.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Generator, List, Optional, Set, Union
+from collections.abc import Callable, Generator
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
-
 from mlx_vlm.speculative import load_drafter as _vlm_load_drafter
 
 # PR #1169 (f96138e) moved the MTP round loop helpers from ``mlx_vlm.generate``
@@ -91,11 +91,11 @@ def _patch_qwen35_mtp_config_for_moe() -> None:
     """
     try:
         import mlx_vlm.speculative.drafters.qwen3_5_mtp as mtp_pkg
-        from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import (
-            Qwen3_5MTPConfig,
-        )
         from mlx_vlm.models.qwen3_5.config import (
             TextConfig as DenseTextConfig,
+        )
+        from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import (
+            Qwen3_5MTPConfig,
         )
     except ImportError:
         return  # drafter module not available; nothing to patch
@@ -247,7 +247,7 @@ class _MTPResetBindingProxy:
         return self._drafter.reset(target_model, *args, **kwargs)
 
 
-def load_vlm_mtp_drafter(path: str) -> Optional[VLMMTPDrafter]:
+def load_vlm_mtp_drafter(path: str) -> VLMMTPDrafter | None:
     """Load an MTP drafter (gemma4_assistant or qwen3_5_mtp); return None
     and log if the artifact is the wrong kind. Soft-fails so a misconfigured
     toggle does not crash model loading."""
@@ -293,7 +293,7 @@ def load_vlm_mtp_drafter(path: str) -> Optional[VLMMTPDrafter]:
     return VLMMTPDrafter(drafter_model, resolved_kind, path)
 
 
-def _read_model_type(drafter: nn.Module) -> Optional[str]:
+def _read_model_type(drafter: nn.Module) -> str | None:
     """Best-effort lookup of the drafter's HF model_type."""
     config = getattr(drafter, "config", None)
     if config is None:
@@ -307,18 +307,18 @@ def run_vlm_mtp_decode(
     *,
     target_language_model: nn.Module,
     drafter: VLMMTPDrafter,
-    prompt_cache: List[Any],
+    prompt_cache: list[Any],
     hidden: mx.array,
     shared_kv_states: dict,
-    first_bonus: Union[int, mx.array],
+    first_bonus: int | mx.array,
     max_tokens: int,
     sampler: Callable[[mx.array], mx.array],
-    prompt_tokens: Optional[mx.array] = None,
-    draft_block_size: Optional[int] = None,
+    prompt_tokens: mx.array | None = None,
+    draft_block_size: int | None = None,
     token_dtype: mx.Dtype = mx.int32,
-    eos_token_ids: Optional[Set[int]] = None,
-    stop_check: Optional[Callable[[int, int], bool]] = None,
-) -> Generator[Union[int, List[Optional[int]]], None, None]:
+    eos_token_ids: set[int] | None = None,
+    stop_check: Callable[[int, int], bool] | None = None,
+) -> Generator[int | list[int | None], None, None]:
     """Stream decoded tokens via mlx-vlm's MTP rounds.
 
     Yields plain Python ints for single-request decode (``first_bonus`` is

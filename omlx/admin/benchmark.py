@@ -14,7 +14,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 
@@ -50,7 +50,7 @@ class BenchmarkRequest(BaseModel):
     # When set, the benchmark runs against a remote OpenAI-compatible
     # endpoint instead of a local engine and model_id is the remote
     # model name (not validated against the local catalog).
-    external: Optional[ExternalEndpointConfig] = None
+    external: ExternalEndpointConfig | None = None
 
     @field_validator("prompt_lengths")
     @classmethod

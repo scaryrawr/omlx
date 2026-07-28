@@ -18,7 +18,7 @@ import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from omlx.cache.paged_cache import PagedCacheManager
@@ -164,13 +164,13 @@ class MemoryMonitor:
         self._max_memory = self._get_max_memory()
 
         self._last_check_time = 0.0
-        self._last_memory_info: Optional[MemoryInfo] = None
+        self._last_memory_info: MemoryInfo | None = None
         self._lock = threading.Lock()
 
         # Model info for memory estimation (set by scheduler)
-        self._num_layers: Optional[int] = None
-        self._num_kv_heads: Optional[int] = None
-        self._head_dim: Optional[int] = None
+        self._num_layers: int | None = None
+        self._num_kv_heads: int | None = None
+        self._head_dim: int | None = None
         # KV storage width; may be fractional with TurboQuant.
         self._dtype_size: float = 2
         self._kv_bytes_per_token_override: float | None = None
@@ -178,8 +178,8 @@ class MemoryMonitor:
         # _dtype_size (which the scheduler may override to a fractional TurboQuant
         # KV width). Set via set_model_info(compute_dtype_size=...).
         self._score_dtype_size: float = _SDPA_FALLBACK_SCORE_DTYPE_SIZE
-        self._num_attention_heads: Optional[int] = None
-        self._num_kv_cache_layers: Optional[int] = None
+        self._num_attention_heads: int | None = None
+        self._num_kv_cache_layers: int | None = None
         # Sliding-window (RotatingKVCache-family) layers as (count, window)
         # groups. Their resident KV is bounded at window + chunk - 1 tokens
         # per layer, so they need a capped term instead of the linear
@@ -190,7 +190,7 @@ class MemoryMonitor:
         self._fixed_state_bytes: int = 0
 
         # PagedCacheManager for KV cache memory measurement
-        self._paged_cache_manager: Optional["PagedCacheManager"] = None
+        self._paged_cache_manager: PagedCacheManager | None = None
         self._block_size: int = 256  # Default block size
 
         # Baseline memory (model weights) - set after model load
@@ -220,7 +220,7 @@ class MemoryMonitor:
         return get_max_working_set_bytes()
 
     def set_paged_cache_manager(
-        self, manager: "PagedCacheManager", block_size: int = 64
+        self, manager: PagedCacheManager, block_size: int = 64
     ) -> None:
         """
         Set PagedCacheManager for memory monitoring.
@@ -362,10 +362,10 @@ class MemoryMonitor:
         num_kv_heads: int,
         head_dim: int,
         dtype_size: float = 2,
-        num_attention_heads: Optional[int] = None,
-        num_kv_cache_layers: Optional[int] = None,
-        compute_dtype_size: Optional[float] = None,
-        kv_bytes_per_token: Optional[float] = None,
+        num_attention_heads: int | None = None,
+        num_kv_cache_layers: int | None = None,
+        compute_dtype_size: float | None = None,
+        kv_bytes_per_token: float | None = None,
         rotating_layer_specs: Sequence[tuple[int, int]] | None = None,
     ) -> None:
         """
@@ -490,10 +490,10 @@ class MemoryMonitor:
     def estimate_block_memory(
         self,
         block_size: int,
-        num_layers: Optional[int] = None,
-        num_kv_heads: Optional[int] = None,
-        head_dim: Optional[int] = None,
-        dtype_size: Optional[float] = None,
+        num_layers: int | None = None,
+        num_kv_heads: int | None = None,
+        head_dim: int | None = None,
+        dtype_size: float | None = None,
     ) -> float:
         """
         Estimate memory usage for a KV cache block.
@@ -938,7 +938,7 @@ def estimate_mla_kv_bytes_per_token(
     return float(elems_per_token) * float(dtype_size)
 
 
-def set_model_info_from_model(monitor: "MemoryMonitor", model: Any) -> None:
+def set_model_info_from_model(monitor: MemoryMonitor, model: Any) -> None:
     """Populate ``monitor`` with KV/SDPA dims read from an mlx-lm ``model``.
 
     The engine-agnostic baseline used by engines that bypass the
@@ -1076,7 +1076,7 @@ def set_model_info_from_model(monitor: "MemoryMonitor", model: Any) -> None:
 
 
 def raise_if_prefill_exceeds(
-    monitor: "MemoryMonitor | None",
+    monitor: MemoryMonitor | None,
     *,
     prefill_memory_guard: bool,
     hard_limit_bytes: int,

@@ -12,12 +12,13 @@ import mlx.nn as nn
 from mlx.nn.layers.distributed import shard_inplace, shard_linear, sum_gradients
 from mlx.utils import tree_flatten
 
+from omlx.patches.deepseek_v4.switch_layers import SwitchGLU
+
 from .base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
 from .cache import CacheList, PoolingCache, RotatingKVCache
 from .hyper_connection import HyperConnection, HyperHead, hc_expand
 from .mla import MultiLinear
 from .pipeline import PipelineMixin
-from omlx.patches.deepseek_v4.switch_layers import SwitchGLU
 
 _DEEPSEEK_V4_SPARSE_ATTENTION_NATIVE_DISABLED = False
 _DEEPSEEK_V4_INDEXER_NATIVE_DISABLED = False

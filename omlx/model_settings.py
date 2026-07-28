@@ -9,9 +9,10 @@ import copy
 import json
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from .model_profiles import (
     MODEL_SPECIFIC_PROFILE_FIELDS,
@@ -19,8 +20,8 @@ from .model_profiles import (
     filter_profile_fields,
     filter_universal_fields,
     slugify_profile_api_name,
-    validate_profile_name,
     utcnow,
+    validate_profile_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,43 +106,43 @@ class ModelSettings:
     """
 
     # Sampling parameters (None means use global default)
-    max_context_window: Optional[int] = None
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    repetition_penalty: Optional[float] = None
-    min_p: Optional[float] = None
-    presence_penalty: Optional[float] = None
+    max_context_window: int | None = None
+    max_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    repetition_penalty: float | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
     force_sampling: bool = False
-    max_tool_result_tokens: Optional[int] = None
-    chat_template_kwargs: Optional[Dict[str, Any]] = None
-    forced_ct_kwargs: Optional[list[str]] = (
+    max_tool_result_tokens: int | None = None
+    chat_template_kwargs: dict[str, Any] | None = None
+    forced_ct_kwargs: list[str] | None = (
         None  # Keys that cannot be overridden by API requests
     )
-    ttl_seconds: Optional[int] = None  # Auto-unload after idle seconds (None = no TTL)
-    model_type_override: Optional[str] = (
+    ttl_seconds: int | None = None  # Auto-unload after idle seconds (None = no TTL)
+    model_type_override: str | None = (
         None  # "llm", "vlm", "embedding", "reranker", "audio_*", "image", or None
     )
-    model_alias: Optional[str] = (
+    model_alias: str | None = (
         None  # API-visible name (alternative to directory name)
     )
-    index_cache_freq: Optional[int] = (
+    index_cache_freq: int | None = (
         None  # IndexCache: every Nth layer keeps indexer (DeepSeek DSA only)
     )
-    enable_thinking: Optional[bool] = (
+    enable_thinking: bool | None = (
         None  # Explicit toggle for thinking/reasoning mode (None = auto)
     )
-    preserve_thinking: Optional[bool] = (
+    preserve_thinking: bool | None = (
         None  # Keep <think> blocks in historical turns (None = auto, True when template supports it)
     )
     thinking_budget_enabled: bool = False
-    thinking_budget_tokens: Optional[int] = None
-    reasoning_parser: Optional[str] = (
+    thinking_budget_tokens: int | None = None
+    reasoning_parser: str | None = (
         None  # xgrammar builtin name: "qwen", "harmony", "llama", etc.
     )
     guided_grammar_enabled: bool = False
-    guided_grammar: Optional[str] = None
+    guided_grammar: str | None = None
 
     # TurboQuant KV cache (mlx-vlm backend)
     turboquant_kv_enabled: bool = False
@@ -152,20 +153,20 @@ class ModelSettings:
 
     # SpecPrefill (experimental: attention-based sparse prefill for MoE models)
     specprefill_enabled: bool = False
-    specprefill_draft_model: Optional[str] = (
+    specprefill_draft_model: str | None = (
         None  # Path to draft model (must share tokenizer)
     )
-    specprefill_keep_pct: Optional[float] = None  # Keep rate (0.1-0.5, default 0.2)
-    specprefill_threshold: Optional[int] = None  # Min tokens to trigger (default 8192)
+    specprefill_keep_pct: float | None = None  # Keep rate (0.1-0.5, default 0.2)
+    specprefill_threshold: int | None = None  # Min tokens to trigger (default 8192)
 
     # DFlash (block diffusion speculative decoding)
     dflash_enabled: bool = False
-    dflash_draft_model: Optional[str] = None  # Path/repo for DFlash draft checkpoint
-    dflash_draft_quant_enabled: Optional[bool] = None
-    dflash_draft_quant_weight_bits: Optional[int] = None  # 2, 4, 8
-    dflash_draft_quant_activation_bits: Optional[int] = None  # 16, 32
-    dflash_draft_quant_group_size: Optional[int] = None  # 32, 64, 128
-    dflash_max_ctx: Optional[int] = (
+    dflash_draft_model: str | None = None  # Path/repo for DFlash draft checkpoint
+    dflash_draft_quant_enabled: bool | None = None
+    dflash_draft_quant_weight_bits: int | None = None  # 2, 4, 8
+    dflash_draft_quant_activation_bits: int | None = None  # 16, 32
+    dflash_draft_quant_group_size: int | None = None  # 32, 64, 128
+    dflash_max_ctx: int | None = (
         None  # None = unlimited; trigger BatchedEngine fallback when prompt_len >= this
     )
     # DFlash prefix cache (private to dflash; separate from omlx tiered cache because
@@ -184,9 +185,9 @@ class ModelSettings:
     # DFlash runtime tuning knobs. None = let dflash-mlx pick its own DEFAULT_RUNTIME_CONFIG
     # value (currently window=1024, sink=64, verify_mode="adaptive"). Surfaced for long-context
     # agentic workloads where acceptance drops on the default sliding window.
-    dflash_draft_window_size: Optional[int] = None
-    dflash_draft_sink_size: Optional[int] = None
-    dflash_verify_mode: Optional[str] = None  # "dflash" | "adaptive" | "ddtree" | "off"
+    dflash_draft_window_size: int | None = None
+    dflash_draft_sink_size: int | None = None
+    dflash_verify_mode: str | None = None  # "dflash" | "adaptive" | "ddtree" | "off"
 
     # Native MTP (mlx-lm PR 990 / PR 15 monkey-patch). When enabled, BatchGenerator
     # uses MTP draft+verify for singleton decode and aligned multi-row decode batches.
@@ -198,7 +199,7 @@ class ModelSettings:
     # DeepSeek-V4 native MTP always runs depth 1. An adaptive controller
     # picks 1..max per sequence from rolling acceptance/latency estimates;
     # set to 1 for a fixed depth-1 cycle.
-    mtp_num_draft_tokens: Optional[int] = None
+    mtp_num_draft_tokens: int | None = None
 
     # VLM MTP speculative decoding via external MTP drafter (mlx-vlm f96138e+).
     # Supported drafter types: gemma4_assistant (for Gemma 4 VLMs), qwen3_5_mtp
@@ -206,10 +207,10 @@ class ModelSettings:
     # Mutually exclusive with all other speculative paths because the wrapper
     # bypasses mlx-lm BatchGenerator at decode time.
     vlm_mtp_enabled: bool = False
-    vlm_mtp_draft_model: Optional[str] = (
+    vlm_mtp_draft_model: str | None = (
         None  # Path / model id of the assistant drafter
     )
-    vlm_mtp_draft_block_size: Optional[int] = (
+    vlm_mtp_draft_block_size: int | None = (
         None  # Tokens per draft round (None = mlx-vlm default)
     )
 
@@ -225,9 +226,9 @@ class ModelSettings:
     trust_remote_code: bool = False
 
     # Metadata
-    display_name: Optional[str] = None
-    description: Optional[str] = None
-    active_profile_name: Optional[str] = None  # Name of the currently-applied profile
+    display_name: str | None = None
+    description: str | None = None
+    active_profile_name: str | None = None  # Name of the currently-applied profile
 
     def __post_init__(self) -> None:
         # Native MTP is mutually exclusive with DFlash (also speculative).
@@ -311,9 +312,9 @@ class ModelSettingsManager:
         self.profiles_file = self.base_path / "model_profiles.json"
         self.templates_file = self.base_path / "global_templates.json"
         self._lock = threading.Lock()
-        self._settings: Dict[str, ModelSettings] = {}
-        self._profiles: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        self._templates: Dict[str, Dict[str, Any]] = {}
+        self._settings: dict[str, ModelSettings] = {}
+        self._profiles: dict[str, dict[str, dict[str, Any]]] = {}
+        self._templates: dict[str, dict[str, Any]] = {}
 
         # Ensure base directory exists
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -334,7 +335,7 @@ class ModelSettingsManager:
             return
 
         try:
-            with open(self.settings_file, "r", encoding="utf-8") as f:
+            with open(self.settings_file, encoding="utf-8") as f:
                 data = json.load(f)
 
             # Check version
@@ -411,7 +412,7 @@ class ModelSettingsManager:
     def get_settings_for_request(
         self,
         model_id: str,
-        resolved_model_id: Optional[str] = None,
+        resolved_model_id: str | None = None,
     ) -> ModelSettings:
         """Get settings for an API-requested model name.
 
@@ -488,7 +489,7 @@ class ModelSettingsManager:
                 logger.info(f"Deleted settings for model '{model_id}'")
             return removed
 
-    def get_default_model_id(self) -> Optional[str]:
+    def get_default_model_id(self) -> str | None:
         """Get the ID of the default model.
 
         Returns:
@@ -513,7 +514,7 @@ class ModelSettingsManager:
                 if settings.is_pinned
             ]
 
-    def get_all_settings(self) -> Dict[str, ModelSettings]:
+    def get_all_settings(self) -> dict[str, ModelSettings]:
         """Get a copy of all model settings.
 
         Returns:
@@ -532,7 +533,7 @@ class ModelSettingsManager:
             self._profiles = {}
             return
         try:
-            with open(self.profiles_file, "r", encoding="utf-8") as f:
+            with open(self.profiles_file, encoding="utf-8") as f:
                 data = json.load(f)
             version = data.get("version", 1)
             if version != PROFILES_VERSION:
@@ -611,14 +612,14 @@ class ModelSettingsManager:
         return candidate
 
     @staticmethod
-    def _profile_api_name(profile: Dict[str, Any]) -> str:
+    def _profile_api_name(profile: dict[str, Any]) -> str:
         api_name = profile.get("api_name") or profile["name"]
         validate_profile_name(api_name)
         return api_name
 
     def _allocate_profile_api_name_locked(
         self,
-        profiles: Dict[str, Dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
         value: str | None,
         *,
         display_name: str | None,
@@ -644,7 +645,7 @@ class ModelSettingsManager:
         return f"{model_id}:{api_name}"
 
     def _display_profile_model_id_locked(
-        self, model_id: str, profile: Dict[str, Any]
+        self, model_id: str, profile: dict[str, Any]
     ) -> str:
         """Advertised form of an exposed profile's model ID.
 
@@ -659,7 +660,7 @@ class ModelSettingsManager:
 
     def _find_exposed_profile_locked(
         self, model_id: str
-    ) -> Optional[tuple[str, Dict[str, Any]]]:
+    ) -> tuple[str, dict[str, Any]] | None:
         for base_model_id, profiles in self._profiles.items():
             base = self._settings.get(base_model_id)
             alias = base.model_alias if base else None
@@ -674,7 +675,7 @@ class ModelSettingsManager:
         return None
 
     def _settings_with_profile_locked(
-        self, model_id: str, profile: Dict[str, Any]
+        self, model_id: str, profile: dict[str, Any]
     ) -> ModelSettings:
         base = self._settings.get(model_id)
         merged = base.to_dict() if base is not None else {}
@@ -686,14 +687,14 @@ class ModelSettingsManager:
         return ModelSettings.from_dict(merged)
 
     def _runtime_settings_with_profile_locked(
-        self, model_id: str, profile: Dict[str, Any]
+        self, model_id: str, profile: dict[str, Any]
     ) -> ModelSettings:
         base = self._settings.get(model_id)
         merged = base.to_dict() if base is not None else {}
         merged.update(filter_profile_fields(profile.get("settings", {}) or {}))
         return ModelSettings.from_dict(merged)
 
-    def get_exposed_profile_source_model_id(self, model_id: str) -> Optional[str]:
+    def get_exposed_profile_source_model_id(self, model_id: str) -> str | None:
         """Return the base model for an exposed profile model ID, if any."""
         with self._lock:
             candidates = [model_id]
@@ -708,7 +709,7 @@ class ModelSettingsManager:
     def get_exposed_profile_runtime_settings_for_request(
         self,
         model_id: str,
-    ) -> Optional[tuple[str, ModelSettings]]:
+    ) -> tuple[str, ModelSettings] | None:
         """Return full runtime settings for an exposed profile request.
 
         Unlike ``get_settings_for_request()``, this includes model-specific
@@ -760,7 +761,7 @@ class ModelSettingsManager:
     def _profile_request_ids_locked(
         self,
         model_id: str,
-        profile: Dict[str, Any],
+        profile: dict[str, Any],
     ) -> set[str]:
         base = self._settings.get(model_id)
         base_ids = {model_id}
@@ -772,7 +773,7 @@ class ModelSettingsManager:
     def _validate_exposed_profile_ids_available_locked(
         self,
         model_id: str,
-        profile: Dict[str, Any],
+        profile: dict[str, Any],
         *,
         exclude_profile_name: str | None = None,
         reserved_model_ids: set[str] | None = None,
@@ -831,7 +832,7 @@ class ModelSettingsManager:
             return exposed
 
     @staticmethod
-    def _has_engine_fields(profile: Dict[str, Any]) -> bool:
+    def _has_engine_fields(profile: dict[str, Any]) -> bool:
         """True when the profile overrides any engine-construction field.
 
         Those fields are ignored by the request-time sampling overlay but are
@@ -857,7 +858,7 @@ class ModelSettingsManager:
                 for p in per_model.values()
             ]
 
-    def get_profile(self, model_id: str, name: str) -> Optional[dict]:
+    def get_profile(self, model_id: str, name: str) -> dict | None:
         with self._lock:
             return dict(self._profiles.get(model_id, {}).get(name, {})) or None
 
@@ -866,12 +867,12 @@ class ModelSettingsManager:
         model_id: str,
         name: str,
         display_name: str,
-        description: Optional[str],
-        settings: Dict[str, Any],
-        source_template: Optional[str] = None,
+        description: str | None,
+        settings: dict[str, Any],
+        source_template: str | None = None,
         expose_as_model: bool = False,
-        api_name: Optional[str] = None,
-        reserved_model_ids: Optional[set[str]] = None,
+        api_name: str | None = None,
+        reserved_model_ids: set[str] | None = None,
     ) -> dict:
         """Create a new profile. Raises if name is invalid or already exists."""
         validate_profile_name(name)
@@ -914,15 +915,15 @@ class ModelSettingsManager:
         model_id: str,
         name: str,
         *,
-        new_name: Optional[str] = None,
-        display_name: Optional[str] = None,
-        description: Optional[str] = None,
-        settings: Optional[Dict[str, Any]] = None,
-        source_template: Optional[str] = None,
-        expose_as_model: Optional[bool] = None,
-        api_name: Optional[str] = None,
-        reserved_model_ids: Optional[set[str]] = None,
-    ) -> Optional[dict]:
+        new_name: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+        settings: dict[str, Any] | None = None,
+        source_template: str | None = None,
+        expose_as_model: bool | None = None,
+        api_name: str | None = None,
+        reserved_model_ids: set[str] | None = None,
+    ) -> dict | None:
         """Update a profile's metadata/settings. Returns updated dict or None if not found."""
         with self._lock:
             per_model = self._profiles.get(model_id, {})
@@ -1023,8 +1024,8 @@ class ModelSettingsManager:
         self,
         model_id: str,
         name: str,
-        settings_sanitizer: Optional[Callable[[dict[str, Any]], None]] = None,
-    ) -> Optional[ModelSettings]:
+        settings_sanitizer: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ModelSettings | None:
         """Merge profile settings into the model's live settings and persist."""
         with self._lock:
             per_model = self._profiles.get(model_id, {})
@@ -1071,7 +1072,7 @@ class ModelSettingsManager:
             self._templates = {}
             return
         try:
-            with open(self.templates_file, "r", encoding="utf-8") as f:
+            with open(self.templates_file, encoding="utf-8") as f:
                 data = json.load(f)
             version = data.get("version", 1)
             if version != TEMPLATES_VERSION:
@@ -1109,7 +1110,7 @@ class ModelSettingsManager:
         with self._lock:
             return [dict(t) for t in self._templates.values()]
 
-    def get_template(self, name: str) -> Optional[dict]:
+    def get_template(self, name: str) -> dict | None:
         with self._lock:
             u = self._templates.get(name)
             return dict(u) if u is not None else None
@@ -1118,8 +1119,8 @@ class ModelSettingsManager:
         self,
         name: str,
         display_name: str,
-        description: Optional[str],
-        settings: Dict[str, Any],
+        description: str | None,
+        settings: dict[str, Any],
     ) -> dict:
         validate_profile_name(name)
         filtered = filter_universal_fields(settings or {})
@@ -1142,8 +1143,8 @@ class ModelSettingsManager:
         self,
         name: str,
         display_name: str,
-        description: Optional[str],
-        settings: Dict[str, Any],
+        description: str | None,
+        settings: dict[str, Any],
     ) -> dict:
         """Create or replace a template with the given settings."""
         validate_profile_name(name)
@@ -1167,11 +1168,11 @@ class ModelSettingsManager:
         self,
         name: str,
         *,
-        new_name: Optional[str] = None,
-        display_name: Optional[str] = None,
-        description: Optional[str] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> Optional[dict]:
+        new_name: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> dict | None:
         with self._lock:
             if name not in self._templates:
                 return None

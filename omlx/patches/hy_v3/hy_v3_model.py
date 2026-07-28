@@ -1,7 +1,7 @@
 # Copyright © 2026 Apple Inc.
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -30,7 +30,7 @@ class ModelArgs(BaseModelArgs):
     expert_hidden_dim: int
     first_k_dense_replace: int
     rms_norm_eps: float
-    rope_parameters: Dict[str, Any]
+    rope_parameters: dict[str, Any]
     router_scaling_factor: float = 1.0
     qk_norm: bool = True
     route_norm: bool = True
@@ -74,8 +74,8 @@ class Attention(nn.Module):
     def __call__(
         self,
         x: mx.array,
-        mask: Optional[mx.array] = None,
-        cache: Optional[Any] = None,
+        mask: mx.array | None = None,
+        cache: Any | None = None,
     ) -> mx.array:
         B, L, _ = x.shape
 
@@ -215,8 +215,8 @@ class DecoderLayer(nn.Module):
     def __call__(
         self,
         x: mx.array,
-        mask: Optional[mx.array] = None,
-        cache: Optional[Any] = None,
+        mask: mx.array | None = None,
+        cache: Any | None = None,
     ) -> mx.array:
         r = self.self_attn(self.input_layernorm(x), mask, cache)
         h = x + r
@@ -235,7 +235,7 @@ class HYV3Model(PipelineMixin, nn.Module):
     def __call__(
         self,
         x: mx.array,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
     ) -> mx.array:
         h = self.embed_tokens(x)
 
@@ -275,7 +275,7 @@ class Model(nn.Module):
     def __call__(
         self,
         inputs: mx.array,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
     ):
         out = self.model(inputs, cache)
         if self.args.enable_lm_head_fp32:
@@ -315,7 +315,7 @@ class Model(nn.Module):
 
         return weights
 
-    def shard(self, group: Optional[mx.distributed.Group] = None):
+    def shard(self, group: mx.distributed.Group | None = None):
         group = group or mx.distributed.init()
         N = group.size()
         for layer in self.model.layers:

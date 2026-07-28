@@ -20,7 +20,7 @@ import gc
 import logging
 import os
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Maps config.json model_type / architecture values to STS engine families.
 # This is the authoritative source — name-based matching is only a fallback.
-_CONFIG_TYPE_TO_FAMILY: Dict[str, str] = {
+_CONFIG_TYPE_TO_FAMILY: dict[str, str] = {
     # model_type values (from config.json or mlx-audio dir names)
     "deepfilternet": "deepfilternet",
     "mossformer2_se": "mossformer2",
@@ -397,7 +397,7 @@ class STSEngine(BaseNonStreamingEngine):
         finally:
             await self._finish_activity(activity_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         return {
             "model_name": self._model_name,

@@ -15,12 +15,11 @@ Also re-exports core engine components for backwards compatibility.
 from ..engine_core import AsyncEngineCore, EngineConfig, EngineCore
 from .base import BaseEngine, BaseNonStreamingEngine, GenerationOutput
 from .batched import BatchedEngine
-from .embedding import EmbeddingEngine
-
 from .dflash import DFlashEngine
+from .embedding import EmbeddingEngine
 from .reranker import RerankerEngine
-from .stt import STTEngine
 from .sts import STSEngine
+from .stt import STTEngine
 from .tts import TTSEngine
 from .vlm import VLMBatchedEngine
 

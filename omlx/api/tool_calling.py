@@ -23,7 +23,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import regex
 from jsonschema import ValidationError, validate
@@ -125,7 +125,7 @@ class ToolCallExtraction:
     """Parsed tool-call result plus sanitized reasoning text."""
 
     cleaned_text: str
-    tool_calls: Optional[List[ToolCall]]
+    tool_calls: list[ToolCall] | None
     cleaned_thinking: str
     tool_calls_from_thinking: bool = False
 
@@ -139,7 +139,7 @@ _SCHEMA_CONTAINER_TYPES = {"object", "array", "arr"}
 _SCHEMA_INT_PREFIXES = ("int", "uint", "long", "short", "unsigned")
 
 
-def _tool_param_properties(func_name: str, tools: Optional[List]) -> dict:
+def _tool_param_properties(func_name: str, tools: list | None) -> dict:
     """Return the declared parameter properties for a tool, or {}."""
     if not tools:
         return {}
@@ -158,7 +158,7 @@ def _tool_param_properties(func_name: str, tools: Optional[List]) -> dict:
     return {}
 
 
-def _repair_json_value(val: str) -> Optional[Any]:
+def _repair_json_value(val: str) -> Any | None:
     """Best-effort repair of near-valid JSON with unbalanced brackets.
 
     Rewrites closing brackets that do not match the innermost open bracket
@@ -167,8 +167,8 @@ def _repair_json_value(val: str) -> Optional[Any]:
     appends missing closers.  Returns the parsed value, or None when the
     repaired text still fails to parse.
     """
-    out: List[str] = []
-    stack: List[str] = []
+    out: list[str] = []
+    stack: list[str] = []
     in_string = False
     escaped = False
     for ch in val:
@@ -283,8 +283,8 @@ def _coerce_param_value(val: str, key: str, props: dict, func_name: str) -> Any:
 
 
 def _parse_xml_tool_calls(
-    text: str, tools: Optional[List] = None
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, tools: list | None = None
+) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for XML-based tool call formats.
 
@@ -384,8 +384,8 @@ def _parse_xml_tool_calls(
 
 
 def _parse_namespaced_tool_calls(
-    text: str, namespace: str, tools: Optional[List] = None
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, namespace: str, tools: list | None = None
+) -> tuple[str, list[ToolCall] | None]:
     """
     Parse namespaced tool call tags like <minimax:tool_call>...</minimax:tool_call>.
 
@@ -438,7 +438,7 @@ def _parse_namespaced_tool_calls(
     return cleaned, tool_calls
 
 
-def _parse_hermes_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
+def _parse_hermes_tool_calls(text: str) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for Hermes-style tool call formats.
 
@@ -528,7 +528,7 @@ def _parse_hermes_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
     return cleaned, tool_calls
 
 
-def _parse_bracket_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
+def _parse_bracket_tool_calls(text: str) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for bracket-style tool call formats.
 
@@ -1112,7 +1112,7 @@ def _gemma4_args_to_json_legacy(args_str: str) -> dict:
     return result
 
 
-def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
+def _parse_gemma4_tool_call_fallback(text: str) -> dict | list:
     """Robust fallback parser for Gemma 4 ``call:name{args}`` format.
 
     Activated only for Gemma 4 models (guarded by the ``tool_call_start``
@@ -1182,7 +1182,7 @@ def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
 
 
 def _remap_tool_call_names(
-    tool_calls: List[ToolCall], tools: Optional[List]
+    tool_calls: list[ToolCall], tools: list | None
 ) -> None:
     """Remap namespace-prefixed emitted tool names onto registered tools.
 
@@ -1227,8 +1227,8 @@ def _remap_tool_call_names(
 def parse_tool_calls(
     text: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """
     Parse tool calls from model output.
 
@@ -1261,8 +1261,8 @@ def parse_tool_calls(
 def _parse_tool_calls_impl(
     text: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """parse_tool_calls body, pre-remap. See the public wrapper's docstring."""
     cleaned_text = text
 
@@ -1476,7 +1476,7 @@ def sanitize_tool_call_markup(text: str, tokenizer: Any) -> str:
     return cleaned.strip()
 
 
-def _extract_tool_names(tools: List) -> set:
+def _extract_tool_names(tools: list) -> set:
     """Extract function names from OpenAI-format tool definitions."""
     names = set()
     for tool in tools:
@@ -1493,7 +1493,7 @@ def extract_tool_calls_with_thinking(
     thinking_content: str,
     regular_content: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
+    tools: list | None = None,
 ) -> ToolCallExtraction:
     """Extract tool calls while keeping a sanitized reasoning transcript.
 
@@ -1556,8 +1556,8 @@ def parse_tool_calls_with_thinking_fallback(
     thinking_content: str,
     regular_content: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """Parse tool calls from content, falling back to thinking if none found.
 
     Small reasoning models sometimes generate tool call XML inside <think>
@@ -1608,12 +1608,12 @@ class ToolCallStreamFilter:
             marker = ""
         if marker_end is None:
             marker_end = ""
-        self._marker_pairs: List[Tuple[str, str]] = [
+        self._marker_pairs: list[tuple[str, str]] = [
             ("]<]minimax[>[<tool_call>", "]<]minimax[>[</tool_call>"),
             ("<|tool_call_start|>", "<|tool_call_end|>"),
             ("<tool_call>", "</tool_call>"),
         ]
-        self._suppress_after_markers: List[str] = []
+        self._suppress_after_markers: list[str] = []
         if marker:
             if marker_end:
                 self._marker_pairs.insert(0, (marker, marker_end))
@@ -1627,10 +1627,10 @@ class ToolCallStreamFilter:
         is_gemma4_tool_marker = (
             marker == "<|tool_call>" and marker_end == "<tool_call|>"
         )
-        self._stray_close_markers: List[str] = (
+        self._stray_close_markers: list[str] = (
             [marker_end] if is_gemma4_tool_marker else []
         )
-        self._orphan_close_markers: List[str] = ["<|tool_call_end|>"]
+        self._orphan_close_markers: list[str] = ["<|tool_call_end|>"]
         if marker_end and not self._is_xml_close_marker(marker_end):
             self._orphan_close_markers.append(marker_end)
         self._orphan_close_markers = list(dict.fromkeys(self._orphan_close_markers))
@@ -1641,7 +1641,7 @@ class ToolCallStreamFilter:
             re.DOTALL,
         )
         self._buffer = ""
-        self._suppressing_until: Optional[str] = None
+        self._suppressing_until: str | None = None
         self._suppressing = False
 
     @staticmethod
@@ -1655,7 +1655,7 @@ class ToolCallStreamFilter:
 
     def _find_start_envelope(
         self, text: str
-    ) -> Optional[Tuple[int, int, Optional[str]]]:
+    ) -> tuple[int, int, str | None] | None:
         """Find earliest complete opening envelope.
 
         Returns:
@@ -1663,7 +1663,7 @@ class ToolCallStreamFilter:
             - close_marker_or_none is a close marker to wait for, or ``None``
               when the whole envelope is already contained in consume_len.
         """
-        starts: List[Tuple[int, int, Optional[str]]] = []
+        starts: list[tuple[int, int, str | None]] = []
 
         for marker, close in self._marker_pairs:
             idx = text.find(marker)
@@ -1827,7 +1827,7 @@ class ToolCallStreamFilter:
         if not any(bp in text for bp in self._bracket_prefixes):
             return text
 
-        out: List[str] = []
+        out: list[str] = []
         cursor = 0
         while cursor < len(text):
             bracket_idx = -1
@@ -1863,7 +1863,7 @@ class ToolCallStreamFilter:
             return text
 
         self._buffer += text
-        out: List[str] = []
+        out: list[str] = []
 
         while self._buffer:
             if self._suppressing_until == "__suppress_permanently__":
@@ -1945,7 +1945,7 @@ class ToolCallStreamFilter:
         return buf
 
 
-def convert_tools_for_template(tools: Optional[List]) -> Optional[List[dict]]:
+def convert_tools_for_template(tools: list | None) -> list[dict] | None:
     """
     Convert OpenAI tools format to format expected by tokenizer.apply_chat_template.
 
@@ -2099,8 +2099,8 @@ def format_tool_call_for_message(tool_call: ToolCall) -> dict:
 
 
 def validate_json_schema(
-    data: Any, schema: Dict[str, Any]
-) -> Tuple[bool, Optional[str]]:
+    data: Any, schema: dict[str, Any]
+) -> tuple[bool, str | None]:
     """
     Validate JSON data against a JSON Schema.
 
@@ -2120,7 +2120,7 @@ def validate_json_schema(
         return False, str(e.message)
 
 
-def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+def extract_json_from_text(text: str) -> dict[str, Any] | None:
     """
     Extract JSON from model output text.
 
@@ -2171,8 +2171,8 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 def parse_json_output(
-    text: str, response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None
-) -> Tuple[str, Optional[Dict[str, Any]], bool, Optional[str]]:
+    text: str, response_format: ResponseFormat | dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any] | None, bool, str | None]:
     """
     Parse JSON from model output when response_format is set.
 
@@ -2239,8 +2239,8 @@ def parse_json_output(
 
 
 def build_json_system_prompt(
-    response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None,
-) -> Optional[str]:
+    response_format: ResponseFormat | dict[str, Any] | None = None,
+) -> str | None:
     """
     Build a system prompt instruction for JSON output.
 

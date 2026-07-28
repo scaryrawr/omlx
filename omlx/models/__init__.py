@@ -6,7 +6,7 @@ This module provides wrappers around mlx-lm and mlx-embeddings
 for integration with oMLX's model execution system.
 """
 
+from omlx.models.embedding import EmbeddingOutput, MLXEmbeddingModel
 from omlx.models.llm import MLXLanguageModel
-from omlx.models.embedding import MLXEmbeddingModel, EmbeddingOutput
 
 __all__ = ["MLXLanguageModel", "MLXEmbeddingModel", "EmbeddingOutput"]

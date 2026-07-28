@@ -20,7 +20,7 @@ Architecture:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -71,16 +71,16 @@ class VLMModelAdapter(nn.Module):
         self._uses_mrope = self._detect_mrope(vlm_model)
 
         # Pending vision embeddings state (set before prefill, cleared after)
-        self._pending_embeds: Optional[mx.array] = None
-        self._pending_kwargs: Dict[str, Any] = {}
+        self._pending_embeds: mx.array | None = None
+        self._pending_kwargs: dict[str, Any] = {}
         self._embed_offset: int = 0
 
         # Per-request mRoPE state: UID → rope_delta mapping.
         # Populated by scheduler after VLM prefill, consumed during decode.
         # The _patched_generation_batch_step builds _batch_rope_deltas
         # from this dict + current batch UIDs before each step.
-        self._uid_rope_deltas: Dict[int, float] = {}
-        self._batch_rope_deltas: Optional[mx.array] = None
+        self._uid_rope_deltas: dict[int, float] = {}
+        self._batch_rope_deltas: mx.array | None = None
 
     def release_resources(self) -> None:
         """Drop references to VLM-owned MLX arrays before engine teardown reclaim."""
@@ -130,7 +130,7 @@ class VLMModelAdapter(nn.Module):
             return self._language_model.args
         return self.config
 
-    def make_cache(self) -> List[Any]:
+    def make_cache(self) -> list[Any]:
         """
         Create KV cache using the language model's make_cache().
 
@@ -146,7 +146,7 @@ class VLMModelAdapter(nn.Module):
     def set_pending_embeddings(
         self,
         inputs_embeds: mx.array,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
+        extra_kwargs: dict[str, Any] | None = None,
         start_offset: int = 0,
     ) -> None:
         """
@@ -235,7 +235,7 @@ class VLMModelAdapter(nn.Module):
         """
         self._batch_rope_deltas = deltas
 
-    def _batch_rope_deltas_for_size(self, batch_size: int) -> Optional[mx.array]:
+    def _batch_rope_deltas_for_size(self, batch_size: int) -> mx.array | None:
         """Return rope deltas aligned to the current model input batch size."""
         if self._batch_rope_deltas is None:
             return None
@@ -305,7 +305,7 @@ class VLMModelAdapter(nn.Module):
     def __call__(
         self,
         input_ids: mx.array,
-        cache: Optional[List[Any]] = None,
+        cache: list[Any] | None = None,
         **kwargs,
     ) -> Any:
         """
@@ -403,7 +403,7 @@ class VLMModelAdapter(nn.Module):
     def _forward_with_embeddings(
         self,
         input_ids: mx.array,
-        cache: Optional[List[Any]] = None,
+        cache: list[Any] | None = None,
         **kwargs,
     ) -> Any:
         """Forward pass with pre-computed vision embeddings (prefill phase)."""
@@ -428,7 +428,7 @@ class VLMModelAdapter(nn.Module):
 
         return result
 
-    def get_input_embeddings(self, input_ids: mx.array, pixel_values: Optional[mx.array] = None, **kwargs) -> Any:
+    def get_input_embeddings(self, input_ids: mx.array, pixel_values: mx.array | None = None, **kwargs) -> Any:
         """
         Compute vision+text merged embeddings.
 

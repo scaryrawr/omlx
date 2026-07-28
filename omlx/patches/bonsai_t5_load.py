@@ -36,9 +36,9 @@ from omlx.custom_kernels.bonsai.fast import (
     _dequant_1bit,
     bonsai_q1_affine_qmv,
     bonsai_qmv_wide,
+    bonsai_t5_qmm,
     bonsai_t5_qmv,
     bonsai_t5_qmv_wide,
-    bonsai_t5_qmm,
     has_native,
 )
 

@@ -12,9 +12,9 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
 
 try:
     import mlx.core as mx
@@ -143,7 +143,7 @@ class OQManager:
     def __init__(
         self,
         model_dirs: list[str],
-        on_complete: Optional[Callable] = None,
+        on_complete: Callable | None = None,
     ):
         self._model_dirs = [Path(d) for d in model_dirs]
         self._output_dir = self._model_dirs[0] if self._model_dirs else Path(".")
@@ -164,7 +164,7 @@ class OQManager:
         """Scan all model dirs. Returns (source_models, all_models)."""
 
         def _scan() -> tuple[list[dict], list[dict]]:
-            from ..oq import validate_quantizable, estimate_memory
+            from ..oq import estimate_memory, validate_quantizable
             from ..utils.model_loading import _checkpoint_has_mtp_weights
 
             source_models = []
@@ -429,7 +429,7 @@ class OQManager:
                     asyncio.shield(active_task),
                     timeout=30.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Thread didn't exit cooperatively (e.g. stuck in long GPTQ
                 # block). Force-cancel as last resort and wait a bit for
                 # Metal to settle.

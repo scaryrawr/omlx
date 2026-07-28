@@ -14,7 +14,7 @@ import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -35,8 +35,8 @@ _accumulated_results: list[dict] = []
 # Server-side queue
 _queue: list["AccuracyBenchmarkRequest"] = []
 _queue_running: bool = False
-_current_run_id: Optional[str] = None
-_current_model: Optional[str] = None
+_current_run_id: str | None = None
+_current_model: str | None = None
 _engine_pool_ref: Any = None
 # Chain-ownership token. A "chain" is one start_next_from_queue call plus
 # the _continue_queue tail it spawns. Each chain captures the token current
@@ -72,7 +72,7 @@ class AccuracyBenchmarkRequest(BaseModel):
     # When set, the benchmark runs against a remote OpenAI-compatible
     # endpoint instead of a local engine and model_id is the remote
     # model name (not validated against the local catalog).
-    external: Optional[ExternalEndpointConfig] = None
+    external: ExternalEndpointConfig | None = None
 
     @model_validator(mode="after")
     def _force_thinking_off_for_external(self) -> "AccuracyBenchmarkRequest":
@@ -119,10 +119,10 @@ class AccuracyBenchmarkRun:
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     terminal: bool = False
-    task: Optional[asyncio.Task] = None
+    task: asyncio.Task | None = None
     results: list[dict] = field(default_factory=list)
     error_message: str = ""
-    last_progress: Optional[dict] = None  # last progress event for reconnect
+    last_progress: dict | None = None  # last progress event for reconnect
     # Finer-grained lifecycle than `status` — surfaces the difference between
     # "still scoring questions" and "cleaning up after the last result was
     # emitted". The serialization gate (_queue_running) stays True across
@@ -142,7 +142,7 @@ _ACCURACY_TERMINAL_TYPES = frozenset({"done", "error"})
 # --- Run management ---
 
 
-def get_run(bench_id: str) -> Optional[AccuracyBenchmarkRun]:
+def get_run(bench_id: str) -> AccuracyBenchmarkRun | None:
     """Get an accuracy benchmark run by ID."""
     return _accuracy_runs.get(bench_id)
 
@@ -224,7 +224,7 @@ def remove_from_queue(idx: int) -> bool:
     return False
 
 
-def start_next_from_queue(engine_pool: Any) -> Optional[str]:
+def start_next_from_queue(engine_pool: Any) -> str | None:
     """Pop next item from queue, create run, start background task.
 
     Returns bench_id if a run was started, None if already running or queue empty.
@@ -376,7 +376,7 @@ async def run_accuracy_benchmark(
     if request.external is None:
         engine_pool._suppress_ttl = True
     start_time = time.time()
-    client: Optional[ExternalAPIClient] = None
+    client: ExternalAPIClient | None = None
 
     try:
         run.phase = "loading"

@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import math
 import os
-from functools import lru_cache
+from functools import cache
 
 import mlx.core as mx
 import mlx.nn as nn
-
 from mlx_lm.models.activations import swiglu
+
 from omlx.custom_kernels.glm_moe_dsa import fast as glm_fast
 from omlx.custom_kernels.nax import is_nax_available
 
@@ -59,7 +59,7 @@ def _scatter_unsort(x, inv_order, shape=None):
     return x
 
 
-@lru_cache(maxsize=None)
+@cache
 def _mxfp4_block_builder(num_experts: int, bm: int):
     source = r"""
         const uint expert = thread_index_in_threadgroup;

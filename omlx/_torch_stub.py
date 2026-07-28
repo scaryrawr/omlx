@@ -173,7 +173,7 @@ _KNOWN_PROBE_NAMES: frozenset[str] = frozenset({
 })
 
 
-def _make_top_level_torch_getattr() -> "callable":
+def _make_top_level_torch_getattr() -> callable:
     """Return a ``__getattr__`` for the stub's top-level torch module.
 
     Real-torch users who reach an unset attribute would get an

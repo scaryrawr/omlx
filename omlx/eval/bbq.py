@@ -9,7 +9,6 @@ Dataset bundled from lighteval/bbq_helm on HuggingFace.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -82,5 +81,5 @@ class BBQBenchmark(BaseBenchmark):
     def get_question_text(self, item: dict) -> str:
         return f"{item.get('context', '')} {item.get('question', '')}"
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return item.get("category")

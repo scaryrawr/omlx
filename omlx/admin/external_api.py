@@ -12,7 +12,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, SecretStr, field_validator
@@ -131,7 +131,7 @@ class ChatResult:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     status: str = "ok"
     reasoning_fields_present: tuple[str, ...] = ()
     reasoning_fields_nonempty: tuple[str, ...] = ()
@@ -168,7 +168,7 @@ class ExternalAPIClient:
         self,
         config: ExternalEndpointConfig,
         timeout: httpx.Timeout = DEFAULT_TIMEOUT,
-        transport: Optional[httpx.AsyncBaseTransport] = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ):
         self._config = config
         self._chat_url = f"{config.base_url}/chat/completions"
@@ -191,7 +191,7 @@ class ExternalAPIClient:
         self,
         messages: list[dict],
         max_tokens: int,
-        temperature: Optional[float],
+        temperature: float | None,
         stream: bool,
     ) -> dict:
         body: dict[str, Any] = {
@@ -282,7 +282,7 @@ class ExternalAPIClient:
         self,
         messages: list[dict],
         max_tokens: int,
-        temperature: Optional[float],
+        temperature: float | None,
     ) -> ChatResult:
         """Send a non-streaming chat completion request."""
         body = self._build_body(messages, max_tokens, temperature, stream=False)
@@ -358,7 +358,7 @@ class ExternalAPIClient:
         self,
         messages: list[dict],
         max_tokens: int,
-        temperature: Optional[float],
+        temperature: float | None,
     ) -> StreamStats:
         """Send a streaming chat completion request and collect stats.
 
@@ -368,9 +368,9 @@ class ExternalAPIClient:
         """
         body = self._build_body(messages, max_tokens, temperature, stream=True)
         start_time = time.perf_counter()
-        first_content_time: Optional[float] = None
-        last_content_time: Optional[float] = None
-        usage: Optional[dict] = None
+        first_content_time: float | None = None
+        last_content_time: float | None = None
+        usage: dict | None = None
         text_parts: list[str] = []
 
         try:
@@ -452,7 +452,7 @@ class _AdapterOutput:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     external_status: str = "ok"
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     reasoning_fields_present: tuple[str, ...] = ()
     reasoning_fields_nonempty: tuple[str, ...] = ()
     error_message: str = ""

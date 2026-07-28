@@ -7,9 +7,7 @@ Dataset bundled from HAERAE-HUB/KMMLU on HuggingFace.
 """
 
 import logging
-import re
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import load_jsonl, stratified_sample
@@ -100,5 +98,5 @@ class KMMLUBenchmark(BaseBenchmark):
     def check_answer(self, predicted: str, item: dict) -> bool:
         return predicted == item["answer"]
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return item.get("subject")

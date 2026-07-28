@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +451,7 @@ def _patch_model(glm: Any) -> None:
                 return False
         return True
 
-    def sanitize(self, weights: Dict[str, Any]) -> Dict[str, Any]:
+    def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
         """Keep + remap the checkpoint's extra MTP layer.
 
         Raw-HF/FP8 checkpoints store the MTP layer as
@@ -505,7 +505,7 @@ def _patch_model(glm: Any) -> None:
             finally:
                 self.args.num_hidden_layers = n_main
 
-            remapped: Dict[str, Any] = {}
+            remapped: dict[str, Any] = {}
             special = {
                 "eh_proj.weight": "eh_proj.weight",
                 "enorm.weight": "enorm.weight",

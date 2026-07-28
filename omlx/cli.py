@@ -75,12 +75,13 @@ def serve_command(args):
     """Start the OpenAI-compatible multi-model server."""
     import logging
     import os
+
     import uvicorn
 
-    from ._version import __version__
     from . import process_title
+    from ._version import __version__
+    from .logging_config import AdminStatsAccessFilter, configure_file_logging
     from .settings import burst_decode_env, init_settings
-    from .logging_config import configure_file_logging, AdminStatsAccessFilter
 
     process_title.set_process_title()
 
@@ -233,8 +234,8 @@ def serve_command(args):
 
     try:
         # Import server and config after the port is known to be available.
-        from .server import init_server
         from .config import parse_size
+        from .server import init_server
 
         model_dirs = settings.get_effective_model_dirs()
         print(f"Base path: {settings.base_path}")

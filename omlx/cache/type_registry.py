@@ -7,7 +7,7 @@ by cache type enum or class name string.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from .type_handlers import (
     ArraysCacheHandler,
@@ -39,10 +39,10 @@ class CacheTypeRegistry:
     """
 
     # Handler instances by cache type
-    _handlers: Dict[CacheType, CacheTypeHandler] = {}
+    _handlers: dict[CacheType, CacheTypeHandler] = {}
 
     # Mapping from mlx-lm class names to cache types
-    _class_name_map: Dict[str, CacheType] = {
+    _class_name_map: dict[str, CacheType] = {
         "KVCache": CacheType.KVCACHE,
         "RotatingKVCache": CacheType.ROTATING_KVCACHE,
         # mlx-vlm MTP wraps target RotatingKVCache layers with rollback slack

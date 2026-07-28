@@ -11,7 +11,6 @@ machine. Mitigations: subprocess with timeout, memory limits, temp file cleanup.
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -19,8 +18,9 @@ import resource
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from .base import BaseBenchmark, BenchmarkResult, QuestionResult
 from .datasets import deterministic_sample, load_jsonl
@@ -90,11 +90,11 @@ def _set_resource_limits():
     """Set resource limits for subprocess."""
     try:
         resource.setrlimit(resource.RLIMIT_AS, (EXEC_MEMORY_LIMIT_BYTES, EXEC_MEMORY_LIMIT_BYTES))
-    except (ValueError, resource.error):
+    except (OSError, ValueError):
         pass
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (EXEC_TIMEOUT_SECONDS + 5, EXEC_TIMEOUT_SECONDS + 5))
-    except (ValueError, resource.error):
+    except (OSError, ValueError):
         pass
 
 
@@ -216,9 +216,9 @@ class HumanEvalBenchmark(BaseBenchmark):
         self,
         engine: Any,
         items: list[dict],
-        on_progress: Optional[Callable[[int, int], Any]] = None,
+        on_progress: Callable[[int, int], Any] | None = None,
         batch_size: int = 1,
-        sampling_kwargs: Optional[dict] = None,
+        sampling_kwargs: dict | None = None,
         enable_thinking: bool = False,
     ) -> BenchmarkResult:
         """Override run: generation is batched, code execution is sequential."""

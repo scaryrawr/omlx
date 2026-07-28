@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -459,7 +459,7 @@ def _patch_model(dsv4: Any) -> None:
                 return False
         return True
 
-    def sanitize(self, weights: Dict[str, Any]) -> Dict[str, Any]:
+    def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
         """Combined oMLX-base + PR 15 sanitize.
 
         oMLX's stock sanitize strips ``mtp.*`` and remaps the FP4 expert
@@ -480,7 +480,7 @@ def _patch_model(dsv4: Any) -> None:
                 pass
             has_mtp = False
 
-        new_weights: Dict[str, Any] = {}
+        new_weights: dict[str, Any] = {}
         for k, v in weights.items():
             if k.startswith("mtp."):
                 if not has_mtp:

@@ -11,8 +11,8 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import requests
 
@@ -108,7 +108,7 @@ _ENRICH_CACHE_MAX = 1024       # bound memory under aggressive search/list use
 _ENRICH_CONCURRENCY = 8        # parallel fetches per recommended/search call
 
 
-def _enrich_cache_get(model_id: str) -> Optional[dict]:
+def _enrich_cache_get(model_id: str) -> dict | None:
     entry = _ENRICH_CACHE.get(model_id)
     if entry is None:
         return None
@@ -128,7 +128,7 @@ def _enrich_cache_put(model_id: str, data: dict) -> None:
     _ENRICH_CACHE[model_id] = (time.time(), data)
 
 
-def _estimate_params_from_config(config: Optional[dict]) -> int:
+def _estimate_params_from_config(config: dict | None) -> int:
     """Estimate decoder-transformer parameter count from a HF-style config.
 
     Handles dense Llama/Qwen/Mistral families and MoE variants
@@ -194,7 +194,7 @@ def _estimate_params_from_config(config: Optional[dict]) -> int:
     return total
 
 
-async def _fetch_model_config(model_id: str) -> Optional[dict]:
+async def _fetch_model_config(model_id: str) -> dict | None:
     """Fetch and parse a model's config.json from ModelScope.
 
     Returns None on any error (network, non-200, non-JSON) so callers can
@@ -672,7 +672,7 @@ class MSDownloader:
     def __init__(
         self,
         model_dir: str,
-        on_complete: Optional[Callable] = None,
+        on_complete: Callable | None = None,
     ):
         self._model_dir = Path(model_dir)
         self._tasks: dict[str, DownloadTask] = {}

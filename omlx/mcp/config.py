@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 from .types import MCPConfig, MCPServerConfig
 
@@ -26,7 +26,7 @@ CONFIG_SEARCH_PATHS = [
 CONFIG_ENV_VAR = "OMLX_MCP_CONFIG"
 
 
-def load_mcp_config(path: Optional[Union[str, Path]] = None) -> MCPConfig:
+def load_mcp_config(path: str | Path | None = None) -> MCPConfig:
     """
     Load MCP configuration from file.
 
@@ -71,7 +71,7 @@ def load_mcp_config(path: Optional[Union[str, Path]] = None) -> MCPConfig:
     return validate_config(data)
 
 
-def _find_config_file(explicit_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
+def _find_config_file(explicit_path: str | Path | None = None) -> Path | None:
     """Find the config file to use."""
     # 1. Explicit path
     if explicit_path:
@@ -97,7 +97,7 @@ def _find_config_file(explicit_path: Optional[Union[str, Path]] = None) -> Optio
     return None
 
 
-def validate_config(data: Dict[str, Any]) -> MCPConfig:
+def validate_config(data: dict[str, Any]) -> MCPConfig:
     """
     Validate and parse configuration dictionary.
 

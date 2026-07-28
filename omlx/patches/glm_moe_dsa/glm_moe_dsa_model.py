@@ -1,23 +1,23 @@
 # Copyright © 2025 Apple Inc.
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import mlx.core as mx
-
 from mlx_lm.models.base import (
     BaseModelArgs,
     create_attention_mask,
     scaled_dot_product_attention,
 )
 from mlx_lm.models.cache import CacheList, KVCache
-from .kernels import fast as glm_fast
+
 from .deepseek_v32 import (
     DeepseekV32Attention,
     DeepseekV32DecoderLayer,
     DeepseekV32Model,
 )
 from .deepseek_v32 import Model as DSV32Model
+from .kernels import fast as glm_fast
 from .sparse_mla import (
     exact_block_token_attention,
     q8_vup_flat,
@@ -51,13 +51,13 @@ def _parse_topk_state(topk_state):
 
 
 def _apply_sparse_topk_mask(
-    mask: Optional[mx.array],
-    topk_indices: Optional[mx.array],
+    mask: mx.array | None,
+    topk_indices: mx.array | None,
     topk_prefix_rows: int,
     *,
     key_length: int,
     query_length: int,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     if topk_indices is None or query_length <= 1:
         return mask
 
@@ -109,8 +109,8 @@ class ModelArgs(BaseModelArgs):
     num_hidden_layers: int
     num_attention_heads: int
     num_key_value_heads: int
-    n_shared_experts: Optional[int]
-    n_routed_experts: Optional[int]
+    n_shared_experts: int | None
+    n_routed_experts: int | None
     routed_scaling_factor: float
     kv_lora_rank: int
     q_lora_rank: int
@@ -127,17 +127,17 @@ class ModelArgs(BaseModelArgs):
     first_k_dense_replace: int
     max_position_embeddings: int
     rms_norm_eps: float
-    rope_parameters: Dict
+    rope_parameters: dict
     attention_bias: bool
-    rope_scaling: Dict = None
-    rope_theta: Optional[float] = None
+    rope_scaling: dict = None
+    rope_theta: float | None = None
     indexer_rope_interleave: bool = True
-    indexer_types: Optional[List[str]] = None
-    index_topk_pattern: Optional[Any] = None
+    indexer_types: list[str] | None = None
+    index_topk_pattern: Any | None = None
     index_topk_freq: int = 1
     index_skip_topk_offset: int = 2
-    quantization: Optional[Dict[str, Any]] = None
-    quantization_config: Optional[Dict[str, Any]] = None
+    quantization: dict[str, Any] | None = None
+    quantization_config: dict[str, Any] | None = None
 
     def __post_init__(self):
         self.rope_scaling = self.rope_parameters
@@ -185,9 +185,9 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
     def __call__(
         self,
         x: mx.array,
-        mask: Optional[mx.array] = None,
-        cache: Optional[Any] = None,
-        prev_topk_indices: Optional[mx.array] = None,
+        mask: mx.array | None = None,
+        cache: Any | None = None,
+        prev_topk_indices: mx.array | None = None,
     ):
         B, L, D = x.shape
 
@@ -419,9 +419,9 @@ class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
     def __call__(
         self,
         x: mx.array,
-        mask: Optional[mx.array] = None,
-        cache: Optional[Any] = None,
-        prev_topk_indices: Optional[mx.array] = None,
+        mask: mx.array | None = None,
+        cache: Any | None = None,
+        prev_topk_indices: mx.array | None = None,
     ):
         r, topk_indices = self.self_attn(
             self.input_layernorm(x), mask, cache, prev_topk_indices
@@ -442,7 +442,7 @@ class GlmMoeDsaModel(DeepseekV32Model):
     def __call__(
         self,
         x: mx.array,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
     ) -> mx.array:
         h = self.embed_tokens(x)
 

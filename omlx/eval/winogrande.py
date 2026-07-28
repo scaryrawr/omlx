@@ -8,9 +8,7 @@ Dataset bundled from winogrande (winogrande_xl) on HuggingFace.
 """
 
 import logging
-import re
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -73,5 +71,5 @@ class WinograndeBenchmark(BaseBenchmark):
     def get_question_text(self, item: dict) -> str:
         return item.get("sentence", "")
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return None
