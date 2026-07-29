@@ -108,9 +108,11 @@ dependencies = [
     # and NVFP4 shared-expert handling while retaining current integrations.
     "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@bd6cb1231743a8fa9c44afaea2bf5fe793668d98",
     "Pillow>=9.0.0",
-    # dflash-mlx v0.1.10 (9ca0028) - bstnxbt repo. Apple G17 NAX verify,
-    # prefix snapshot metrics, CopySpec mode, and full-context draft-layer cache checks.
-    "dflash-mlx @ git+https://github.com/bstnxbt/dflash-mlx@9ca002898b48e14c9727dec17299f497e8467870",
+    # dflash-mlx v0.1.10+omlx.2 (cb5cd28) - jundot fork of bstnxbt 0.1.10 (9ca0028).
+    # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
+    # fired upstream) and the single-host-sync decode cycle (one D2H transfer
+    # per cycle instead of four syncs plus a hard eval).
+    "dflash-mlx @ git+https://github.com/jundot/dflash-mlx@cb5cd2888b31d31214e221f2be7101bd125c4122",
     "markitdown[pdf,docx,pptx]==0.1.6",
 ]
 
@@ -193,7 +195,7 @@ dev = [
     # in the dev environment so the test actually runs.
     #
     # Held at 0.2.3: xgrammar 0.2.4/0.2.5 cap transformers at <5,
-    # which conflicts with our transformers>=5.7.0 pin and makes
+    # which conflicts with our transformers>=5.12.1 pin and makes
     # pip/uv dev installs unresolvable (#2289). Bump again once
     # upstream lifts the cap.
     "xgrammar==0.2.3",
@@ -232,7 +234,7 @@ include = ["omlx*"]
 
 [tool.setuptools.package-data]
 "omlx" = ["oq_calibration_data.json", "oqe_calibration_data.json"]
-"omlx.admin" = ["templates/**/*.html", "static/**/*", "i18n/*.json"]
+"omlx.admin" = ["templates/**/*.html", "static/**/*", "i18n/*.json", "bench_corpus.txt"]
 "omlx.eval" = ["data/*.jsonl"]
 "omlx.custom_kernels.glm_moe_dsa" = ["*.metallib", "*.dylib", "*.so"]
 "omlx.custom_kernels.minimax_m3" = ["*.metallib", "*.dylib", "*.so"]

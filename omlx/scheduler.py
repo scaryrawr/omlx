@@ -90,6 +90,11 @@ def _make_suppress_logits_processor(
     def _suppress_logits(tokens: Any, logits: Any) -> Any:
         return _apply_suppress_token_ids(logits, suppress_tuple)
 
+    # Marker for _route_to_vlm_mtp: this model-level processor is the one
+    # kind the vlm_mtp path reproduces on its own (folded into the sampler
+    # via _make_suppressing_sampler), so it must not block routing.
+    _suppress_logits._omlx_suppress_processor = True  # type: ignore[attr-defined]
+
     return _suppress_logits
 
 
@@ -179,6 +184,14 @@ class _VLMMTPResponse:
     finish_reason: str | None = None
     logprobs: Any = None
     prompt_cache: Any = None
+
+
+@dataclass
+class _StopOutputState:
+    """Request-local output held while it can still match a stop string."""
+
+    strings: dict[tuple[int, ...], str]
+    pending: deque[tuple[int, RequestOutput]] = field(default_factory=deque)
 
 
 # Serializes Metal buffer-protocol access from the async store-cache worker
@@ -3362,7 +3375,15 @@ class Scheduler:
                         _abort / 1024**3,
                     )
                 elif current > self._memory_limit_bytes:
-                    logger.warning(
+                    # Speed priority runs full chunks through this caution
+                    # band by design — the per-chunk notice is DEBUG there,
+                    # not a warning about an unexpected state.
+                    _log = (
+                        logger.debug
+                        if self._prefill_speed_priority
+                        else logger.warning
+                    )
+                    _log(
                         f"Prefill above max_bytes at "
                         f"{processed_tokens} tokens: "
                         f"{current / 1024**3:.1f}GB > "
@@ -4584,7 +4605,13 @@ class Scheduler:
                     _abort / 1024**3,
                 )
             elif current > self._memory_limit_bytes:
-                logger.warning(
+                # Speed priority runs full chunks through this caution band
+                # by design — the per-chunk notice is DEBUG there, not a
+                # warning about an unexpected state.
+                _log = (
+                    logger.debug if self._prefill_speed_priority else logger.warning
+                )
+                _log(
                     f"Chunked prefill above max_bytes at "
                     f"{state.tokens_processed} tokens: "
                     f"{current / 1024**3:.1f}GB > "
@@ -4641,10 +4668,45 @@ class Scheduler:
 
         Precondition: state.sampler, state.sm, state.per_row_lps are set.
         """
-        self._finalize_chunked_prefill_cache_for_insert(request, state.cache)
-
         if request.sampling_params.seed is not None:
             mx.random.seed(request.sampling_params.seed)
+
+        # #2219: both chunked-completion paths (inline first chunk and
+        # _advance_chunked_prefills) funnel through here, but external VLM MTP
+        # routing only existed on the non-chunked prefill exit -- so any prompt
+        # long enough to be chunk-prefilled silently bypassed VLM MTP. Re-apply
+        # the decision at this shared choke point, BEFORE the TurboQuant convert
+        # below, so the drafter's final forward sees the un-quantized cache. A
+        # declined route (e.g. the single-in-flight drafter is busy) falls
+        # through to BatchGenerator, matching short-prompt behaviour.
+        if self._vlm_mtp_drafter is not None and state.cache is not None:
+            vlm_mtp_uid = self._route_to_vlm_mtp(
+                request,
+                state.cache,
+                state.last_token,
+                state.sampler,
+                state.sm,
+                logits_processors=state.per_row_lps,
+            )
+            if vlm_mtp_uid is not None:
+                self.request_id_to_uid[request.request_id] = vlm_mtp_uid
+                self.uid_to_request_id[vlm_mtp_uid] = request.request_id
+                now = time.monotonic()
+                request.batch_uid = vlm_mtp_uid
+                request.status = RequestStatus.RUNNING
+                request.generation_started_at = now
+                request.last_activity_at = now
+                self.running[request.request_id] = request
+                scheduled.append(request)
+                self.total_prompt_tokens += request.num_prompt_tokens
+                logger.debug(
+                    "Scheduled chunked-prefill request %s via vlm_mtp (uid=%d)",
+                    request.request_id,
+                    vlm_mtp_uid,
+                )
+                return
+
+        self._finalize_chunked_prefill_cache_for_insert(request, state.cache)
 
         per_row_lps = state.per_row_lps if state.per_row_lps is not None else []
         # insert() merges the prompt cache into the batch KV caches with lazy
@@ -4824,6 +4886,7 @@ class Scheduler:
             stop_tokens_set.update(request.sampling_params.stop_token_ids)
 
         stop_sequences: list[tuple[int, ...]] = [(int(t),) for t in stop_tokens_set]
+        stop_sequence_strings: dict[tuple[int, ...], str] = {}
 
         # Tokenize stop strings into token sequences. mlx-lm's
         # StopSequenceMatcher uses Aho-Corasick, so per-token match
@@ -4838,9 +4901,117 @@ class Scheduler:
             except TypeError:
                 seq = self.tokenizer.encode(stop_str)
             if seq:
-                stop_sequences.append(tuple(int(t) for t in seq))
+                token_sequence = tuple(int(token) for token in seq)
+                stop_sequences.append(token_sequence)
+                stop_sequence_strings[token_sequence] = stop_str
+
+        # Response-side buffering is request-local so normal completion,
+        # retry, and cleanup paths do not need any new scheduler lifecycle.
+        request._stop_output_state = _StopOutputState(  # type: ignore[attr-defined]
+            strings=stop_sequence_strings
+        )
 
         return StopSequenceMatcher(stop_sequences)
+
+    def _buffer_stop_sequence_output(
+        self,
+        request: "Request",
+        response: Any,
+        output: RequestOutput,
+    ) -> list[RequestOutput]:
+        """Suppress every output chunk belonging to a matched stop sequence.
+
+        mlx-lm reports the full ``match_sequence`` but marks only its final
+        token as ``finish_reason=stop``.  Keep only a suffix that is a token
+        prefix of a configured stop string, then discard that suffix when the
+        full sequence matches.  All other output is released immediately.
+        """
+        state = getattr(request, "_stop_output_state", None)
+        if state is None or not state.strings:
+            return [output]
+
+        pending = state.pending
+        pending.append((int(response.token), output))
+
+        pending_tokens = tuple(token for token, _ in pending)
+        reported_match = tuple(
+            int(token)
+            for token in (getattr(response, "match_sequence", None) or ())
+        )
+        matched_sequence = (
+            reported_match
+            if output.finish_reason == "stop" and reported_match in state.strings
+            else None
+        )
+        if matched_sequence is not None:
+            terminal_output = output
+            matched_outputs = []
+            for _ in matched_sequence:
+                _, matched_output = pending.pop()
+                matched_outputs.append(matched_output)
+            matched_outputs.reverse()
+
+            stop_string = state.strings[matched_sequence]
+
+            def strip_matched_prefix(text: str) -> str:
+                for prefix_len in range(len(stop_string), 0, -1):
+                    if text.endswith(stop_string[:prefix_len]):
+                        return text[:-prefix_len]
+                return text
+
+            matched_stream_text = "".join(
+                matched_output.new_text for matched_output in matched_outputs
+            )
+            safe_stream_text = strip_matched_prefix(matched_stream_text)
+            suppressed_stream_text = matched_stream_text[len(safe_stream_text) :]
+            if suppressed_stream_text and terminal_output.output_text.endswith(
+                suppressed_stream_text
+            ):
+                terminal_output.output_text = terminal_output.output_text[
+                    :-len(suppressed_stream_text)
+                ]
+            else:
+                matched_prefix_tokens = matched_sequence[:-1]
+                output_token_ids = terminal_output.output_token_ids
+                if (
+                    matched_prefix_tokens
+                    and len(output_token_ids) >= len(matched_prefix_tokens)
+                    and tuple(output_token_ids[-len(matched_prefix_tokens) :])
+                    == matched_prefix_tokens
+                    and request.request_id not in self._output_parser_sessions
+                ):
+                    terminal_output.output_text = self.tokenizer.decode(
+                        output_token_ids[:-len(matched_prefix_tokens)]
+                    )
+            request.output_text = terminal_output.output_text
+
+            terminal_output.new_text = safe_stream_text
+            terminal_output.new_token_ids = []
+            if safe_stream_text and matched_outputs:
+                terminal_output.generated_at = matched_outputs[0].generated_at
+            pending.append((int(response.token), terminal_output))
+            ready = [pending_output for _, pending_output in pending]
+            pending.clear()
+            return ready
+
+        if output.finished:
+            ready = [pending_output for _, pending_output in pending]
+            pending.clear()
+            return ready
+
+        keep = 0
+        for sequence in state.strings:
+            max_prefix = min(len(sequence), len(pending_tokens))
+            for prefix_len in range(max_prefix, keep, -1):
+                if pending_tokens[-prefix_len:] == sequence[:prefix_len]:
+                    keep = prefix_len
+                    break
+
+        ready = []
+        while len(pending) > keep:
+            _, pending_output = pending.popleft()
+            ready.append(pending_output)
+        return ready
 
     def _emit_prefill_boundary_snapshot(
         self,
@@ -6997,6 +7168,7 @@ class Scheduler:
         last_tokens: list[int],
         sampler: Callable[[Any], Any],
         state_machine: Any,
+        logits_processors: list[Any] | None = None,
     ) -> int | None:
         """Bypass BatchGenerator and stand up a vlm_mtp generator instead.
 
@@ -7011,6 +7183,28 @@ class Scheduler:
         """
         drafter = self._vlm_mtp_drafter
         if drafter is None:
+            return None
+
+        # Per-request logits processors (grammar constraints, thinking
+        # budget, repetition/presence/frequency penalties) have no
+        # application point on this path: run_vlm_mtp_decode threads only a
+        # sampler into mlx-vlm's _mtp_rounds, and a sampler sees logits
+        # without the token history processors need. Model-level suppress
+        # tokens are the one exception, reproduced below via
+        # _make_suppressing_sampler. Same convention as Lightning MTP,
+        # which declines activation when grammar processors are present:
+        # fall back to BatchGenerator so every processor is enforced
+        # (#2399).
+        if logits_processors and any(
+            not getattr(proc, "_omlx_suppress_processor", False)
+            for proc in logits_processors
+        ):
+            logger.info(
+                "vlm_mtp routing skipped for %s: request carries per-request "
+                "logits processors (grammar / thinking budget / penalties); "
+                "falling back to BatchGenerator",
+                request.request_id,
+            )
             return None
 
         # Gemma4AssistantDraftModel keeps ``_shared_kv`` / ``_input_embed`` on
@@ -8947,7 +9141,12 @@ class Scheduler:
             # eligibility issue so other speculative paths stay intact.
             if self._vlm_mtp_drafter is not None and cache_to_use is not None:
                 vlm_mtp_uid = self._route_to_vlm_mtp(
-                    request, cache_to_use, tokens_to_process, sampler, sm
+                    request,
+                    cache_to_use,
+                    tokens_to_process,
+                    sampler,
+                    sm,
+                    logits_processors=logits_processors,
                 )
                 if vlm_mtp_uid is not None:
                     self.request_id_to_uid[request.request_id] = vlm_mtp_uid
@@ -9274,7 +9473,7 @@ class Scheduler:
                     5, "Request %s generated text:\n%s", request_id, output.output_text
                 )
 
-            outputs.append(output)
+            outputs.extend(self._buffer_stop_sequence_output(request, response, output))
 
         return outputs, finished_ids
 

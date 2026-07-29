@@ -1430,6 +1430,22 @@
                 );
             },
 
+            // Settings that materialize as per-request logits processors,
+            // which the VLM MTP decode path cannot apply (#2399). Mirrors
+            // vlm_mtp_processor_conflicts() in model_settings.py; neutral
+            // values (repetition 1.0, presence 0.0) do not conflict.
+            vlmMtpProcessorConflict() {
+                const ms = this.modelSettings;
+                if (!ms) return false;
+                const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+                const rep = num(ms.repetition_penalty);
+                const pres = num(ms.presence_penalty);
+                return (rep !== null && rep !== 1.0)
+                    || (pres !== null && pres !== 0.0)
+                    || !!ms.enableThinkingBudget
+                    || !!ms.guided_grammar_enabled;
+            },
+
             buildCtKwargEntries(chatTemplateKwargs, forcedCtKwargs, isDiffusion = false) {
                 const ctk = chatTemplateKwargs || {};
                 const forced = new Set(forcedCtKwargs || []);
@@ -2999,7 +3015,8 @@
                             // (pp, tg); batch rows by batch_size.
                             if (data.data.test_type === 'single') {
                                 const exists = this.benchSingleResults.some(
-                                    r => r.pp === data.data.pp && r.tg === data.data.tg
+                                    r => this.benchRequestedPp(r) === this.benchRequestedPp(data.data)
+                                        && r.tg === data.data.tg
                                 );
                                 if (!exists) {
                                     this.benchSingleResults = [...this.benchSingleResults, data.data];
@@ -3215,6 +3232,31 @@
                 return window.t('ctx_bench.capped.memory');
             },
 
+            // Native context length of the selected bench model (0 = unknown).
+            ctxBenchNativeLimit() {
+                const m = this.models.find(m => m.id === this.ctxBenchModelId);
+                return (m && m.model_context_length) || 0;
+            },
+
+            // Target presets the selected model can actually reach. Unknown
+            // native -> full list; native below the smallest preset -> keep
+            // the smallest (the server caps the search at native anyway).
+            ctxBenchTargetOptions() {
+                const all = [16384, 32768, 65536, 131072, 262144, 524288];
+                const native = this.ctxBenchNativeLimit();
+                if (!native) return all;
+                const filtered = all.filter(t => t <= native);
+                return filtered.length ? filtered : [all[0]];
+            },
+
+            // Keep the selected target inside the model's reachable presets.
+            ctxBenchClampTarget() {
+                const options = this.ctxBenchTargetOptions();
+                if (!options.includes(this.ctxBenchTarget)) {
+                    this.ctxBenchTarget = options[options.length - 1];
+                }
+            },
+
             // Narrow-patch save of the global Prefill Priority setting from
             // the bench tab (mirrors the Settings row; applied live server-side).
             async saveCtxBenchPriority(value) {
@@ -3237,10 +3279,43 @@
             },
 
             benchGetSpeedup(batchResult) {
-                const baseline = this.benchSingleResults.find(r => r.pp === 1024);
+                const baseline = this.benchFindSingle(1024);
                 if (!baseline || !baseline.gen_tps || baseline.gen_tps <= 0) return null;
                 if (batchResult.tg_tps === null || batchResult.tg_tps === undefined) return null;
                 return batchResult.tg_tps / baseline.gen_tps;
+            },
+
+            benchRequestedPp(result) {
+                return result?.requested_pp ?? result?.pp;
+            },
+
+            benchFindSingle(requestedPp) {
+                return this.benchSingleResults.find(
+                    r => this.benchRequestedPp(r) === requestedPp
+                );
+            },
+
+            benchSingleTestLabel(result) {
+                const requested = this.benchRequestedPp(result);
+                const actual = result?.pp;
+                if (requested !== actual) {
+                    return `pp${actual} (requested pp${requested})/tg${result.tg}`;
+                }
+                return `pp${actual}/tg${result.tg}`;
+            },
+
+            benchBatchPromptSummary() {
+                const result = this.benchBatchResults[0];
+                if (!result || result.requested_pp === undefined) {
+                    return window.t('bench.results.batch.subtitle');
+                }
+                const requested = result.requested_pp;
+                const minimum = result.prompt_tokens_min ?? result.pp;
+                const maximum = result.prompt_tokens_max ?? result.pp;
+                const actual = minimum === maximum
+                    ? `actual pp${minimum}`
+                    : `actual pp${minimum}-${maximum}`;
+                return `requested pp${requested} / ${actual} / tg${result.tg}`;
             },
 
             // Unmeasured metrics (tpot_ms/gen_tps/tg_tps, plus ttft/pp when
@@ -3287,11 +3362,11 @@
                     lines.push('');
                     lines.push('Single Request Results');
                     lines.push('-'.repeat(80));
-                    const hdr = [rpad('Test', 16), pad('TTFT(ms)', 10), pad('TPOT(ms)', 10), pad('pp TPS', 12), pad('tg TPS', 12), pad('E2E(s)', 10), pad('Throughput', 12), pad('Peak Mem', 10)];
+                    const hdr = [rpad('Test', 32), pad('TTFT(ms)', 10), pad('TPOT(ms)', 10), pad('pp TPS', 12), pad('tg TPS', 12), pad('E2E(s)', 10), pad('Throughput', 12), pad('Peak Mem', 10)];
                     lines.push(hdr.join('  '));
                     for (const r of this.benchSingleResults) {
                         const row = [
-                            rpad(`pp${r.pp}/tg${r.tg}`, 16),
+                            rpad(this.benchSingleTestLabel(r), 32),
                             pad(this.benchFmtNum(r.ttft_ms, 1), 10),
                             pad(this.benchFmtNum(r.tpot_ms, 2), 10),
                             pad(this.benchFmtNum(r.processing_tps, 1, ' tok/s'), 12),
@@ -3307,7 +3382,7 @@
                 // Helper for batch table text
                 const buildBatchText = (title, subtitle, results) => {
                     if (results.length === 0) return;
-                    const baseline = this.benchSingleResults.find(r => r.pp === 1024);
+                    const baseline = this.benchFindSingle(1024);
                     lines.push('');
                     lines.push(`${title}`);
                     lines.push(subtitle);
@@ -3343,7 +3418,7 @@
 
                 buildBatchText(
                     'Continuous Batching',
-                    'pp1024 / tg128',
+                    this.benchBatchPromptSummary(),
                     this.benchBatchResults
                 );
 

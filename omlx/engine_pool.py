@@ -96,6 +96,7 @@ class EngineEntry:
     model_type: ModelType  # Model type
     engine_type: EngineType  # Engine type to use
     estimated_size: int  # Pre-calculated from safetensors (bytes)
+    text_only_size: int = 0  # Language-only estimate for VLM checkpoints (0 = n/a)
     actual_size: int | None = None  # Observed process-memory delta after load settles
     config_model_type: str = (
         ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
@@ -492,6 +493,7 @@ class EnginePool:
                     model_type=info.model_type,
                     engine_type=info.engine_type,
                     estimated_size=info.estimated_size,
+                    text_only_size=getattr(info, "text_only_size", 0),
                     config_model_type=getattr(info, "config_model_type", ""),
                     thinking_default=getattr(info, "thinking_default", None),
                     preserve_thinking_default=getattr(
@@ -964,6 +966,16 @@ class EnginePool:
             # ceiling (static, guard-independent) and keep evicting, but
             # never refuse the load under it — with the guard off the
             # user opted out of hard limits.
+            # A VLM-shaped checkpoint served by the text engine (force_lm or a
+            # model_type_override that flipped engine_type to "batched") loads
+            # only its language weights, so admit it by the text-only estimate
+            # instead of the vision-inclusive file size (#2385).
+            admission_size = entry.estimated_size
+            if entry.text_only_size and (
+                force_lm or entry.engine_type == "batched"
+            ):
+                admission_size = entry.text_only_size
+
             ceiling = self._current_ceiling()
             best_effort = False
             if ceiling <= 0:
@@ -988,7 +1000,7 @@ class EnginePool:
                         get_phys_footprint(),
                         self._current_model_memory,
                     )
-                    projected = current + entry.estimated_size
+                    projected = current + admission_size
                     if projected <= evict_target:
                         break
                     victim = self._find_lru_victim()
@@ -1037,7 +1049,7 @@ class EnginePool:
                         committed = max(
                             mx.get_active_memory(), self._current_model_memory
                         )
-                        committed_projected = committed + entry.estimated_size
+                        committed_projected = committed + admission_size
                         if committed_projected <= ceiling:
                             logger.info(
                                 f"Admitting '{model_id}': committed baseline "
@@ -1070,7 +1082,7 @@ class EnginePool:
                     # ModelTooLargeError when the model alone exceeds the
                     # ceiling (no chance of fitting), InsufficientMemoryError
                     # when current usage leaves no room.
-                    if entry.estimated_size > ceiling:
+                    if admission_size > ceiling:
                         binding, advice = self._ceiling_binding_and_advice(
                             ceiling=ceiling,
                             current=failure_current,
@@ -1078,7 +1090,7 @@ class EnginePool:
                         )
                         raise ModelTooLargeError(
                             model_id,
-                            entry.estimated_size,
+                            admission_size,
                             ceiling,
                             binding=binding,
                             advice=advice,
@@ -1090,14 +1102,14 @@ class EnginePool:
                     )
                     label = f"{binding} memory ceiling" if binding else "memory ceiling"
                     raise InsufficientMemoryError(
-                        required=entry.estimated_size,
+                        required=admission_size,
                         current=failure_current,
                         message=(
                             f"Cannot load {model_id}: projected memory "
                             f"{format_size(failure_projected)} would exceed "
                             f"the {label} {format_size(ceiling)} "
                             f"({failure_label}: {format_size(failure_current)}, "
-                            f"model: {format_size(entry.estimated_size)}). "
+                            f"model: {format_size(admission_size)}). "
                             f"{advice or DEFAULT_CEILING_ADVICE}."
                         ),
                     )
@@ -2266,6 +2278,7 @@ class EnginePool:
                     "engine_type": e.engine_type,
                     "model_type": e.model_type,
                     "config_model_type": e.config_model_type,
+                    "model_context_length": e.model_context_length,
                     "is_helper": e.is_helper,
                     "thinking_default": e.thinking_default,
                     "preserve_thinking_default": e.preserve_thinking_default,
