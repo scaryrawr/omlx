@@ -5265,3 +5265,367 @@ class TestQuantizeOqStreamingOq25:
         assert "model.layers.0.mlp.switch_mlp.down_proj.scales" in tensors
         assert "model.layers.0.mlp.switch_mlp.gate_proj.scales" in tensors
         assert "model.layers.0.mlp.switch_mlp.up_proj.scales" in tensors
+
+
+class TestTextOnlyMultimodalMetadata:
+    """A text-only output must not advertise the modalities it dropped.
+
+    Text-only conversions strip the vision / audio / speech tensors, so the
+    output config and the copied sidecars must not keep claiming those
+    inputs. MiMo V2.5 spells two of them differently from the families oQ
+    saw first, carrying a top-level ``vision_model_type`` and
+    ``processor_config`` rather than only a nested ``vision_config``.
+    """
+
+    MIMO_LIKE_CONFIG = {
+        "model_type": "mimo_v2",
+        "hidden_size": 4096,
+        "num_hidden_layers": 48,
+        "vision_config": {"depth": 28},
+        "vision_model_type": "mimovl",
+        "processor_config": {"patch_size": 14},
+        "image_token_id": 151655,
+        "video_token_id": 151656,
+        "vision_start_token_id": 151652,
+        "vision_end_token_id": 151653,
+        "audio_config": {"num_layers": 24},
+    }
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "vision_config",
+            "vision_model_type",
+            "image_token_id",
+            "video_token_id",
+            "vision_start_token_id",
+            "vision_end_token_id",
+            "audio_config",
+            "processor_config",
+        ],
+    )
+    def test_multimodal_key_is_dropped(self, key):
+        from omlx.oq import _normalize_text_only_in_config
+
+        config = dict(self.MIMO_LIKE_CONFIG)
+        assert key in config, "fixture must actually carry the key under test"
+
+        _normalize_text_only_in_config(config)
+
+        assert key not in config
+
+    def test_text_keys_survive(self):
+        from omlx.oq import _normalize_text_only_in_config
+
+        config = dict(self.MIMO_LIKE_CONFIG)
+
+        _normalize_text_only_in_config(config)
+
+        assert config["model_type"] == "mimo_v2"
+        assert config["hidden_size"] == 4096
+        assert config["num_hidden_layers"] == 48
+
+    def test_absent_keys_are_not_an_error(self):
+        from omlx.oq import _normalize_text_only_in_config
+
+        config = {"model_type": "qwen3", "hidden_size": 1024}
+
+        _normalize_text_only_in_config(config)
+
+        assert config == {"model_type": "qwen3", "hidden_size": 1024}
+
+    @staticmethod
+    def _make_source(tmp_path, **contents):
+        """Build a source dir; ``contents`` overrides a file's body."""
+        src = tmp_path / "src"
+        src.mkdir()
+        files = {
+            "tokenizer.json": "{}",
+            "tokenizer_config.json": "{}",
+            "preprocessor_config.json": "{}",
+            "processor_config.json": "{}",
+        }
+        files.update(contents)
+        for name, body in files.items():
+            (src / name).write_text(body)
+        return src
+
+    def test_text_only_skips_processor_sidecars(self, tmp_path):
+        from omlx.oq import _copy_model_sidecars
+
+        src = self._make_source(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _copy_model_sidecars(src, out, text_only=True)
+
+        assert (out / "tokenizer.json").exists()
+        assert (out / "tokenizer_config.json").exists()
+        assert not (out / "preprocessor_config.json").exists()
+        assert not (out / "processor_config.json").exists()
+
+    def test_multimodal_keeps_processor_sidecars(self, tmp_path):
+        from omlx.oq import _copy_model_sidecars
+
+        src = self._make_source(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _copy_model_sidecars(src, out)
+
+        assert (out / "preprocessor_config.json").exists()
+        assert (out / "processor_config.json").exists()
+
+    def test_text_only_keeps_processor_config_holding_a_chat_template(
+        self, tmp_path
+    ):
+        """An inline chat template is not modality metadata.
+
+        Older processor repos store the template under a ``chat_template``
+        key inside ``processor_config.json`` and Transformers still honours
+        it on load, so dropping the file would silently take the model's
+        chat template with it.
+        """
+        from omlx.oq import _copy_model_sidecars
+
+        src = self._make_source(
+            tmp_path,
+            **{"processor_config.json": json.dumps({"chat_template": "{{ x }}"})},
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _copy_model_sidecars(src, out, text_only=True)
+
+        assert (out / "processor_config.json").exists()
+        # The one carrying only modality settings is still dropped.
+        assert not (out / "preprocessor_config.json").exists()
+
+    def test_text_only_keeps_unparseable_processor_config(self, tmp_path):
+        """Preserving a file we cannot parse is the cheaper mistake."""
+        from omlx.oq import _copy_model_sidecars
+
+        src = self._make_source(
+            tmp_path, **{"preprocessor_config.json": "not json at all"}
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _copy_model_sidecars(src, out, text_only=True)
+
+        assert (out / "preprocessor_config.json").exists()
+
+    @pytest.mark.parametrize("body", ["[]", "null", '"processor"'])
+    def test_text_only_keeps_non_mapping_processor_config(self, tmp_path, body):
+        """Valid JSON with a non-object root must be preserved, not crash."""
+        from omlx.oq import _copy_model_sidecars
+
+        src = self._make_source(tmp_path, **{"processor_config.json": body})
+        out = tmp_path / "out"
+        out.mkdir()
+
+        _copy_model_sidecars(src, out, text_only=True)
+
+        assert (out / "processor_config.json").exists()
+
+    def test_processor_configs_stay_out_of_the_base_pattern_list(self):
+        """The chat-template guard only runs for the multimodal patterns.
+
+        Moving either name back into the base list would bypass the guard and
+        the text-only skip together, with no test failing on the copy paths.
+        """
+        from omlx.oq import _MULTIMODAL_SIDECAR_PATTERNS, _SIDECAR_PATTERNS
+
+        assert not set(_SIDECAR_PATTERNS) & set(_MULTIMODAL_SIDECAR_PATTERNS)
+        assert "preprocessor_config.json" in _MULTIMODAL_SIDECAR_PATTERNS
+        assert "processor_config.json" in _MULTIMODAL_SIDECAR_PATTERNS
+
+
+class TestRecorderRefusesUnreplayableOps:
+    """Discovery must refuse what replay cannot reproduce.
+
+    ``_DiscoveredPlan`` replays a list of single-source unary ops. An op
+    against a second live tensor cannot be expressed, and recording only one
+    side would silently drop the other: a block-scale multiply would vanish
+    and the plan would ship unscaled weights. The recorder therefore poisons
+    the result so discovery raises and the caller falls back to eager
+    sanitize.
+    """
+
+    class _Index:
+        def __init__(self, logical):
+            self._logical = logical
+            self._index = {}
+
+        def logical_metadata(self):
+            return self._logical
+
+    def _discover(self, sanitize_fn, logical):
+        from omlx.oq import _discover_sanitize_plan
+
+        return _discover_sanitize_plan(sanitize_fn, self._Index(logical))
+
+    def test_scale_multiply_is_not_laundered_by_later_unary_ops(self):
+        """The regression that motivated the guard.
+
+        Block-aligned shapes keep every reshape consistent, so nothing fails
+        on shape grounds and the trailing ``astype`` used to make the plan
+        look replayable while the multiply had silently disappeared.
+        """
+        logical = {"w": ((256, 128), "BF16"), "s": ((2, 1), "F32")}
+
+        def sanitize(weights):
+            w = weights["w"].reshape(2, 128, 128)
+            w = w * weights["s"][:, None, None]
+            return {"out": w.reshape(256, 128).astype(mx.bfloat16)}
+
+        with pytest.raises(
+            ValueError, match="non-replayable transform|single-source transform"
+        ):
+            self._discover(sanitize, logical)
+
+    def test_scale_multiply_is_not_laundered_by_split(self):
+        """A split must not turn a poisoned multi-source result replayable."""
+        logical = {"w": ((256, 128), "BF16"), "s": ((256, 1), "F32")}
+
+        def sanitize(weights):
+            scaled = weights["w"] * weights["s"]
+            return {"out": mx.split(scaled, 2, axis=0)[0]}
+
+        with pytest.raises(
+            ValueError, match="non-replayable transform|single-source transform"
+        ):
+            self._discover(sanitize, logical)
+
+    def test_scalar_multiply_still_records(self):
+        """Only a second tracked tensor poisons; scalars are unaffected."""
+        from omlx.oq import _TrackedTensor
+
+        tracked = _TrackedTensor((8, 4), "BF16", sources=["w"])
+        assert (tracked * 2.0).transform != "nested_unreplayable"
+        assert (tracked * tracked).transform == "nested_unreplayable"
+
+    def test_binary_op_records_both_operands_as_sources(self):
+        from omlx.oq import _TrackedTensor
+
+        left = _TrackedTensor((8, 4), "BF16", sources=["w"])
+        right = _TrackedTensor((8, 1), "F32", sources=["s"])
+
+        assert set((left * right).sources) == {"w", "s"}
+
+    @pytest.mark.parametrize("op", ["from_fp8", "pad"])
+    def test_ops_that_reset_the_recipe_poison_instead(self, op):
+        """These built a fresh tensor with an empty recipe, discarding any
+        lineage recorded before them."""
+        from omlx.oq import _TrackedTensor
+
+        tracked = _TrackedTensor((256, 128), "BF16", sources=["w"])
+        reshaped = tracked.reshape(2, 128, 128)
+        assert reshaped.recipe, "precondition: something was recorded"
+
+        if op == "from_fp8":
+            result = reshaped._unreplayable(dtype="BF16")
+        else:
+            result = reshaped._unreplayable(shape=(2, 130, 128))
+
+        assert result.transform == "nested_unreplayable"
+        assert not result.recipe
+
+    def test_poison_survives_a_following_replayable_op(self):
+        from omlx.oq import _TrackedTensor
+
+        tracked = _TrackedTensor((8, 4), "BF16", sources=["w"])
+        poisoned = tracked * _TrackedTensor((8, 1), "F32", sources=["s"])
+
+        assert poisoned.reshape(4, 8).transform == "nested_unreplayable"
+        assert poisoned.astype(mx.bfloat16).transform == "nested_unreplayable"
+
+
+class TestCalibrationFootprint:
+    """Calibration materializes the dequantized view, so the proxy budget
+    must size on that rather than on the checkpoint's file bytes."""
+
+    class _FakeIndex:
+        def __init__(self, logical):
+            self._logical = logical
+
+        def logical_metadata(self):
+            return self._logical
+
+    def test_fp8_weights_are_counted_as_bf16(self):
+        from omlx.oq import _logical_footprint_bytes
+
+        # An fp8 weight occupies one byte on disk; the logical view reports
+        # it as BF16, which is what the calibration forward allocates.
+        index = self._FakeIndex({"w": ((1000, 1000), "BF16")})
+        assert _logical_footprint_bytes(index) == 1000 * 1000 * 2
+
+    def test_packed_fp4_expands_fourfold_not_twofold(self):
+        """The case a flat 2x multiplier gets wrong.
+
+        DeepSeek-V4 style experts store two fp4 values per byte and declare
+        ``quant_method: "fp8"``. The logical view already reports the
+        unpacked column count, so one stored byte becomes two bf16 values,
+        i.e. 4 bytes -- double what a per-format constant would predict.
+        """
+        from omlx.oq import _logical_footprint_bytes
+
+        on_disk_bytes = 512 * 256
+        index = self._FakeIndex({"w": ((512, 256 * 2), "BF16")})
+        assert _logical_footprint_bytes(index) == on_disk_bytes * 4
+
+    def test_unquantized_source_is_unchanged(self):
+        from omlx.oq import _logical_footprint_bytes
+
+        index = self._FakeIndex({"w": ((10, 10), "BF16"), "b": ((10,), "F32")})
+        assert _logical_footprint_bytes(index) == 10 * 10 * 2 + 10 * 4
+
+    def test_index_without_logical_view_contributes_nothing(self):
+        from omlx.oq import _logical_footprint_bytes
+
+        assert _logical_footprint_bytes(object()) == 0
+
+    def test_dequantized_footprint_flips_requires_proxy(self, monkeypatch):
+        import omlx.oq as oq
+
+        # Fixed capacity 400 -> model_limit = int(0.75 * 400) = 300.
+        monkeypatch.setattr(oq, "_system_available_memory_bytes", lambda: 400)
+        monkeypatch.setattr(oq, "_metal_available_memory_bytes", lambda: 400)
+
+        on_disk = 200  # < 300 -> sizing on file bytes would skip the proxy
+        assert oq._calibration_memory_budget(on_disk)["requires_proxy"] is False
+
+        # Same tensors, reported at their dequantized size.
+        index = self._FakeIndex({"w": ((200, 1), "BF16")})
+        footprint = max(on_disk, oq._logical_footprint_bytes(index))
+        assert footprint == 400  # over the 300 limit
+        assert oq._calibration_memory_budget(footprint)["requires_proxy"] is True
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"quantization_config": {"quant_method": "mxfp8"}},
+            {
+                "model_type": "deepseek_v4",
+                "quantization_config": {"quant_method": "fp8"},
+            },
+        ],
+        ids=["minimax_mxfp8", "deepseek_v4_fp4"],
+    )
+    def test_quantized_source_calibration_keeps_packed_footprint(self, config):
+        from omlx.oq import _calibration_footprint_bytes
+
+        index = self._FakeIndex({"w": ((200, 1), "BF16")})
+
+        assert _calibration_footprint_bytes(index, 100, config) == 100
+
+    def test_native_fp8_calibration_uses_dequantized_footprint(self):
+        from omlx.oq import _calibration_footprint_bytes
+
+        index = self._FakeIndex({"w": ((200, 1), "BF16")})
+        config = {
+            "model_type": "mimo_v2",
+            "quantization_config": {"quant_method": "fp8"},
+        }
+
+        assert _calibration_footprint_bytes(index, 100, config) == 400
