@@ -497,6 +497,16 @@ def _is_mtp_eligible(gen_batch: Any) -> bool:
 def _is_mtp_batch_eligible(gen_batch: Any) -> bool:
     if not _mtp_common_eligible(gen_batch):
         return False
+    model = getattr(gen_batch, "model", None)
+    if getattr(model, "_omlx_mtp_rowwise_unsupported", False) or getattr(
+        getattr(model, "_language_model", None),
+        "_omlx_mtp_rowwise_unsupported",
+        False,
+    ):
+        # Multi-block window heads (inkling) keep per-request cycle state
+        # on the cache list; the row-wise extract/merge path does not
+        # model that.
+        return False
     uids = getattr(gen_batch, "uids", None)
     if uids is None or len(uids) <= 1:
         return False
@@ -1644,7 +1654,13 @@ class _DepthController:
         if self.max_depth > 1:
             self._warmup.extend([0, 0, 0])
 
-    def observe(self, used: int, accepted: int, cycle_ms: float) -> None:
+    def observe(
+        self,
+        used: int,
+        accepted: int,
+        cycle_ms: float,
+        time_sample: bool = True,
+    ) -> None:
         self.cycles += 1
         used = max(0, min(int(used), self.max_depth))
         accepted = max(0, min(int(accepted), used))
@@ -1657,11 +1673,16 @@ class _DepthController:
                 break
         # Cost: wall-time-domain EMA with a one-off-spike guard, plus per-depth
         # ages so probes can target the estimate that is most stale.
+        # ``time_sample=False`` marks cycles carrying a one-off maintenance
+        # cost (a multi-block head keepalive refold) whose spike would bias
+        # this depth's estimate; the acceptance update above still applies.
         cycle_ms = max(0.0, float(cycle_ms))
-        self._update_time(used, cycle_ms)
+        if time_sample:
+            self._update_time(used, cycle_ms)
         for d in list(self.t_age):
             self.t_age[d] += cycle_ms
-        self.t_age[used] = 0.0
+        if time_sample:
+            self.t_age[used] = 0.0
         self._ms_probe += cycle_ms
         self._ms_explore += cycle_ms
 
@@ -1944,8 +1965,23 @@ def _chain_next_drafts(
         state.draft_accept_lps = []
         return
 
-    if _HEAD_HIDDEN_POST_NORM and hidden_rows.ndim == 3:
+    # Models whose MTP head normalizes its hidden input internally
+    # (inkling: per-block hidden_norm, chain_hidden_post_norm=False) mark
+    # themselves and receive the raw pre-norm trunk hidden.
+    head_prenorm = getattr(model, "_omlx_mtp_head_prenorm", False) or getattr(
+        getattr(model, "_language_model", None), "_omlx_mtp_head_prenorm", False
+    )
+    if _HEAD_HIDDEN_POST_NORM and not head_prenorm and hidden_rows.ndim == 3:
         hidden_rows = _trunk_norm_module(model)(hidden_rows)
+
+    # Multi-block heads (inkling) route fold/chain by a per-cycle pass
+    # counter on the cache list; reset it before the fold. Single-block
+    # heads have no hook and are unaffected.
+    begin = getattr(model, "mtp_begin_cycle", None) or getattr(
+        getattr(model, "_language_model", None), "mtp_begin_cycle", None
+    )
+    if begin is not None:
+        begin(state.mtp_cache, depth)
 
     n = committed.shape[0]
     logits, head_hidden = model.mtp_forward(
@@ -2614,8 +2650,14 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
     state.next_main = next_main
     state.stats.mtp_head_ms += (time.perf_counter() - t0) * 1000
     if state.controller is not None:
+        keepalive = bool(getattr(state.mtp_cache, "fold_keepalive", False))
+        if keepalive:
+            state.mtp_cache.fold_keepalive = False
         state.controller.observe(
-            k, m, (time.perf_counter() - cycle_t0) * 1000
+            k,
+            m,
+            (time.perf_counter() - cycle_t0) * 1000,
+            time_sample=not keepalive,
         )
 
 
