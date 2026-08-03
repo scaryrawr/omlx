@@ -176,14 +176,18 @@ def _map_transformer_block(sub: str, v: mx.array) -> dict:
     Port of the upstream drafter's mapping (drafters/inkling_mtp)."""
     out = {}
     p = "transformer_block."
+    from mlx_vlm.models.inkling.inkling import _to_mlx_sconv_weight
+
     if sub.startswith("attn."):
         name, leaf = sub[len("attn.") :].rsplit(".", 1)
         if name in _ATTN:
-            out[p + f"self_attn.{_ATTN[name]}.weight"] = v
+            out[p + f"self_attn.{_ATTN[name]}.{leaf}"] = v
         elif name in ("q_norm", "k_norm"):
-            out[p + f"self_attn.{name}.weight"] = v
+            out[p + f"self_attn.{name}.{leaf}"] = v
         elif name in ("k_sconv", "v_sconv"):
-            out[p + f"self_attn.{name}.conv.weight"] = v.transpose(0, 2, 1)
+            if leaf == "weight":
+                v = _to_mlx_sconv_weight(v)
+            out[p + f"self_attn.{name}.conv.{leaf}"] = v
         elif name == "rel_logits_proj":
             out[p + "self_attn.rel_proj"] = v
         else:
@@ -193,9 +197,9 @@ def _map_transformer_block(sub: str, v: mx.array) -> dict:
     elif sub == "mlp_norm.weight":
         out[p + "post_attention_layernorm.weight"] = v
     elif sub == "attn_sconv.weight":
-        out[p + "attn_sconv.conv.weight"] = v.transpose(0, 2, 1)
+        out[p + "attn_sconv.conv.weight"] = _to_mlx_sconv_weight(v)
     elif sub == "mlp_sconv.weight":
-        out[p + "mlp_sconv.conv.weight"] = v.transpose(0, 2, 1)
+        out[p + "mlp_sconv.conv.weight"] = _to_mlx_sconv_weight(v)
     elif sub.startswith("mlp."):
         from mlx_vlm.models.inkling.inkling import _split_gate_up
 
@@ -219,6 +223,8 @@ def _map_transformer_block(sub: str, v: mx.array) -> dict:
 def _mtp_sanitize_hook(key: str, value: mx.array) -> dict:
     """Map a raw ``model.mtp.layers.N.*`` checkpoint key onto the attached
     ``language_model.mtp.blocks.N.*`` parameter names."""
+    if key.startswith("language_model.mtp."):
+        return {key: value}
     for prefix in ("model.mtp.layers.", "mtp.layers."):
         if key.startswith(prefix):
             i, sub = key[len(prefix) :].split(".", 1)
@@ -348,16 +354,19 @@ def _register_mtp_classes(inkling_lang: Any) -> None:
     from dataclasses import replace
 
     InklingDecoderLayer = inkling_lang.InklingDecoderLayer
+    qkvr_fusion_enabled = inkling_lang.qkvr_fusion_enabled
 
     class InklingMTPBlock(nn.Module):
-        def __init__(self, config, layer_idx: int):
+        def __init__(self, config, layer_idx: int, *, qkvr_fused: bool):
             super().__init__()
             self.embed_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.hidden_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.input_proj = nn.Linear(
                 2 * config.hidden_size, config.hidden_size, bias=False
             )
-            self.transformer_block = InklingDecoderLayer(config, layer_idx)
+            self.transformer_block = InklingDecoderLayer(
+                config, layer_idx, qkvr_fused=qkvr_fused
+            )
 
     class InklingMTPModule(nn.Module):
         """Per-depth MTP blocks (upstream drafter layout, trunk-bound)."""
@@ -375,7 +384,14 @@ def _register_mtp_classes(inkling_lang: Any) -> None:
                 mlp_layer_types=["dense"] * n,
                 local_layer_ids=None,
             )
-            self.blocks = [InklingMTPBlock(layer_config, i) for i in range(n)]
+            self.blocks = [
+                InklingMTPBlock(
+                    layer_config,
+                    i,
+                    qkvr_fused=qkvr_fusion_enabled(text_config, i, mtp=True),
+                )
+                for i in range(n)
+            ]
 
         def __call__(
             self,

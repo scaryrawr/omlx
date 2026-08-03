@@ -67,6 +67,7 @@ from omlx.oq import (
     _sensitivity_lm_config_override,
     _should_quantize_tensor,
     _source_imatrix_signature,
+    _source_has_nextn_tensors,
     _TrackedTensor,
     _validate_oq_dtype_for_model,
     _uses_minimax_mxfp8_scale_inv_source,
@@ -791,12 +792,64 @@ class TestNormalizeMtpInConfig:
         # Non-mtp fields untouched.
         assert cfg["text_config"]["num_hidden_layers"] == 64
 
+    def test_removes_dspark_discriminator_fields(self):
+        from omlx.oq import _normalize_mtp_in_config
+
+        cfg = {
+            "num_nextn_predict_layers": 1,
+            "dspark_block_size": 5,
+            "dspark_noise_token_id": 128799,
+            "dspark_target_layer_ids": [40, 41, 42],
+            "dspark_markov_rank": 256,
+        }
+        _normalize_mtp_in_config(cfg)
+        assert cfg["num_nextn_predict_layers"] == 0
+        assert not any(key.startswith("dspark_") for key in cfg)
+
     def test_no_mtp_fields_is_noop(self):
         from omlx.oq import _normalize_mtp_in_config
 
         cfg = {"model_type": "llama"}
         _normalize_mtp_in_config(cfg)
         assert cfg == {"model_type": "llama"}
+
+
+class TestSourceHasNextnTensors:
+    @pytest.mark.parametrize(
+        "prefix",
+        (
+            "model.layers.45",
+            "language_model.model.layers.45",
+            "model.language_model.layers.45",
+        ),
+    )
+    def test_accepts_runtime_and_vlm_prefixes(self, prefix):
+        config = {
+            "model_type": "step3p7",
+            "text_config": {
+                "model_type": "step3p5",
+                "num_hidden_layers": 45,
+                "num_nextn_predict_layers": 3,
+            },
+        }
+
+        assert _source_has_nextn_tensors(
+            [f"{prefix}.eh_proj.weight"], config
+        ) is True
+
+    def test_rejects_backbone_only_weights(self):
+        config = {
+            "num_hidden_layers": 45,
+            "num_nextn_predict_layers": 3,
+        }
+
+        assert (
+            _source_has_nextn_tensors(
+                ["language_model.model.layers.44.self_attn.q_proj.weight"],
+                config,
+            )
+            is False
+        )
 
 
 # =============================================================================
@@ -5686,6 +5739,16 @@ class TestInklingQuantPredicate:
         )
         assert isinstance(result, dict) and result["bits"] == 8
 
+    def test_fused_qkvr_keeps_inkling_attention_at_q8(
+        self, inkling_config, module
+    ):
+        result = universal_quant_predicate(
+            "language_model.model.layers.3.self_attn.qkvr_proj.weight",
+            module,
+            inkling_config,
+        )
+        assert isinstance(result, dict) and result["bits"] == 8
+
     def test_towers_skipped(self, inkling_config, module):
         assert (
             universal_quant_predicate(
@@ -5742,7 +5805,10 @@ class TestInklingSanitizeDiscovery:
                 (n_experts, hidden, inter), dtype=np.float16
             ),
             "model.llm.layers.1.mlp.shared_experts.shared_w13_weight": np.zeros(
-                (2 * inter, hidden), dtype=np.float16
+                (2, 2 * inter, hidden), dtype=np.float16
+            ),
+            "model.llm.layers.1.mlp.shared_experts.shared_w2_weight": np.zeros(
+                (2, hidden, inter), dtype=np.float16
             ),
             "model.llm.layers.1.mlp.gate.weight": np.zeros(
                 (n_experts + 1, hidden), dtype=np.float16
@@ -5750,8 +5816,17 @@ class TestInklingSanitizeDiscovery:
             "model.llm.layers.1.attn.wq_du.weight": np.zeros(
                 (hidden, hidden), dtype=np.float16
             ),
+            "model.llm.layers.1.attn.wk_dv.weight": np.zeros(
+                (hidden, hidden), dtype=np.float16
+            ),
+            "model.llm.layers.1.attn.wv_dv.weight": np.zeros(
+                (hidden, hidden), dtype=np.float16
+            ),
+            "model.llm.layers.1.attn.wr_du.weight": np.zeros(
+                (hidden, hidden), dtype=np.float16
+            ),
             "model.llm.layers.1.attn.k_sconv.weight": np.zeros(
-                (hidden, 4, 1), dtype=np.float16
+                (hidden, 1, 4), dtype=np.float16
             ),
             "model.llm.embed.weight": np.zeros((16, hidden), dtype=np.float16),
             "model.mtp.layers.0.input_proj.weight": np.zeros(
@@ -5779,12 +5854,26 @@ class TestInklingSanitizeDiscovery:
         down = plan[prefix + "mlp.switch_mlp.down_proj.weight"]
         assert down["transform"] == "passthrough"
 
+        shared_gate = plan[prefix + "mlp.shared_experts.gate_proj.weight"]
+        shared_down = plan[prefix + "mlp.shared_experts.down_proj.weight"]
+        assert tuple(shared_gate["shape"]) == (8, 8)
+        assert tuple(shared_down["shape"]) == (8, 8)
+
         # Synthesized identity scales become literal plan entries.
         assert plan[prefix + "mlp.switch_mlp.gate_scale"]["transform"] == "literal"
         assert plan[prefix + "mlp.switch_mlp.out_scale"]["transform"] == "literal"
 
         sconv = plan[prefix + "self_attn.k_sconv.conv.weight"]
-        assert tuple(sconv["shape"]) == (8, 1, 4)
+        assert tuple(sconv["shape"]) == (8, 4, 1)
+
+        qkvr = plan[prefix + "self_attn.qkvr_proj.weight"]
+        assert qkvr["sources"] == [
+            "model.llm.layers.1.attn.wq_du.weight",
+            "model.llm.layers.1.attn.wk_dv.weight",
+            "model.llm.layers.1.attn.wv_dv.weight",
+            "model.llm.layers.1.attn.wr_du.weight",
+        ]
+        assert tuple(qkvr["shape"]) == (32, 8)
 
         assert plan["language_model.model.embed_tokens.weight"]["transform"] == (
             "passthrough"
@@ -5906,9 +5995,7 @@ class TestInklingLayerWalk:
         assert type(sparse.switch_mlp.gate_proj).__name__ in (
             _OQE_SWITCH_LINEAR_CLASSES
         )
-        assert type(sparse.shared_experts.down_proj).__name__ in (
-            _OQE_SWITCH_LINEAR_CLASSES
-        )
+        assert type(sparse.shared_experts.down_proj).__name__ == "Linear"
 
 
 @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
@@ -5939,12 +6026,15 @@ class TestInklingModelSanitizer:
                 (n_experts, hidden, inter)
             ),
             "model.llm.layers.1.attn.wq_du.weight": mx.zeros((hidden, hidden)),
+            "model.llm.layers.1.attn.wk_dv.weight": mx.zeros((hidden, hidden)),
+            "model.llm.layers.1.attn.wv_dv.weight": mx.zeros((hidden, hidden)),
+            "model.llm.layers.1.attn.wr_du.weight": mx.zeros((hidden, hidden)),
             "model.llm.embed.weight": mx.zeros((16, hidden)),
         }
         out = sanitize_fn(weights)
         prefix = "language_model.model.layers.1."
         assert prefix + "mlp.switch_mlp.gate_proj.weight" in out
-        assert prefix + "self_attn.q_proj.weight" in out
+        assert prefix + "self_attn.qkvr_proj.weight" in out
         assert "language_model.model.embed_tokens.weight" in out
 
 

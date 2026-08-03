@@ -448,6 +448,7 @@
 
             // Benchmark state
             benchModelId: '',
+            benchContextProfile: 'code_python',
             benchPromptLengths: { 1024: true, 4096: true, 8192: false, 16384: false, 32768: false, 65536: false, 131072: false, 200000: false },
             benchBatchSizes: { 2: true, 4: true, 8: false },
             benchForceLmEngine: false,
@@ -476,7 +477,8 @@
             benchUploadResults: [],
             benchUploadDone: null,
             benchUploading: false,
-            benchUploadSkipped: null,  // { features: [...] } when upload was skipped due to experimental features
+            benchUploadSkipped: null,  // { reason } — only external-endpoint runs skip now
+            benchUploadFlags: [],      // [{key, label}] acceleration active during the run
             // { bench_id, model_id } when the server reports a running bench
             // that is NOT the one this tab is displaying. Drives the "another
             // bench is running" banner + disables Start so the user doesn't
@@ -2712,6 +2714,31 @@
                 return String(n);
             },
 
+            formatDFlashSessionStats(totals) {
+                if (!totals || totals.requests <= 1) return '';
+
+                const parts = [];
+                if (totals.speculative_requests > 0) {
+                    parts.push(
+                        Math.round((totals.acceptance_ratio || 0) * 100) + '% ' +
+                        window.t('status.active_models.dflash_draft_share'),
+                        (totals.accepted_draft_tokens_per_cycle || 0).toFixed(2) + ' ' +
+                        window.t('status.active_models.dflash_accepted_draft_per_cycle'),
+                        (totals.tokens_per_cycle || 0).toFixed(2) + ' ' +
+                        window.t('status.active_models.dflash_output_per_cycle'),
+                        totals.speculative_requests + ' ' +
+                        window.t('status.active_models.dflash_speculative_requests'),
+                    );
+                }
+                if (totals.fallback_requests > 0) {
+                    parts.push(
+                        totals.fallback_requests + ' ' +
+                        window.t('status.active_models.dflash_fallback_requests'),
+                    );
+                }
+                return window.t('status.active_models.dflash_session') + ': ' + parts.join(' · ');
+            },
+
             formatDurationShort(seconds) {
                 if (seconds == null || !Number.isFinite(seconds)) return '—';
                 if (seconds < 1) return seconds.toFixed(1) + 's';
@@ -2948,6 +2975,7 @@
                 this.benchUploadDone = null;
                 this.benchUploading = false;
                 this.benchUploadSkipped = null;
+                this.benchUploadFlags = [];
                 this.benchRunExternal = this.benchExternalEnabled
                     ? { base_url: this.externalBaseUrl.trim(), model: this.externalModel.trim() }
                     : null;
@@ -2958,6 +2986,7 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             model_id: this.benchExternalEnabled ? this.externalModel.trim() : this.benchModelId,
+                            context_profile: this.benchContextProfile,
                             prompt_lengths: promptLengths,
                             generation_length: 128,
                             batch_sizes: batchSizes,
@@ -3048,6 +3077,7 @@
                             }
                         } else if (data.type === 'upload_done') {
                             this.benchUploadDone = data.data;
+                            this.benchUploadFlags = data.data.feature_flags || [];
                             this.benchUploading = false;
                             this.benchRunning = false;
                             this.benchProgress = null;
@@ -3055,7 +3085,7 @@
                             this.benchEventSource = null;
                         } else if (data.type === 'upload_skipped') {
                             this.benchUploadSkipped = {
-                                reason: data.reason || 'experimental_features',
+                                reason: data.reason || 'external_endpoint',
                                 features: data.features || [],
                             };
                             this.benchUploading = false;
@@ -3354,6 +3384,7 @@
                     lines.push(`Benchmark Model: ${this.benchModelId}`);
                     lines.push(`Engine: ${this.benchForceLmEngine ? 'Force mlx-lm' : 'Auto'}`);
                 }
+                lines.push(`Context: ${this.benchContextLabel(this.benchContextProfile)}`);
                 lines.push('='.repeat(80));
 
                 // Single Request Results
@@ -3491,6 +3522,7 @@
                         this.benchOtherActive = {
                             bench_id: data.bench_id,
                             model_id: data.model_id,
+                            context_profile: data.context_profile || 'code_python',
                             force_lm_engine: !!data.force_lm_engine,
                             external: !!data.external,
                         };
@@ -3512,6 +3544,7 @@
             // /api/bench/active. External model ids aren't in the local
             // dropdown, so the external flag drives which controls light up.
             _restoreBenchRunSource(data) {
+                this.benchContextProfile = data.context_profile || 'code_python';
                 if (data.external) {
                     this.benchExternalEnabled = true;
                     this.benchRunExternal = {
@@ -3526,6 +3559,17 @@
                     this.benchExternalEnabled = false;
                     this.benchRunExternal = null;
                 }
+            },
+
+            benchContextLabel(profile) {
+                const keys = {
+                    code_python: 'bench.config.context.code_python',
+                    code_mixed: 'bench.config.context.code_mixed',
+                    novel_ko: 'bench.config.context.novel_ko',
+                    novel_en: 'bench.config.context.novel_en',
+                    novel_ja: 'bench.config.context.novel_ja',
+                };
+                return window.t(keys[profile] || keys.code_python);
             },
 
             // User clicked "View live" on the banner — clear the stale
@@ -3544,6 +3588,7 @@
                 this.benchUploadResults = [];
                 this.benchUploadDone = null;
                 this.benchUploadSkipped = null;
+                this.benchUploadFlags = [];
                 this.benchProgress = null;
                 this.benchError = '';
                 this.connectBenchSSE(other.bench_id);

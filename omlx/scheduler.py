@@ -50,6 +50,7 @@ from mlx_lm.sample_utils import make_logits_processors
 
 from .cache.observability import CacheRateTracker
 from .cache.paged_cache import PagedCacheManager
+from .cache.pooling_delta import compact_pooling_cache_snapshot
 from .cache.prefix_cache import BlockAwarePrefixCache
 from .exceptions import (
     PrefillMemoryExceededError,
@@ -73,6 +74,42 @@ from .utils.metal_sync import (
 from .utils.proc_memory import get_phys_footprint
 from .utils.sampling import make_sampler as omlx_make_sampler
 from .utils.tokenizer import create_streaming_detokenizer
+
+
+def _compact_boundary_snapshot_value(
+    value: Any, token_count: int, block_size: int, stream: Any
+) -> Any:
+    """Compact an extracted in-memory boundary snapshot when available."""
+    if (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and value[0] == "__prefill_extracted__"
+        and isinstance(value[1], list)
+    ):
+        with mx.stream(stream):
+            compact_pooling_cache_snapshot(value[1], token_count, block_size)
+            delta_arrays = []
+            for layer in value[1]:
+                for sub_idx in layer.get("pooling_delta_ranges", {}):
+                    pooled = layer["state"][int(sub_idx)][2]
+                    if isinstance(pooled, mx.array):
+                        delta_arrays.append(pooled)
+            if delta_arrays:
+                mx.eval(*delta_arrays)
+    return value
+
+
+def _contains_pooling_cache(snapshot_cache: list[Any]) -> bool:
+    """Return whether a boundary snapshot contains a PoolingCache sub-cache."""
+    for layer_cache in snapshot_cache:
+        if type(layer_cache).__name__ != "CacheList":
+            continue
+        if any(
+            type(sub_cache).__name__ == "PoolingCache"
+            for sub_cache in getattr(layer_cache, "caches", ())
+        ):
+            return True
+    return False
 
 
 def _apply_suppress_token_ids(logits: Any, suppress_token_ids: tuple[int, ...]) -> Any:
@@ -1768,6 +1805,7 @@ class Scheduler:
         # SpecPrefill: draft model for attention-based sparse prefill
         self._specprefill_draft_model: Any | None = None
         self._draft_paged_ssd_cache_manager: Any | None = None
+        self._draft_prefix_cache: Any | None = None
         # Track active specprefill request for RoPE cleanup
         self._specprefill_active_request_id: str | None = None
 
@@ -5577,16 +5615,27 @@ class Scheduler:
                     token_count,
                     snapshot_cache,
                     self._extract_cache_states,
+                    block_size=block_size,
                 )
             if saved:
                 self._boundary_cache_snapshots[request_id][token_count] = None
             else:
                 self._boundary_cache_snapshots[request_id][token_count] = (
-                    self._prefill_snapshot_value(snapshot_cache)
+                    _compact_boundary_snapshot_value(
+                        self._prefill_snapshot_value(snapshot_cache),
+                        token_count,
+                        block_size,
+                        self._stream,
+                    )
                 )
         else:
             self._boundary_cache_snapshots[request_id][token_count] = (
-                self._prefill_snapshot_value(snapshot_cache)
+                _compact_boundary_snapshot_value(
+                    self._prefill_snapshot_value(snapshot_cache),
+                    token_count,
+                    block_size,
+                    self._stream,
+                )
             )
 
         self._boundary_snapshot_required = True
@@ -5611,6 +5660,28 @@ class Scheduler:
             return extracted
         self._eval_snapshot_cache(snapshot_cache)
         return snapshot_cache
+
+    def _decode_boundary_snapshot_value(
+        self, snapshot_cache: list[Any], token_count: int, block_size: int
+    ) -> Any:
+        """Materialize a decode snapshot, compacting only PoolingCache layers.
+
+        Decode snapshots returned by ``BatchGenerator.extract_cache`` are
+        already independent cache objects. Preserve the established raw-cache
+        representation for every other cache type, while pre-extracting the
+        PoolingCache case so its cumulative ``pooled`` tensor can be stored as
+        a single-block delta.
+        """
+        if not _contains_pooling_cache(snapshot_cache):
+            self._eval_snapshot_cache(snapshot_cache)
+            return snapshot_cache
+
+        return _compact_boundary_snapshot_value(
+            self._prefill_snapshot_value(snapshot_cache),
+            token_count,
+            block_size,
+            self._stream,
+        )
 
     def _extract_prefill_snapshot_states(
         self, snapshot_cache: list[Any]
@@ -5836,6 +5907,7 @@ class Scheduler:
                     total_tokens,
                     snapshot_cache,
                     self._extract_cache_states,
+                    block_size=block_size,
                 )
             if saved:
                 self._boundary_cache_snapshots[request.request_id][total_tokens] = None
@@ -5846,15 +5918,17 @@ class Scheduler:
                 # the capturing thread; otherwise the worker re-dispatches a lazy op
                 # to this thread's stream index -> "no Stream(gpu, N)" -> SIGABRT.
                 # Mirrors _on_prefill_boundary_snapshot's in-memory fallback.
-                self._eval_snapshot_cache(snapshot_cache)
-                self._boundary_cache_snapshots[request.request_id][
-                    total_tokens
-                ] = snapshot_cache
+                self._boundary_cache_snapshots[request.request_id][total_tokens] = (
+                    self._decode_boundary_snapshot_value(
+                        snapshot_cache, total_tokens, block_size
+                    )
+                )
         else:
-            self._eval_snapshot_cache(snapshot_cache)
-            self._boundary_cache_snapshots[request.request_id][
-                total_tokens
-            ] = snapshot_cache
+            self._boundary_cache_snapshots[request.request_id][total_tokens] = (
+                self._decode_boundary_snapshot_value(
+                    snapshot_cache, total_tokens, block_size
+                )
+            )
 
         logger.debug(
             f"Captured boundary cache snapshot for {request.request_id} at "
@@ -6804,7 +6878,13 @@ class Scheduler:
                 f"{best_p}: stored=...{stored_ctx!r} vs prompt=...{prompt_ctx!r}"
             )
 
-    _CACHE_FRESHNESS_WAIT_MIN_PROMPT_TOKENS = 8192
+    # A 4K prompt is the smallest standard benchmark/workload where a missed
+    # async store is already a multi-second re-prefill.  DeepSeek V4 boundary
+    # snapshots intentionally retain 3584 of 4096 prompt tokens, and their SSD
+    # write can finish just after the first HTTP response is returned.  Include
+    # this workload class in the non-blocking freshness deferral so an immediate
+    # repeated turn waits for that relevant store instead of racing it.
+    _CACHE_FRESHNESS_WAIT_MIN_PROMPT_TOKENS = 4096
     _CACHE_FRESHNESS_WAIT_MIN_COMMON_TOKENS = 8192
     _CACHE_FRESHNESS_WAIT_MIN_PROMPT_RATIO = 0.30
     _CACHE_FRESHNESS_WAIT_TIMEOUT_S = 4.0
@@ -7156,7 +7236,7 @@ class Scheduler:
                 "Could not close the previous SpecPrefill draft SSD cache manager"
             )
         self._specprefill_draft_model = draft_model
-        self._draft_prefix_cache: Any | None = None
+        self._draft_prefix_cache = None
         if not draft_model_name:
             logger.info(
                 "SpecPrefill: draft model set without a stable model name "
@@ -8987,6 +9067,13 @@ class Scheduler:
 
                     from .specprefill.target import run_specprefill_target_prefill
 
+                    # all_tokens may start after an ordinary cache hit; exact
+                    # matching needs the complete static prefix from the prompt.
+                    prompt_token_ids = request.prompt_token_ids or []
+                    static_prefix_tokens = list(
+                        prompt_token_ids[: request.specprefill_system_end]
+                    )
+
                     target_result = run_specprefill_target_prefill(
                         target_model=self.model,
                         request=request,
@@ -9001,9 +9088,27 @@ class Scheduler:
                         sync_and_clear_cache=lambda: _sync_and_clear_cache(self._stream),
                         log=logger,
                         eval_cache_states=_eval_cache_states,
+                        extract_cache_states=self._extract_cache_states,
+                        # Preserve an ordinary cache hit that already extends
+                        # beyond the static boundary; exact restoration is only
+                        # useful while some system/tool tokens remain.
+                        exact_prefix_cache=(
+                            self.block_aware_cache
+                            if target_plan.system_token_count > 0
+                            else None
+                        ),
+                        static_prefix_tokens=static_prefix_tokens,
+                        promote_static_prefix_to_hot_cache=(
+                            not self._bypass_hot_cache_under_pressure()
+                        ),
                     )
 
-                    cache_to_use = target_result.prompt_cache
+                    # An exact static-prefix restore can supersede a shorter
+                    # ordinary prefix cache. Transfer the successful target
+                    # result to the request so the old target KV is released
+                    # before decode.
+                    request.prompt_cache = target_result.prompt_cache
+                    cache_to_use = request.prompt_cache
                     tokens_to_process = target_result.tokens_to_process
                     self._specprefill_active_request_id = request.request_id
 
@@ -11596,7 +11701,25 @@ class Scheduler:
             "prefix_tokens_requested": prefix_stats.tokens_requested_total,
             "prefix_tokens_saved": prefix_stats.tokens_saved,
             "evictions": prefix_stats.evictions,
+            "target_static_hits": prefix_stats.exact_prefix_hits,
+            "target_static_misses": prefix_stats.exact_prefix_misses,
+            "target_static_tokens_restored": (
+                prefix_stats.exact_prefix_tokens_restored
+            ),
         }
+
+        # Target exact-prefix and draft ordinary-prefix reuse are separate
+        # model-specific caches, so expose their counters independently.
+        draft_prefix_cache = self._draft_prefix_cache
+        if draft_prefix_cache is not None:
+            draft_stats = draft_prefix_cache.get_stats()
+            counters.update(
+                {
+                    "draft_prefix_hits": draft_stats.hits,
+                    "draft_prefix_misses": draft_stats.misses,
+                    "draft_prefix_tokens_saved": draft_stats.tokens_saved,
+                }
+            )
 
         if self.paged_ssd_cache_manager is not None:
             ssd = self.paged_ssd_cache_manager.get_stats()
@@ -11627,7 +11750,29 @@ class Scheduler:
             stats["block_size"] = self.config.paged_cache_block_size
 
         if self.block_aware_cache is not None:
-            stats["prefix_cache"] = self.block_aware_cache.get_stats_dict()
+            prefix_stats = self.block_aware_cache.get_stats_dict()
+            stats["prefix_cache"] = prefix_stats
+            specprefill_cache_stats = {
+                "target_static_hits": prefix_stats["exact_prefix_hits"],
+                "target_static_misses": prefix_stats["exact_prefix_misses"],
+                "target_static_tokens_restored": prefix_stats[
+                    "exact_prefix_tokens_restored"
+                ],
+                "target_static_stores": prefix_stats["exact_prefix_stores"],
+                "target_static_store_failures": prefix_stats[
+                    "exact_prefix_store_failures"
+                ],
+            }
+            if self._draft_prefix_cache is not None:
+                draft_stats = self._draft_prefix_cache.get_stats()
+                specprefill_cache_stats.update(
+                    {
+                        "draft_prefix_hits": draft_stats.hits,
+                        "draft_prefix_misses": draft_stats.misses,
+                        "draft_prefix_tokens_saved": draft_stats.tokens_saved,
+                    }
+                )
+            stats["specprefill_cache"] = specprefill_cache_stats
 
         counters = self._collect_cache_counters()
         if counters:

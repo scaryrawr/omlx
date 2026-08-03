@@ -475,9 +475,14 @@ def maybe_apply_pre_load_patches(
             else:
                 set_mtp_depth(3)
             if mtp_enabled:
+                backend = (
+                    "embedded DSpark" if _has_dspark_heads(config) else "Lightning MTP"
+                )
                 logger.info(
-                    "Native MTP patch applied for %s (model_type=%s, active)",
+                    "Speculative backend selected for %s: %s "
+                    "(model_type=%s, active)",
                     model_name,
+                    backend,
                     model_type,
                 )
             else:
@@ -650,8 +655,22 @@ def maybe_apply_pre_load_patches(
                 )
 
 
+def _has_dspark_heads(config: dict) -> bool:
+    """True for checkpoints with an embedded DSpark drafter."""
+    cfgs = (config, config.get("text_config") or {})
+    for cfg in cfgs:
+        if int(cfg.get("dspark_block_size", 0) or 0) <= 0:
+            continue
+        target_ids = cfg.get("dspark_target_layer_ids") or ()
+        if target_ids:
+            return True
+    return False
+
+
 def _has_mtp_heads(config: dict) -> bool:
     """True iff the model config declares any MTP head layers."""
+    if _has_dspark_heads(config):
+        return True
     if int(config.get("mtp_num_hidden_layers", 0) or 0) > 0:
         return True
     if int(config.get("num_nextn_predict_layers", 0) or 0) > 0:
@@ -676,6 +695,26 @@ _MTP_WEIGHT_PREFIXES = (
 )
 
 
+def _nextn_weight_prefixes_from_config(config: dict) -> tuple[str, ...]:
+    """Return every supported weight prefix for native nextn layers."""
+    cfgs = (config, config.get("text_config") or {})
+    n_mtp = max(int(c.get("num_nextn_predict_layers", 0) or 0) for c in cfgs)
+    if n_mtp <= 0:
+        return ()
+    n_main = max(int(c.get("num_hidden_layers", 0) or 0) for c in cfgs)
+    if n_main <= 0:
+        return ()
+    return tuple(
+        prefix
+        for i in range(n_mtp)
+        for prefix in (
+            f"model.layers.{n_main + i}.",
+            f"language_model.model.layers.{n_main + i}.",
+            f"model.language_model.layers.{n_main + i}.",
+        )
+    )
+
+
 def _nextn_weight_prefixes(model_path: str | Path) -> tuple[str, ...]:
     """Weight-key prefixes for MTP layers stored as extra decoder layers.
 
@@ -688,14 +727,7 @@ def _nextn_weight_prefixes(model_path: str | Path) -> tuple[str, ...]:
         config = json.loads((Path(model_path) / "config.json").read_text())
     except Exception:
         return ()
-    cfgs = (config, config.get("text_config") or {})
-    n_mtp = max(int(c.get("num_nextn_predict_layers", 0) or 0) for c in cfgs)
-    if n_mtp <= 0:
-        return ()
-    n_main = max(int(c.get("num_hidden_layers", 0) or 0) for c in cfgs)
-    if n_main <= 0:
-        return ()
-    return tuple(f"model.layers.{n_main + i}." for i in range(n_mtp))
+    return _nextn_weight_prefixes_from_config(config)
 
 
 def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
@@ -772,6 +804,7 @@ def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:
         or model_type == "glm_moe_dsa"
         or model_type == "gemma4"
         or model_type in ("inkling", "inkling_mm_model")
+        or model_type == "step3p7"
     )
 
 

@@ -121,6 +121,10 @@ def test_config_plumb_and_attach(runtime):
     assert model._omlx_mtp_head_clone is False
     assert model._omlx_mtp_rowwise_unsupported is True
     assert model._omlx_mtp_depth == 3  # clamped to the shipped block count
+    assert all(
+        hasattr(block.transformer_block.self_attn, "qkvr_proj")
+        for block in model.mtp.blocks
+    )
 
 
 def test_cycle_routing_uses_block_j(runtime):
@@ -273,8 +277,17 @@ def test_sanitize_hook_maps_mtp_keys(runtime):
         "model.mtp.layers.0.transformer_block.attn.wq_du.weight": mx.zeros(
             (hidden, hidden)
         ),
+        "model.mtp.layers.0.transformer_block.attn.wk_dv.weight": mx.zeros(
+            (hidden, hidden)
+        ),
+        "model.mtp.layers.0.transformer_block.attn.wv_dv.weight": mx.zeros(
+            (hidden, hidden)
+        ),
+        "model.mtp.layers.0.transformer_block.attn.wr_du.weight": mx.zeros(
+            (hidden, hidden)
+        ),
         "model.mtp.layers.0.transformer_block.attn.k_sconv.weight": mx.zeros(
-            (hidden, 4, 1)
+            (hidden, 1, 4)
         ),
         "model.mtp.layers.0.transformer_block.mlp.w13_dn.weight": w13,
         "model.llm.embed.weight": mx.zeros((16, hidden)),
@@ -283,11 +296,11 @@ def test_sanitize_hook_maps_mtp_keys(runtime):
     base = "language_model.mtp.blocks.0."
     assert base + "input_proj.weight" in out
     assert base + "embed_norm.weight" in out
-    assert base + "transformer_block.self_attn.q_proj.weight" in out
+    assert base + "transformer_block.self_attn.qkvr_proj.weight" in out
     assert out[base + "transformer_block.self_attn.k_sconv.conv.weight"].shape == (
         hidden,
-        1,
         4,
+        1,
     )
     gate = out[base + "transformer_block.mlp.gate_proj.weight"]
     ref = w13.reshape(inter, 2, hidden)

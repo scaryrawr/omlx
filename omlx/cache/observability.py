@@ -100,6 +100,10 @@ def _compute_window(
     d_ssd_disk = delta("ssd_disk_loads")
     d_tokens_matched = delta("prefix_tokens_matched")
     d_tokens_requested = delta("prefix_tokens_requested")
+    d_target_static_hits = delta("target_static_hits")
+    d_target_static_misses = delta("target_static_misses")
+    d_draft_prefix_hits = delta("draft_prefix_hits")
+    d_draft_prefix_misses = delta("draft_prefix_misses")
 
     minutes = elapsed / 60.0
 
@@ -119,6 +123,26 @@ def _compute_window(
         "ssd_hot_rate": round(
             _safe_ratio(d_ssd_hot, d_ssd_hot + d_ssd_disk), 4
         ),
+        "target_static_hits": d_target_static_hits,
+        "target_static_misses": d_target_static_misses,
+        "target_static_hit_rate": round(
+            _safe_ratio(
+                d_target_static_hits,
+                d_target_static_hits + d_target_static_misses,
+            ),
+            4,
+        ),
+        "target_static_tokens_restored": delta("target_static_tokens_restored"),
+        "draft_prefix_hits": d_draft_prefix_hits,
+        "draft_prefix_misses": d_draft_prefix_misses,
+        "draft_prefix_hit_rate": round(
+            _safe_ratio(
+                d_draft_prefix_hits,
+                d_draft_prefix_hits + d_draft_prefix_misses,
+            ),
+            4,
+        ),
+        "draft_prefix_tokens_saved": delta("draft_prefix_tokens_saved"),
     }
 
 
@@ -129,6 +153,10 @@ def _compute_cumulative(counters: dict[str, int]) -> dict[str, Any]:
     ssd_disk = counters.get("ssd_disk_loads", 0)
     tokens_matched = counters.get("prefix_tokens_matched", 0)
     tokens_requested = counters.get("prefix_tokens_requested", 0)
+    target_static_hits = counters.get("target_static_hits", 0)
+    target_static_misses = counters.get("target_static_misses", 0)
+    draft_prefix_hits = counters.get("draft_prefix_hits", 0)
+    draft_prefix_misses = counters.get("draft_prefix_misses", 0)
 
     return {
         "prefix_hits": prefix_hits,
@@ -145,4 +173,26 @@ def _compute_cumulative(counters: dict[str, int]) -> dict[str, Any]:
         "hot_cache_evictions": counters.get("hot_cache_evictions", 0),
         "hot_cache_promotions": counters.get("hot_cache_promotions", 0),
         "ssd_hot_rate": round(_safe_ratio(ssd_hot, ssd_hot + ssd_disk), 4),
+        "target_static_hits": target_static_hits,
+        "target_static_misses": target_static_misses,
+        "target_static_hit_rate": round(
+            _safe_ratio(
+                target_static_hits,
+                target_static_hits + target_static_misses,
+            ),
+            4,
+        ),
+        "target_static_tokens_restored": counters.get(
+            "target_static_tokens_restored", 0
+        ),
+        "draft_prefix_hits": draft_prefix_hits,
+        "draft_prefix_misses": draft_prefix_misses,
+        "draft_prefix_hit_rate": round(
+            _safe_ratio(
+                draft_prefix_hits,
+                draft_prefix_hits + draft_prefix_misses,
+            ),
+            4,
+        ),
+        "draft_prefix_tokens_saved": counters.get("draft_prefix_tokens_saved", 0),
     }
