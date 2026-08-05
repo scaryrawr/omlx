@@ -227,6 +227,115 @@ class TestBailingHybridOutputParserSession:
         assert final.stream_text == ""
         assert final.visible_text == ""
 
+    def test_fragmented_tool_protocol_is_hidden_and_parsed(self):
+        tokenizer = BailingHybridTokenizer(
+            {
+                1: "Before ",
+                2: "<to",
+                3: "ol_call>weather<arg_",
+                4: "key>city</arg_key><arg_value>Paris",
+                5: "</arg_value></tool_call>",
+                6: " after.",
+            }
+        )
+        factory = detect_output_parser(
+            "Ling-3.0-flash-mxfp4",
+            tokenizer,
+            {"model_type": "bailing_hybrid"},
+        )
+
+        assert factory is not None
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        assert factory.create_session_with_tools is not None
+        session = factory.create_session_with_tools(tokenizer, tools)
+        results = [session.process_token(token_id) for token_id in range(1, 7)]
+        final = session.finalize()
+        streamed = "".join(result.stream_text for result in results)
+        visible = "".join(result.visible_text for result in results)
+
+        assert streamed + final.stream_text == "Before  after."
+        assert visible + final.visible_text == "Before  after."
+        assert all(
+            marker not in streamed + final.stream_text
+            for marker in ("<tool_call>", "<arg_key>", "<arg_value>")
+        )
+        assert final.finish_reason == "tool_calls"
+        assert len(final.tool_calls) == 1
+        assert final.tool_calls[0]["name"] == "weather"
+        assert json.loads(final.tool_calls[0]["arguments"]) == {"city": "Paris"}
+
+    def test_tool_calls_use_request_schema_and_registered_names(self):
+        tokenizer = BailingHybridTokenizer(
+            {
+                1: (
+                    "<tool_call>weather<arg_key>code</arg_key>"
+                    "<arg_value>123</arg_value></tool_call>"
+                    "<tool_call>unknown<arg_key>x</arg_key>"
+                    "<arg_value>1</arg_value></tool_call>"
+                )
+            }
+        )
+        factory = detect_output_parser(
+            "Ling-3.0-flash-mxfp4",
+            tokenizer,
+            {"model_type": "bailing_hybrid"},
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+
+        assert factory is not None
+        assert factory.create_session_with_tools is not None
+        session = factory.create_session_with_tools(tokenizer, tools)
+        session.process_token(1)
+        final = session.finalize()
+
+        assert len(final.tool_calls) == 1
+        assert final.tool_calls[0]["name"] == "weather"
+        assert json.loads(final.tool_calls[0]["arguments"]) == {"code": "123"}
+
+    def test_tool_protocol_without_request_tools_is_not_a_tool_call(self):
+        tokenizer = BailingHybridTokenizer(
+            {
+                1: (
+                    "<tool_call>weather<arg_key>city</arg_key>"
+                    "<arg_value>Paris</arg_value></tool_call>"
+                )
+            }
+        )
+        factory = detect_output_parser(
+            "Ling-3.0-flash-mxfp4",
+            tokenizer,
+            {"model_type": "bailing_hybrid"},
+        )
+
+        assert factory is not None
+        session = factory.create_session(tokenizer)
+        session.process_token(1)
+        final = session.finalize()
+
+        assert final.tool_calls == []
+        assert final.finish_reason is None
 
 class TestCohere2MoeOutputParserSession:
     def test_detects_cohere2_moe_from_model_config(self, monkeypatch):

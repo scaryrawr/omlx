@@ -62,6 +62,9 @@ class OutputParserFactory:
 
     kind: str
     create_session: Callable[[Any], OutputParserSession]
+    create_session_with_tools: (
+        Callable[[Any, list[dict] | None], OutputParserSession] | None
+    ) = None
     stop_token_ids: set[int] = field(default_factory=set)
     thinking_start_text: str | None = None
     thinking_start_output_text: str | None = None
@@ -209,51 +212,132 @@ def _is_minimax_m3_model(
 
 
 class BailingHybridOutputParserSession:
-    """Suppress role-boundary tokens accidentally sampled by Ling models."""
+    """Suppress Ling role markers and XML tool-call protocol envelopes."""
 
     def __init__(
         self,
         tokenizer: Any,
         marker_token_ids: set[int],
         model_path: str | None = None,
+        tools: list[dict] | None = None,
     ):
         self._tokenizer = tokenizer
         self._marker_token_ids = marker_token_ids
+        self._tools = tools
+        self._raw_text = ""
         self._detokenizer = create_streaming_detokenizer(tokenizer, model_path)
         if self._detokenizer is not None:
             self._detokenizer.reset()
+
+        try:
+            from ..api.tool_calling import ToolCallStreamFilter
+
+            self._stream_filter = ToolCallStreamFilter(tokenizer)
+            self._visible_filter = ToolCallStreamFilter(tokenizer)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Ling stream filter unavailable: %s", e)
+            self._stream_filter = None
+            self._visible_filter = None
+
+    def _decode_token(self, token_id: int) -> str:
+        if self._detokenizer is not None:
+            self._detokenizer.add_token(token_id)
+            return self._detokenizer.last_segment
+        try:
+            return self._tokenizer.decode(
+                [token_id],
+                skip_special_tokens=False,
+            )
+        except TypeError:
+            return self._tokenizer.decode([token_id])
+
+    @staticmethod
+    def _filtered_text(text: str, tool_filter: Any) -> str:
+        if not text:
+            return ""
+        if tool_filter is not None:
+            return tool_filter.feed(text)
+        return text
+
+    @staticmethod
+    def _finish_filtered_text(tool_filter: Any) -> str:
+        if tool_filter is None:
+            return ""
+        return tool_filter.finish()
 
     def process_token(self, token_id: int) -> OutputParserTokenResult:
         if token_id in self._marker_token_ids:
             return OutputParserTokenResult(record_token=True)
 
-        if self._detokenizer is not None:
-            self._detokenizer.add_token(token_id)
-            text = self._detokenizer.last_segment
-        else:
-            try:
-                text = self._tokenizer.decode(
-                    [token_id],
-                    skip_special_tokens=False,
-                )
-            except TypeError:
-                text = self._tokenizer.decode([token_id])
+        text = self._decode_token(token_id)
+        self._raw_text += text
 
         return OutputParserTokenResult(
-            stream_text=text,
-            visible_text=text,
+            stream_text=self._filtered_text(text, self._stream_filter),
+            visible_text=self._filtered_text(text, self._visible_filter),
             record_token=True,
         )
 
     def finalize(self) -> OutputParserFinalizeResult:
-        if self._detokenizer is None:
-            return OutputParserFinalizeResult()
+        stream_text = ""
+        visible_text = ""
+        if self._detokenizer is not None:
+            self._detokenizer.finalize()
+            final_text = self._detokenizer.last_segment
+            if final_text:
+                self._raw_text += final_text
+                stream_text += self._filtered_text(
+                    final_text,
+                    self._stream_filter,
+                )
+                visible_text += self._filtered_text(
+                    final_text,
+                    self._visible_filter,
+                )
 
-        self._detokenizer.finalize()
-        text = self._detokenizer.last_segment
+        stream_text += self._finish_filtered_text(self._stream_filter)
+        visible_text += self._finish_filtered_text(self._visible_filter)
+
+        tool_calls: list[dict[str, str]] = []
+        if self._tools:
+            try:
+                from ..api.tool_calling import parse_tool_calls
+
+                _, parsed_calls = parse_tool_calls(
+                    self._raw_text,
+                    self._tokenizer,
+                    self._tools,
+                )
+                valid_names = {
+                    function["name"]
+                    for tool in self._tools
+                    if isinstance(tool, dict)
+                    and isinstance((function := tool.get("function")), dict)
+                    and isinstance(function.get("name"), str)
+                    and function["name"]
+                }
+                for call in parsed_calls or []:
+                    if call.function.name not in valid_names:
+                        logger.warning(
+                            "Dropping unregistered Ling tool call %r",
+                            call.function.name,
+                        )
+                        continue
+                    tool_calls.append(
+                        {
+                            "id": getattr(call, "id", ""),
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        }
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Ling tool-call parse failed: %s", e)
+
         return OutputParserFinalizeResult(
-            stream_text=text,
-            visible_text=text,
+            stream_text=stream_text,
+            visible_text=visible_text,
+            tool_calls=tool_calls,
+            finish_reason="tool_calls" if tool_calls else None,
         )
 
 
@@ -1025,6 +1109,14 @@ def detect_output_parser(
                         session_tokenizer,
                         marker_token_ids,
                         model_path=session_model_path,
+                    )
+                ),
+                create_session_with_tools=lambda session_tokenizer, tools: (
+                    BailingHybridOutputParserSession(
+                        session_tokenizer,
+                        marker_token_ids,
+                        model_path=session_model_path,
+                        tools=tools,
                     )
                 ),
                 thinking_start_text="<think>",
