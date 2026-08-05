@@ -79,6 +79,20 @@ class DeepSeekV4Tokenizer(CohereTokenizer):
         return parse_tool_call(text, tools)
 
 
+class BailingHybridTokenizer(CohereTokenizer):
+    _token_ids = {
+        "<role>": 157151,
+        "</role>": 157152,
+    }
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return self._token_ids.get(token, -1)
+
+    def encode(self, text: str, add_special_tokens: bool = False):
+        token_id = self._token_ids.get(text)
+        return [token_id] if token_id is not None else []
+
+
 class _FakeMelodyOptions:
     def cmd4(self):
         return self
@@ -175,6 +189,43 @@ class ByteFallbackTokenizer:
         if raw == bytes([0xEC, 0x9E, 0xA0]):
             return "\uc7a0"
         return "\ufffd" * sum(1 for token_id in token_ids if token_id != 0)
+
+
+class TestBailingHybridOutputParserSession:
+    def test_role_boundary_tokens_are_suppressed(self):
+        tokenizer = BailingHybridTokenizer(
+            {
+                1: "Now I have ",
+                2: "fixed it.",
+                157151: "<role>",
+                157152: "</role>",
+            }
+        )
+        factory = detect_output_parser(
+            "Ling-3.0-flash-mxfp4",
+            tokenizer,
+            {"model_type": "bailing_hybrid"},
+        )
+
+        assert factory is not None
+        assert factory.kind == "bailing_hybrid"
+        session = factory.create_session(tokenizer)
+        results = [
+            session.process_token(token_id)
+            for token_id in (1, 157152, 2, 157151)
+        ]
+        final = session.finalize()
+
+        assert "".join(result.stream_text for result in results) == (
+            "Now I have fixed it."
+        )
+        assert "".join(result.visible_text for result in results) == (
+            "Now I have fixed it."
+        )
+        assert results[1].record_token is True
+        assert results[3].record_token is True
+        assert final.stream_text == ""
+        assert final.visible_text == ""
 
 
 class TestCohere2MoeOutputParserSession:

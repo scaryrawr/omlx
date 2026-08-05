@@ -164,6 +164,8 @@ _MINIMAX_TOOL_CALL_START = "]<]minimax[>[<tool_call>"
 _MINIMAX_TOOL_CALL_END = "]<]minimax[>[</tool_call>"
 _DEEPSEEK_V4_TOOL_CALL_START = "<｜DSML｜tool_calls>"
 _DEEPSEEK_V4_TOOL_CALL_END = "</｜DSML｜tool_calls>"
+_BAILING_HYBRID_MODEL_TYPE = "bailing_hybrid"
+_BAILING_ROLE_MARKERS = ("<role>", "</role>")
 
 
 def _is_deepseek_v4_model(
@@ -204,6 +206,55 @@ def _is_minimax_m3_model(
         return True
     lowered = model_name.lower()
     return "minimax" in lowered and "m3" in lowered
+
+
+class BailingHybridOutputParserSession:
+    """Suppress role-boundary tokens accidentally sampled by Ling models."""
+
+    def __init__(
+        self,
+        tokenizer: Any,
+        marker_token_ids: set[int],
+        model_path: str | None = None,
+    ):
+        self._tokenizer = tokenizer
+        self._marker_token_ids = marker_token_ids
+        self._detokenizer = create_streaming_detokenizer(tokenizer, model_path)
+        if self._detokenizer is not None:
+            self._detokenizer.reset()
+
+    def process_token(self, token_id: int) -> OutputParserTokenResult:
+        if token_id in self._marker_token_ids:
+            return OutputParserTokenResult(record_token=True)
+
+        if self._detokenizer is not None:
+            self._detokenizer.add_token(token_id)
+            text = self._detokenizer.last_segment
+        else:
+            try:
+                text = self._tokenizer.decode(
+                    [token_id],
+                    skip_special_tokens=False,
+                )
+            except TypeError:
+                text = self._tokenizer.decode([token_id])
+
+        return OutputParserTokenResult(
+            stream_text=text,
+            visible_text=text,
+            record_token=True,
+        )
+
+    def finalize(self) -> OutputParserFinalizeResult:
+        if self._detokenizer is None:
+            return OutputParserFinalizeResult()
+
+        self._detokenizer.finalize()
+        text = self._detokenizer.last_segment
+        return OutputParserFinalizeResult(
+            stream_text=text,
+            visible_text=text,
+        )
 
 
 class _MiniMaxM3ProtocolNormalizer:
@@ -958,6 +1009,28 @@ def detect_output_parser(
     tokenizer.json for their streaming detokenizers.
     """
     session_model_path = model_path or model_name
+
+    model_type = model_config.get("model_type") if model_config else None
+    if model_type == _BAILING_HYBRID_MODEL_TYPE:
+        marker_token_ids = {
+            token_id
+            for marker in _BAILING_ROLE_MARKERS
+            if (token_id := _token_id_for_text(tokenizer, marker)) is not None
+        }
+        if marker_token_ids:
+            return OutputParserFactory(
+                kind="bailing_hybrid",
+                create_session=lambda session_tokenizer: (
+                    BailingHybridOutputParserSession(
+                        session_tokenizer,
+                        marker_token_ids,
+                        model_path=session_model_path,
+                    )
+                ),
+                thinking_start_text="<think>",
+                thinking_start_output_text="<think>\n",
+                protocol_marker_texts=_BAILING_ROLE_MARKERS,
+            )
 
     if is_harmony_model(model_name, model_config):
         temp_parser = HarmonyStreamingParser(tokenizer)
