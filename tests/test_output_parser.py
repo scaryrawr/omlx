@@ -576,6 +576,29 @@ class TestGemma4OutputParserSession:
         assert text == "<think>\nreasoning</think>\nanswermore"
         assert "<channel|>" not in text
 
+    def test_prefilled_thought_closes_before_visible_content(self):
+        """A prompt-side opener must seed the parser before generation.
+
+        Gemma 4 tool continuations start generation inside the thought
+        channel, so the generated stream contains only the body, close marker,
+        and visible answer.
+        """
+        token_map = {
+            1: "reasoning",
+            2: "<channel|>",
+            3: "answer",
+        }
+        tokenizer = GemmaTokenizer(token_map)
+        session = Gemma4OutputParserSession(tokenizer)
+        session.notify_prefilled_thought()
+
+        parts = []
+        for token_id in [1, 2, 3]:
+            parts.append(session.process_token(token_id).stream_text)
+        parts.append(session.finalize().stream_text)
+
+        assert "".join(parts) == "reasoning</think>\nanswer"
+
     def test_stray_open_marker_inside_thought_dropped(self):
         """A nested ``<|channel>thought\\n`` while already inside a thought
         block must not re-emit ``<think>``. The block stays open until the
@@ -857,6 +880,9 @@ class TestOutputParserFactory:
 
         assert factory is not None
         assert factory.kind == "gemma4"
+        assert factory.thinking_start_text == "<|channel>thought"
+        assert factory.thinking_start_output_text == "<think>\n"
+        assert factory.thinking_end_text == "<channel|>"
 
     def test_session_receives_model_path_when_provided(self, monkeypatch):
         """Since #2178 the scheduler's model_name is a display id, so the
@@ -1040,6 +1066,19 @@ class TestInklingOutputParserSession:
         visible.append(final.visible_text)
         return "".join(stream), "".join(visible), stopped, final
 
+    def _parse_tool_call_payload(self, payload):
+        token_map = {
+            1: "<|content_invoke_tool_json|>",
+            2: payload,
+            3: "<|end_message|>",
+            4: "<|content_model_end_sampling|>",
+        }
+        tokenizer, factory = self._factory(token_map)
+        session = factory.create_session(tokenizer)
+        _, _, stopped, final = self._run(session, [1, 2, 3, 4])
+        assert stopped
+        return final
+
     def test_thinking_then_text(self):
         token_map = {
             1: "<|content_thinking|>",
@@ -1086,6 +1125,54 @@ class TestInklingOutputParserSession:
         assert final.tool_calls[0]["name"] == "get_weather"
         assert json.loads(final.tool_calls[0]["arguments"]) == {"city": "Seoul"}
         assert final.finish_reason == "tool_calls"
+
+    def test_tool_call_accepts_json_encoded_arguments(self):
+        arguments = {
+            "city": "Chicago",
+            "guests": {"adults": 2, "children": 1},
+        }
+        payload = json.dumps(
+            {
+                "name": "book_hotel",
+                "arguments": json.dumps(arguments, separators=(",", ":")),
+            },
+            separators=(",", ":"),
+        )
+
+        final = self._parse_tool_call_payload(payload)
+
+        assert final.tool_calls[0]["name"] == "book_hotel"
+        assert json.loads(final.tool_calls[0]["arguments"]) == arguments
+        assert final.finish_reason == "tool_calls"
+
+    def test_tool_call_repairs_missing_outer_brace(self):
+        arguments = {
+            "city": "Chicago",
+            "guests": {"adults": 2, "children": 1},
+        }
+        payload = json.dumps(
+            {"name": "book_hotel", "args": arguments},
+            separators=(",", ":"),
+        )[:-1]
+
+        final = self._parse_tool_call_payload(payload)
+
+        assert final.tool_calls[0]["name"] == "book_hotel"
+        assert json.loads(final.tool_calls[0]["arguments"]) == arguments
+        assert final.finish_reason == "tool_calls"
+
+    def test_truncated_tool_call_ignores_braces_inside_strings(self):
+        for text in ("open { brace", "close } brace", 'quoted "} brace'):
+            payload = json.dumps(
+                {"name": "write", "args": {"text": text}},
+                separators=(",", ":"),
+            )[:-1]
+
+            final = self._parse_tool_call_payload(payload)
+
+            assert len(final.tool_calls) == 1, text
+            assert json.loads(final.tool_calls[0]["arguments"]) == {"text": text}
+            assert final.finish_reason == "tool_calls"
 
     def test_partial_marker_across_tokens(self):
         token_map = {

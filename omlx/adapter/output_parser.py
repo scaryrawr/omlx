@@ -702,6 +702,36 @@ def _is_inkling_model(
     return "inkling" in model_name.lower()
 
 
+def _append_missing_json_object_closers(payload: str) -> str | None:
+    """Append missing object closers without counting braces in strings."""
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for char in payload:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            if depth == 0:
+                return None
+            depth -= 1
+
+    if in_string or depth <= 0:
+        return None
+    return payload + "}" * depth
+
+
 class _InklingChannelSplitter:
     """Streaming splitter for inkling's channel protocol.
 
@@ -917,11 +947,38 @@ class InklingOutputParserSession:
             try:
                 parsed = json.loads(payload)
             except (json.JSONDecodeError, ValueError):
-                logger.debug("Inkling tool-call payload not valid JSON")
-                continue
+                # Quantized checkpoints occasionally emit the payload with the
+                # final closing brace(s) missing (observed: a complete nested
+                # args object short exactly one "}" before <|end_message|>).
+                # Brace-balance repair only runs after strict parsing failed,
+                # so well-formed payloads are never touched.
+                repaired_payload = _append_missing_json_object_closers(payload)
+                if repaired_payload is not None:
+                    try:
+                        parsed = json.loads(repaired_payload)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.debug("Inkling tool-call payload not valid JSON")
+                        continue
+                else:
+                    logger.debug("Inkling tool-call payload not valid JSON")
+                    continue
             if not isinstance(parsed, dict) or not parsed.get("name"):
                 continue
-            args = parsed.get("args", {})
+            # Accept both payload conventions: Inkling-native {"name", "args":
+            # {...}} and the OpenAI wire format {"name", "arguments": "<json>"}
+            # that quantized checkpoints sometimes emit (both are abundant in
+            # tool-call training data). A JSON-encoded string is decoded; only
+            # a non-object result falls back to {}.
+            args = parsed.get("args")
+            if args is None:
+                args = parsed.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, ValueError):
+                    args = None
+            if not isinstance(args, dict):
+                args = {}
             tool_calls.append(
                 {
                     "name": str(parsed["name"]),
@@ -1154,6 +1211,8 @@ def detect_output_parser(
                 model_path=session_model_path,
             ),
             stop_token_ids=set(),
+            thinking_start_text="<|channel>thought",
+            thinking_start_output_text="<think>\n",
             thinking_end_text="<channel|>",
             protocol_marker_texts=(
                 _OPEN_MARKER_BARE,

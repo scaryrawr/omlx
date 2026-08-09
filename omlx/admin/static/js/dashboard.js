@@ -183,6 +183,7 @@
                 trust_remote_code: false,
             },
             savingModelSettings: false,
+            importingMtplx: false,
             loadingGenDefaults: false,
             reasoningParsers: [],
 
@@ -1437,6 +1438,8 @@
             // which the VLM MTP decode path cannot apply (#2399). Mirrors
             // vlm_mtp_processor_conflicts() in model_settings.py; neutral
             // values (repetition 1.0, presence 0.0) do not conflict.
+            // Thinking budget is exempt: it is applied on the vlm_mtp path
+            // at verify time (MTPProcessingSampler).
             vlmMtpProcessorConflict() {
                 const ms = this.modelSettings;
                 if (!ms) return false;
@@ -1445,7 +1448,6 @@
                 const pres = num(ms.presence_penalty);
                 return (rep !== null && rep !== 1.0)
                     || (pres !== null && pres !== 0.0)
-                    || !!ms.enableThinkingBudget
                     || !!ms.guided_grammar_enabled;
             },
 
@@ -1961,6 +1963,30 @@
                     this.computeDrift();
                 }
                 this.showModelSettingsModal = true;
+            },
+
+            async importMtplxSidecar() {
+                if (!this.selectedModel || this.importingMtplx) return;
+                this.importingMtplx = true;
+                try {
+                    const response = await fetch(`/admin/api/models/${encodeURIComponent(this.selectedModel.id)}/import-mtplx`, {
+                        method: 'POST',
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        alert(data.detail || window.t('js.error.mtplx_import_failed'));
+                        return;
+                    }
+                    if (data.message) alert(data.message);
+                    // Refresh so mtp_compatible flips and the toggle unlocks.
+                    await this.loadModels();
+                    const model = this.models.find(m => m.id === this.selectedModel.id);
+                    if (model) await this.openModelSettings(model);
+                } catch (e) {
+                    alert(window.t('js.error.mtplx_import_failed'));
+                } finally {
+                    this.importingMtplx = false;
+                }
             },
 
             async saveModelSettings() {

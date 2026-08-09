@@ -33,6 +33,7 @@ from omlx.scheduler import (
     SchedulerOutput,
     SchedulingPolicy,
     _PrefillState,
+    _PreflightRejection,
     _StoreCacheGate,
     _VLMMTPDecodeState,
 )
@@ -2241,8 +2242,17 @@ class TestSchedulerBoundarySnapshots:
 
         assert 4 in scheduler._boundary_cache_snapshots["req-boundary"]
         snapshot = scheduler._boundary_cache_snapshots["req-boundary"][4]
-        # Non-sliceable cache layer is kept as-is in the snapshot
-        assert snapshot == [mock_layer_cache]
+        # The in-memory fallback pre-extracts eagerly (retaining raw cache
+        # objects kept the full KV member of pm-eligible CacheLists alive
+        # per boundary — the quadratic-RAM fallback gap from the #2550
+        # review). A stub layer that defeats extraction falls back to the
+        # raw objects, so both shapes are legitimate; the raw list must
+        # only appear via the explicit fallback, marker-free.
+        if isinstance(snapshot, tuple):
+            assert snapshot[0] == Scheduler._PREFILL_SNAPSHOT_MARKER
+            assert len(snapshot[1]) == 1
+        else:
+            assert snapshot == [mock_layer_cache]
 
     def test_boundary_snapshot_skipped_on_speculative_skew(
         self, mock_model, mock_tokenizer
@@ -4952,6 +4962,10 @@ class TestOutputParserSmoke:
         def encode(self, text: str, add_special_tokens: bool = True):
             if text == "\n":
                 return [198]
+            if text == "<|channel>thought":
+                return [100, 45518]
+            if text == "<channel|>":
+                return [101]
             return [10]
 
         def decode(self, token_ids, skip_special_tokens: bool = True):
@@ -5050,6 +5064,108 @@ class TestOutputParserSmoke:
         assert "<|channel>" not in full_stream
         assert "<channel|>" not in full_stream
         assert full_stream == "<think>\nreasoning</think>\nanswer"
+
+    def test_gemma4_prefilled_thought_after_tool_response(self, mock_model):
+        """Tool continuations open the thought channel in the prompt.
+
+        The scheduler must both prepend the normalized opening tag and seed
+        the parser so the generated close marker ends reasoning instead of
+        being discarded as stray markup.
+        """
+        mock_model.config.model_type = "gemma4"
+        tokenizer = self._GemmaTokenizer(
+            {
+                13: "reasoning",
+                14: "<channel|>",
+                15: "answer",
+                16: "<turn|>",
+            }
+        )
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=tokenizer,
+            config=SchedulerConfig(model_name="google/gemma-4b"),
+        )
+
+        request = Request(
+            request_id="gemma-prefilled-thought",
+            prompt="prompt",
+            sampling_params=SamplingParams(max_tokens=4),
+            prompt_token_ids=[9, 100, 45518, 198],
+            num_prompt_tokens=4,
+            status=RequestStatus.RUNNING,
+            batch_uid=99,
+        )
+        assert scheduler._detect_needs_think_prefix(request) is True
+        request.needs_think_prefix = True
+
+        scheduler.running[request.request_id] = request
+        scheduler.requests[request.request_id] = request
+        scheduler.uid_to_request_id[99] = request.request_id
+        scheduler.request_id_to_uid[request.request_id] = 99
+
+        responses = [
+            type("Resp", (), {"uid": 99, "token": 13, "finish_reason": None})(),
+            type("Resp", (), {"uid": 99, "token": 14, "finish_reason": None})(),
+            type("Resp", (), {"uid": 99, "token": 15, "finish_reason": None})(),
+            type("Resp", (), {"uid": 99, "token": 16, "finish_reason": "stop"})(),
+        ]
+
+        outputs, finished_ids = scheduler._process_batch_responses(responses)
+
+        assert finished_ids == {request.request_id}
+        assert "".join(output.new_text for output in outputs) == (
+            "<think>\nreasoning</think>\nanswer"
+        )
+        assert outputs[-1].output_text == "<think>\nreasoning</think>\nanswer"
+
+        disabled = Request(
+            request_id="gemma-thinking-disabled",
+            prompt="prompt",
+            sampling_params=SamplingParams(),
+            prompt_token_ids=[100, 45518, 198, 101],
+            num_prompt_tokens=4,
+        )
+        assert scheduler._detect_needs_think_prefix(disabled) is False
+
+    def test_gemma4_prefilled_thought_rejection_does_not_create_session(
+        self, mock_model
+    ):
+        """A request rejected before admission must not retain a parser session."""
+        mock_model.config.model_type = "gemma4"
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=self._GemmaTokenizer({}),
+            config=SchedulerConfig(model_name="google/gemma-4b"),
+        )
+        request = Request(
+            request_id="gemma-prefilled-rejected",
+            prompt="prompt",
+            sampling_params=SamplingParams(max_tokens=4),
+            prompt_token_ids=[9, 100, 45518, 198],
+            num_prompt_tokens=4,
+            status=RequestStatus.WAITING,
+        )
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+        scheduler._preflight_memory_check = MagicMock(
+            return_value=_PreflightRejection(
+                message="too large",
+                estimated_bytes=100,
+                limit_bytes=50,
+            )
+        )
+        scheduler._build_sampler_and_processors = MagicMock(
+            return_value=(MagicMock(), [])
+        )
+
+        scheduled, rejected = scheduler._schedule_waiting()
+
+        assert request.needs_think_prefix is True
+        assert scheduled == []
+        assert len(rejected) == 1
+        assert request.request_id not in scheduler.requests
+        assert request.request_id not in scheduler._output_parser_sessions
 
     def test_gemma4_batch_stop_token_not_streamed(self, mock_model):
         mock_model.config.model_type = "gemma4"

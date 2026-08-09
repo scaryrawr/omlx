@@ -664,6 +664,15 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
             "(supported: qwen3_5*, qwen3_6*, deepseek_v4*, glm_moe_dsa)"
         )
     if not _checkpoint_has_mtp_weights(model_path):
+        from ..oq import _resolve_mtplx_sidecar
+
+        if _resolve_mtplx_sidecar(Path(model_path), cfg) is not None:
+            # The dashboard keys the one-click import button off this
+            # "MTPLX side-car" marker (models.js).
+            return False, (
+                "MTPLX side-car detected but not imported. Import it to "
+                "merge the MTP head into the checkpoint index."
+            )
         return False, (
             "Config declares MTP layers but the weight files contain neither "
             "mtp.* tensors nor native nextn layers. Re-convert from HF with a "
@@ -2134,6 +2143,32 @@ async def load_model(
     return {"status": "ok", "model_id": model_id, "message": f"Loaded {model_id}"}
 
 
+@router.post("/api/models/{model_id}/import-mtplx")
+async def import_mtplx(
+    model_id: str,
+    is_admin: bool = Depends(_require_admin_or_bearer),
+):
+    """Import an MTPLX side-car MTP head into the model's checkpoint index."""
+    from ..oq import import_mtplx_sidecar
+
+    engine_pool = _get_engine_pool()
+    if engine_pool is None:
+        raise HTTPException(status_code=503, detail="Engine pool not initialized")
+    entry = engine_pool.get_entry(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+
+    try:
+        result = await asyncio.to_thread(import_mtplx_sidecar, entry.model_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(f"Imported MTPLX side-car for model: {model_id}")
+    if entry.engine is not None:
+        result["message"] = "Imported. Reload the model to activate the MTP head."
+    return {"status": "ok", "model_id": model_id, **result}
+
+
 @router.post("/api/reload")
 async def reload_models(is_admin: bool = Depends(require_admin)):
     """Reload models: re-read model settings, re-discover models, preload pinned."""
@@ -2184,6 +2219,9 @@ async def update_model_settings(
     # (clear to default) from "not sent" (don't touch).
     sent = request.model_fields_set
     prev_engine_type = entry.engine_type  # Track for requires_reload check
+    prev_load_signature = engine_pool._engine_runtime_signature(
+        model_id, current_settings
+    )
     is_diffusion_model = _entry_is_diffusion_model(entry)
     if "model_alias" in sent:
         alias_value = request.model_alias.strip() if request.model_alias else None
@@ -2615,6 +2653,23 @@ async def update_model_settings(
 
     # Persist settings
     settings_manager.set_settings(model_id, current_settings)
+
+    # A failed load is cached to prevent clients from retrying the same broken
+    # configuration on every request. Clear that cache only when the effective
+    # load-time configuration changed so the next request can try the new
+    # configuration without requiring a full model rescan.
+    current_load_signature = engine_pool._engine_runtime_signature(
+        model_id, current_settings
+    )
+    if entry.load_failed and (
+        prev_engine_type != entry.engine_type
+        or prev_load_signature != current_load_signature
+    ):
+        engine_pool._clear_load_failure(entry)
+        logger.info(
+            "Cleared cached load failure for %s after load-time settings changed.",
+            model_id,
+        )
 
     # Auto-unload (and re-load if pinned) when a setting that only takes
     # effect at engine construction time is changed on a loaded model.
