@@ -23,7 +23,7 @@ import time
 from array import array
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -511,11 +511,12 @@ class _CacheFreshnessWait:
 
 
 # ---------------------------------------------------------------------------
-# Monkey-patch GenerationBatch._step to call grammar accept_token() after
-# sampling.  In the pipelined _step(), logits processors fill the bitmask
-# (constrain NEXT token) but can't know which token was just sampled.
-# After _original_step returns, self._next_tokens holds the freshly sampled
-# tokens.  We eval them synchronously and accept in grammar processors.
+# Monkey-patch GenerationBatch._step to feed grammar processors the token
+# that was sampled from their bitmask.  In the pipelined _step(), logits
+# processors fill the bitmask (constrain the NEXT token) but can't know which
+# token was just drawn from it; only the step can, via self._next_tokens.
+# The accept runs at the TOP of the following step, where _next_tokens is
+# about to become the model input anyway — see _omlx_advance_grammar_rows.
 # ---------------------------------------------------------------------------
 # Authoritative per-uid row state for the generation batch.
 #
@@ -682,6 +683,49 @@ def _omlx_realign_generation_batch_rows(self) -> None:
     self.samplers = new_samplers
 
 
+def _omlx_advance_grammar_rows(self) -> None:
+    """Accept the token each grammar row sampled during the previous step.
+
+    ``_next_tokens`` still holds the previous step's samples here, and the
+    original step is what promotes them to the model input, so this is both
+    the last point at which the matcher can still be advanced in time for
+    the next bitmask and the first at which reading the ids costs nothing:
+    the forward pass about to run needs them evaluated regardless.
+
+    Doing it here rather than immediately after the previous dispatch is
+    what keeps mlx-lm's one-step lookahead intact.  The old placement forced
+    ``mx.eval`` on the freshly dispatched samples, so every bit of host work
+    that follows a step — ``next()``'s epilogue, stop-token matching,
+    ``filter``, detokenisation, the output collector, SSE streaming — ran
+    with the GPU idle instead of behind it.  That serialisation, not the
+    bitmask itself, is where constrained decoding lost its throughput.
+    """
+    from .api.grammar import GrammarConstraintProcessor
+
+    rows = [
+        (e, proc)
+        for e, procs in enumerate(self.logits_processors)
+        for proc in procs
+        if isinstance(proc, GrammarConstraintProcessor) and proc.pending
+    ]
+    if not rows:
+        return
+
+    # filter([]) leaves _next_tokens as None (mlx-lm generate.py), and a row
+    # count that disagrees with uids means the positional state is mid-drift;
+    # in both cases there is no id this row can be told to accept.
+    next_tokens = self._next_tokens
+    if next_tokens is None or not (
+        len(next_tokens) == len(self.uids) == len(self.logits_processors)
+    ):
+        return
+
+    mx.eval(next_tokens)
+    sampled = next_tokens.tolist()
+    for e, proc in rows:
+        proc.accept_token(sampled[e])
+
+
 _original_generation_batch_step = GenerationBatch._step
 
 
@@ -715,28 +759,12 @@ def _patched_generation_batch_step(self):
     # See #934 / #1747.
     _omlx_realign_generation_batch_rows(self)
 
-    result = _original_generation_batch_step(self)
+    # Must run after the realignment: it reads self.logits_processors[e] as
+    # the row state for uids[e], which is exactly what the realignment above
+    # is there to guarantee.
+    _omlx_advance_grammar_rows(self)
 
-    # self._next_tokens contains the just-sampled tokens (async eval pending).
-    # We need to accept them NOW so the next __call__ fills the correct bitmask.
-    if any(self.logits_processors):
-        from .api.grammar import GrammarConstraintProcessor
-
-        has_grammar = any(
-            isinstance(p, GrammarConstraintProcessor)
-            for procs in self.logits_processors
-            for p in procs
-        )
-        if has_grammar:
-            # Force eval of the sampled tokens so we can read them.
-            mx.eval(self._next_tokens)
-            sampled = self._next_tokens.tolist()
-            for e in range(len(self.uids)):
-                for proc in self.logits_processors[e]:
-                    if isinstance(proc, GrammarConstraintProcessor):
-                        proc.accept_token(sampled[e])
-
-    return result
+    return _original_generation_batch_step(self)
 
 
 GenerationBatch._omlx_realign_rows = _omlx_realign_generation_batch_rows
@@ -1478,6 +1506,10 @@ class SchedulerConfig:
     paged_ssd_cache_max_size: int = 100 * 1024 * 1024 * 1024  # 100GB default
     hot_cache_max_size: int = 0  # In-memory hot cache size in bytes (0 = disabled)
     hot_cache_budget: Any | None = None  # Shared process-wide hot cache budget
+    # Store top-level ArraysCache recurrent state as SSD sidecars while the
+    # ordinary block retains only KV/sliceable payloads.
+    gdn_ssd_split_enabled: bool = False
+    gdn_ssd_pending_max_bytes: int = 512 * 1024 * 1024
 
     # Model identification (for cache isolation between different models)
     model_name: str = ""  # OpenAI API model name (e.g., "mlx-community/Llama-3.2-3B")
@@ -1526,11 +1558,13 @@ class _BoundarySnapshotProvider:
         request_id: str,
         valid_tcs: list[int],
         in_memory_snapshots: dict[int, Any],
+        paged_ssd_manager: Any | None = None,
     ) -> None:
         self._store = store
         self._request_id = request_id
         self._valid_tcs = set(valid_tcs)
         self._in_memory = in_memory_snapshots
+        self._paged_ssd_manager = paged_ssd_manager
 
     def __contains__(self, tc: int) -> bool:
         return tc in self._valid_tcs
@@ -1555,6 +1589,46 @@ class _BoundarySnapshotProvider:
             snap = self._in_memory.get(tc)
             if snap is not None:
                 yield snap
+
+    def commit_gdn_checkpoint(
+        self,
+        token_count: int,
+        source_block_hash: bytes,
+        *,
+        layer_cache_types: list[str] | None,
+        layer_meta_states: list[Any] | None,
+        model_name: str,
+        block_size: int,
+    ) -> bool:
+        """Promote one request-local boundary snapshot to durable sidecar storage."""
+        if self._store is None or self._paged_ssd_manager is None:
+            return False
+        staged_path = self._store.take_staged_file(self._request_id, token_count)
+        if staged_path is None:
+            return False
+        try:
+            signature = self._paged_ssd_manager.cache_signature_for(
+                model_name=model_name,
+                num_layers=len(layer_cache_types or []),
+                block_size=block_size,
+                layer_cache_types=layer_cache_types or [],
+            )
+            committed = self._paged_ssd_manager.commit_gdn_checkpoint_file(
+                source_block_hash,
+                staged_path,
+                token_count=token_count,
+                model_name=model_name,
+                cache_signature=signature,
+                block_size=block_size,
+            )
+            if committed is None:
+                with suppress(OSError):
+                    staged_path.unlink()
+            return committed is not None
+        except Exception:
+            with suppress(OSError):
+                staged_path.unlink()
+            return False
 
 
 class Scheduler:
@@ -1943,6 +2017,7 @@ class Scheduler:
             self.block_aware_cache = BlockAwarePrefixCache(
                 model=model,
                 paged_cache_manager=self.paged_cache_manager,
+                gdn_ssd_split_enabled=self.config.gdn_ssd_split_enabled,
             )
 
             # Initialize paged SSD cache. If the backing directory is not
@@ -2414,12 +2489,48 @@ class Scheduler:
 
         return window_sizes
 
+    def _detect_pooling_cache(self) -> bool:
+        """Return True if model.make_cache() contains a PoolingCache."""
+        if not hasattr(self.model, "make_cache"):
+            return False
+
+        try:
+            cache_list = self.model.make_cache()
+        except Exception as e:
+            logger.debug(f"Failed to inspect model pooling caches: {e}")
+            return False
+
+        if cache_list is None:
+            return False
+
+        return any(
+            self._cache_tree_has_pooling_cache(cache_obj) for cache_obj in cache_list
+        )
+
+    @staticmethod
+    def _cache_tree_has_pooling_cache(cache_obj: Any) -> bool:
+        """Return True if cache_obj contains PoolingCache (recursively)."""
+        sub_caches = getattr(cache_obj, "caches", None)
+        if isinstance(sub_caches, (list, tuple)):
+            return any(
+                Scheduler._cache_tree_has_pooling_cache(sub) for sub in sub_caches
+            )
+        return type(cache_obj).__name__ in ("PoolingCache", "BatchPoolingCache")
+
     # Target range for RotatingKVCache block size alignment.
     # Using a multiple of window_size within this range reduces SSD I/O
     # overhead (fewer, larger block files) while keeping cache restore
     # reprocessing reasonable.
     _ROTATING_BLOCK_SIZE_MIN = 512
     _ROTATING_BLOCK_SIZE_MAX = 1024
+
+    # Models with a PoolingCache (DeepSeek V4 family) get 2048 instead.
+    # Prefill chunks are clamped to the block boundary, and the native
+    # ratio-128 attention and MXFP4 block kernels only reach their measured
+    # gains at 2048-token chunks (+12-19% cold prefill vs 512 on M3 Ultra,
+    # cache-on matching cache-off). The cost is coarser warm-hit flooring:
+    # cached prefixes floor to 2048-token multiples instead of 512.
+    _POOLING_ROTATING_BLOCK_SIZE = 2048
 
     def _align_block_size_with_rotating_window(self) -> None:
         """
@@ -2432,6 +2543,10 @@ class Scheduler:
         many small files. Instead we pick the smallest multiple of
         window_size that falls within [_ROTATING_BLOCK_SIZE_MIN,
         _ROTATING_BLOCK_SIZE_MAX].
+
+        Models with a PoolingCache (DeepSeek V4 family) target
+        _POOLING_ROTATING_BLOCK_SIZE instead, since their prefill
+        kernels need 2048-token chunks to reach the measured gains.
         """
         if not self.config.paged_ssd_cache_dir:
             return
@@ -2453,6 +2568,8 @@ class Scheduler:
         # If window_size itself is already >= max, just use window_size.
         lo = self._ROTATING_BLOCK_SIZE_MIN
         hi = self._ROTATING_BLOCK_SIZE_MAX
+        if self._detect_pooling_cache():
+            lo = hi = self._POOLING_ROTATING_BLOCK_SIZE
 
         if window_size >= hi or window_size >= lo:
             target_block_size = window_size
@@ -3553,6 +3670,8 @@ class Scheduler:
         if n_tokens <= 0:
             return 0.0
         per_token = 0.0
+        static_per_token = 0.0
+        recent_reclaim = 0
         tracker = self._prefill_transient_tracker
         if tracker is not None:
             if tracker.last_n_tokens > 0 and tracker.last_delta_bytes > 0:
@@ -3561,13 +3680,20 @@ class Scheduler:
                 )
             if tracker.bytes_per_token > 0:
                 per_token = max(per_token, tracker.bytes_per_token)
+            recent_reclaim = tracker.recent_reclaim_bytes
         if self.memory_monitor is not None:
             static = self.memory_monitor.estimate_chunk_transient_bytes(
                 n_tokens, kv_len + n_tokens
             )
             static += self.memory_monitor.estimate_prompt_kv_bytes(n_tokens)
-            per_token = max(per_token, float(static) / n_tokens)
-        return per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+            static_per_token = float(static) / n_tokens
+            per_token = max(per_token, static_per_token)
+        base_prediction = per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+        reallocation_prediction = (
+            static_per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+            + recent_reclaim
+        )
+        return max(base_prediction, reallocation_prediction)
 
     def _admission_transient_bound(self, n_tokens: int, kv_len: int) -> float:
         """Transient charge for admission and the guard's pass/abort gates.
@@ -4305,6 +4431,11 @@ class Scheduler:
         has to stay conservative. Keeping kv_len in the log is what made that
         analysis possible.
 
+        Negative deltas remain excluded from the per-token EWMA, but their
+        released footprint is retained until the next positive sample. The
+        next predictor prices that one-shot reallocation risk without treating
+        it as a negative per-token cost.
+
         Under speed priority, only a complete requested step is representative
         of the full-size chunks used for admission. A shorter tail or
         boundary-alignment chunk must not replace the last full-step sample:
@@ -4313,6 +4444,15 @@ class Scheduler:
         charge.
         """
         delta = post_bytes - pre_bytes
+        # The reclaim ledger sees every measurement, including samples the
+        # EWMA gates below skip: a release on a sub-floor tail must still be
+        # priced, and any positive growth confirms the pool reallocation and
+        # drops the one-shot charge — leaving it armed after the footprint
+        # recovered would double count against the guard's gates.
+        if delta <= 0:
+            self._prefill_transient_tracker.record_reclaim(-delta)
+        else:
+            self._prefill_transient_tracker.clear_reclaim()
         min_chunk = max(1, self._prefill_min_chunk_tokens)
         if n_tokens < min_chunk:
             logger.debug(
@@ -4327,7 +4467,8 @@ class Scheduler:
             return
         if delta <= 0:
             logger.debug(
-                "[throttle:%s] measure rid=%s n=%d delta=%dB (skipped: <=0)",
+                "[throttle:%s] measure rid=%s n=%d delta=%dB "
+                "(excluded from EWMA; tracked as reclaim)",
                 loop_label,
                 request_id,
                 n_tokens,
@@ -6137,6 +6278,7 @@ class Scheduler:
             request_id=request_id,
             valid_tcs=provider_tcs,
             in_memory_snapshots=extracted_in_memory,
+            paged_ssd_manager=self.paged_ssd_cache_manager,
         )
 
         token_sequence = (
@@ -8294,6 +8436,25 @@ class Scheduler:
         request = self.requests.get(request_id)
         if request is None:
             return False
+
+        # A finished request remains in self.requests while its async
+        # store_cache worker owns boundary snapshots and cache buffers. Do not
+        # run abort cleanup concurrently with that worker: the normal deferred
+        # drain will release the batch row, snapshots, and Request once the
+        # future completes. If it completed between steps, drain it now before
+        # deciding whether there is anything left to abort.
+        store_future = self._inflight_store_futures.get(request_id)
+        if store_future is not None:
+            if not store_future.done():
+                logger.debug(
+                    "Deferring abort cleanup for %s until async store_cache completes",
+                    request_id,
+                )
+                return False
+            self._drain_pending_async_removes()
+            request = self.requests.get(request_id)
+            if request is None:
+                return False
 
         self._clear_request_admission_bookkeeping(request_id)
 
@@ -11157,6 +11318,29 @@ class Scheduler:
 
     def reset(self) -> None:
         """Reset the scheduler state."""
+        # A store_cache worker may still be loading request-local boundary
+        # snapshots or publishing blocks. reset() clears both namespaces, so
+        # use the same bounded teardown barrier as shutdown() before aborting
+        # requests or clearing caches. The drain performs the request-local
+        # cleanup only after every future has completed.
+        inflight = list(self._inflight_store_futures.values())
+        if inflight:
+            logger.info(
+                "Waiting for %d inflight async store_cache future(s) before reset...",
+                len(inflight),
+            )
+            _done, not_done = concurrent.futures.wait(
+                inflight, timeout=FATAL_TEARDOWN_TIMEOUT_S
+            )
+            if not_done:
+                fatal_exit(
+                    "Scheduler reset timed out after "
+                    f"{FATAL_TEARDOWN_TIMEOUT_S:.0f}s waiting for "
+                    f"{len(not_done)} async store_cache future(s)"
+                )
+                return
+            self._drain_pending_async_removes()
+
         # Drain any pending deferred aborts
         self._pending_abort_ids.clear()
 
@@ -11761,6 +11945,7 @@ class Scheduler:
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
                 hot_cache_only=self.config.hot_cache_only,
                 hot_cache_budget=self.config.hot_cache_budget,
+                gdn_ssd_split_enabled=self.config.gdn_ssd_split_enabled,
                 expected_model_name=self.config.model_name or "",
                 expected_num_layers=expected_num_layers,
                 expected_block_size=self.config.paged_cache_block_size,
@@ -11786,8 +11971,13 @@ class Scheduler:
             if BoundarySnapshotSSDStore is not None and not self.config.hot_cache_only:
                 try:
                     self._boundary_snapshot_store = BoundarySnapshotSSDStore(
-                        base_dir=Path(self.config.paged_ssd_cache_dir)
+                        base_dir=Path(self.config.paged_ssd_cache_dir),
+                        pending_max_bytes=self.config.gdn_ssd_pending_max_bytes,
                     )
+                    if self.block_aware_cache is not None:
+                        self.block_aware_cache.set_gdn_checkpoint_loader(
+                            self._boundary_snapshot_store.load_file
+                        )
                 except Exception as e:
                     logger.debug(
                         "Failed to initialize boundary snapshot SSD store: %s", e
