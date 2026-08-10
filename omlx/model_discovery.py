@@ -97,6 +97,7 @@ VLM_MODEL_TYPES = {
     "youtu_vl",
     "inkling",
     "inkling_mm_model",  # config model_type of Inkling Small checkpoints
+    "muse_glimmer",
 }
 
 # Text-only model families that are implemented in mlx-vlm rather than
@@ -190,6 +191,7 @@ VLM_ARCHITECTURES = {
     "Florence2ForConditionalGeneration",
     "UnlimitedOCRForCausalLM",  # baidu/Unlimited-OCR
     "InklingForConditionalGeneration",  # thinkingmachines/Inkling-Small
+    "MuseGlimmerForConditionalGeneration",  # meta-models/Muse-Glimmer-30B
 }
 
 # Known embedding model types from mlx-embeddings
