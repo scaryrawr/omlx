@@ -8,6 +8,7 @@ for better throughput when serving multiple concurrent requests.
 
 import copy
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -23,6 +24,22 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _warmup_bailing_hybrid(model: Any, token_id: int = 0) -> bool:
+    """Compile Ling's sorted-prefill and decode graphs before serving."""
+    args = getattr(model, "args", None)
+    if getattr(args, "model_type", None) != "bailing_hybrid":
+        return False
+
+    import mlx.core as mx
+
+    cache = model.make_cache()
+    prefill = model(mx.full((1, 8), token_id, dtype=mx.int32), cache=cache)
+    mx.eval(prefill)
+    decode = model(mx.array([[token_id]], dtype=mx.int32), cache=cache)
+    mx.eval(decode)
+    return True
 
 
 # Optional Harmony adapter import
@@ -430,6 +447,19 @@ class BatchedEngine(BaseEngine):
             tokenizer=self._tokenizer,
             config=engine_config,
         )
+
+        warmup_started = time.perf_counter()
+        warmed_up = await loop.run_in_executor(
+            self._engine.engine._mlx_executor,
+            _warmup_bailing_hybrid,
+            self._model,
+            getattr(self._tokenizer, "bos_token_id", None) or 0,
+        )
+        if warmed_up:
+            logger.info(
+                "Ling inference warmup completed in %.2fs",
+                time.perf_counter() - warmup_started,
+            )
 
         await self._engine.engine.start()
 

@@ -322,6 +322,39 @@ class TestBatchedEngineInitialization:
         inner_engine.close.assert_called_once()
 
 
+class TestBailingHybridWarmup:
+    def test_compiles_sorted_prefill_and_decode_paths(self):
+        import mlx.core as mx
+
+        from omlx.engine.batched import _warmup_bailing_hybrid
+
+        class FakeModel:
+            args = SimpleNamespace(model_type="bailing_hybrid")
+
+            def __init__(self):
+                self.calls = []
+                self.cache = object()
+
+            def make_cache(self):
+                return self.cache
+
+            def __call__(self, tokens, cache):
+                self.calls.append((tokens.shape, cache))
+                return mx.zeros((*tokens.shape, 4))
+
+        model = FakeModel()
+
+        assert _warmup_bailing_hybrid(model, token_id=7) is True
+        assert model.calls == [((1, 8), model.cache), ((1, 1), model.cache)]
+
+    def test_skips_other_model_types(self):
+        from omlx.engine.batched import _warmup_bailing_hybrid
+
+        model = SimpleNamespace(args=SimpleNamespace(model_type="qwen3"))
+
+        assert _warmup_bailing_hybrid(model) is False
+
+
 class TestBatchedEngineStreamingCleanup:
     """Tests for streaming generator cleanup paths."""
 
