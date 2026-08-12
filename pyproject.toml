@@ -152,6 +152,9 @@ audio = [
     # stt extra: sentencepiece
     # sts extra: sentencepiece, webrtcvad, setuptools<81
     "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@d28d68c6ac4e28f7d2d66007f640b06cf3fd8ceb",
+    # WebSocket protocol impl for uvicorn (realtime STT endpoint). Pure
+    # python; uvicorn's ws="auto" picks it up when installed.
+    "wsproto==1.2.0",
 ]
 paroquant = [
     # ParoQuant runtime loader for paroquant-quantized models. Installed
@@ -193,6 +196,8 @@ bundle = [
     "setuptools<81",
     # [audio] extra on top of pyproject's plain mistral-common>=1.10
     "mistral-common[audio]>=1.10",
+    # realtime STT WebSocket endpoint
+    "wsproto==1.2.0",
 ]
 dev = [
     "pytest>=7.0.0",

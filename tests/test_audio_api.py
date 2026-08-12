@@ -108,6 +108,7 @@ class TestModelsListAudio:
         with patch("omlx.server._server_state") as mock_state:
             mock_state.engine_pool = mock_pool
             mock_state.global_settings = None
+            mock_state.distributed_inference_enabled = False
             mock_state.process_memory_enforcer = None
             mock_state.hf_downloader = None
             mock_state.ms_downloader = None
@@ -129,6 +130,7 @@ class TestModelsListAudio:
         with patch("omlx.server._server_state") as mock_state:
             mock_state.engine_pool = mock_pool
             mock_state.global_settings = None
+            mock_state.distributed_inference_enabled = False
             mock_state.process_memory_enforcer = None
             mock_state.hf_downloader = None
             mock_state.ms_downloader = None

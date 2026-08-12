@@ -200,4 +200,5 @@ def test_chat_template_uses_status_metadata_for_filtering():
     assert "e !== 'image'" in source
     assert "t !== 'embedding'" in source
     assert "t !== 'reranker'" in source
-    assert "!t.startsWith('audio_')" in source
+    assert "t !== 'audio_tts'" in source
+    assert "t !== 'audio_sts'" in source

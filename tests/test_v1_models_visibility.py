@@ -21,6 +21,14 @@ class _Pool:
     def resolve_model_id(self, model_id_or_alias: str, settings_manager) -> str:
         return model_id_or_alias
 
+    def get_active_model_aliases(self, settings_manager) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        model_ids = {model["id"] for model in self._models}
+        for model_id, settings in settings_manager.get_all_settings().items():
+            if model_id in model_ids and settings.model_alias:
+                aliases[model_id] = settings.model_alias
+        return aliases
+
     def get_status(self) -> dict:
         return {
             "final_ceiling": 0,
