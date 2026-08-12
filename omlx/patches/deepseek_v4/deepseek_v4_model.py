@@ -2279,7 +2279,7 @@ class Model(nn.Module):
                 ("w2", "down_proj"),
                 ("w3", "up_proj"),
             ):
-                for suffix in ("weight", "scales"):
+                for suffix in ("weight", "scales", "biases"):
                     key0 = f"{prefix}.0.{src}.{suffix}"
                     if key0 in weights:
                         stacked = [
