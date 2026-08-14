@@ -1630,7 +1630,7 @@ def _record_std_tax_sample(gen_batch: Any, duration_ms: float) -> None:
     )
 
 
-def _effective_loop_tax(model: Any) -> Optional[float]:
+def _effective_loop_tax(model: Any) -> float | None:
     """Measured loop tax, decayed toward the default exit margin with age.
 
     A genuine loop tax is stable and re-latches through fresh park probes,
@@ -2041,7 +2041,7 @@ def _resolve_draft_sampler(gen_batch: Any, state: _MtpState):
     return state.draft_sampler
 
 
-def _dspark_host(model: Any) -> Optional[Any]:
+def _dspark_host(model: Any) -> Any | None:
     """Return the model object that owns an active embedded DSpark head."""
     candidates = [model]
     for attr in ("language_model", "_language_model"):
@@ -2059,7 +2059,7 @@ def _dspark_next_drafts(
     state: _MtpState,
     hidden_rows: Any,
     committed: Any,
-    prev_buf: Optional[Any],
+    prev_buf: Any | None,
 ) -> None:
     """Append committed target taps and sample one DSpark block.
 
@@ -2095,9 +2095,9 @@ def _dspark_next_drafts(
 
     sampler = _resolve_sampler(gen_batch)
     procs = _proc_list(gen_batch)
-    draft_toks: List[Any] = []
-    draft_lps: List[Any] = []
-    draft_accept_lps: List[Any] = []
+    draft_toks: list[Any] = []
+    draft_lps: list[Any] = []
+    draft_accept_lps: list[Any] = []
     previous = anchor.reshape(1)
 
     for idx in range(depth):
