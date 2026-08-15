@@ -244,3 +244,22 @@ def test_native_vlm_mtp_readiness_failure_keeps_standard_decode(
         logits_processors=[],
     )
     assert batch_generator._mtp_common_eligible(generation_batch) is False
+
+
+def test_incompatible_optional_inkling_patch_does_not_block_qwen(monkeypatch):
+    """An mlx-vlm Inkling API drift must fail closed instead of aborting Qwen load."""
+    from omlx.patches.mlx_vlm_mtp import inkling_vlm_runtime
+
+    monkeypatch.setattr(inkling_vlm_runtime, "_APPLIED", False)
+    monkeypatch.setattr(inkling_vlm_runtime, "apply_sanitize", lambda: True)
+
+    def incompatible_api(_inkling_pkg):
+        raise AttributeError("missing optional Inkling runtime symbol")
+
+    monkeypatch.setattr(
+        inkling_vlm_runtime,
+        "_patch_model_config",
+        incompatible_api,
+    )
+
+    assert inkling_vlm_runtime.apply() is False
