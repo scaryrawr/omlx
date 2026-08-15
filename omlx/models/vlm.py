@@ -81,6 +81,10 @@ class VLMModelAdapter(nn.Module):
         # from this dict + current batch UIDs before each step.
         self._uid_rope_deltas: dict[int, float] = {}
         self._batch_rope_deltas: mx.array | None = None
+        # Native-head MTP reuses mlx-lm's GenerationBatch. Embeddings-prefilled
+        # rows stay on standard decode because prompt-history priming skips
+        # inputs_embeds forwards.
+        self._native_mtp_disabled_uids: set[int] = set()
 
     def release_resources(self) -> None:
         """Drop references to VLM-owned MLX arrays before engine teardown reclaim."""
@@ -88,6 +92,7 @@ class VLMModelAdapter(nn.Module):
         self._pending_kwargs = {}
         self._uid_rope_deltas.clear()
         self._batch_rope_deltas = None
+        self._native_mtp_disabled_uids.clear()
         self._language_model = None
         self._vlm_model = None
 
@@ -226,6 +231,23 @@ class VLMModelAdapter(nn.Module):
     def unregister_rope_delta(self, uid: int) -> None:
         """Remove rope_delta for a finished/aborted UID."""
         self._uid_rope_deltas.pop(uid, None)
+        self._native_mtp_disabled_uids.discard(uid)
+
+    def set_native_mtp_request_eligible(self, uid: int, eligible: bool) -> None:
+        """Record whether a BatchGenerator row may use native-head MTP.
+
+        The scheduler calls this after ``insert()`` and before the first
+        decode step. Text-only rows are eligible; embeddings-prefilled rows
+        retain the same VLM cache but stay on standard autoregressive decode.
+        """
+        if eligible:
+            self._native_mtp_disabled_uids.discard(uid)
+        else:
+            self._native_mtp_disabled_uids.add(uid)
+
+    def native_mtp_allowed_for_uids(self, uids: list[int]) -> bool:
+        """Return False when any current row was prefixed with embeddings."""
+        return all(uid not in self._native_mtp_disabled_uids for uid in uids)
 
     def set_batch_rope_deltas(self, deltas: mx.array) -> None:
         """Set per-request rope_deltas for the current decode batch.

@@ -601,16 +601,31 @@ def maybe_apply_pre_load_patches(
     # corrupts the output (garbage tokens). PR 990's sanitize gates the
     # shift on "unsanitized conv1d" instead.
     #
-    # Whether the model actually attaches an MTP head — and therefore
-    # whether BatchGenerator runs the MTP draft+verify cycle — is gated
-    # by a process-wide flag set just before mlx_lm.load() runs. With
-    # mtp_enabled=False the patch is still active so sanitize behaves
-    # correctly, but Model.__init__ skips ``self.mtp = MTPModule(args)``;
-    # the resulting model is indistinguishable from a stock model that
-    # never had MTP heads.
+    # On the mlx-lm text path, whether the model attaches an MTP head — and
+    # therefore whether BatchGenerator can run draft+verify — is gated by a
+    # process-wide flag set just before load. The mlx-vlm path below separates
+    # head attachment (needed for strict weight binding) from decode activation.
     if _is_mtp_compatible(config, model_type):
-        mtp_enabled = bool(
+        mtp_requested = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
+        )
+        has_mtp_weights = (
+            _checkpoint_has_mtp_weights(model_name) if for_vlm else None
+        )
+        # A VLM config can retain mtp_num_hidden_layers after conversion
+        # stripped the actual head tensors. Keep the construction-time decode
+        # flag off unless both the user toggle and persisted native head agree;
+        # the independent attach flag below still binds real heads when decode
+        # is disabled so strict mlx-vlm loading remains lossless.
+        mtp_enabled = (
+            _native_vlm_mtp_eligible(
+                config,
+                model_type,
+                model_settings,
+                has_mtp_weights=bool(has_mtp_weights),
+            )
+            if for_vlm
+            else mtp_requested
         )
         from ..patches.mlx_lm_mtp import (
             apply_mlx_lm_mtp_patch,
@@ -662,10 +677,16 @@ def maybe_apply_pre_load_patches(
                     backend,
                     model_type,
                 )
+            elif for_vlm and mtp_requested and not has_mtp_weights:
+                logger.warning(
+                    "Native VLM MTP requested for %s but no persisted MTP "
+                    "weights were found; standard decode remains active",
+                    model_name,
+                )
             else:
                 logger.debug(
                     "Native MTP patch applied for %s for sanitize correctness "
-                    "(model has MTP heads but mtp_enabled=False; head not attached)",
+                    "(model has MTP heads but native decode is disabled)",
                     model_name,
                 )
 
@@ -706,8 +727,7 @@ def maybe_apply_pre_load_patches(
                 # and silently downgrade the engine to LLM, dropping
                 # vision. Scan the index for actual mtp.* keys and skip
                 # attachment when they're absent.
-                has_mtp_weights = _checkpoint_has_mtp_weights(model_name)
-                set_mtp_attach_enabled(has_mtp_weights)
+                set_mtp_attach_enabled(bool(has_mtp_weights))
 
                 # Sanitize-preservation patch runs unconditionally: the
                 # stock mlx-vlm Model.sanitize strips every ``mtp.*`` key,
@@ -958,6 +978,27 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
         except Exception as e:
             logger.debug("Failed to read %s header for mtp weight scan: %s", shard, e)
     return False
+
+
+def _native_vlm_mtp_eligible(
+    config: dict,
+    model_type: str | None,
+    model_settings: Any | None,
+    *,
+    has_mtp_weights: bool,
+) -> bool:
+    """True iff a VLM load may enable native-head MTP decode.
+
+    Head attachment is intentionally a separate decision: mlx-vlm must bind
+    persisted ``mtp.*`` tensors even when decode is disabled. This predicate
+    controls only BatchGenerator draft+verify activation.
+    """
+    return bool(
+        model_settings is not None
+        and getattr(model_settings, "mtp_enabled", False)
+        and has_mtp_weights
+        and _is_mtp_compatible(config, model_type)
+    )
 
 
 def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:

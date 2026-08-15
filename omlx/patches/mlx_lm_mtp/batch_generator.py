@@ -289,11 +289,10 @@ def _model_has_mtp_module(model: Any) -> bool:
     """Check whether the model actually has an MTP head attached.
 
     The ``mtp_forward`` method is added to the class unconditionally by
-    the patch, but the per-instance ``mtp`` module is only attached when
-    ``mtp_enabled`` was True at load time (see qwen35_model._patch_model
-    and deepseek_v4_model._patch_model). Without the inner module the
-    ``mtp_forward`` call would AttributeError, so we gate eligibility on
-    the actual module's presence.
+    the patch. Text loaders attach ``mtp`` only when ``mtp_enabled`` is on;
+    VLM loaders also attach it when persisted weights must bind for strict
+    loading. Without the inner module the call would fail, so eligibility
+    always checks actual module presence and the separate decode marker.
     """
     inner = getattr(model, "language_model", model)
     return hasattr(inner, "mtp") and getattr(inner, "mtp", None) is not None
@@ -316,6 +315,24 @@ def _model_mtp_decode_enabled(model: Any) -> bool:
         bool(getattr(candidate, "_omlx_mtp_decode_enabled", False))
         for candidate in candidates
     )
+
+
+def _model_allows_native_mtp_for_uids(model: Any, uids: Any) -> bool:
+    """Honor optional per-row gates supplied by model adapters.
+
+    VLM embeddings prefills do not prime the native MTP head's prompt
+    history, so ``VLMModelAdapter`` rejects those UIDs and keeps their decode
+    on the stock GenerationBatch path. Text models expose no gate and remain
+    unchanged.
+    """
+    checker = getattr(model, "native_mtp_allowed_for_uids", None)
+    if not callable(checker):
+        return True
+    try:
+        return bool(checker(uids))
+    except Exception:
+        logger.debug("Native MTP per-row eligibility check failed", exc_info=True)
+        return False
 
 
 def _batch_generator_allows_mtp_activation(batch_gen: Any) -> bool:
@@ -397,6 +414,8 @@ def _mtp_common_eligible(gen_batch: Any) -> bool:
         return False
     uids = getattr(gen_batch, "uids", None)
     if uids is None or len(uids) == 0:
+        return False
+    if not _model_allows_native_mtp_for_uids(gen_batch.model, uids):
         return False
     if _has_grammar_processors(gen_batch):
         return False
@@ -607,6 +626,11 @@ def _ineligibility_reason(gen_batch: Any) -> str:
     uids = getattr(gen_batch, "uids", None)
     if uids is None:
         return "GenerationBatch has no uids"
+    if not _model_allows_native_mtp_for_uids(gen_batch.model, uids):
+        return (
+            "VLM batch includes an embeddings-prefilled row; "
+            "native MTP is text-only"
+        )
     if len(uids) != 1:
         if not _allows_new_mtp_activation(gen_batch, "_omlx_mtp_batch_state"):
             return "pending prompt work may still merge into this batch"

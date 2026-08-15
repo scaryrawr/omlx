@@ -110,6 +110,44 @@ MINIMAX_M3_MODEL_TYPES = {"minimax_m3", MINIMAX_M3_VL_MODEL_TYPE}
 
 DIFFUSION_PREFILL_STEP_SIZE = 2048
 
+
+def _report_native_vlm_mtp_readiness(
+    model_name: str,
+    adapter: Any,
+    *,
+    has_mtp_weights: bool,
+) -> bool:
+    """Log and return whether a loaded VLM can enter native-head MTP decode."""
+    language_model = getattr(adapter, "_language_model", None)
+    has_mtp_head = getattr(language_model, "mtp", None) is not None
+    decode_enabled = bool(
+        getattr(language_model, "_omlx_mtp_decode_enabled", False)
+    )
+    adapter_ready = callable(getattr(adapter, "mtp_forward", None))
+    ready = bool(
+        has_mtp_weights and has_mtp_head and decode_enabled and adapter_ready
+    )
+    if ready:
+        logger.info(
+            "Native VLM MTP ready for %s (loaded native head; text-only "
+            "requests use mlx-lm BatchGenerator draft+verify; vision requests "
+            "use standard decode)",
+            model_name,
+        )
+    else:
+        logger.warning(
+            "Native VLM MTP requested for %s but readiness gate failed "
+            "(weights=%s, head=%s, decode_flag=%s, adapter=%s); standard "
+            "decode remains active",
+            model_name,
+            has_mtp_weights,
+            has_mtp_head,
+            decode_enabled,
+            adapter_ready,
+        )
+    return ready
+
+
 # Per-model OCR generation defaults from official configs.
 # Applied automatically when no explicit user override is provided.
 OCR_MODEL_GENERATION_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -1724,6 +1762,19 @@ class VLMBatchedEngine(BaseEngine):
         # mlx-vlm models now handle per-sequence mx.array offsets natively
         # and batched decode is fixed, so no separate mlx-lm decode model needed.
         self._adapter = VLMModelAdapter(self._vlm_model)
+
+        # Native-head MTP uses this same adapter and mlx-lm BatchGenerator;
+        # it is distinct from the external ``vlm_mtp`` assistant drafter.
+        # Report readiness only after strict loading has proven that the head
+        # actually bound to the VLM language model.
+        if getattr(self._model_settings, "mtp_enabled", False):
+            from ..utils.model_loading import _checkpoint_has_mtp_weights
+
+            _report_native_vlm_mtp_readiness(
+                self._model_name,
+                self._adapter,
+                has_mtp_weights=_checkpoint_has_mtp_weights(self._model_name),
+            )
 
         # Create scheduler config
         scheduler_config = (
