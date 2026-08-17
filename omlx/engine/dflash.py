@@ -592,6 +592,15 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
                 target_bundle.model,
                 target_ops=target_bundle.target_ops,
             )
+            try:
+                from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+                CompiledMLPBlocks.install(target_bundle.model)
+            except Exception:
+                logger.debug(
+                    "DFlash target compiled MLP dispatch not installed",
+                    exc_info=True,
+                )
             draft_backend = EagerDraftBackend()
             return target_bundle, draft, draft_backend
 

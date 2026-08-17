@@ -2063,6 +2063,13 @@ class VLMBatchedEngine(BaseEngine):
                 apply_qwen35_ragged_decode_patch()
             except Exception:
                 logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
+
+        try:
+            from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+            CompiledMLPBlocks.install(self._vlm_model)
+        except Exception:
+            logger.debug("Qwen compiled MLP dispatch not installed", exc_info=True)
         scheduler.refresh_ssd_layer_signature()
 
         # SpecPrefill: load draft model and pass to scheduler

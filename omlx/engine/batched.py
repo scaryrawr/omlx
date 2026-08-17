@@ -501,6 +501,13 @@ class BatchedEngine(BaseEngine):
             except Exception:
                 logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
 
+        try:
+            from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+            CompiledMLPBlocks.install(self._model)
+        except Exception:
+            logger.debug("Qwen compiled MLP dispatch not installed", exc_info=True)
+
         # Create engine config (copy to avoid mutating the shared instance)
         scheduler_config = (
             copy.copy(self._scheduler_config)
