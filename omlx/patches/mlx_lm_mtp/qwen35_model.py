@@ -254,15 +254,23 @@ def _patch_gated_delta_net(q35: Any) -> None:
         lengths=None,
     ):
         B, S_chunk = qkv_chunk.shape[:2]
-        conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
-        n_keep = self.conv_kernel_size - 1
-        if lengths is not None:
-            ends = mx.clip(lengths, 0, S_chunk)
-            positions = (ends[:, None] + mx.arange(n_keep))[..., None]
-            new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
+        from ..qwen35_gdn_decode import try_fused_conv_silu
+
+        fused = try_fused_conv_silu(
+            self, conv_state, qkv_chunk, mask=ssm_mask, lengths=lengths
+        )
+        if fused is not None:
+            new_conv_state, conv_out = fused
         else:
-            new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
-        conv_out = nn.silu(self.conv1d(conv_in))
+            conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
+            n_keep = self.conv_kernel_size - 1
+            if lengths is not None:
+                ends = mx.clip(lengths, 0, S_chunk)
+                positions = (ends[:, None] + mx.arange(n_keep))[..., None]
+                new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
+            else:
+                new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
+            conv_out = nn.silu(self.conv1d(conv_in))
 
         q, k, v = [
             t.reshape(B, S_chunk, h, d)

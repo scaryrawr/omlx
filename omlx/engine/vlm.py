@@ -1903,6 +1903,15 @@ class VLMBatchedEngine(BaseEngine):
         # Qwen3.5/3.6 verify-width GDN prework -> one fused Metal launch
         # (conv+SiLU+split+RMS+scale+conv-state), bit-exact to the chain.
         try:
+            from ..patches.qwen35_gdn_decode import (
+                apply_qwen35_gdn_decode_patch,
+            )
+
+            apply_qwen35_gdn_decode_patch()
+        except Exception:
+            logger.debug("Qwen fused GDN decode patch not applied", exc_info=True)
+
+        try:
             from ..patches.qwen35_gdn_prework import (
                 apply_qwen35_gdn_prework_patch,
             )

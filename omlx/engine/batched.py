@@ -390,6 +390,15 @@ class BatchedEngine(BaseEngine):
             except Exception:
                 logger.debug("Qwen FA-256 steel patch not applied", exc_info=True)
 
+        try:
+            from ..patches.qwen35_gdn_decode import (
+                apply_qwen35_gdn_decode_patch,
+            )
+
+            apply_qwen35_gdn_decode_patch()
+        except Exception:
+            logger.debug("Qwen fused GDN decode patch not applied", exc_info=True)
+
         # Qwen3.5/3.6 q4 prefill linears -> native qmm tile tuned for long
         # batches. Strictly gated in the patch; decode and unsupported linears
         # fall through.
