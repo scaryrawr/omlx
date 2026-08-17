@@ -34,12 +34,6 @@ never to a wrong history.
 
 Capture sites (each calls :func:`maybe_capture` after the backbone forward):
 
-- mlx-lm qwen3_5 text path: the patched ``TextModel.__call__``
-  (``qwen35_model``), which computes the trunk-normed hidden inline.
-- mlx-vlm qwen3_5 path: a wrap on the inner ``Qwen3_5Model.__call__``
-  (``qwen35_vlm_runtime``), whose return value *is* the trunk-normed
-  hidden; the MoE inner model inherits it. The outer ``LanguageModel`` is
-  reached via a weakref stamped at init.
 - DeepSeek-V4 (``deepseek_v4_model``): the patched ``Model.__call__``
   requests ``return_raw_hidden`` and passes the raw 4D Hyper-stream hidden
   (the head input variant; no trunk norm).

@@ -337,18 +337,11 @@ class TestQwen35Model:
 class TestQwen35EndToEndIdentity:
     @staticmethod
     def _run(model, *, mtp_enabled: bool, max_tokens: int = 12):
-        from importlib import import_module
-
         import mlx.core as mx
         from mlx_lm.generate import BatchGenerator
 
         package = ModelSettings.__module__.split(".", 1)[0]
-        prompt_priming = import_module(
-            f"{package}.patches.mlx_lm_mtp.prompt_priming"
-        )
-
         setattr(model, f"_{package}_mtp_decode_enabled", mtp_enabled)
-        prompt_priming.drop_ctx(model)
         generator = BatchGenerator(
             model,
             max_tokens=max_tokens,
