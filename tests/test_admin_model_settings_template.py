@@ -138,6 +138,18 @@ def test_model_settings_feature_i18n_keys_exist_in_every_locale():
         "modal.model_settings.qwen_ane_gdn_layers",
         "modal.model_settings.qwen_ane_measured",
         "status.active_models.dflash_label",
+        "modal.model_settings.qwen_ane",
+        "modal.model_settings.qwen_ane_hint",
+        "modal.model_settings.qwen_ane_prompt_block",
+        "modal.model_settings.qwen_ane_mlp_fraction",
+        "modal.model_settings.qwen_ane_mlp_layers",
+        "modal.model_settings.qwen_ane_dual",
+        "modal.model_settings.qwen_ane_dual_hint",
+        "modal.model_settings.qwen_ane_gdn",
+        "modal.model_settings.qwen_ane_gdn_hint",
+        "modal.model_settings.qwen_ane_gdn_fraction",
+        "modal.model_settings.qwen_ane_gdn_layers",
+        "modal.model_settings.qwen_ane_measured",
     }
 
     for locale_path in sorted(i18n_dir.glob("*.json")):
@@ -161,14 +173,30 @@ def test_qwen_ane_model_specific_controls_are_fully_wired():
     }
 
     assert 'x-if="isQwen35AnePrefillModel(selectedModel)"' in html
+    assert "'qwen3_5', 'qwen3_6', 'qwen3_8'" in script
     for field in fields:
         assert f"modelSettings.{field}" in html
         assert f"{field}:" in script
 
     assert 'x-model.number="modelSettings.qwen35_ane_prefill_fraction"' in html
     assert 'x-model.number="modelSettings.qwen35_ane_prefill_gdn_fraction"' in html
-    assert '<option :value="0.53">53% —' in html
-    assert '<option :value="0.5">50% —' in html
+    assert '<option value="0.53" selected>53% —' in html
+    assert '<option value="0.5" selected>50% —' in html
+
+
+def test_qwen_ane_selects_have_static_values_and_measured_defaults():
+    """Alpine initializes the select before dynamic child bindings."""
+    html = _model_settings_template()
+    section = _section(
+        html,
+        "<!-- Qwen 3.5/3.6/3.8 private ANE/GPU prompt processing -->",
+        "<!-- TurboQuant KV Cache -->",
+    )
+
+    assert '<option value="2048" selected>' in section
+    assert '<option value="0.53" selected>' in section
+    assert '<option value="0.5" selected>' in section
+    assert "<option :value=" not in section
 
 
 def test_qwen_ane_web_defaults_match_measured_profile():

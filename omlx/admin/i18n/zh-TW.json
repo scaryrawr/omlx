@@ -617,7 +617,7 @@
   "modal.model_settings.turboquant_kv_hint": "使用向量量化壓縮 KV 快取。較低位元 = 更多壓縮，較高位元 = 更佳品質。支援 2 到 8 位元。",
   "modal.model_settings.turboquant_kv_bits_label": "每通道位元數",
   "modal.model_settings.qwen_ane": "Qwen ANE 提示詞處理",
-  "modal.model_settings.qwen_ane_hint": "將支援的 Qwen 3.5/3.6 提示詞處理分配到兩個 ANE 與 GPU。此功能使用 Apple 私有執行階段介面，並在重新載入模型後生效。",
+  "modal.model_settings.qwen_ane_hint": "將支援的 Qwen 3.5/3.6/3.8 提示詞處理分配到兩個 ANE 與 GPU。此功能使用 Apple 私有執行階段介面，並在重新載入模型後生效。",
   "modal.model_settings.qwen_ane_prompt_block": "提示詞區塊",
   "modal.model_settings.qwen_ane_mlp_fraction": "ANE 上的 MLP",
   "modal.model_settings.qwen_ane_mlp_layers": "MLP 層數上限",

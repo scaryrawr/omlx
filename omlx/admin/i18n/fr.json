@@ -617,7 +617,7 @@
   "modal.model_settings.turboquant_kv_hint": "Compressez le cache KV en utilisant la quantification vectorielle. Bits inférieurs = plus de compression, bits supérieurs = meilleure qualité. Supporte 2 à 8 bits.",
   "modal.model_settings.turboquant_kv_bits_label": "Bits par canal",
   "modal.model_settings.qwen_ane": "Traitement des prompts Qwen sur ANE",
-  "modal.model_settings.qwen_ane_hint": "Répartit le traitement compatible des prompts Qwen 3.5/3.6 entre les deux ANE et le GPU. Utilise des interfaces Apple privées et s'applique après le rechargement du modèle.",
+  "modal.model_settings.qwen_ane_hint": "Répartit le traitement compatible des prompts Qwen 3.5/3.6/3.8 entre les deux ANE et le GPU. Utilise des interfaces Apple privées et s'applique après le rechargement du modèle.",
   "modal.model_settings.qwen_ane_prompt_block": "Bloc de prompt",
   "modal.model_settings.qwen_ane_mlp_fraction": "MLP sur ANE",
   "modal.model_settings.qwen_ane_mlp_layers": "Limite de couches MLP",

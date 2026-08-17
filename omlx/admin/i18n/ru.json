@@ -617,7 +617,7 @@
   "modal.model_settings.turboquant_kv_hint": "Сжимайте KV-кэш с помощью векторного квантования. Меньшее число бит = сильнее сжатие, большее = лучше качество. Поддерживает от 2 до 8 бит.",
   "modal.model_settings.turboquant_kv_bits_label": "Битов на канал",
   "modal.model_settings.qwen_ane": "Обработка промптов Qwen на ANE",
-  "modal.model_settings.qwen_ane_hint": "Распределяет поддерживаемую обработку промптов Qwen 3.5/3.6 между двумя ANE и GPU. Использует закрытые интерфейсы Apple и применяется после перезагрузки модели.",
+  "modal.model_settings.qwen_ane_hint": "Распределяет поддерживаемую обработку промптов Qwen 3.5/3.6/3.8 между двумя ANE и GPU. Использует закрытые интерфейсы Apple и применяется после перезагрузки модели.",
   "modal.model_settings.qwen_ane_prompt_block": "Блок промпта",
   "modal.model_settings.qwen_ane_mlp_fraction": "MLP на ANE",
   "modal.model_settings.qwen_ane_mlp_layers": "Лимит слоёв MLP",

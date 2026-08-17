@@ -617,7 +617,7 @@
   "modal.model_settings.turboquant_kv_hint": "Compress KV cache using vector quantization. Reduces memory ~60-75% with near-lossless quality for long context.",
   "modal.model_settings.turboquant_kv_bits_label": "Bits per channel",
   "modal.model_settings.qwen_ane": "Qwen ANE プロンプト処理",
-  "modal.model_settings.qwen_ane_hint": "対応する Qwen 3.5/3.6 のプロンプト処理を 2 基の ANE と GPU に分散します。Apple の非公開インターフェースを使用し、モデルの再読み込み後に適用されます。",
+  "modal.model_settings.qwen_ane_hint": "対応する Qwen 3.5/3.6/3.8 のプロンプト処理を 2 基の ANE と GPU に分散します。Apple の非公開インターフェースを使用し、モデルの再読み込み後に適用されます。",
   "modal.model_settings.qwen_ane_prompt_block": "プロンプトブロック",
   "modal.model_settings.qwen_ane_mlp_fraction": "ANE 上の MLP",
   "modal.model_settings.qwen_ane_mlp_layers": "MLP レイヤー上限",
