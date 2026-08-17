@@ -421,6 +421,13 @@ def maybe_apply_pre_load_patches(
 
     apply_arrays_cache_extract_guard()
 
+    # Model-independent: mlx-lm hybrid caches must combine left- and
+    # right-padding constraints, and filtering an empty BatchKVCache must not
+    # move its logical offset below zero.
+    from ..patches.hybrid_batch_cache import apply_hybrid_batch_cache_fixes
+
+    apply_hybrid_batch_cache_fixes()
+
     config_path = Path(model_name) / "config.json"
     if not config_path.exists():
         return
