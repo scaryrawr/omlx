@@ -33,6 +33,30 @@ def _quantized_bf16(linear, bits=4):
     return qlinear
 
 
+def test_m4_uses_short_prefill_default(monkeypatch):
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    monkeypatch.setattr(
+        patch.mx,
+        "device_info",
+        lambda: {"device_name": "Apple M4 Max"},
+    )
+    assert patch._default_min_tokens() == 128
+    assert patch._route_min_tokens_for_bits(4, 128, 16384) == 128
+    assert patch._route_min_tokens_for_bits(8, 128, 16384) == 16384
+
+
+def test_non_m4_keeps_long_prefill_default(monkeypatch):
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    monkeypatch.setattr(
+        patch.mx,
+        "device_info",
+        lambda: {"device_name": "Apple M3 Ultra"},
+    )
+    assert patch._default_min_tokens() == 2048
+
+
 @pytest.mark.parametrize("bits", [4, 5, 6, 8])
 def test_qwen35_q_affine_qmm_matches_mlx_quantized_matmul(bits):
     fast = _require_qmm_kernels((bits,))

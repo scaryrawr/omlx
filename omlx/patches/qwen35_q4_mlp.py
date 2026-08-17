@@ -30,6 +30,11 @@ _SUPPORTED_QMM_BITS = frozenset((2, 4, 5, 6, 8))
 _Q8_MIN_TOKENS = 16384
 
 
+def _default_min_tokens() -> int:
+    name = str(mx.device_info().get("device_name", ""))
+    return 128 if name.startswith("Apple M4") else 2048
+
+
 def _native_qmm_for_bits(bits: int) -> Callable[..., mx.array] | None:
     try:
         from omlx.custom_kernels.qwen35_prefill import fast
@@ -184,14 +189,17 @@ def _make_patched_mlp(
         # MLP call of every layer of every decode step, so the common case
         # must exit on a single shape check (issue #2132 — per-call gate
         # overhead across the qwen35 prefill patches costs ~2% TG).
-        if x.ndim < 3 or x.shape[-2] < min_tokens:
+        gate_proj = getattr(self, "gate_proj", None)
+        route_min = _route_min_tokens_for_bits(
+            getattr(gate_proj, "bits", None), min_tokens, q8_min_tokens
+        )
+        if x.ndim < 3 or x.shape[-2] < route_min:
             return orig_call(self, x, *args, **kwargs)
         target_verify = bool(kwargs.get("target_verify", False))
         if args and isinstance(args[0], bool):
             target_verify = target_verify or bool(args[0])
         if target_verify or os.environ.get("OMLX_QWEN35_Q4_MLP", "1") == "0":
             return orig_call(self, x, *args, **kwargs)
-        gate_proj = getattr(self, "gate_proj", None)
         up_proj = getattr(self, "up_proj", None)
         down_proj = getattr(self, "down_proj", None)
         gate_dim = _quantized_linear_output_dim(gate_proj)
@@ -252,7 +260,11 @@ def apply_qwen35_q4_mlp_patch() -> bool:
         return False
 
     variant = int(os.environ.get("OMLX_QWEN35_Q4_MLP_VARIANT", "8"))
-    min_tokens = int(os.environ.get("OMLX_QWEN35_Q4_MLP_MIN_TOKENS", "2048"))
+    min_tokens = int(
+        os.environ.get(
+            "OMLX_QWEN35_Q4_MLP_MIN_TOKENS", str(_default_min_tokens())
+        )
+    )
     q8_min_tokens = int(
         os.environ.get("OMLX_QWEN35_Q8_MLP_MIN_TOKENS", str(_Q8_MIN_TOKENS))
     )
@@ -310,7 +322,11 @@ def apply_qwen35_q4_prefill_linear_patch() -> bool:
         return False
 
     variant = int(os.environ.get("OMLX_QWEN35_Q4_LINEAR_VARIANT", "8"))
-    min_tokens = int(os.environ.get("OMLX_QWEN35_Q4_LINEAR_MIN_TOKENS", "2048"))
+    min_tokens = int(
+        os.environ.get(
+            "OMLX_QWEN35_Q4_LINEAR_MIN_TOKENS", str(_default_min_tokens())
+        )
+    )
     q8_min_tokens = int(
         os.environ.get("OMLX_QWEN35_Q8_LINEAR_MIN_TOKENS", str(_Q8_MIN_TOKENS))
     )
@@ -331,9 +347,18 @@ def apply_qwen35_q4_prefill_linear_patch() -> bool:
         return orig_linear(linear, x, target_verify)
 
     def patched_linears(linears, x: mx.array, target_verify: bool):
+        route_min = min(
+            (
+                _route_min_tokens_for_bits(
+                    getattr(linear, "bits", None), min_tokens, q8_min_tokens
+                )
+                for linear in linears
+            ),
+            default=min_tokens,
+        )
         if (
             x.ndim != 3
-            or x.shape[-2] < min_tokens
+            or x.shape[-2] < route_min
             or target_verify
             or os.environ.get("OMLX_QWEN35_Q4_LINEAR", "1") == "0"
         ):
@@ -385,7 +410,11 @@ def apply_qwen35_q4_lm_prefill_linear_patch() -> bool:
         return False
 
     variant = int(os.environ.get("OMLX_QWEN35_Q4_LINEAR_VARIANT", "8"))
-    min_tokens = int(os.environ.get("OMLX_QWEN35_Q4_LINEAR_MIN_TOKENS", "2048"))
+    min_tokens = int(
+        os.environ.get(
+            "OMLX_QWEN35_Q4_LINEAR_MIN_TOKENS", str(_default_min_tokens())
+        )
+    )
     q8_min_tokens = int(
         os.environ.get("OMLX_QWEN35_Q8_LINEAR_MIN_TOKENS", str(_Q8_MIN_TOKENS))
     )
@@ -416,10 +445,15 @@ def apply_qwen35_q4_lm_prefill_linear_patch() -> bool:
             attn_module = None
 
         def patched_attention(self, x, mask=None, cache=None):
+            route_min = _route_min_tokens_for_bits(
+                getattr(self.q_proj, "bits", None),
+                min_tokens,
+                q8_min_tokens,
+            )
             if (
                 attn_module is None
                 or x.ndim != 3
-                or x.shape[-2] < min_tokens
+                or x.shape[-2] < route_min
                 or not all(
                     should_route(linear, x)
                     for linear in (self.q_proj, self.k_proj, self.v_proj)
@@ -496,10 +530,22 @@ def apply_qwen35_q4_lm_prefill_linear_patch() -> bool:
             # Verify forwards are always far below min_tokens, so this wrapper
             # never routes them; forward the kwarg to the underlying (MTP-patched)
             # __call__ only when set, so stock GatedDeltaNet stays compatible.
+            input_linears = (
+                self.in_proj_qkv,
+                self.in_proj_z,
+                self.in_proj_b,
+                self.in_proj_a,
+            )
+            route_min = min(
+                _route_min_tokens_for_bits(
+                    getattr(linear, "bits", None), min_tokens, q8_min_tokens
+                )
+                for linear in input_linears
+            )
             if (
                 gated_delta_update is None
                 or inputs.ndim != 3
-                or inputs.shape[-2] < min_tokens
+                or inputs.shape[-2] < route_min
                 or self.sharding_group is not None
             ):
                 if n_confirmed:
@@ -508,12 +554,6 @@ def apply_qwen35_q4_lm_prefill_linear_patch() -> bool:
                     )
                 return orig_gdn(self, inputs, mask=mask, cache=cache)
 
-            input_linears = (
-                self.in_proj_qkv,
-                self.in_proj_z,
-                self.in_proj_b,
-                self.in_proj_a,
-            )
             if not any(should_route(linear, inputs) for linear in input_linears):
                 if n_confirmed:
                     return orig_gdn(

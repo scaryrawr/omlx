@@ -135,11 +135,13 @@ class ModelSettings:
             (None = dflash default "adaptive"). "adaptive" can shrink block size when
             acceptance drops.
         mtp_enabled: Enable native multi-token prediction (mlx-lm PR 990 / PR 15 monkey-patch).
-            When True, BatchGenerator uses MTP draft+verify for singleton decode and
-            for multi-row decode batches whose cache positions are aligned. Unaligned
-            continuous batches fall back to standard decoding automatically. Compatible
-            model_types: qwen3_5*, qwen3_6*, deepseek_v4*. Mutually exclusive with
-            dflash_enabled.
+            When True, BatchGenerator uses MTP draft+verify for singleton decode.
+            Multi-row requests use faster standard batched decoding by default; the
+            row-wise MTP path is available as an explicit runtime opt-in. Compatible
+            model_types include qwen3_5*, qwen3_6*, deepseek_v4*, GLM-5.2, Gemma 4,
+            Inkling, Nemotron-H, and Step-3.7. Qwen prompt-lookup drafting is enabled
+            by default and can be disabled with OMLX_MTP_CONTEXT_COPY=0. Mutually
+            exclusive with dflash_enabled.
         vlm_mtp_enabled: Enable VLM MTP speculative decoding via an external assistant
             drafter (mlx-vlm 191d7c8+). Target = Gemma4 VLM body, drafter must be a
             "gemma4_assistant" model. Mutually exclusive with processor-backed
@@ -240,9 +242,10 @@ class ModelSettings:
     dflash_verify_mode: str | None = None  # "dflash" | "adaptive" | "ddtree" | "off"
 
     # Native MTP (mlx-lm PR 990 / PR 15 monkey-patch). When enabled, BatchGenerator
-    # uses MTP draft+verify for singleton decode and aligned multi-row decode batches.
-    # Compatible model_types: qwen3_5*, qwen3_6*, deepseek_v4*. Mutually exclusive
-    # with dflash.
+    # uses MTP draft+verify for singleton decode. Multi-row requests stay on
+    # standard batched decoding by default because it is faster than the row-wise
+    # MTP implementation; OMLX_MTP_ROWWISE_BATCH=1 explicitly opts into that path.
+    # Mutually exclusive with dflash.
     mtp_enabled: bool = False
     # Maximum chained MTP draft tokens per verify cycle (speculative depth).
     # None = model-specific default (3 for DeepSeek-V4 and Qwen3.5/3.6).

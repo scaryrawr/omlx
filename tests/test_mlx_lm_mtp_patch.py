@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for omlx.patches.mlx_lm_mtp.
 
-Phase 1 covers the model-side hooks (PR 990 for Qwen3.5/3.6 + PR 15
-skeleton for DeepSeek-V4) and the conditional dispatch in
-``GenerationBatch.next``. End-to-end MTP draft/verify is exercised in a
-follow-up once the BatchGenerator integration body is filled in.
+Coverage includes the model-side hooks, conditional BatchGenerator dispatch,
+and end-to-end greedy identity on a tiny real Qwen3.5 model.
 """
 
 from __future__ import annotations
@@ -20,6 +18,29 @@ from omlx.utils.model_loading import (
     _is_mtp_compatible,
     maybe_apply_pre_load_patches,
 )
+
+_TINY_QWEN35_CONFIG = {
+    "model_type": "qwen3_5",
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 4,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,
+    "vocab_size": 256,
+    "linear_num_value_heads": 2,
+    "linear_num_key_heads": 2,
+    "linear_key_head_dim": 16,
+    "linear_value_head_dim": 16,
+    "linear_conv_kernel_dim": 3,
+    "full_attention_interval": 2,
+    "tie_word_embeddings": True,
+    "rms_norm_eps": 1e-5,
+    "head_dim": 32,
+    "rope_theta": 1000.0,
+    "partial_rotary_factor": 0.5,
+    "max_position_embeddings": 128,
+    "mtp_num_hidden_layers": 1,
+}
 
 # ---------------------------------------------------------------------------
 # Patch orchestrator + sub-modules
@@ -67,6 +88,45 @@ class TestCacheRollback:
 
         assert pool._undo is None
         assert pool._undo_chain is False
+
+
+class TestContextCopyDrafting:
+    def test_prompt_lookup_returns_continuation(self):
+        from omlx.patches.mlx_lm_mtp import batch_generator as bg
+
+        model = SimpleNamespace(
+            args=SimpleNamespace(
+                model_type="qwen3_5",
+                text_config={"model_type": "qwen3_5_text"},
+            )
+        )
+        prompt = [90, 1, 2, 3, 4, 5, 6, 7, 8, 91]
+        state = bg._MtpState()
+        bg._context_copy_init(model, state, prompt, main_id=90)
+        state.copy_history.extend([1, 2, 3, 4, 5, 6])
+
+        assert bg._context_copy_proposal(state, depth=3) == [7, 8, 91]
+
+    def test_prompt_lookup_rejects_weak_six_token_collision(self):
+        from omlx.patches.mlx_lm_mtp import batch_generator as bg
+
+        model = SimpleNamespace(args=SimpleNamespace(model_type="qwen3_5"))
+        prompt = [90, 1, 2, 3, 4, 5, 6, 7, 8, 91]
+        state = bg._MtpState()
+        bg._context_copy_init(model, state, prompt, main_id=1)
+        state.copy_history.extend([2, 3, 4, 5, 6])
+
+        assert bg._context_copy_proposal(state, depth=3) is None
+
+    def test_prompt_lookup_respects_kill_switch(self, monkeypatch):
+        from omlx.patches.mlx_lm_mtp import batch_generator as bg
+
+        monkeypatch.setenv("OMLX_MTP_CONTEXT_COPY", "0")
+        model = SimpleNamespace(args=SimpleNamespace(model_type="qwen3_5"))
+        state = bg._MtpState()
+        bg._context_copy_init(model, state, list(range(10)), main_id=1)
+
+        assert state.copy_index is None
 
 
 class TestMtpBoundaryCommit:
@@ -182,58 +242,15 @@ class TestQwen35Model:
     def test_text_model_args_from_dict_preserves_mtp_layers(self):
         from mlx_lm.models.qwen3_5 import TextModelArgs
 
-        args = TextModelArgs.from_dict(
-            {
-                "model_type": "qwen3_5",
-                "hidden_size": 64,
-                "intermediate_size": 128,
-                "num_hidden_layers": 4,
-                "num_attention_heads": 4,
-                "num_key_value_heads": 2,
-                "vocab_size": 256,
-                "linear_num_value_heads": 2,
-                "linear_num_key_heads": 2,
-                "linear_key_head_dim": 16,
-                "linear_value_head_dim": 16,
-                "linear_conv_kernel_dim": 3,
-                "full_attention_interval": 2,
-                "tie_word_embeddings": True,
-                "rms_norm_eps": 1e-5,
-                "head_dim": 32,
-                "rope_theta": 1000.0,
-                "partial_rotary_factor": 0.5,
-                "max_position_embeddings": 128,
-                "mtp_num_hidden_layers": 1,
-            }
-        )
+        args = TextModelArgs.from_dict(_TINY_QWEN35_CONFIG)
         assert getattr(args, "mtp_num_hidden_layers", None) == 1
 
     def test_text_model_args_default_zero_when_missing(self):
         from mlx_lm.models.qwen3_5 import TextModelArgs
 
-        args = TextModelArgs.from_dict(
-            {
-                "model_type": "qwen3_5",
-                "hidden_size": 64,
-                "intermediate_size": 128,
-                "num_hidden_layers": 4,
-                "num_attention_heads": 4,
-                "num_key_value_heads": 2,
-                "vocab_size": 256,
-                "linear_num_value_heads": 2,
-                "linear_num_key_heads": 2,
-                "linear_key_head_dim": 16,
-                "linear_value_head_dim": 16,
-                "linear_conv_kernel_dim": 3,
-                "full_attention_interval": 2,
-                "tie_word_embeddings": True,
-                "rms_norm_eps": 1e-5,
-                "head_dim": 32,
-                "rope_theta": 1000.0,
-                "partial_rotary_factor": 0.5,
-                "max_position_embeddings": 128,
-            }
-        )
+        config = dict(_TINY_QWEN35_CONFIG)
+        config.pop("mtp_num_hidden_layers")
+        args = TextModelArgs.from_dict(config)
         assert getattr(args, "mtp_num_hidden_layers", None) == 0
 
     def test_mtp_classes_registered_on_module(self):
@@ -315,6 +332,80 @@ class TestQwen35Model:
         )
         DecoderLayer.__call__(fake, 0.0, mask=None, cache=None, n_confirmed=3)
         assert seen["n_confirmed"] == 3
+
+
+class TestQwen35EndToEndIdentity:
+    @staticmethod
+    def _run(model, *, mtp_enabled: bool, max_tokens: int = 12):
+        from importlib import import_module
+
+        import mlx.core as mx
+        from mlx_lm.generate import BatchGenerator
+
+        package = ModelSettings.__module__.split(".", 1)[0]
+        prompt_priming = import_module(
+            f"{package}.patches.mlx_lm_mtp.prompt_priming"
+        )
+
+        setattr(model, f"_{package}_mtp_decode_enabled", mtp_enabled)
+        prompt_priming.drop_ctx(model)
+        generator = BatchGenerator(
+            model,
+            max_tokens=max_tokens,
+            sampler=lambda logits: mx.argmax(logits, axis=-1).astype(mx.uint32),
+            completion_batch_size=1,
+            prefill_batch_size=1,
+        )
+        try:
+            uid = generator.insert([[1, 2, 3, 4, 5]], max_tokens=[max_tokens])[0]
+            output = []
+            for _ in range(max_tokens * 3):
+                _, responses = generator.next()
+                output.extend(
+                    response.token for response in responses if response.uid == uid
+                )
+                if any(
+                    response.uid == uid and response.finish_reason is not None
+                    for response in responses
+                ):
+                    return output
+        finally:
+            generator.close()
+        pytest.fail("tiny Qwen3.5 generation did not terminate")
+
+    @pytest.mark.parametrize("depth", [1, 3])
+    def test_greedy_mtp_matches_standard_decode(self, depth, caplog):
+        """Exercise the real Qwen backbone, MTP head, verify, and rollback loop."""
+        import logging
+        from importlib import import_module
+
+        import mlx.core as mx
+        from mlx_lm.models.qwen3_5 import TextModel, TextModelArgs
+
+        package = ModelSettings.__module__.split(".", 1)[0]
+        mtp_patch = import_module(f"{package}.patches.mlx_lm_mtp")
+
+        previous_active = mtp_patch.is_mtp_active()
+        previous_depth = mtp_patch.get_mtp_depth()
+        try:
+            assert mtp_patch.apply_mlx_lm_mtp_patch()
+            mtp_patch.set_mtp_active(True)
+            mtp_patch.set_mtp_depth(depth)
+            mx.random.seed(7)
+            model = TextModel(TextModelArgs.from_dict(_TINY_QWEN35_CONFIG))
+            mx.eval(model.parameters())
+
+            standard = self._run(model, mtp_enabled=False)
+            with caplog.at_level(logging.INFO):
+                mtp = self._run(model, mtp_enabled=True)
+
+            assert mtp == standard
+            assert len(mtp) == 12
+            assert "MTP path activated" in caplog.text
+            assert "finish=length" in caplog.text
+        finally:
+            mtp_patch.set_mtp_depth(previous_depth)
+            mtp_patch.set_mtp_active(previous_active)
 
 
 class TestQwen35MtpNormShift:

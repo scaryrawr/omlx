@@ -129,7 +129,11 @@ def apply() -> bool:
     self-healing elsewhere doesn't apply here.
     """
     try:
-        from mlx_lm.generate import BatchGenerator, GenerationBatch
+        from mlx_lm.generate import (
+            BatchGenerator,
+            GenerationBatch,
+            PromptProcessingBatch,
+        )
     except ImportError:
         logger.debug("mlx_lm.generate GenerationBatch/BatchGenerator not importable")
         return False
@@ -220,14 +224,21 @@ def apply() -> bool:
             if host_state is not None and _mtp_state_valid_for_batch(self, host_state):
                 _reconcile_mtp_to_standard(self, host_state)
                 _drop_mtp_state(self, "extend-reconciled")
+            donor_cache = getattr(batch, "prompt_cache", None)
             result = original_extend(self, batch, *args, **kwargs)
+            uids = getattr(self, "uids", None)
+            if uids and len(uids) == 1:
+                _prompt_priming.transfer_ctx(
+                    getattr(self, "model", None),
+                    donor_cache,
+                    getattr(self, "prompt_cache", None),
+                )
             _drop_mtp_state(batch, "donor-extended")
             _drop_invalid_mtp_state(self, "extend")
             _drop_invalid_mtp_batch_state(self, "extend")
             # Priming only serves a singleton timeline: once this batch
             # holds >1 rows, the context can never be consumed — release
             # its head cache now instead of riding the merged decode.
-            uids = getattr(self, "uids", None)
             if not uids or len(uids) != 1:
                 _prompt_priming.drop_ctx(getattr(self, "model", None))
             return result
@@ -248,6 +259,23 @@ def apply() -> bool:
         GenerationBatch.next = patched_next
         GenerationBatch.filter = patched_filter
         GenerationBatch.extend = patched_extend
+        if not getattr(PromptProcessingBatch, "_omlx_mtp_patched", False):
+            original_prompt_split = PromptProcessingBatch.split
+
+            def patched_prompt_split(self, indices, *args, **kwargs):
+                source_cache = getattr(self, "prompt_cache", None)
+                source_uids = list(getattr(self, "uids", []) or [])
+                split_batch = original_prompt_split(self, indices, *args, **kwargs)
+                if len(source_uids) == 1 and len(split_batch.uids) == 1:
+                    _prompt_priming.transfer_ctx(
+                        getattr(self, "model", None),
+                        source_cache,
+                        getattr(split_batch, "prompt_cache", None),
+                    )
+                return split_batch
+
+            PromptProcessingBatch.split = patched_prompt_split
+            PromptProcessingBatch._omlx_mtp_patched = True
         GenerationBatch._omlx_mtp_patched = True
 
     if not hasattr(BatchGenerator, "_omlx_mtp_patched"):
@@ -681,6 +709,9 @@ class _MtpStats:
     depth_accepted: list[int] = field(default_factory=list)
     # Cycles the depth controller parked at 0 (plain steps, no speculation).
     zero_cycles: int = 0
+    copy_rounds: int = 0
+    copy_drafted: int = 0
+    copy_accepted: int = 0
     # Component-level timings. Help diagnose where MTP overhead comes from
     # when accept rate is healthy but wall-clock throughput isn't.
     backbone_ms: float = 0.0  # cumulative time inside the 2-token verify forward
@@ -755,6 +786,12 @@ class _MtpState:
     # Adaptive depth controller (None = fixed depth). Chooses how many
     # drafts the next chain builds from rolling accept/latency estimates.
     controller: Any | None = None
+    # Prompt-lookup drafting for repeated code / grounded output. The index
+    # contains prompt n-grams; history also includes committed generation.
+    copy_prompt: list[int] | None = None
+    copy_history: list[int] | None = None
+    copy_index: dict[tuple[int, ...], list[int]] | None = None
+    copy_active: bool = False
 
     # Accept-rate / throughput counters. Surfaced via logger.info on finish.
     stats: _MtpStats = field(default_factory=_MtpStats)
@@ -765,6 +802,108 @@ class _MtpBatchState:
     """Experimental row-wise MTP state for a multi-sequence GenerationBatch."""
 
     states: dict[Any, _MtpState] = field(default_factory=dict)
+
+
+_CONTEXT_COPY_NGRAM = 6
+_CONTEXT_COPY_MAX_CANDIDATES = 32
+
+# Prompt-lookup strategy adapted from MTPLX's Apache-2.0 context-copy path;
+# the cache integration and exact oMLX chain-verification route are local.
+
+def _context_copy_enabled() -> bool:
+    return os.environ.get("OMLX_MTP_CONTEXT_COPY", "1").strip().lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+
+
+def _context_copy_block_size() -> int:
+    try:
+        return max(4, min(16, int(os.environ.get("OMLX_MTP_CONTEXT_COPY_K", "4"))))
+    except ValueError:
+        return 4
+
+
+def _context_copy_init(
+    model: Any, state: _MtpState, prompt: list[int], main_id: int
+) -> None:
+    candidates = [model]
+    for attr in ("language_model", "_language_model"):
+        inner = getattr(model, attr, None)
+        if inner is not None and inner is not model:
+            candidates.append(inner)
+    qwen35 = False
+    for candidate in candidates:
+        args = getattr(candidate, "args", None)
+        model_type = getattr(args, "model_type", None)
+        text_config = getattr(args, "text_config", None)
+        if isinstance(text_config, dict):
+            model_type = text_config.get("model_type") or model_type
+        if str(model_type or "").startswith("qwen3_5"):
+            qwen35 = True
+            break
+    if (
+        not qwen35
+        or not _context_copy_enabled()
+        or len(prompt) <= _CONTEXT_COPY_NGRAM
+    ):
+        return
+    index: dict[tuple[int, ...], list[int]] = {}
+    for end in range(_CONTEXT_COPY_NGRAM, len(prompt) + 1):
+        gram = tuple(prompt[end - _CONTEXT_COPY_NGRAM : end])
+        index.setdefault(gram, []).append(end)
+    state.copy_prompt = prompt
+    state.copy_history = prompt + [main_id]
+    state.copy_index = index
+
+
+def _context_copy_proposal(state: _MtpState, depth: int) -> list[int] | None:
+    prompt = state.copy_prompt
+    history = state.copy_history
+    index = state.copy_index
+    if (
+        depth <= 0
+        or prompt is None
+        or history is None
+        or index is None
+        or len(history) < _CONTEXT_COPY_NGRAM
+    ):
+        return None
+    candidates = index.get(tuple(history[-_CONTEXT_COPY_NGRAM :]))
+    if not candidates:
+        return None
+
+    best_pos = None
+    best_extension = -1
+    max_extension = 4
+    for pos in reversed(candidates[-_CONTEXT_COPY_MAX_CANDIDATES:]):
+        if pos >= len(prompt):
+            continue
+        extension = 0
+        while (
+            extension < max_extension
+            and pos - _CONTEXT_COPY_NGRAM - 1 - extension >= 0
+            and len(history) - _CONTEXT_COPY_NGRAM - 1 - extension >= 0
+            and prompt[pos - _CONTEXT_COPY_NGRAM - 1 - extension]
+            == history[len(history) - _CONTEXT_COPY_NGRAM - 1 - extension]
+        ):
+            extension += 1
+        if extension > best_extension:
+            best_pos = pos
+            best_extension = extension
+            if extension == max_extension:
+                break
+    if best_pos is None:
+        return None
+    if best_extension < 1:
+        return None
+
+    # Require at least a seven-token suffix match to avoid incidental prompt
+    # collisions. Stronger matches can use a larger operator override.
+    cap = min(_context_copy_block_size(), 4 + 2 * max(0, best_extension))
+    block = prompt[best_pos : best_pos + cap]
+    return block if len(block) >= 2 else None
 
 
 # ---------------------------------------------------------------------------
@@ -2226,6 +2365,9 @@ def _chain_next_drafts(
     procs = _proc_list(gen_batch)
 
     depth = state.controller.cur if state.controller is not None else state.depth
+    if state.copy_history is not None:
+        state.copy_history.extend(int(token) for token in committed.tolist())
+    state.copy_active = False
     if depth == 0 and not state.mtp_cache:
         # Depth-0 with a stateless head (no cache to keep warm, e.g. the
         # gemma4 assistant): skip the fold entirely — on fast backbones its
@@ -2266,6 +2408,14 @@ def _chain_next_drafts(
     )
     state.hist_offset += int(n)
 
+    proposal = None if procs is not None else _context_copy_proposal(state, depth)
+    if proposal is not None:
+        state.copy_active = True
+        state.drafts = mx.array(proposal, dtype=mx.uint32)
+        state.draft_lps = []
+        state.draft_accept_lps = []
+        mx.async_eval(state.drafts)
+        return
     draft_toks: list[Any] = []
     draft_lps: list[Any] = []
     draft_accept_lps: list[Any] = []
@@ -2382,10 +2532,14 @@ def _post_init_mtp(gen_batch: Any) -> None:
         # next_main_tok — the first committed history entry — and its logits
         # are the first draft's distribution; the rest of the chain follows.
         mx.eval(main_tok, next_main_tok)
+        main_id = int(main_tok.tolist()[0])
         state = _MtpState(uid=gen_batch.uids[0])
         state.chain = True
         state.depth = depth
         state.head_clone = head_clone
+        _context_copy_init(
+            gen_batch.model, state, list(gen_batch.tokens[0]), main_id
+        )
         if depth > 1:
             state.controller = _DepthController(
                 depth,
@@ -2402,7 +2556,7 @@ def _post_init_mtp(gen_batch: Any) -> None:
         else:
             state.mtp_cache = gen_batch.model.make_mtp_cache()
         state.next_main = _ensure_uint32(next_main_tok)
-        state.queue.append((int(main_tok.tolist()[0]), main_lp, "init"))
+        state.queue.append((main_id, main_lp, "init"))
         state.queue.append(
             (int(next_main_tok.tolist()[0]), next_main_lp.squeeze(0), "init")
         )
@@ -2420,7 +2574,7 @@ def _post_init_mtp(gen_batch: Any) -> None:
     # that the *next* verify cycle will check against forward([next_main, draft]).
     # The legacy depth-1 cycle rebuilds head history per cycle and never
     # consumes a primed cache; release any capture leftovers.
-    _prompt_priming.drop_ctx(gen_batch.model)
+    _prompt_priming.drop_ctx(gen_batch.model, gen_batch.prompt_cache)
     mtp_cache = gen_batch.model.make_mtp_cache()
     hidden_at_main = hidden[:, -1:, :]  # (1, 1, H)
     next_ids = next_main_tok.reshape(1, 1)
@@ -2705,7 +2859,8 @@ def _log_mtp_stats(uid: Any, stats: _MtpStats, finish_reason: str) -> None:
     total_emits = (
         stats.init_emits + stats.draft_emits + stats.bonus_emits + stats.verify_emits
     )
-    total_drafted = sum(stats.depth_drafted) or stats.cycles
+    total_drafted = sum(stats.depth_drafted) + stats.copy_drafted
+    total_drafted = total_drafted or stats.cycles
     if total_drafted > 0:
         rate_str = f"{stats.accepts / total_drafted * 100:.1f}%"
     else:
@@ -2721,6 +2876,11 @@ def _log_mtp_stats(uid: Any, stats: _MtpStats, finish_reason: str) -> None:
         depth_str = ""
     if stats.zero_cycles:
         depth_str += f" d0={stats.zero_cycles}"
+    if stats.copy_rounds:
+        depth_str += (
+            f" copy[r={stats.copy_rounds},"
+            f"a={stats.copy_accepted}/{stats.copy_drafted}]"
+        )
     tpc = total_emits / stats.cycles if stats.cycles else 0.0
     logger.info(
         "MTP[%s] finish=%s tokens=%d cycles=%d tok/cycle=%.2f accept=%d/%d (%s)%s "
@@ -2792,6 +2952,7 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
     # Adaptive depth: the chain may have drafted fewer than state.depth
     # tokens this cycle — the verify window follows the actual drafts.
     k = int(state.drafts.shape[0])
+    copy_cycle = state.copy_active
     cycle_t0 = time.perf_counter()
 
     inputs = mx.concatenate([state.next_main, state.drafts])  # (k+1,)
@@ -2863,10 +3024,13 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
         # samples for every position, and the bonus draw, all resolved in
         # ONE host sync (mirrors the greedy path's sync structure).
         accept_rows = _accept_lp_for(sampler, combined_lp)  # (k+1, V)
-        q_rows = mx.stack(state.draft_accept_lps)  # (k, V)
         idx = state.drafts.astype(mx.int32)[:, None]
         p_at = mx.take_along_axis(accept_rows[:k], idx, axis=-1).squeeze(-1)
-        q_at = mx.take_along_axis(q_rows, idx, axis=-1).squeeze(-1)
+        if copy_cycle:
+            q_at = mx.zeros_like(p_at)
+        else:
+            q_rows = mx.stack(state.draft_accept_lps)  # (k, V)
+            q_at = mx.take_along_axis(q_rows, idx, axis=-1).squeeze(-1)
         ratio = p_at - q_at  # (k,) log acceptance ratios
         u = mx.random.uniform(shape=(k,))
         acc = mx.logical_or(ratio >= 0, mx.log(u) < ratio)
@@ -2875,7 +3039,11 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
         # reject position's sample is used; computing all k keeps the cycle
         # single-sync and costs a few elementwise vocab ops on GPU.
         p_all = mx.exp(accept_rows[:k])
-        res = mx.maximum(p_all - mx.exp(q_rows), 0.0)
+        if copy_cycle:
+            vocab = mx.arange(p_all.shape[-1])[None, :]
+            res = mx.where(vocab == idx, 0.0, p_all)
+        else:
+            res = mx.maximum(p_all - mx.exp(q_rows), 0.0)
         z = res.sum(axis=-1, keepdims=True)
         res_dist = mx.where(z > 0, res, p_all)
         res_samples = mx.random.categorical(mx.log(res_dist))  # (k,)
@@ -2947,16 +3115,21 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
 
     # --- stats ---
     state.stats.cycles += 1
-    if len(state.stats.depth_drafted) < state.depth:
-        pad = state.depth - len(state.stats.depth_drafted)
-        state.stats.depth_drafted.extend([0] * pad)
-        state.stats.depth_accepted.extend([0] * pad)
-    for j in range(k):
-        state.stats.depth_drafted[j] += 1
-        if j < m:
-            state.stats.depth_accepted[j] += 1
-        else:
-            break
+    if copy_cycle:
+        state.stats.copy_rounds += 1
+        state.stats.copy_drafted += k
+        state.stats.copy_accepted += m
+    else:
+        if len(state.stats.depth_drafted) < state.depth:
+            pad = state.depth - len(state.stats.depth_drafted)
+            state.stats.depth_drafted.extend([0] * pad)
+            state.stats.depth_accepted.extend([0] * pad)
+        for j in range(k):
+            state.stats.depth_drafted[j] += 1
+            if j < m:
+                state.stats.depth_accepted[j] += 1
+            else:
+                break
     state.stats.accepts += m
     if m < k:
         state.stats.rejects += 1
@@ -2965,7 +3138,8 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
     # --- commit: queue emits + cache rollback ---
     t0 = time.perf_counter()
     for j in range(m):
-        state.queue.append((int(draft_ids[j]), state.draft_lps[j], "draft"))
+        draft_lp = combined_lp[j] if copy_cycle else state.draft_lps[j]
+        state.queue.append((int(draft_ids[j]), draft_lp, "draft"))
     if m == k:
         state.queue.append((int(emit_last_id), emit_last_lp, "bonus"))
         _clear_rollback(gen_batch.prompt_cache)
@@ -2998,7 +3172,7 @@ def _run_verify_cycle_chain(gen_batch: Any, state: _MtpState) -> None:
     state.stats.mtp_head_ms += (time.perf_counter() - t0) * 1000
     if materialize_boundary_emit:
         _materialize_mtp_boundary_emit(gen_batch, state)
-    if state.controller is not None:
+    if state.controller is not None and not copy_cycle:
         keepalive = bool(getattr(state.mtp_cache, "fold_keepalive", False))
         if keepalive:
             state.mtp_cache.fold_keepalive = False

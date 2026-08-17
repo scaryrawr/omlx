@@ -259,19 +259,27 @@ class TestCaptureSkips:
             getattr(c, "_omlx_mtp_prime_ctx", None) is None for c in cache
         )
 
-    def test_interleaved_request_restarts_slot(self, model):
-        """A second request's prefill on the same model can never continue
-        the first request's timeline: its offsets restart at zero, which
-        breaks contiguity and restarts the slot."""
+    def test_interleaved_requests_keep_independent_contexts(self, model):
+        """Interleaved singleton prefills retain separate priming timelines."""
         cache_a = _make_cache(model)
-        _chunked_prefill(model, cache_a, _tokens(10, seed=23), [10])
-        assert prompt_priming.prime_ctx_stats(model) == 9
+        tokens_a = _tokens(10, seed=23)
+        model(tokens_a[:5][None, :], cache=cache_a)
+        assert prompt_priming.prime_ctx_stats(model, cache_a) == 4
+
         cache_b = _make_cache(model)
         _chunked_prefill(model, cache_b, _tokens(6, seed=24), [6])
-        assert prompt_priming.prime_ctx_stats(model) == 5
-        # Request A activating now must not see B's history.
-        model(_tokens(1, seed=25)[None, :], cache=cache_a, return_hidden=True)
-        assert prompt_priming.take_primed(model, cache_a, _tokens(1, seed=25)) is None
+        assert prompt_priming.prime_ctx_stats(model, cache_b) == 5
+
+        model(tokens_a[5:][None, :], cache=cache_a)
+        assert prompt_priming.prime_ctx_stats(model, cache_a) == 9
+        assert prompt_priming.prime_ctx_stats(model, cache_b) == 5
+
+        main_a = _tokens(1, seed=25)
+        model(main_a[None, :], cache=cache_a, return_hidden=True)
+        primed_a = prompt_priming.take_primed(model, cache_a, main_a)
+        assert primed_a is not None
+        assert primed_a[1] == 10
+        assert prompt_priming.prime_ctx_stats(model, cache_b) == 5
 
     def test_ctx_survives_kv_entry_replacement(self, model):
         """Simulate the TurboQuant convert: swap every KVCache entry for a
@@ -344,6 +352,40 @@ class TestActivationHandoff:
         assert state.hist_offset == n + 1
         assert state.mtp_cache[0].offset >= n
         assert prompt_priming._find_ctx(model) is None
+
+    def test_batch_generator_singleton_prefill_is_primed(self, model):
+        from mlx_lm.generate import BatchGenerator
+
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        assert batch_generator.apply()
+        tokens = _tokens(10, seed=26)
+        generator = BatchGenerator(
+            model,
+            max_tokens=4,
+            sampler=lambda lp: mx.argmax(lp, axis=-1).astype(mx.uint32),
+            completion_batch_size=1,
+            prefill_batch_size=1,
+        )
+        try:
+            generator.insert(
+                [list(int(t) for t in tokens.tolist())],
+                max_tokens=[4],
+            )
+            for _ in range(3):
+                generator.next()
+            state = next(
+                (
+                    value
+                    for value in vars(generator._generation_batch).values()
+                    if isinstance(value, batch_generator._MtpState)
+                ),
+                None,
+            )
+            assert state is not None
+            assert state.hist_offset >= len(tokens)
+        finally:
+            generator.close()
 
     def test_post_init_without_ctx_is_unprimed(self, model):
         from omlx.patches.mlx_lm_mtp import batch_generator as bg
