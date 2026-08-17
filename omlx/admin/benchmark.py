@@ -1047,7 +1047,7 @@ def _upload_model_name(model_id: str) -> str:
 
 def _upload_model_repo(
     model_id: str, entry: Any = None, model_dirs: Any = None
-) -> Optional[str]:
+) -> str | None:
     """Org-qualified repo id to publish alongside the model name (#1808).
 
     Uses the same derivation as the models UI display name: the HF repo id
