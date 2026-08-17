@@ -738,6 +738,39 @@ class TestSchedulerAddRequest:
         scheduler._prepare_prefix_cache_for_request(request)
         scheduler.block_aware_cache.fetch_cache.assert_called_once()
 
+    def test_relevant_store_does_not_time_out_after_four_seconds(
+        self, mock_model, mock_tokenizer
+    ):
+        """Long sequential turns must not stack full GPU KV caches.
+
+        The old four-second freshness timeout admitted the next turn while
+        the prior cache was still being serialized, retaining one full cache
+        per turn until the store-cache gate filled.
+        """
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler.block_aware_cache = MagicMock()
+        prompt = list(range(9001))
+
+        future = MagicMock()
+        future.done.return_value = False
+        scheduler._inflight_store_futures["req-prev"] = future
+        scheduler._inflight_store_info["req-prev"] = (
+            scheduler_module._InflightStoreInfo(tokens=list(range(9000)))
+        )
+        request = Request(
+            request_id="req-next",
+            prompt="test",
+            sampling_params=SamplingParams(),
+            prompt_token_ids=prompt,
+            num_prompt_tokens=len(prompt),
+        )
+
+        with patch.object(scheduler_module.time, "monotonic", return_value=10.0):
+            assert scheduler._should_defer_for_cache_freshness(request) is True
+        with patch.object(scheduler_module.time, "monotonic", return_value=15.0):
+            assert scheduler._should_defer_for_cache_freshness(request) is True
+        assert request.request_id in scheduler._cache_freshness_waits
+
     def test_admission_defers_for_ratio_relevant_inflight_store(
         self, mock_model, mock_tokenizer
     ):

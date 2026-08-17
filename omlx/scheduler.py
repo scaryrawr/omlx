@@ -7640,7 +7640,14 @@ class Scheduler:
     _CACHE_FRESHNESS_WAIT_MIN_PROMPT_TOKENS = 4096
     _CACHE_FRESHNESS_WAIT_MIN_COMMON_TOKENS = 8192
     _CACHE_FRESHNESS_WAIT_MIN_PROMPT_RATIO = 0.30
-    _CACHE_FRESHNESS_WAIT_TIMEOUT_S = 4.0
+    # A relevant in-flight store still owns the completed request's full GPU
+    # KV cache. Letting an immediate follow-up proceed after only four seconds
+    # duplicates that cache while the writer continues, so a long sequential
+    # conversation can stack up to the store-cache gate cap worth of 30k+
+    # token caches. Match the existing stalled-writer bound: normal stores
+    # drain and release their batch row before the next prefix lookup, while a
+    # genuinely stuck writer still has a finite escape hatch.
+    _CACHE_FRESHNESS_WAIT_TIMEOUT_S = _STORE_CACHE_ADMISSION_STALL_TIMEOUT_S
 
     @staticmethod
     def _store_extra_keys_match(
