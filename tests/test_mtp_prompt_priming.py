@@ -8,6 +8,8 @@ in the patched ``TextModel.__call__`` and the activation handoff in
 wiring is exercised by the real-model smoke test.
 """
 
+import gc
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -300,6 +302,23 @@ class TestCaptureSkips:
         primed = prompt_priming.take_primed(model, cache, main_tok)
         assert primed is not None
         assert primed[1] == n
+
+    def test_ctx_does_not_retain_main_prompt_cache(self, model):
+        class CacheMarker:
+            pass
+
+        cache = _make_cache(model)
+        _chunked_prefill(model, cache, _tokens(6, seed=27), [6])
+        marker = CacheMarker()
+        marker_ref = weakref.ref(marker)
+        cache.append(marker)
+
+        del marker
+        del cache
+        gc.collect()
+
+        assert marker_ref() is None
+        assert prompt_priming.prime_ctx_stats(model) == 5
 
     def test_drop_ctx(self, model):
         cache = _make_cache(model)

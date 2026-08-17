@@ -245,6 +245,11 @@ def apply() -> bool:
 
         def patched_filter(self, keep, *args, **kwargs):
             old_uids = list(getattr(self, "uids", []) or [])
+            if not keep:
+                _prompt_priming.drop_ctx(
+                    getattr(self, "model", None),
+                    getattr(self, "prompt_cache", None),
+                )
             result = original_filter(self, keep, *args, **kwargs)
             _drop_invalid_mtp_state(self, "filter", log_empty=True)
             _drop_invalid_mtp_batch_state(

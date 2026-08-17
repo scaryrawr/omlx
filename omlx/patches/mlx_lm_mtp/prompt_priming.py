@@ -118,7 +118,7 @@ def _suppressed() -> bool:
 class _PrimeCtx:
     """Streaming priming state owned by one outer prompt-cache list."""
 
-    cache: Any = None
+    cache_id: int = 0
     mtp_cache: List[Any] = field(default_factory=list)
     # Head-input hidden of the newest seen token, (1, 1, ..., H) — pairs
     # with the first token of the next chunk (or main_tok at activation).
@@ -206,7 +206,7 @@ def _find_ctx(
             continue
         if cache is not None:
             ctx = contexts.get(id(cache))
-            if ctx is not None and ctx.cache is cache:
+            if ctx is not None and ctx.cache_id == id(cache):
                 return ctx
             continue
         if contexts:
@@ -232,7 +232,7 @@ def drop_ctx(model: Any, cache: Optional[List[Any]] = None) -> None:
             contexts.clear()
         else:
             ctx = contexts.get(id(cache))
-            if ctx is not None and ctx.cache is cache:
+            if ctx is not None and ctx.cache_id == id(cache):
                 contexts.pop(id(cache), None)
         if not contexts:
             try:
@@ -256,10 +256,10 @@ def transfer_ctx(
         if not isinstance(contexts, dict):
             continue
         ctx = contexts.get(id(source_cache))
-        if ctx is None or ctx.cache is not source_cache:
+        if ctx is None or ctx.cache_id != id(source_cache):
             continue
         contexts.pop(id(source_cache), None)
-        ctx.cache = target_cache
+        ctx.cache_id = id(target_cache)
         contexts[id(target_cache)] = ctx
         return
 
@@ -337,7 +337,10 @@ def maybe_capture(
         if seq_len <= 1:
             # A lone decode step cannot start a prompt timeline.
             return
-        ctx = _PrimeCtx(cache=cache, mtp_cache=host.make_mtp_cache())
+        # Keep only the identity token. Holding the outer list here pins every
+        # main-model KV tensor on the long-lived model if a handoff is missed.
+        # Offset contiguity below still rejects stale or reused identities.
+        ctx = _PrimeCtx(cache_id=id(cache), mtp_cache=host.make_mtp_cache())
         if not ctx.mtp_cache:
             return
         contexts = getattr(host, _CTX_ATTR, None)
