@@ -6,7 +6,11 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 import pytest
-from mlx_lm.models.qwen3_next import Qwen3NextMLP
+from mlx_lm.models.qwen3_next import (
+    ModelArgs,
+    Qwen3NextMLP,
+    Qwen3NextSparseMoeBlock,
+)
 from mlx_vlm.models.qwen3_5.language import Qwen3_5MLP
 
 from omlx.patches.qwen35_compiled_mlp import (
@@ -29,6 +33,40 @@ def _dense_mlp(cls=Qwen3NextMLP):
     nn.quantize(mlp, group_size=64, bits=4)
     mx.eval(mlp.parameters())
     return mlp
+
+
+def _moe_block():
+    args = ModelArgs(
+        model_type="qwen3_next",
+        hidden_size=64,
+        num_hidden_layers=1,
+        intermediate_size=128,
+        num_attention_heads=4,
+        linear_num_value_heads=4,
+        linear_num_key_heads=2,
+        linear_key_head_dim=16,
+        linear_value_head_dim=16,
+        linear_conv_kernel_dim=4,
+        num_experts=8,
+        num_experts_per_tok=2,
+        decoder_sparse_step=1,
+        shared_expert_intermediate_size=128,
+        mlp_only_layers=[],
+        moe_intermediate_size=128,
+        rms_norm_eps=1e-6,
+        vocab_size=128,
+        num_key_value_heads=2,
+        rope_theta=10000.0,
+        partial_rotary_factor=0.25,
+        max_position_embeddings=2048,
+        head_dim=16,
+    )
+    block = Qwen3NextSparseMoeBlock(args)
+    block.eval()
+    nn.quantize(block.switch_mlp, group_size=64, bits=4)
+    nn.quantize(block.shared_expert, group_size=64, bits=4)
+    mx.eval(block.parameters())
+    return block
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
@@ -59,6 +97,20 @@ def test_compiled_quantized_dense_output_is_bit_exact(batch, seq):
     inner = _dense_mlp()
     host = _Host(inner)
     x = mx.random.normal((batch, seq, 64)).astype(mx.float16)
+    expected = inner(x)
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+
+    actual = host.mlp(x)
+    mx.eval(expected, actual)
+
+    assert mx.array_equal(actual, expected).item()
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+def test_compiled_quantized_moe_output_is_bit_exact():
+    inner = _moe_block()
+    host = _Host(inner)
+    x = mx.random.normal((1, 3, 64)).astype(mx.float16)
     expected = inner(x)
     assert CompiledMLPBlocks.install(host, enabled=True) == 1
 

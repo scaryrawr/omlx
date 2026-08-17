@@ -18,12 +18,13 @@ class _CompactStateModel(nn.Module):
     def __call__(self, inputs, cache):
         recurrent = cache[0]
         self.cache_ids.append(id(recurrent))
-        state = recurrent[0]
-        if state is None:
-            state = mx.zeros((inputs.shape[0], 2, 3, 4), dtype=mx.float32)
-        state = state + 1
-        recurrent[0] = state
-        self.state_shapes.append(state.shape)
+        for slot, shape in enumerate(((3, 8), (2, 3, 4))):
+            state = recurrent[slot]
+            if state is None:
+                state = mx.zeros((inputs.shape[0], *shape), dtype=mx.float32)
+            state = state + 1
+            recurrent[slot] = state
+        self.state_shapes.append(recurrent[1].shape)
         logits = mx.zeros((inputs.shape[0], 1, 8))
         logits[:, :, 1] = 1
         return logits
@@ -42,7 +43,7 @@ def test_generation_batch_keeps_gdn_state_compact_between_decode_steps(
     monkeypatch.setattr(ArraysCache, "merge", unexpected_cache_transition)
 
     model = _CompactStateModel()
-    cache = ArraysCache(1)
+    cache = ArraysCache(2)
     batch = GenerationBatch(
         model=model,
         uids=[10, 11, 12],
@@ -61,5 +62,7 @@ def test_generation_batch_keeps_gdn_state_compact_between_decode_steps(
 
     assert model.cache_ids == [id(cache)] * 4
     assert model.state_shapes == [(3, 2, 3, 4)] * 4
-    assert cache[0].shape == (3, 2, 3, 4)
+    assert cache[0].shape == (3, 3, 8)
+    assert cache[1].shape == (3, 2, 3, 4)
     assert mx.all(cache[0] == 4).item()
+    assert mx.all(cache[1] == 4).item()

@@ -36,6 +36,13 @@ class CompiledMLPBlocks:
             Qwen3_5MoeSparseMoeBlock,
         )
 
+        for target in (Qwen3NextMLP, Qwen3NextSparseMoeBlock):
+            parameters = list(inspect.signature(target.__call__).parameters)
+            if parameters != ["self", "x"]:
+                raise RuntimeError(
+                    f"mlx-lm {target.__name__}.__call__ signature changed "
+                    f"({parameters}); update the compiled MLP policy"
+                )
         for target in (Qwen3_5MLP, Qwen3_5MoeMLP, Qwen3_5MoeSparseMoeBlock):
             parameters = list(inspect.signature(target.__call__).parameters)
             if parameters != ["self", "x", "target_verify"]:
@@ -106,6 +113,9 @@ class CompiledMLPBlock(nn.Module):
         super().__init__()
         self.inner = inner
         self.train(inner.training)
+        # mx.compile captures the final weight arrays. Install this wrapper
+        # only after all load-time transforms; post-install weight rebinding
+        # is unsupported because it would leave the trace on stale arrays.
         self._compiled = mx.compile(inner.__call__)
 
     def routes_compiled(self, x: mx.array) -> bool:
