@@ -173,6 +173,8 @@ class EnginePool:
         self._entries: dict[str, EngineEntry] = {}
         self._lock = asyncio.Lock()
         self._current_model_memory = 0
+        # Scanned model roots, kept for org-qualified display/upload names.
+        self._model_dirs: list[Path] = []
         self._scheduler_config = scheduler_config or SchedulerConfig()
         self._process_memory_enforcer: ProcessMemoryEnforcerLike | None = None  # Set by server
         self._get_final_ceiling: object | None = None  # Set by server
@@ -498,6 +500,7 @@ class EnginePool:
             dirs = [Path(model_dirs)]
         else:
             dirs = [Path(d) for d in model_dirs]
+        self._model_dirs = dirs
 
         if len(dirs) == 1:
             discovered = discover_models(dirs[0])
