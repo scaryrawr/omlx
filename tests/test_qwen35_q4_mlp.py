@@ -23,6 +23,15 @@ def _require_qmm_kernels(bits):
     return fast
 
 
+def _require_fp_kernel(mode):
+    from omlx.custom_kernels.qwen35_prefill import fast
+
+    name = f"qwen35_{mode}_qmm_t"
+    if not fast.has_symbol(name):
+        pytest.skip(f"{name} native kernel unavailable")
+    return fast
+
+
 def _quantized_bf16(linear, bits=4):
     qlinear = nn.QuantizedLinear.from_linear(
         linear, group_size=64, bits=bits, mode="affine"
@@ -31,6 +40,11 @@ def _quantized_bf16(linear, bits=4):
     if qlinear.biases is not None:
         qlinear.biases = qlinear.biases.astype(mx.bfloat16)
     return qlinear
+
+
+def _float_quantized_bf16(linear, mode):
+    bits = 4 if mode == "mxfp4" else 8
+    return nn.QuantizedLinear.from_linear(linear, group_size=32, bits=bits, mode=mode)
 
 
 def test_m4_uses_short_prefill_default(monkeypatch):
@@ -88,6 +102,100 @@ def test_qwen35_q_affine_qmm_matches_mlx_quantized_matmul(bits):
     assert rel <= 0.05
 
 
+@pytest.mark.parametrize("mode", ["mxfp4", "mxfp8"])
+def test_qwen35_fp_qmm_matches_mlx_quantized_matmul(mode):
+    fast = _require_fp_kernel(mode)
+    bits = 4 if mode == "mxfp4" else 8
+    x = mx.random.normal((1, 32, 256)).astype(mx.bfloat16)
+    linear = _float_quantized_bf16(nn.Linear(256, 128, bias=False), mode)
+    ref = linear(x)
+    got = getattr(fast, f"qwen35_{mode}_qmm_t")(x, linear.weight, linear.scales, 8)
+    mx.eval(ref, got)
+
+    diff = mx.abs(got.astype(mx.float32) - ref.astype(mx.float32))
+    mx.eval(diff)
+    max_abs = float(mx.max(diff).item())
+    rel = float((mx.max(diff) / (mx.max(mx.abs(ref.astype(mx.float32))) + 1e-9)).item())
+    assert linear.bits == bits
+    assert max_abs <= 1.0
+    assert rel <= 0.05
+
+
+@pytest.mark.parametrize("mode", ["mxfp4", "mxfp8"])
+def test_qwen35_fp_qmm_rejects_unbuilt_variant(mode):
+    fast = _require_fp_kernel(mode)
+    x = mx.random.normal((1, 32, 256)).astype(mx.bfloat16)
+    linear = _float_quantized_bf16(nn.Linear(256, 128, bias=False), mode)
+
+    with pytest.raises(ValueError, match="floating-point qmm variant 5"):
+        getattr(fast, f"qwen35_{mode}_qmm_t")(x, linear.weight, linear.scales, 5)
+
+
+def test_qwen35_mxfp4_routes_narrow_long_prefill():
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    fast = _require_fp_kernel("mxfp4")
+    linear = _float_quantized_bf16(nn.Linear(512, 48, bias=False), "mxfp4")
+    x = mx.random.normal((1, 8192, 512)).astype(mx.bfloat16)
+    mx.eval(linear.weight, linear.scales, x)
+    ref = linear(x)
+    got = fast.qwen35_mxfp4_qmm_t(x, linear.weight, linear.scales, 8)
+    fallback = patch._linear_qmm(linear, x, 0)
+    mx.eval(ref, got, fallback)
+
+    assert patch._is_supported_affine_linear(linear, x)
+    assert not patch._is_supported_affine_linear(linear, x[:, :4096, :])
+    diff = mx.abs(ref.astype(mx.float32) - got.astype(mx.float32))
+    assert mx.max(diff).item() <= 0.02
+    assert (
+        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item()
+        == 0
+    )
+
+
+@pytest.mark.parametrize("bits", [4, 5])
+def test_qwen35_affine_routes_narrow_long_prefill(bits):
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    fast = _require_qmm_kernels((bits,))
+    linear = _quantized_bf16(nn.Linear(512, 48, bias=False), bits)
+    x = mx.random.normal((1, 2048, 512)).astype(mx.bfloat16)
+    mx.eval(linear.weight, linear.scales, linear.biases, x)
+    ref = linear(x)
+    got = getattr(fast, f"qwen35_q{bits}_affine_qmm_t")(
+        x,
+        linear.weight,
+        linear.scales,
+        linear.biases,
+        8,
+    )
+    fallback = patch._linear_qmm(linear, x, 0)
+    mx.eval(ref, got, fallback)
+
+    assert patch._is_supported_affine_linear(linear, x)
+    assert not patch._is_supported_affine_linear(linear, x[:, :1024, :])
+    diff = mx.abs(ref.astype(mx.float32) - got.astype(mx.float32))
+    assert mx.max(diff).item() <= 1.0
+    assert (
+        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item()
+        == 0
+    )
+
+
+def test_qwen35_affine_narrow_shape_falls_back_with_old_extension(monkeypatch):
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    linear = _quantized_bf16(nn.Linear(512, 48, bias=False), 4)
+    x = mx.random.normal((1, 2048, 512)).astype(mx.bfloat16)
+    monkeypatch.setattr(patch, "_qmm_supports_narrow_affine", lambda: False)
+
+    assert not patch._is_supported_affine_linear(linear, x)
+    ref = linear(x)
+    got = patch._linear_qmm(linear, x, 8)
+    mx.eval(ref, got)
+    assert mx.array_equal(ref, got).item()
+
+
 def test_qwen35_q4_mlp_patch_routes_prefill_and_skips_decode(monkeypatch):
     fast = _require_q4_kernel()
     import mlx_lm.models.qwen3_5 as qwen35
@@ -123,6 +231,67 @@ def test_qwen35_q4_mlp_patch_routes_prefill_and_skips_decode(monkeypatch):
     y_decode = mlp(x[:, :1, :])
     mx.eval(y_decode)
     assert calls["count"] == 0
+
+
+def test_qwen35_mxfp4_mlp_patch_routes_prefill_and_skips_decode(monkeypatch):
+    fast = _require_fp_kernel("mxfp4")
+    import mlx_lm.models.qwen3_5 as qwen35
+
+    from omlx.patches.qwen35_q4_mlp import apply_qwen35_q4_mlp_patch
+
+    monkeypatch.setenv("OMLX_QWEN35_Q4_MLP", "1")
+    monkeypatch.setenv("OMLX_QWEN35_Q4_MLP_MIN_TOKENS", "16")
+
+    mlp = qwen35.MLP(256, 512)
+    for name in ("gate_proj", "up_proj", "down_proj"):
+        setattr(
+            mlp,
+            name,
+            _float_quantized_bf16(getattr(mlp, name), "mxfp4"),
+        )
+
+    x = mx.random.normal((1, 32, 256)).astype(mx.bfloat16)
+    orig_call = getattr(qwen35.MLP, "_omlx_q4_mlp_original_call", qwen35.MLP.__call__)
+    y_ref = orig_call(mlp, x)
+    mx.eval(y_ref)
+
+    calls = {"count": 0}
+    orig_qmm = fast.qwen35_mxfp4_qmm_t
+
+    def spy(*args, **kwargs):
+        calls["count"] += 1
+        return orig_qmm(*args, **kwargs)
+
+    monkeypatch.setattr(fast, "qwen35_mxfp4_qmm_t", spy)
+    assert apply_qwen35_q4_mlp_patch() is True
+    y = mlp(x)
+    mx.eval(y)
+    assert calls["count"] == 3
+    assert mx.max(mx.abs(y.astype(mx.float32) - y_ref.astype(mx.float32))).item() <= 1.0
+
+    calls["count"] = 0
+    y_decode = mlp(x[:, :1, :])
+    mx.eval(y_decode)
+    assert calls["count"] == 0
+
+
+@pytest.mark.parametrize("mode", ["affine", "mxfp4", "mxfp8"])
+def test_qwen35_quantized_qmm_falls_back_on_cpu(mode):
+    from omlx.patches import qwen35_q4_mlp as patch
+
+    linear = nn.Linear(256, 128, bias=False)
+    if mode == "affine":
+        quantized = _quantized_bf16(linear)
+    else:
+        quantized = _float_quantized_bf16(linear, mode)
+    x = mx.random.normal((1, 32, 256)).astype(mx.bfloat16)
+
+    with mx.stream(mx.cpu):
+        expected = quantized(x)
+        actual = patch._linear_qmm(quantized, x, variant=8)
+        mx.eval(expected, actual)
+
+    assert mx.array_equal(actual, expected).item()
 
 
 def test_qwen35_mixed_bit_mlp_patch_routes_5_bit_down_proj(monkeypatch):
