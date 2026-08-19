@@ -187,6 +187,11 @@ class GenerationOutput:
     generated_at: float | None = None
     generated_until: float | None = None
     first_token_at: float | None = None
+    # Internal scheduler trace populated only by local benchmark requests.
+    benchmark_prefill_chunks: list[int] = field(default_factory=list)
+    benchmark_requested_steps: list[int] = field(default_factory=list)
+    benchmark_boundary_enabled: bool = False
+    benchmark_cache_block_size: int = 0
 
 
 class BaseEngine(ABC):

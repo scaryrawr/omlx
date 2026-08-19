@@ -222,3 +222,4 @@ class ResponseObject(BaseModel):
     metadata: dict[str, str] | None = Field(default_factory=dict)
     truncation: str | None = None
     error: dict[str, Any] | None = None
+    incomplete_details: dict[str, str] | None = None
