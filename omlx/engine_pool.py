@@ -188,6 +188,7 @@ class EnginePool:
         self._load_time_observations: int = 0
         self._lease_release_tasks: set[asyncio.Task[None]] = set()
         self._pending_unload_tasks: dict[str, asyncio.Task[None]] = {}
+        self._engine_unload_tasks: dict[str, asyncio.Task[None]] = {}
         self._shutting_down = False
         self.configure_hot_cache_budget()
 
@@ -1905,7 +1906,64 @@ class EnginePool:
         self._deferred_mlx_cleanup = False
         self._wake_process_memory_enforcer()
 
+    def _finish_engine_unload_task(
+        self,
+        model_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        if self._engine_unload_tasks.get(model_id) is task:
+            self._engine_unload_tasks.pop(model_id, None)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.error("Engine unload task was cancelled for '%s'", model_id)
+        except Exception:
+            logger.exception("Engine unload task failed for '%s'", model_id)
+
+    async def _drain_engine_unload_tasks(self) -> None:
+        while self._engine_unload_tasks:
+            tasks = tuple(self._engine_unload_tasks.values())
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _unload_engine(self, model_id: str) -> None:
+        """Run one cancellation-safe unload for a model.
+
+        Model teardown has cancellation points after the pool entry is cleared
+        but before GC, Metal cache reclaim, and memory accounting finish. Letting
+        caller cancellation stop there can strand an engine's tensors with no
+        registry entry capable of unloading them later. Keep the teardown in a
+        dedicated single-flight task and delay cancellation propagation until it
+        has completed.
+        """
+        task = self._engine_unload_tasks.get(model_id)
+        if task is None:
+            task = asyncio.create_task(
+                self._unload_engine_impl(model_id),
+                name=f"engine-unload:{model_id}",
+            )
+            self._engine_unload_tasks[model_id] = task
+            task.add_done_callback(
+                lambda completed, mid=model_id: self._finish_engine_unload_task(
+                    mid, completed
+                )
+            )
+
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Preserve the caller's cancellation, but only after teardown has
+            # reached a consistent state. This also keeps any caller-held pool
+            # lock in place until the unload task finishes.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            raise
+
+    async def _unload_engine_impl(self, model_id: str) -> None:
         """
         Immediately stop and unload an engine with memory settle barrier.
 
@@ -2754,6 +2812,7 @@ class EnginePool:
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         await self._drain_lease_release_tasks()
+        await self._drain_engine_unload_tasks()
         async with self._lock:
             for model_id in list(self._entries.keys()):
                 entry = self._entries.get(model_id)
