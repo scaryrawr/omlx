@@ -59,7 +59,7 @@ from .model_discovery import (
     is_realtime_stt_model,
 )
 from .scheduler import SchedulerConfig
-from .utils.optional_deps import MFLUX_MISSING_MESSAGE, is_mflux_available
+from .utils.optional_deps import MLX_VLM_MISSING_MESSAGE, is_mlx_vlm_available
 from .utils.proc_memory import get_phys_footprint
 
 logger = logging.getLogger(__name__)
@@ -173,6 +173,7 @@ class EnginePool:
         self._entries: dict[str, EngineEntry] = {}
         self._lock = asyncio.Lock()
         self._current_model_memory = 0
+        self._deferred_mlx_cleanup = False
         # Scanned model roots, kept for org-qualified display/upload names.
         self._model_dirs: list[Path] = []
         self._scheduler_config = scheduler_config or SchedulerConfig()
@@ -1334,13 +1335,11 @@ class EnginePool:
             self._raise_if_model_path_missing_locked(model_id, entry)
             self._raise_if_load_failed(model_id, entry)
 
-            # Gate image engine loads on the optional `mflux` extra before
-            # reserving any memory or evicting other models. Discovery only
-            # needs metadata, so image entries can exist without mflux; we
-            # fail fast here with the centralized install hint instead of
-            # leaking a raw ImportError from deeper in the load path.
-            if entry.engine_type == "image" and not is_mflux_available():
-                raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE)
+            # mlx-vlm is required by oMLX, but keep this image admission check
+            # explicit so a damaged or incompatible core install fails before
+            # reserving memory or evicting another model.
+            if entry.engine_type == "image" and not is_mlx_vlm_available():
+                raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
 
             # Pre-load admission against the memory ceiling from the
             # process memory enforcer (min of static and dynamic). Try
@@ -1530,6 +1529,7 @@ class EnginePool:
             if e is not None and e.in_use > 0:
                 e.in_use -= 1
             await self._unload_pending_if_idle_locked(model_id)
+            await self._run_deferred_mlx_cleanup_if_idle()
 
     def _finish_lease_release_task(self, task: asyncio.Task[None]) -> None:
         self._lease_release_tasks.discard(task)
@@ -1885,6 +1885,25 @@ class EnginePool:
                 return True
         return False
 
+    async def _run_deferred_mlx_cleanup_if_idle(self) -> None:
+        """Run cleanup deferred by an unload once all leased work has drained."""
+        if not self._deferred_mlx_cleanup:
+            return
+        if any(
+            entry.is_loading
+            or entry.in_use > 0
+            or self._entry_has_active_requests(entry)
+            for entry in self._entries.values()
+            if entry.engine is not None or entry.is_loading
+        ):
+            return
+
+        gc.collect()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache_sync)
+        self._deferred_mlx_cleanup = False
+        self._wake_process_memory_enforcer()
+
     async def _unload_engine(self, model_id: str) -> None:
         """
         Immediately stop and unload an engine with memory settle barrier.
@@ -1904,9 +1923,18 @@ class EnginePool:
         distributed = self._distributed_deployment_for_entry(entry) is not None
         resident_size = self._entry_resident_size(entry)
         pre_unload_active = 0 if distributed else mx.get_active_memory()
+        concurrent_activity = (
+            False if distributed else self._other_entries_serving(model_id)
+        )
 
         try:
-            await entry.engine.stop()
+            concurrent_stop = getattr(
+                entry.engine, "stop_without_global_cleanup", None
+            )
+            if concurrent_activity and callable(concurrent_stop):
+                await concurrent_stop()
+            else:
+                await entry.engine.stop()
         except Exception as e:
             if distributed:
                 # Keep the supervisor reachable and the planned memory
@@ -1983,16 +2011,13 @@ class EnginePool:
             self._wake_process_memory_enforcer()
             return
 
-        # Force garbage collection to release memory.
-        # Run mx.clear_cache on the global MLX executor to avoid concurrent
-        # Metal operations with running engines. See issue #85.
-        # Synchronize before clearing to prevent releasing Metal buffers
-        # still referenced by in-flight command buffers. See issue #300.
+        # Force garbage collection to release the target engine's references.
+        # A global synchronize/clear-cache must not be queued behind another
+        # active engine: doing so makes an otherwise idle model's unload wait
+        # for that inference to finish. Live memory remains visible to future
+        # admission checks if allocator cache is not immediately reclaimable.
         gc.collect()
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            get_mlx_executor(), _clear_mlx_cache_sync
-        )
 
         # Memory settle barrier: poll actual freed memory instead of
         # trusting the cumulative _current_model_memory estimate.
@@ -2003,7 +2028,26 @@ class EnginePool:
         min_expected_freed = max(0, resident_size - settle_tolerance)
         settled = False
         settle_indeterminate = False
-        for _settle_round in range(10):
+        active_now = pre_unload_active
+        actual_freed = 0
+        concurrent_activity = self._other_entries_serving(model_id)
+        if concurrent_activity:
+            active_now = mx.get_active_memory()
+            actual_freed = pre_unload_active - active_now
+            settle_indeterminate = True
+            self._deferred_mlx_cleanup = True
+            logger.info(
+                f"Settle for '{model_id}' indeterminate under concurrent "
+                f"activity (freed={format_size(actual_freed)}, "
+                f"need>={format_size(min_expected_freed)}); skipping "
+                f"global MLX cleanup and settle wait"
+            )
+        else:
+            # Run mx.clear_cache on the global MLX executor only while the
+            # pool is otherwise idle. See issues #85 and #300.
+            await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache_sync)
+
+        for _settle_round in range(10 if not settle_indeterminate else 0):
             active_now = mx.get_active_memory()
             actual_freed = pre_unload_active - active_now
             if actual_freed >= min_expected_freed:
@@ -2028,7 +2072,7 @@ class EnginePool:
                     f"Settle for '{model_id}' indeterminate under concurrent "
                     f"activity (freed={format_size(actual_freed)}, "
                     f"need>={format_size(min_expected_freed)}); skipping "
-                    f"settle wait"
+                    f"further global MLX cleanup and settle wait"
                 )
                 break
             logger.debug(
@@ -2334,12 +2378,14 @@ class EnginePool:
                         config_model_type=entry.config_model_type,
                     )
                 elif effective_type == "image":
-                    if not is_mflux_available():
-                        raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE)
+                    if not is_mlx_vlm_available():
+                        raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
                     try:
                         from .engine.image import ImageEngine
                     except ImportError as exc:
-                        raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE) from exc
+                        raise ModelLoadingError(
+                            model_id, MLX_VLM_MISSING_MESSAGE
+                        ) from exc
 
                     engine = ImageEngine(
                         model_name=entry.model_path,
@@ -2485,13 +2531,21 @@ class EnginePool:
                         f"Successfully loaded {model_id} as LLM (fallback from VLM)"
                     )
                 elif entry.engine_type == "image" and isinstance(start_error, ImportError):
-                    # ImageEngine imports mflux lazily during model load. If
-                    # the optional `image` extra is missing at start time,
-                    # surface the centralized install hint via
-                    # ModelLoadingError instead of leaking a raw ImportError.
+                    # ImageEngine imports mlx-vlm lazily during model load.
+                    # If the core package went missing after admission, surface
+                    # the centralized dependency error instead of raw import.
                     with contextlib.suppress(Exception):
                         await engine.stop()
-                    raise ModelLoadingError(model_id, MFLUX_MISSING_MESSAGE) from start_error
+                    raise ModelLoadingError(
+                        model_id, MLX_VLM_MISSING_MESSAGE
+                    ) from start_error
+                elif entry.engine_type == "image" and isinstance(start_error, ValueError):
+                    # ImageEngine validates the manifest before loading model
+                    # weights. Surface unsupported families and stale
+                    # quantize settings as ordinary model-load failures.
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(model_id, str(start_error)) from start_error
                 else:
                     raise
 

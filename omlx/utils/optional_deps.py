@@ -1,26 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers for optional runtime dependencies."""
+"""Helpers for runtime dependencies with optional feature surfaces."""
 
 from __future__ import annotations
 
 from importlib.util import find_spec
 
-MFLUX_PACKAGE = "mflux"
-IMAGE_EXTRA_INSTALL_COMMAND = "pip install 'omlx[image]'"
-IMAGE_EXTRA_SOURCE_INSTALL_COMMAND = "pip install -e '.[image]'"
-IMAGE_EXTRA_INSTALL_HINT = (
-    f"Install image support with: {IMAGE_EXTRA_INSTALL_COMMAND}. "
-    f"If you are running from a source checkout, use: {IMAGE_EXTRA_SOURCE_INSTALL_COMMAND}."
+MLX_VLM_PACKAGE = "mlx_vlm"
+MLX_VLM_MISSING_MESSAGE = (
+    "mlx-vlm image support is unavailable or incompatible. Reinstall oMLX to "
+    "restore its required mlx-vlm dependency."
 )
-MFLUX_MISSING_MESSAGE = f"mflux is required for image inference. {IMAGE_EXTRA_INSTALL_HINT}"
 
 
-def is_mflux_available() -> bool:
-    """Return True when mflux can be imported, without importing it."""
-    return find_spec(MFLUX_PACKAGE) is not None
+def is_mlx_vlm_available() -> bool:
+    """Return whether the required mlx-vlm package can be imported."""
+    return find_spec(MLX_VLM_PACKAGE) is not None
 
 
-def require_mflux_available() -> None:
-    """Raise ImportError with install guidance when mflux is unavailable."""
-    if not is_mflux_available():
-        raise ImportError(MFLUX_MISSING_MESSAGE)
+def require_mlx_vlm_available() -> None:
+    """Raise a clear error when the core mlx-vlm dependency is unavailable."""
+    if not is_mlx_vlm_available():
+        raise ImportError(MLX_VLM_MISSING_MESSAGE)

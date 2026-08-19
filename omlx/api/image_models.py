@@ -88,7 +88,7 @@ class _ImageRequestBase(BaseModel):
     partial_images: int | None = None
     user: str | None = None
 
-    # oMLX/mflux extension fields passed through by routes when supported.
+    # oMLX/mlx-vlm extension fields passed through by routes when supported.
     seed: int | None = None
     steps: int | None = None
     guidance: float | None = None

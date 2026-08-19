@@ -12,7 +12,7 @@ Supports:
 - Reranker models: Use RerankerEngine for document reranking
 - Audio STT models: Use STTEngine for speech-to-text (Whisper, Qwen3-ASR, ...)
 - Audio TTS models: Use TTSEngine for text-to-speech (Qwen3-TTS, Kokoro, ...)
-- Image models: Use ImageEngine for mflux-backed image generation/editing
+- Image models: Use ImageEngine for mlx-vlm-backed image generation/editing
 """
 
 import contextlib
@@ -449,7 +449,7 @@ class HfCacheEntry:
 
 @dataclass
 class ImageModelManifest:
-    """Validated mflux image model manifest."""
+    """Validated mlx-vlm image model manifest."""
 
     backend: str
     base_model: str
@@ -502,27 +502,6 @@ def _normalize_image_base_model(value: object) -> str:
     return normalize_image_alias(value)
 
 
-def _adjust_image_size_for_quantize(size: int, quantize: object) -> int:
-    """Keep fallback estimates conservative when manifests request quantization."""
-    if quantize is None:
-        return size
-    if isinstance(quantize, bool):
-        return size
-    if isinstance(quantize, int):
-        quantized = quantize
-    elif isinstance(quantize, float) and quantize.is_integer():
-        quantized = int(quantize)
-    elif isinstance(quantize, str) and quantize.strip().isdigit():
-        quantized = int(quantize.strip())
-    else:
-        return size
-    if quantized <= 4:
-        return max(1 * 1024**3, int(size * 0.45))
-    if quantized <= 8:
-        return max(1 * 1024**3, int(size * 0.70))
-    return size
-
-
 def _validate_positive_int(value: object, field_name: str) -> int | None:
     """Validate a positive integer-ish manifest value."""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
@@ -532,7 +511,7 @@ def _validate_positive_int(value: object, field_name: str) -> int | None:
 
 
 def _has_local_image_layout(model_path: Path) -> bool:
-    """Detect local mflux/LM Studio image weights without assuming component names."""
+    """Detect known local mlx-vlm image layouts without assuming component names."""
     if not (model_path / "tokenizer").is_dir() and not any(
         (model_path / name).exists()
         for name in ("tokenizer.json", "tokenizer_config.json")
@@ -546,7 +525,7 @@ def _has_local_image_layout(model_path: Path) -> bool:
 
 
 def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
-    """Infer an mflux image manifest from known local model layouts."""
+    """Infer an mlx-vlm image manifest from known local model layouts."""
     spec = infer_image_model_spec_from_name(model_path.name)
     if spec is None:
         return None
@@ -555,7 +534,7 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
 
     tasks = list(spec.tasks)
     metadata: dict[str, object] = {
-        "backend": "mflux",
+        "backend": "mlx-vlm",
         "base_model": spec.base_model,
         "model_path": ".",
         "tasks": tasks,
@@ -563,7 +542,7 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
         "inferred": True,
     }
     return ImageModelManifest(
-        backend="mflux",
+        backend="mlx-vlm",
         base_model=spec.base_model,
         tasks=tasks,
         metadata=metadata,
@@ -572,7 +551,7 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
 
 
 def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
-    """Load and validate an mflux image model manifest, or infer one if absent."""
+    """Load and validate an mlx-vlm image manifest, or infer one if absent."""
     manifest_path = model_path / IMAGE_MANIFEST_NAME
     if not manifest_path.exists():
         return _infer_image_manifest(model_path)
@@ -589,9 +568,9 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
         return None
 
     backend = manifest.get("backend")
-    if not isinstance(backend, str) or backend.strip().lower() != "mflux":
+    if not isinstance(backend, str) or backend.strip().lower() != "mlx-vlm":
         logger.warning(
-            f"Invalid image manifest at {manifest_path}: backend must be 'mflux'"
+            f"Invalid image manifest at {manifest_path}: backend must be 'mlx-vlm'"
         )
         return None
 
@@ -665,7 +644,7 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
     metadata["manifest_path"] = str(manifest_path)
 
     return ImageModelManifest(
-        backend="mflux",
+        backend="mlx-vlm",
         base_model=base_model.strip(),
         tasks=tasks,
         metadata=metadata,
@@ -874,7 +853,7 @@ def detect_model_type(model_path: Path) -> ModelType:
     Detect model type from config.json.
 
     Checks:
-    1. mflux image manifest (omlx-image-model.json)
+    1. mlx-vlm image manifest (omlx-image-model.json)
     2. architectures field for reranker-specific classes (SequenceClassification)
     3. CausalLM-based reranker/embedding detection (architecture + directory name)
     4. sentence-transformers pipeline detection via modules.json
@@ -1323,7 +1302,7 @@ def _sum_file_tree_size(path: Path) -> int:
 
 
 def estimate_image_model_size(model_dir: Path, manifest: ImageModelManifest) -> int:
-    """Estimate image model size without importing or loading mflux."""
+    """Estimate image model size without importing or loading mlx-vlm."""
     if manifest.estimated_size is not None:
         return manifest.estimated_size
 
@@ -1347,10 +1326,9 @@ def estimate_image_model_size(model_dir: Path, manifest: ImageModelManifest) -> 
             "Using conservative image model size fallback for unknown base_model %r",
             manifest.base_model,
         )
-    return _adjust_image_size_for_quantize(
-        fallback_size,
-        manifest.metadata.get("quantize"),
-    )
+    return fallback_size
+
+
 # Weight-name prefixes that the text-only (mlx-lm) loaders drop when serving a
 # VLM-shaped checkpoint: qwen3_5(_moe) sanitize strips ``vision_tower.*`` and
 # ``model.visual.*``; the projector/vision-model spellings cover the other

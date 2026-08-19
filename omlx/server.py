@@ -620,7 +620,7 @@ from .api.mcp_routes import set_mcp_manager_getter
 set_mcp_manager_getter(get_mcp_manager)
 app.include_router(mcp_router, dependencies=[Depends(verify_api_key)])
 
-# Keep image routes registered even when optional mflux/image support is absent;
+# Keep image routes registered even when the mlx-vlm image runtime is unavailable;
 # handlers return a 503 install hint so OpenAI-compatible paths remain stable.
 from .api.image_routes import router as image_router
 

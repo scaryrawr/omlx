@@ -14,7 +14,7 @@ def _dependency_name(requirement: str) -> str:
     ].lower().replace("_", "-")
 
 
-def test_mflux_is_only_in_image_extra():
+def test_mlx_vlm_is_core_and_image_extra_is_compatibility_only():
     pyproject = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
     )
@@ -23,10 +23,7 @@ def test_mflux_is_only_in_image_extra():
         _dependency_name(requirement)
         for requirement in pyproject["project"]["dependencies"]
     }
-    image_extra_dependencies = {
-        _dependency_name(requirement)
-        for requirement in pyproject["project"]["optional-dependencies"]["image"]
-    }
+    image_extra = pyproject["project"]["optional-dependencies"]["image"]
 
-    assert "mflux" not in core_dependencies
-    assert "mflux" in image_extra_dependencies
+    assert "mlx-vlm" in core_dependencies
+    assert image_extra == []

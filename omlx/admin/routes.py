@@ -4614,7 +4614,6 @@ def _get_engine_info() -> dict:
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
         "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
-        "mflux": "https://github.com/scaryrawr/mflux",
     }
 
     fallback_commits = _load_fallback_commits(packages)

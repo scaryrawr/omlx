@@ -1,181 +1,96 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the mflux-backed image engine."""
+"""Tests for the mlx-vlm-backed image engine."""
 
 from __future__ import annotations
 
-import asyncio
-import sys
-import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import omlx.engine.image as image_module
 from omlx.engine.image import ImageEngine, ImageEngineResult
+from omlx.utils.optional_deps import MLX_VLM_MISSING_MESSAGE
+
+
+class _FakeImageGenerationRequest:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _FakeImageEditRequest:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
 
 
 @dataclass
-class _FakeConfig:
-    name: str
-
-    @property
-    def model_name(self) -> str:
-        return self.name
+class _FakeModel:
+    reference: str
+    task: str
+    calls: list[tuple[str, Any]] = field(default_factory=list)
 
 
-class _FakeModelConfig:
-    @staticmethod
-    def from_name(model_name: str) -> _FakeConfig:
-        return _FakeConfig(model_name)
+class _FakeImageAPI:
+    ImageGenerationRequest = _FakeImageGenerationRequest
+    ImageEditRequest = _FakeImageEditRequest
 
+    def __init__(self) -> None:
+        self.loads: list[tuple[str, str]] = []
+        self.models: list[_FakeModel] = []
 
-class _FakeGeneratedImage:
-    def __init__(self, image: Any, model_config: _FakeConfig, **metadata: Any) -> None:
-        self.image = image
-        self.model_config = model_config
-        for key, value in metadata.items():
-            setattr(self, key, value)
+    def load_image_model(self, reference: str, *, task: str) -> _FakeModel:
+        self.loads.append((reference, task))
+        model = _FakeModel(reference=reference, task=task)
+        self.models.append(model)
+        return model
 
-
-class _FakeTiledLatents:
-    ndim = 5
-    shape = (1, 128, 1, 64, 64)
-
-    def __getitem__(self, key: object) -> _FakeSqueezedLatents:
-        return _FakeSqueezedLatents()
-
-
-class _FakeSqueezedLatents:
-    ndim = 4
-    shape = (1, 128, 64, 64)
-
-
-class _FakeErnieLatentCreator:
-    seen_pack_shape: tuple[int, ...] | None = None
-
-    @staticmethod
-    def pack_latents(latents: Any, height: int, width: int) -> Any:  # noqa: ARG004
-        _FakeErnieLatentCreator.seen_pack_shape = latents.shape
-        batch_size, channels, height, width = latents.shape
-        return {
-            "batch_size": batch_size,
-            "channels": channels,
-            "height": height,
-            "width": width,
-        }
-
-
-def _make_fake_model_class(class_name: str):
-    class _FakeModel:
-        instances: list[_FakeModel] = []
-
-        def __init__(
-            self,
-            *,
-            model_config: _FakeConfig | None = None,
-            quantize: int | None = None,
-            model_path: str | None = None,
-            **kwargs: Any,
-        ) -> None:
-            self.model_config = model_config
-            self.quantize = quantize
-            self.model_path = model_path
-            self.init_kwargs = kwargs
-            self.calls: list[dict[str, Any]] = []
-            type(self).instances.append(self)
-
-        def generate_image(self, **kwargs: Any) -> _FakeGeneratedImage:
-            self.calls.append(dict(kwargs))
-            if class_name == "ErnieImage" and kwargs.get("image_path") is not None:
-                from mflux.models.ernie_image.latent_creator.ernie_latent_creator import (
-                    ErnieLatentCreator,
-                )
-
-                ErnieLatentCreator.pack_latents(_FakeTiledLatents(), 1024, 1024)
-            return _FakeGeneratedImage(
-                image={"class": class_name, "prompt": kwargs.get("prompt")},
-                model_config=self.model_config or _FakeConfig("missing"),
-                seed=kwargs.get("seed"),
-                prompt=kwargs.get("prompt"),
-                width=kwargs.get("width"),
-                height=kwargs.get("height"),
-                guidance=kwargs.get("guidance"),
-                steps=kwargs.get("num_inference_steps"),
-                generation_time=0.1,
-            )
-
-    _FakeModel.__name__ = class_name
-    return _FakeModel
+    def generate_image(
+        self, model: _FakeModel, request: Any, *, task: str
+    ) -> SimpleNamespace:
+        model.calls.append((task, request))
+        return SimpleNamespace(
+            image={"task": task, "prompt": request.prompt},
+            metadata={"revised_prompt": f"revised: {request.prompt}"},
+            seed=request.seed,
+            steps=request.steps,
+            guidance=request.guidance,
+            width=request.width,
+            height=request.height,
+            model=model.reference,
+            family="fake",
+            variant="fake-variant",
+        )
 
 
 @pytest.fixture
-def fake_mflux(monkeypatch):
-    classes: dict[str, type] = {}
+def fake_mlx_vlm(monkeypatch):
+    api = _FakeImageAPI()
     cleanup_calls: list[str] = []
-
-    def ensure_package(name: str) -> types.ModuleType:
-        module = sys.modules.get(name)
-        if module is None:
-            module = types.ModuleType(name)
-            module.__path__ = []  # type: ignore[attr-defined]
-            monkeypatch.setitem(sys.modules, name, module)
-        return module
-
-    def install_module(module_name: str, class_name: str | None = None) -> types.ModuleType:
-        parts = module_name.split(".")
-        for index in range(1, len(parts)):
-            ensure_package(".".join(parts[:index]))
-        module = types.ModuleType(module_name)
-        if class_name is not None:
-            cls = _make_fake_model_class(class_name)
-            setattr(module, class_name, cls)
-            classes[class_name] = cls
-        monkeypatch.setitem(sys.modules, module_name, module)
-        return module
-
-    config_module = install_module("mflux.models.common.config.model_config")
-    config_module.ModelConfig = _FakeModelConfig
-    ernie_latent_module = install_module(
-        "mflux.models.ernie_image.latent_creator.ernie_latent_creator"
-    )
-    ernie_latent_module.ErnieLatentCreator = _FakeErnieLatentCreator
-    _FakeErnieLatentCreator.seen_pack_shape = None
-
-    install_module("mflux.models.flux2.variants.txt2img.flux2_klein", "Flux2Klein")
-    install_module("mflux.models.flux2.variants.edit.flux2_klein_edit", "Flux2KleinEdit")
-    install_module("mflux.models.z_image.variants.z_image", "ZImage")
-    install_module("mflux.models.qwen.variants.txt2img.qwen_image", "QwenImage")
-    install_module("mflux.models.qwen.variants.edit.qwen_image_edit", "QwenImageEdit")
-    install_module("mflux.models.fibo.variants.txt2img.fibo", "FIBO")
-    install_module("mflux.models.fibo.variants.edit.fibo_edit", "FIBOEdit")
-    install_module("mflux.models.ernie_image.variants.txt2img.ernie_image", "ErnieImage")
-    install_module("mflux.models.ideogram4.variants.txt2img.ideogram4", "Ideogram4")
-    install_module("mflux.models.krea2.variants.txt2img.krea2", "Krea2")
-
+    monkeypatch.setattr(image_module, "_image_api", lambda: api)
     monkeypatch.setattr(
         image_module.mx, "synchronize", lambda: cleanup_calls.append("synchronize")
     )
     monkeypatch.setattr(
         image_module.mx, "clear_cache", lambda: cleanup_calls.append("clear_cache")
     )
+    return SimpleNamespace(api=api, cleanup_calls=cleanup_calls)
 
-    return types.SimpleNamespace(classes=classes, cleanup_calls=cleanup_calls)
 
-
-async def test_generate_loads_flux2_with_manifest_defaults(fake_mflux, tmp_path):
+async def test_generate_loads_local_manifest_path_with_request_defaults(
+    fake_mlx_vlm, tmp_path
+):
     model_root = tmp_path / "flux-model"
     model_root.mkdir()
-
+    (model_root / "weights").mkdir()
     engine = ImageEngine(
         model_name="api-image-model",
         model_id="image-model",
         model_path=str(model_root),
         image_metadata={
-            "backend": "mflux",
+            "backend": "mlx-vlm",
             "base_model": "flux2-klein-9b",
             "model_path": "weights",
-            "quantize": "8",
             "default_steps": "7",
             "default_guidance": "1.5",
         },
@@ -183,10 +98,6 @@ async def test_generate_loads_flux2_with_manifest_defaults(fake_mflux, tmp_path)
     )
 
     await engine.start()
-
-    flux_cls = fake_mflux.classes["Flux2Klein"]
-    assert flux_cls.instances == []
-
     result = await engine.generate(
         "a cat",
         width=512,
@@ -196,463 +107,210 @@ async def test_generate_loads_flux2_with_manifest_defaults(fake_mflux, tmp_path)
         negative_prompt="low quality",
     )
 
-    assert len(flux_cls.instances) == 1
-    model = flux_cls.instances[0]
-    assert model.model_config == _FakeConfig("flux2-klein-9b")
-    assert model.quantize == 8
-    assert model.model_path == str(model_root / "weights")
+    assert fake_mlx_vlm.api.loads == [
+        (str(model_root / "weights"), "generate"),
+    ]
+    model = fake_mlx_vlm.api.models[0]
+    task, request = model.calls[-1]
+    assert task == "generate"
+    assert request.prompt == "a cat"
+    assert request.seed == 42
+    assert request.width == 512
+    assert request.height == 768
+    assert request.steps == 7
+    assert request.guidance == 1.5
+    assert request.extra == {"negative_prompt": "low quality"}
 
     assert isinstance(result, ImageEngineResult)
-    assert result.image == {"class": "Flux2Klein", "prompt": "a cat"}
-    assert model.calls[-1] == {
-        "prompt": "a cat",
-        "seed": 42,
-        "width": 512,
-        "height": 768,
-        "num_inference_steps": 7,
-        "guidance": 1.5,
-        "negative_prompt": "low quality",
-    }
+    assert result.image == {"task": "generate", "prompt": "a cat"}
     assert result.metadata["output_format"] == "jpeg"
     assert result.metadata["steps"] == 7
     assert result.metadata["guidance"] == 1.5
-    assert result.metadata["mflux_model_name"] == "flux2-klein-9b"
+    assert result.metadata["model_path"] == str(model_root / "weights")
+    assert result.metadata["revised_prompt"] == "revised: a cat"
 
     await engine.stop()
     assert engine.get_stats()["loaded"] is False
-    assert "synchronize" in fake_mflux.cleanup_calls
-    assert "clear_cache" in fake_mflux.cleanup_calls
+    assert "synchronize" in fake_mlx_vlm.cleanup_calls
+    assert "clear_cache" in fake_mlx_vlm.cleanup_calls
+
+
+async def test_stop_can_defer_global_mlx_cleanup(fake_mlx_vlm):
+    engine = ImageEngine(
+        model_name="image-model",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["generation"],
+    )
+    await engine.start()
+
+    await engine.stop_without_global_cleanup()
+
+    assert engine.get_stats()["loaded"] is False
+    assert fake_mlx_vlm.cleanup_calls == []
 
 
 @pytest.mark.parametrize(
-    ("base_model", "class_name", "expected_config", "expected_steps"),
+    ("base_model", "expected_steps", "expected_guidance"),
     [
-        ("z-image-turbo", "ZImage", "z-image-turbo", 8),
-        ("z-image", "ZImage", "z-image", 50),
-        ("flux2-klein-4b", "Flux2Klein", "flux2-klein-4b", 8),
-        ("krea-2", "Krea2", "krea-2", 8),
+        ("flux2-klein-4b", 4, 1.0),
+        ("mage-flow-base", 30, 5.0),
+        ("mage-flow", 20, 5.0),
+        ("mage-flow-turbo", 4, 1.0),
+        ("z-image-turbo", 9, 0.0),
+        ("ernie-image-turbo", 8, 1.0),
     ],
 )
-async def test_generate_uses_registry_step_defaults_without_manifest_defaults(
-    fake_mflux,
-    base_model,
-    class_name,
-    expected_config,
-    expected_steps,
+async def test_generation_uses_family_defaults(
+    fake_mlx_vlm, base_model, expected_steps, expected_guidance
 ):
     engine = ImageEngine(
         model_name=base_model,
-        image_metadata={"backend": "mflux", "base_model": base_model},
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
         tasks=["generation"],
     )
 
     await engine.start()
     result = await engine.generate("a cat")
 
-    model = fake_mflux.classes[class_name].instances[-1]
-    assert model.model_config == _FakeConfig(expected_config)
-    assert model.calls[-1]["num_inference_steps"] == expected_steps
+    _, request = fake_mlx_vlm.api.models[-1].calls[-1]
+    assert request.steps == expected_steps
+    assert request.guidance == expected_guidance
     assert result.metadata["steps"] == expected_steps
+    assert result.metadata["guidance"] == expected_guidance
 
 
-async def test_generate_request_steps_override_registry_defaults(fake_mflux):
+async def test_request_defaults_override_manifest_and_family_defaults(fake_mlx_vlm):
     engine = ImageEngine(
-        model_name="z-image-turbo",
-        image_metadata={"backend": "mflux", "base_model": "z-image-turbo"},
+        model_name="mage",
+        image_metadata={
+            "backend": "mlx-vlm",
+            "base_model": "mage-flow",
+            "default_steps": 7,
+            "default_guidance": 2.0,
+        },
         tasks=["generation"],
     )
 
     await engine.start()
-    result = await engine.generate("a cat", steps=12)
+    await engine.generate("a cat", steps=12, guidance=3.5)
 
-    model = fake_mflux.classes["ZImage"].instances[-1]
-    assert model.calls[-1]["num_inference_steps"] == 12
-    assert result.metadata["steps"] == 12
+    _, request = fake_mlx_vlm.api.models[-1].calls[-1]
+    assert request.steps == 12
+    assert request.guidance == 3.5
 
 
-async def test_edit_uses_qwen_image_paths_and_request_overrides(fake_mflux):
+async def test_edit_routes_multiple_mage_inputs_and_strength_aliases(fake_mlx_vlm):
     engine = ImageEngine(
-        model_name="qwen-edit",
+        model_name="mage-edit",
         image_metadata={
-            "backend": "mflux",
-            "base_model": "qwen-image-edit",
-            "default_steps": 4,
-            "default_guidance": 4.0,
-        },
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    result = await engine.edit(
-        "make it brighter",
-        image_paths=["input-a.png", "input-b.png"],
-        steps=9,
-        guidance=2.5,
-        seed=123,
-    )
-
-    qwen_cls = fake_mflux.classes["QwenImageEdit"]
-    model = qwen_cls.instances[0]
-    assert model.model_config == _FakeConfig("qwen-image-edit")
-    assert model.calls[-1] == {
-        "prompt": "make it brighter",
-        "seed": 123,
-        "width": None,
-        "height": None,
-        "num_inference_steps": 9,
-        "guidance": 2.5,
-        "image_paths": ["input-a.png", "input-b.png"],
-    }
-    assert result.metadata["task"] == "edit"
-    assert result.metadata["input_image_count"] == 2
-
-    with pytest.raises(ValueError, match="does not support mask_path"):
-        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
-
-
-async def test_klein_edit_uses_auto_dimensions_and_registry_defaults(fake_mflux):
-    engine = ImageEngine(
-        model_name="klein-edit",
-        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    result = await engine.edit("keep the same composition", image_paths=["input.png"])
-
-    klein_cls = fake_mflux.classes["Flux2KleinEdit"]
-    model = klein_cls.instances[0]
-    assert model.model_config == _FakeConfig("flux2-klein-4b")
-    assert model.calls[-1] == {
-        "prompt": "keep the same composition",
-        "seed": 0,
-        "width": None,
-        "height": None,
-        "num_inference_steps": 8,
-        "image_paths": ["input.png"],
-    }
-    assert result.metadata["steps"] == 8
-    assert "width" not in result.metadata
-    assert "height" not in result.metadata
-
-
-async def test_klein_edit_passes_manifest_image_strength_when_supported(fake_mflux):
-    engine = ImageEngine(
-        model_name="klein-edit",
-        image_metadata={
-            "backend": "mflux",
-            "base_model": "flux2-klein-9b",
-            "default_image_strength": 0.2,
-        },
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit("subtle cleanup", image_paths=["input.png"])
-
-    klein_cls = fake_mflux.classes["Flux2KleinEdit"]
-    assert klein_cls.instances[0].model_config == _FakeConfig("flux2-klein-9b")
-    assert klein_cls.instances[0].calls[-1]["image_strength"] == 0.2
-
-
-async def test_fibo_edit_routes_single_image_and_mask(fake_mflux):
-    engine = ImageEngine(
-        model_name="fibo-edit",
-        image_metadata={"backend": "mflux", "base_model": "fibo-edit"},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit(
-        "remove background",
-        image_paths=["input.png"],
-        mask_path="mask.png",
-        width=1024,
-        height=1024,
-    )
-
-    fibo_cls = fake_mflux.classes["FIBOEdit"]
-    assert fibo_cls.instances[0].calls[-1] == {
-        "prompt": "remove background",
-        "seed": 0,
-        "width": 1024,
-        "height": 1024,
-        "image_path": "input.png",
-        "mask_path": "mask.png",
-    }
-
-    with pytest.raises(ValueError, match="exactly one input image"):
-        await engine.edit("remove background", image_paths=["a.png", "b.png"])
-
-
-async def test_ernie_edit_routes_single_image_to_image_path(fake_mflux):
-    engine = ImageEngine(
-        model_name="ernie-edit",
-        image_metadata={"backend": "mflux", "base_model": "ernie-image-turbo"},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit(
-        "make it watercolor",
-        image_paths=["input.png"],
-        image_strength=0.6,
-        width=1024,
-        height=576,
-    )
-
-    ernie_cls = fake_mflux.classes["ErnieImage"]
-    model = ernie_cls.instances[0]
-    assert model.model_config == _FakeConfig("ernie-image-turbo")
-    assert _FakeErnieLatentCreator.seen_pack_shape == (1, 128, 64, 64)
-    assert model.calls[-1] == {
-        "prompt": "make it watercolor",
-        "seed": 0,
-        "width": 1024,
-        "height": 576,
-        "num_inference_steps": 8,
-        "guidance": 1.0,
-        "image_path": "input.png",
-        "image_strength": 0.6,
-    }
-
-    with pytest.raises(ValueError, match="does not support mask_path"):
-        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
-
-    with pytest.raises(ValueError, match="exactly one input image"):
-        await engine.edit("combine these", image_paths=["a.png", "b.png"])
-
-
-async def test_ernie_edit_uses_default_image_strength_for_reference_image(fake_mflux):
-    engine = ImageEngine(
-        model_name="ernie-edit",
-        image_metadata={"backend": "mflux", "base_model": "ernie-image-turbo"},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit("make it watercolor", image_paths=["input.png"])
-
-    ernie_cls = fake_mflux.classes["ErnieImage"]
-    assert ernie_cls.instances[0].calls[-1]["image_path"] == "input.png"
-    assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.4
-
-
-@pytest.mark.parametrize(
-    ("base_model", "class_name", "expected_config", "expected_image_strength"),
-    [
-        ("z-image-turbo", "ZImage", "z-image-turbo", 0.4),
-        ("z-image", "ZImage", "z-image", 0.4),
-        ("fibo", "FIBO", "fibo", None),
-    ],
-)
-async def test_img2img_generation_models_route_single_edit_image(
-    fake_mflux,
-    base_model,
-    class_name,
-    expected_config,
-    expected_image_strength,
-):
-    engine = ImageEngine(
-        model_name=base_model,
-        image_metadata={"backend": "mflux", "base_model": base_model},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit(
-        "make it cinematic",
-        image_paths=["input.png"],
-        steps=6,
-        guidance=1.2,
-        image_strength=0.55,
-    )
-
-    model = fake_mflux.classes[class_name].instances[-1]
-    assert model.model_config == _FakeConfig(expected_config)
-    assert model.calls[-1] == {
-        "prompt": "make it cinematic",
-        "seed": 0,
-        "width": None,
-        "height": None,
-        "num_inference_steps": 6,
-        "guidance": 1.2,
-        "image_path": "input.png",
-        "image_strength": 0.55,
-    }
-
-    with pytest.raises(ValueError, match="does not support mask_path"):
-        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
-
-    with pytest.raises(ValueError, match="exactly one input image"):
-        await engine.edit("combine these", image_paths=["a.png", "b.png"])
-
-    await engine.edit("use registry defaults", image_paths=["input.png"])
-    default_call = model.calls[-1]
-    if expected_image_strength is None:
-        assert "image_strength" not in default_call
-    else:
-        assert default_call["image_strength"] == expected_image_strength
-
-
-async def test_krea2_edit_routes_single_img2img_input_with_registry_defaults(fake_mflux):
-    engine = ImageEngine(
-        model_name="krea2-edit",
-        image_metadata={"backend": "mflux", "base_model": "Krea_2_Turbo"},
-        tasks=["edit"],
-    )
-
-    await engine.start()
-    await engine.edit(
-        "make it cinematic",
-        image_paths=["input.png"],
-        scheduler="euler",
-    )
-
-    krea2_cls = fake_mflux.classes["Krea2"]
-    model = krea2_cls.instances[0]
-    assert model.model_config == _FakeConfig("krea-2")
-    assert model.calls[-1] == {
-        "prompt": "make it cinematic",
-        "seed": 0,
-        "width": None,
-        "height": None,
-        "num_inference_steps": 8,
-        "guidance": 1.0,
-        "image_path": "input.png",
-        "image_strength": 0.4,
-        "scheduler": "euler",
-    }
-
-    with pytest.raises(ValueError, match="does not support mask_path"):
-        await engine.edit("mask this", image_paths=["input.png"], mask_path="mask.png")
-
-    with pytest.raises(ValueError, match="exactly one input image"):
-        await engine.edit("combine these", image_paths=["a.png", "b.png"])
-
-
-async def test_ernie_edit_manifest_image_strength_overrides_registry_default(fake_mflux):
-    engine = ImageEngine(
-        model_name="ernie-edit",
-        image_metadata={
-            "backend": "mflux",
-            "base_model": "ernie-image-turbo",
+            "backend": "mlx-vlm",
+            "base_model": "mage-flow-edit",
             "default_image_strength": 0.7,
         },
         tasks=["edit"],
     )
 
     await engine.start()
-    await engine.edit("make it watercolor", image_paths=["input.png"])
-
-    ernie_cls = fake_mflux.classes["ErnieImage"]
-    assert ernie_cls.instances[0].calls[-1]["image_strength"] == 0.7
-
-
-async def test_ideogram_generation_uses_fp8_config(fake_mflux):
-    engine = ImageEngine(
-        model_name="ideogram",
-        image_metadata={"backend": "mflux", "base_model": "ideogram4"},
-        tasks=["generation"],
+    result = await engine.edit(
+        "make it cinematic",
+        image_paths=["input-a.png", "input-b.png"],
+        steps=9,
+        guidance=2.5,
+        seed=123,
+        image_strength=0.55,
+        scheduler="euler",
     )
 
-    await engine.start()
-    await engine.generate("a typographic poster", seed=99, width=1024, height=1024)
-
-    ideogram_cls = fake_mflux.classes["Ideogram4"]
-    model = ideogram_cls.instances[0]
-    assert model.model_config == _FakeConfig("ideogram-4-fp8")
-    assert model.calls[-1] == {
-        "prompt": "a typographic poster",
-        "seed": 99,
-        "width": 1024,
-        "height": 1024,
+    model = fake_mlx_vlm.api.models[-1]
+    task, request = model.calls[-1]
+    assert task == "edit"
+    assert request.image_paths == ("input-a.png", "input-b.png")
+    assert request.seed == 123
+    assert request.steps == 9
+    assert request.guidance == 2.5
+    assert request.extra == {
+        "scheduler": "euler",
+        "image_strength": 0.55,
+        "strength": 0.55,
     }
+    assert result.metadata["task"] == "edit"
+    assert result.metadata["input_image_count"] == 2
 
 
-async def test_ideogram_edit_is_not_supported(fake_mflux):
+@pytest.mark.parametrize("base_model", ["z-image-turbo", "ernie-image-turbo"])
+async def test_edit_uses_family_image_strength_default(fake_mlx_vlm, base_model):
     engine = ImageEngine(
-        model_name="ideogram",
-        image_metadata={"backend": "mflux", "base_model": "ideogram4"},
+        model_name=base_model,
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
         tasks=["edit"],
     )
+    await engine.start()
 
-    with pytest.raises(ValueError, match="Unsupported mflux image base_model"):
-        await engine.start()
+    await engine.edit("make it brighter", image_paths=["input.png"])
+
+    _, request = fake_mlx_vlm.api.models[-1].calls[-1]
+    assert request.extra["image_strength"] == 0.6
+    assert request.extra["strength"] == 0.6
+    assert request.steps == 8
 
 
-async def test_start_rejects_unsupported_base_model(fake_mflux):
+async def test_manifest_image_strength_overrides_family_default(fake_mlx_vlm):
     engine = ImageEngine(
-        model_name="unsupported",
-        image_metadata={"backend": "mflux", "base_model": "schnell"},
-        tasks=["generation"],
+        model_name="ernie-image",
+        image_metadata={
+            "backend": "mlx-vlm",
+            "base_model": "ernie-image",
+            "default_image_strength": 0.4,
+        },
+        tasks=["edit"],
     )
+    await engine.start()
 
-    with pytest.raises(ValueError, match="Unsupported mflux image base_model"):
-        await engine.start()
+    await engine.edit("make it brighter", image_paths=["input.png"])
 
-    assert fake_mflux.classes["Flux2Klein"].instances == []
+    _, request = fake_mlx_vlm.api.models[-1].calls[-1]
+    assert request.extra["image_strength"] == 0.4
+    assert request.extra["strength"] == 0.4
 
 
-@pytest.mark.parametrize(
-    ("base_model", "class_name"),
-    [
-        ("FLUX.2-klein-4B", "Flux2Klein"),
-        ("Z_Image_Turbo", "ZImage"),
-        ("Ernie_Image_Turbo", "ErnieImage"),
-        ("Ideogram4", "Ideogram4"),
-        ("Krea_2_Turbo", "Krea2"),
-    ],
-)
-async def test_start_accepts_lmstudio_style_base_aliases(
-    fake_mflux, base_model, class_name
+@pytest.mark.parametrize("base_model", ["z-image", "z-image-turbo", "ernie-image"])
+async def test_single_source_edit_families_reject_multiple_images(
+    fake_mlx_vlm, base_model
 ):
     engine = ImageEngine(
-        model_name="lmstudio-image",
-        image_metadata={"backend": "mflux", "base_model": base_model},
-        tasks=["generation"],
+        model_name=base_model,
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
+        tasks=["edit"],
     )
-
     await engine.start()
 
-    assert fake_mflux.classes[class_name].instances == []
+    with pytest.raises(ValueError, match="exactly one input image"):
+        await engine.edit("combine", image_paths=["a.png", "b.png"])
 
 
-async def test_generate_missing_mflux_raises_import_error_with_install_hint(monkeypatch):
-    real_import_module = image_module.importlib.import_module
-
-    def missing_mflux_import(name: str):
-        if name.startswith("mflux."):
-            raise ImportError("No module named 'mflux'")
-        return real_import_module(name)
-
-    monkeypatch.setattr(image_module.importlib, "import_module", missing_mflux_import)
-
+async def test_all_current_image_families_reject_masks(fake_mlx_vlm):
     engine = ImageEngine(
-        model_name="missing-mflux",
-        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
-        tasks=["generation"],
+        model_name="flux-edit",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["edit"],
     )
     await engine.start()
 
-    with pytest.raises(ImportError) as exc_info:
-        await engine.generate("a cat")
+    with pytest.raises(ValueError, match="do not support masks"):
+        await engine.edit(
+            "remove background",
+            image_paths=["input.png"],
+            mask_path="mask.png",
+        )
 
-    message = str(exc_info.value)
-    assert "mflux is required for image inference" in message
-    assert "pip install 'omlx[image]'" in message
 
-
-async def test_dual_task_engine_retains_one_loaded_model(fake_mflux):
+async def test_dual_task_engine_keeps_one_loaded_variant(fake_mlx_vlm):
     engine = ImageEngine(
         model_name="dual-task",
-        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
         tasks=["generation", "edit"],
     )
-
     await engine.start()
-    assert engine.get_stats()["loaded"] is True
-    assert engine.get_stats()["loaded_tasks"] == []
 
     await engine.generate("a cat")
     assert engine.get_stats()["loaded_tasks"] == ["generation"]
@@ -661,68 +319,154 @@ async def test_dual_task_engine_retains_one_loaded_model(fake_mflux):
     await engine.edit("make it brighter", image_paths=["input.png"])
     assert engine.get_stats()["loaded_tasks"] == ["edit"]
     assert len(engine._models) == 1
-    assert "synchronize" in fake_mflux.cleanup_calls
-    assert "clear_cache" in fake_mflux.cleanup_calls
+    assert len(fake_mlx_vlm.api.loads) == 2
 
     await engine.generate("a dog")
     assert engine.get_stats()["loaded_tasks"] == ["generation"]
     assert len(engine._models) == 1
+    assert len(fake_mlx_vlm.api.loads) == 3
 
 
-async def test_lazy_load_counts_as_active_request(monkeypatch):
-    load_started = asyncio.Event()
-    release_load = asyncio.Event()
-
-    class FakeModel:
-        def generate_image(self, **kwargs):
-            return _FakeGeneratedImage(
-                image={"prompt": kwargs.get("prompt")},
-                model_config=_FakeConfig("flux2-klein-4b"),
-            )
-
-    async def fake_load_model_for_task(self, *args, **kwargs):
-        load_started.set()
-        await release_load.wait()
-        return FakeModel()
-
-    monkeypatch.setattr(
-        ImageEngine,
-        "_load_model_for_task",
-        fake_load_model_for_task,
-    )
-    monkeypatch.setattr(image_module.mx, "synchronize", lambda: None)
-    monkeypatch.setattr(image_module.mx, "clear_cache", lambda: None)
-
+async def test_model_path_override_is_a_distinct_loaded_variant(
+    fake_mlx_vlm, tmp_path
+):
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    override = tmp_path / "other-model"
+    override.mkdir()
     engine = ImageEngine(
-        model_name="active-load",
-        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
+        model_name="flux",
+        model_path=str(model_root),
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
         tasks=["generation"],
     )
     await engine.start()
 
-    task = asyncio.create_task(engine.generate("a cat"))
-    await load_started.wait()
-    assert engine.has_active_requests() is True
+    await engine.generate("first")
+    await engine.generate("second", model_path=str(override))
 
-    release_load.set()
-    await task
-    assert engine.has_active_requests() is False
+    assert fake_mlx_vlm.api.loads == [
+        (str(model_root), "generate"),
+        (str(override), "generate"),
+    ]
+    assert len(engine._models) == 1
 
 
-def test_task_normalization_accepts_tuple_tasks():
+@pytest.mark.parametrize(
+    ("base_model", "expected_reference"),
+    [
+        ("mage-flow-aligned", "mage-flow"),
+        ("ideogram4", "ideogram-ai/ideogram-4-fp8"),
+        ("z-image", "Tongyi-MAI/Z-Image"),
+        ("z-image-turbo", "Tongyi-MAI/Z-Image-Turbo"),
+    ],
+)
+async def test_direct_engine_uses_loader_reference_without_a_local_model_path(
+    fake_mlx_vlm, base_model, expected_reference
+):
     engine = ImageEngine(
-        model_name="tuple-tasks",
-        image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
-        tasks=("txt2img", "edit"),
+        model_name="public-alias-engine",
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
+        tasks=["generation"],
     )
+    await engine.start()
 
-    assert engine.get_stats()["tasks"] == ["generation", "edit"]
+    await engine.generate("a cat")
+
+    assert fake_mlx_vlm.api.loads == [(expected_reference, "generate")]
 
 
-def test_task_normalization_rejects_invalid_task():
-    with pytest.raises(ValueError, match="Unsupported image model task"):
-        ImageEngine(
-            model_name="bad-task",
-            image_metadata={"backend": "mflux", "base_model": "flux2-klein-4b"},
-            tasks=["upscale"],
-        )
+async def test_manifest_model_path_must_resolve_locally(fake_mlx_vlm, tmp_path):
+    engine = ImageEngine(
+        model_name="flux",
+        model_path=str(tmp_path),
+        image_metadata={
+            "backend": "mlx-vlm",
+            "base_model": "flux2-klein-4b",
+            "model_path": "missing-weights",
+        },
+        tasks=["generation"],
+    )
+    with pytest.raises(ValueError, match="manifest model_path does not exist"):
+        await engine.start()
+    assert fake_mlx_vlm.api.loads == []
+
+
+async def test_quantize_is_rejected_in_manifest_and_request(fake_mlx_vlm):
+    manifest_engine = ImageEngine(
+        model_name="flux",
+        image_metadata={
+            "backend": "mlx-vlm",
+            "base_model": "flux2-klein-4b",
+            "quantize": 4,
+        },
+        tasks=["generation"],
+    )
+    with pytest.raises(ValueError, match="manifest quantize"):
+        await manifest_engine.start()
+
+    engine = ImageEngine(
+        model_name="flux",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["generation"],
+    )
+    await engine.start()
+    with pytest.raises(ValueError, match="request quantize"):
+        await engine.generate("a cat", quantize=4)
+
+
+async def test_start_rejects_unsupported_backend_or_model(fake_mlx_vlm):
+    bad_backend = ImageEngine(
+        model_name="unsupported",
+        image_metadata={"backend": "other", "base_model": "flux2-klein-4b"},
+        tasks=["generation"],
+    )
+    with pytest.raises(ValueError, match="Unsupported image backend"):
+        await bad_backend.start()
+
+    bad_model = ImageEngine(
+        model_name="unsupported",
+        image_metadata={"backend": "mlx-vlm", "base_model": "schnell"},
+        tasks=["generation"],
+    )
+    with pytest.raises(ValueError, match="Unsupported mlx-vlm image base_model"):
+        await bad_model.start()
+
+
+@pytest.mark.parametrize(
+    ("base_model", "task"),
+    [
+        ("FLUX.2-klein-base-4B", "generation"),
+        ("flux2-klein-9b-kv", "edit"),
+        ("Mage_Flow_Aligned", "generation"),
+        ("Mage_Flow_Edit_Turbo", "edit"),
+        ("Z_Image_Turbo", "generation"),
+        ("ERNIE_Image_Turbo", "edit"),
+        ("Ideogram4", "generation"),
+        ("bonsai-ternary", "generation"),
+    ],
+)
+async def test_start_accepts_supported_aliases(fake_mlx_vlm, base_model, task):
+    engine = ImageEngine(
+        model_name="image-alias",
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
+        tasks=[task],
+    )
+    await engine.start()
+    assert engine.get_stats()["loaded_tasks"] == [task]
+
+
+async def test_missing_mlx_vlm_produces_core_dependency_error(monkeypatch):
+    def unavailable_api() -> Any:
+        raise ImportError(MLX_VLM_MISSING_MESSAGE)
+
+    monkeypatch.setattr(image_module, "_image_api", unavailable_api)
+    monkeypatch.setattr(image_module.mx, "synchronize", lambda: None)
+    monkeypatch.setattr(image_module.mx, "clear_cache", lambda: None)
+    engine = ImageEngine(
+        model_name="missing-runtime",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["generation"],
+    )
+    with pytest.raises(ImportError, match="mlx-vlm image support is unavailable"):
+        await engine.start()

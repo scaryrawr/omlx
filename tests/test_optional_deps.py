@@ -10,7 +10,7 @@ import pytest
 from omlx.utils import optional_deps
 
 
-def test_mflux_availability_uses_find_spec_without_importing(monkeypatch):
+def test_mlx_vlm_availability_uses_find_spec_without_importing(monkeypatch):
     calls: list[str] = []
 
     def fake_find_spec(name: str):
@@ -19,23 +19,23 @@ def test_mflux_availability_uses_find_spec_without_importing(monkeypatch):
 
     monkeypatch.setattr(optional_deps, "find_spec", fake_find_spec)
 
-    assert optional_deps.is_mflux_available() is True
-    assert calls == ["mflux"]
+    assert optional_deps.is_mlx_vlm_available() is True
+    assert calls == ["mlx_vlm"]
 
 
-def test_mflux_availability_false_when_spec_missing(monkeypatch):
+def test_mlx_vlm_availability_false_when_spec_missing(monkeypatch):
     monkeypatch.setattr(optional_deps, "find_spec", lambda name: None)
 
-    assert optional_deps.is_mflux_available() is False
+    assert optional_deps.is_mlx_vlm_available() is False
 
 
-def test_require_mflux_available_raises_install_hint(monkeypatch):
+def test_require_mlx_vlm_available_raises_core_dependency_error(monkeypatch):
     monkeypatch.setattr(optional_deps, "find_spec", lambda name: None)
 
     with pytest.raises(ImportError) as exc_info:
-        optional_deps.require_mflux_available()
+        optional_deps.require_mlx_vlm_available()
 
     message = str(exc_info.value)
-    assert "mflux is required for image inference" in message
-    assert "pip install 'omlx[image]'" in message
-    assert "pip install -e '.[image]'" in message
+    assert "mlx-vlm image support is unavailable" in message
+    assert "required mlx-vlm dependency" in message
+    assert "omlx[image]" not in message

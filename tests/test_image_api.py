@@ -27,14 +27,17 @@ def _png_bytes(color: tuple[int, int, int] = (255, 0, 0)) -> bytes:
 class FakeImageEngine:
     def __init__(self, tasks: list[str]) -> None:
         self._tasks = tasks
+        self.pool: FakePool | None = None
         self.generate_calls: list[dict] = []
         self.edit_calls: list[dict] = []
         self.seen_paths: list[str] = []
 
     def get_stats(self) -> dict:
-        return {"backend": "mflux", "tasks": self._tasks}
+        return {"backend": "mlx-vlm", "tasks": self._tasks}
 
     async def generate(self, prompt: str, **kwargs):
+        assert self.pool is not None
+        assert self.pool.in_use > 0
         self.generate_calls.append({"prompt": prompt, **kwargs})
         return SimpleNamespace(
             image=Image.new("RGB", (2, 2), color=(0, 255, 0)),
@@ -42,6 +45,8 @@ class FakeImageEngine:
         )
 
     async def edit(self, prompt: str, image_paths: list[str], **kwargs):
+        assert self.pool is not None
+        assert self.pool.in_use > 0
         self.edit_calls.append({"prompt": prompt, "image_paths": image_paths, **kwargs})
         self.seen_paths.extend(image_paths)
         mask_path = kwargs.get("mask_path")
@@ -64,7 +69,10 @@ class FakePool:
         engine_type: str = "image",
     ) -> None:
         self.engine = engine
+        self.engine.pool = self
         self.get_engine_calls: list[str] = []
+        self.release_engine_calls: list[str] = []
+        self.in_use = 0
         self.entry = SimpleNamespace(
             model_type=model_type,
             engine_type=engine_type,
@@ -75,10 +83,17 @@ class FakePool:
     def get_entry(self, model_id: str):
         return self.entry if model_id == "resolved-image-model" else None
 
-    async def get_engine(self, model_id: str):
+    async def get_engine(self, model_id: str, *, _lease: bool = False):
         assert model_id == "resolved-image-model"
+        assert _lease is True
         self.get_engine_calls.append(model_id)
+        self.in_use += 1
         return self.engine
+
+    async def release_engine(self, model_id: str):
+        assert model_id == "resolved-image-model"
+        self.release_engine_calls.append(model_id)
+        self.in_use -= 1
 
 
 @pytest.fixture
@@ -91,7 +106,7 @@ def image_client(monkeypatch):
     monkeypatch.setattr(
         image_routes, "_resolve_model", lambda model: "resolved-image-model"
     )
-    monkeypatch.setattr(image_routes, "require_mflux_available", lambda: None)
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", lambda: None)
 
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
@@ -166,15 +181,15 @@ def test_generation_rejects_url_response_format_before_engine_pool(
     )
 
 
-def test_generation_missing_mflux_returns_503_before_engine_pool(
+def test_generation_missing_mlx_vlm_returns_503_before_engine_pool(
     image_client, monkeypatch
 ):
     pool_touched = False
 
-    def missing_mflux() -> None:
+    def missing_mlx_vlm() -> None:
         raise ImportError(
-            "mflux is required for image inference. "
-            "Install image support with: pip install 'omlx[image]'."
+            "mlx-vlm image support is unavailable. Reinstall oMLX to restore "
+            "its required mlx-vlm dependency."
         )
 
     def get_engine_pool():
@@ -182,7 +197,9 @@ def test_generation_missing_mflux_returns_503_before_engine_pool(
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(image_routes, "require_mflux_available", missing_mflux)
+    monkeypatch.setattr(
+        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
+    )
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
     response = image_client.post(
@@ -191,8 +208,35 @@ def test_generation_missing_mflux_returns_503_before_engine_pool(
     )
 
     assert response.status_code == 503
-    assert "pip install 'omlx[image]'" in response.json()["detail"]
+    assert "mlx-vlm image support is unavailable" in response.json()["detail"]
     assert pool_touched is False
+
+
+def test_generation_incompatible_mlx_vlm_returns_503_during_inference(
+    image_client, monkeypatch
+):
+    engine = _install_pool(monkeypatch, ["generation"])
+
+    async def fail_generate(prompt: str, **kwargs):
+        raise ImportError(
+            "mlx-vlm image support is unavailable or incompatible. "
+            "Reinstall oMLX to restore its required mlx-vlm dependency."
+        )
+
+    monkeypatch.setattr(engine, "generate", fail_generate)
+
+    response = image_client.post(
+        "/v1/images/generations",
+        json={"model": "alias", "prompt": "a square"},
+    )
+
+    assert response.status_code == 503
+    assert "mlx-vlm image support is unavailable or incompatible" in response.json()[
+        "detail"
+    ]
+    assert engine.pool is not None
+    assert engine.pool.in_use == 0
+    assert engine.pool.release_engine_calls == ["resolved-image-model"]
 
 
 def test_generation_rejects_invalid_size_before_engine_call(image_client, monkeypatch):
@@ -297,16 +341,16 @@ def test_json_edit_accepts_data_uri_and_cleans_temp_file(image_client, monkeypat
     assert all(not Path(path).exists() for path in engine.seen_paths)
 
 
-def test_json_edit_missing_mflux_returns_503_before_download_or_engine_pool(
+def test_json_edit_missing_mlx_vlm_returns_503_before_download_or_engine_pool(
     image_client, monkeypatch
 ):
     path_conversion_touched = False
     pool_touched = False
 
-    def missing_mflux() -> None:
+    def missing_mlx_vlm() -> None:
         raise ImportError(
-            "mflux is required for image inference. "
-            "Install image support with: pip install 'omlx[image]'."
+            "mlx-vlm image support is unavailable. Reinstall oMLX to restore "
+            "its required mlx-vlm dependency."
         )
 
     async def image_reference_to_path(reference):
@@ -319,7 +363,9 @@ def test_json_edit_missing_mflux_returns_503_before_download_or_engine_pool(
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(image_routes, "require_mflux_available", missing_mflux)
+    monkeypatch.setattr(
+        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
+    )
     monkeypatch.setattr(image_routes, "_image_reference_to_path", image_reference_to_path)
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
@@ -333,12 +379,12 @@ def test_json_edit_missing_mflux_returns_503_before_download_or_engine_pool(
     )
 
     assert response.status_code == 503
-    assert "pip install 'omlx[image]'" in response.json()["detail"]
+    assert "mlx-vlm image support is unavailable" in response.json()["detail"]
     assert path_conversion_touched is False
     assert pool_touched is False
 
 
-def test_json_edit_accepts_url_object_mask_and_ignores_compat_fields(
+def test_json_edit_rejects_mask_before_image_fetch_or_engine_load(
     image_client, monkeypatch
 ):
     engine = _install_pool(monkeypatch, ["edit"])
@@ -364,22 +410,10 @@ def test_json_edit_accepts_url_object_mask_and_ignores_compat_fields(
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body["data"]) == 2
-    assert "url" not in body["data"][0]
-    assert [call["seed"] for call in engine.edit_calls] == [7, 8]
-    assert engine.edit_calls[0]["width"] == 2
-    assert engine.edit_calls[0]["height"] == 2
-    assert engine.edit_calls[0]["mask_path"] is not None
-    for ignored_field in (
-        "response_format",
-        "style",
-        "moderation",
-        "user",
-    ):
-        assert ignored_field not in engine.edit_calls[0]
-    assert all(not Path(path).exists() for path in engine.seen_paths)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "mask is not supported by mlx-vlm image models"
+    assert engine.edit_calls == []
+    assert engine.seen_paths == []
 
 
 def test_json_edit_rejects_url_response_format_before_image_fetch(
@@ -701,16 +735,16 @@ def test_multipart_edit_accepts_upload_and_cleans_temp_file(image_client, monkey
     assert all(not Path(path).exists() for path in engine.seen_paths)
 
 
-def test_multipart_edit_missing_mflux_returns_503_before_file_processing_or_engine_pool(
+def test_multipart_edit_missing_mlx_vlm_returns_503_before_file_processing_or_engine_pool(
     image_client, monkeypatch
 ):
     upload_touched = False
     pool_touched = False
 
-    def missing_mflux() -> None:
+    def missing_mlx_vlm() -> None:
         raise ImportError(
-            "mflux is required for image inference. "
-            "Install image support with: pip install 'omlx[image]'."
+            "mlx-vlm image support is unavailable. Reinstall oMLX to restore "
+            "its required mlx-vlm dependency."
         )
 
     async def upload_to_path(value, field_name):
@@ -723,7 +757,9 @@ def test_multipart_edit_missing_mflux_returns_503_before_file_processing_or_engi
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(image_routes, "require_mflux_available", missing_mflux)
+    monkeypatch.setattr(
+        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
+    )
     monkeypatch.setattr(image_routes, "_upload_to_path", upload_to_path)
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
@@ -734,7 +770,7 @@ def test_multipart_edit_missing_mflux_returns_503_before_file_processing_or_engi
     )
 
     assert response.status_code == 503
-    assert "pip install 'omlx[image]'" in response.json()["detail"]
+    assert "mlx-vlm image support is unavailable" in response.json()["detail"]
     assert upload_touched is False
     assert pool_touched is False
 
@@ -790,7 +826,7 @@ def test_multipart_edit_rejects_unsupported_streaming_fields(image_client, monke
     assert engine.edit_calls == []
 
 
-def test_multipart_edit_accepts_image_array_mask_and_compat_fields(
+def test_multipart_edit_rejects_mask_before_upload_processing(
     image_client, monkeypatch
 ):
     engine = _install_pool(monkeypatch, ["edit"])
@@ -815,21 +851,10 @@ def test_multipart_edit_accepts_image_array_mask_and_compat_fields(
         ],
     )
 
-    assert response.status_code == 200
-    assert len(response.json()["data"]) == 2
-    assert [call["seed"] for call in engine.edit_calls] == [3, 4]
-    assert len(engine.edit_calls[0]["image_paths"]) == 2
-    assert engine.edit_calls[0]["mask_path"] is not None
-    assert engine.edit_calls[0]["width"] == 2
-    assert engine.edit_calls[0]["height"] == 2
-    for ignored_field in (
-        "response_format",
-        "style",
-        "moderation",
-        "user",
-    ):
-        assert ignored_field not in engine.edit_calls[0]
-    assert all(not Path(path).exists() for path in engine.seen_paths)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "mask is not supported by mlx-vlm image models"
+    assert engine.edit_calls == []
+    assert engine.seen_paths == []
 
 
 def test_multipart_edit_rejects_url_response_format_before_upload_processing(
@@ -892,7 +917,7 @@ def test_server_image_routes_inherit_api_key_auth(monkeypatch):
     monkeypatch.setattr(
         image_routes, "_resolve_model", lambda model: "resolved-image-model"
     )
-    monkeypatch.setattr(image_routes, "require_mflux_available", lambda: None)
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", lambda: None)
     monkeypatch.setattr(server._server_state, "api_key", "secret")
     monkeypatch.setattr(server._server_state, "global_settings", None)
     monkeypatch.setattr(server._server_state, "engine_pool", None)

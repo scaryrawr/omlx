@@ -71,9 +71,7 @@ omlx start
 # Optional: MCP (Model Context Protocol) support
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
 
-# Optional: mflux-backed image generation/edit support
-# (pulls heavier transitive dependencies such as torch)
-/opt/homebrew/opt/omlx/libexec/bin/pip install git+https://github.com/scaryrawr/mflux@58cc3569484727e8f7ab28e73632f78a5b92989a
+# mlx-vlm image generation and editing support is included with oMLX.
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
@@ -87,16 +85,17 @@ brew install jundot/omlx/omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
-pip install -e .          # Core only
+pip install -e .          # Core runtime, including mlx-vlm image support
 pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
 # GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
 # if you serve those families -- see note below)
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
-pip install -e ".[image]" # With mflux-backed image generation/edit support
 ```
 
-When installing a released package, the same extras are available, e.g. `pip install 'omlx[image]'` or `pip install 'omlx[mcp,image]'`.
+Image generation and editing use the core `mlx-vlm` dependency. The retained
+`image` extra is a no-op compatibility alias; source and released installs do
+not need it.
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4).
 
@@ -115,7 +114,8 @@ Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/
 > python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
 > ```
 
-Core installs are text/VLM/embedding/reranker only; image generation and editing require the `image` extra, which pulls in `mflux` and heavier transitive dependencies such as torch. MCP support remains optional via the `mcp` extra.
+Core installs include text, VLM, embedding, reranker, and mlx-vlm image
+generation/editing support. MCP remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -165,7 +165,8 @@ Logs are written to two locations:
 
 ## Features
 
-Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon. mflux-backed image generation/edit models are also supported when the optional `image` extra is installed (see [Install](#install)).
+Supports text LLMs, vision-language models (VLM), OCR models, embeddings,
+rerankers, and mlx-vlm image generation/editing models on Apple Silicon.
 
 ### Admin Dashboard
 
@@ -329,21 +330,23 @@ Models are auto-detected by type. You can also download models directly from the
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
-| Image | mflux models such as Flux.2 Klein, Krea 2, Qwen Image, FIBO, Z-Image |
+| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
 
 ### Image Model Manifests
 
-Image generation/editing requires the optional `image` extra (`pip install -e ".[image]"` from source, or `pip install 'omlx[image]'` for released packages). The extra installs `mflux` and may pull heavier transitive dependencies such as torch. Image model manifests are still discovered without the extra, but loading or generating returns a clear error until `mflux` is installed.
+Image generation and editing use the core mlx-vlm dependency. Add an
+`omlx-image-model.json` manifest when a local image-model directory needs an
+explicit family or task declaration.
 
-Add an `omlx-image-model.json` file in a model subdirectory to expose a mflux image model through `/v1/images/generations` and/or `/v1/images/edits`:
+Add an `omlx-image-model.json` file in a model subdirectory to expose an
+mlx-vlm image model through `/v1/images/generations` and/or `/v1/images/edits`:
 
 ```json
 {
-  "backend": "mflux",
+  "backend": "mlx-vlm",
   "base_model": "flux2-klein-4b",
   "task": ["generation", "edit"],
-  "model_path": "weights",
-  "quantize": 4,
+  "model_path": ".",
   "default_steps": 28,
   "default_guidance": 3.5,
   "default_image_strength": 0.4,
@@ -351,7 +354,18 @@ Add an `omlx-image-model.json` file in a model subdirectory to expose a mflux im
 }
 ```
 
-`model_path`, `quantize`, defaults, and `estimated_size` are optional. When `estimated_size` is omitted, oMLX uses the local `model_path` size when available, otherwise a conservative estimate for memory accounting; set `estimated_size` for the most accurate engine-pool limits. Supported `base_model` aliases include `flux2-klein-4b`, `flux2-klein-9b`, `krea-2`, `qwen-image`, `qwen-image-edit`, `fibo`, `fibo-edit`, `z-image`, and `z-image-turbo`. LM Studio-style folders for Flux.2 Klein, Krea 2, FIBO, ERNIE Image, Z-Image, and Z-Image Turbo are inferred as image-to-image edit capable when the local layout is detected; Qwen base folders remain generation-only, so use `qwen-image-edit` for Qwen edit models.
+`model_path`, defaults, and `estimated_size` are optional. When
+`estimated_size` is omitted, oMLX uses the local `model_path` size when
+available, otherwise a conservative family estimate for memory accounting.
+`quantize` is not a valid image manifest setting because mlx-vlm loads the
+checkpoint's native weight format directly.
+
+Supported `base_model` aliases include FLUX.2 Klein 4B/9B/base/KV variants
+(generation and multi-image edit), Mage-Flow base/aligned/turbo and their edit
+variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
+Ideogram 4 FP8, and Bonsai Ternary. Z-Image and ERNIE-Image edit modes require
+exactly one source image; masks are not supported by the current mlx-vlm image
+families.
 
 ## CLI Configuration
 

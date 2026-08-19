@@ -110,9 +110,8 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from latest upstream HEAD (bd6cb123). Adds newer model families
-    # and NVFP4 shared-expert handling while retaining current integrations.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@bd6cb1231743a8fa9c44afaea2bf5fe793668d98",
+    # mlx-vlm main, including Flux.2, Mage-Flow, Ideogram 4, and Bonsai image APIs.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@20eec6cb5564c6a196b046d869d2081c29e3ff92",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.5 (2eb169f) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
@@ -135,11 +134,8 @@ grammar = [
     "xgrammar==0.2.3",
     "apache-tvm-ffi==0.1.11",
 ]
-image = [
-    # Image generation via mflux; may pull heavy transitive deps such as torch.
-    # Pin to scaryrawr/mflux for Krea 2 support and MLX 0.32 compatibility.
-    "mflux @ git+https://github.com/scaryrawr/mflux@58cc3569484727e8f7ab28e73632f78a5b92989a",
-]
+# Kept as a no-op compatibility extra. mlx-vlm image support is part of core.
+image = []
 mcp = [
     "mcp>=2.0.0,<3",
 ]
@@ -268,8 +264,6 @@ include = ["omlx*"]
 # mlx and mlx-lm are git-pinned; keep optional transitive dependencies on
 # the same engine stack when resolving extras.
 override-dependencies = [
-    # When the [image] extra enables mflux, its Linux cuda extra metadata can
-    # otherwise resolve an older mlx; keep oMLX on the core MLX pin.
     "mlx==0.32.0",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
     # mlx-audio's current metadata still caps Transformers below 5.13, but

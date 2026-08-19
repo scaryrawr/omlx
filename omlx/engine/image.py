@@ -1,18 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""
-MFLUX-backed image engine for oMLX.
-
-This module intentionally keeps image inference non-streaming. Routes prepare
-request inputs (including temporary edit image paths) and call ``generate`` or
-``edit``; the engine owns only model loading, mflux invocation, and cleanup.
-"""
+"""mlx-vlm-backed image generation and editing engine for oMLX."""
 
 from __future__ import annotations
 
 import asyncio
 import gc
 import importlib
-import inspect
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -24,16 +17,17 @@ import mlx.core as mx
 from ..engine_core import get_mlx_executor
 from ..image_registry import (
     get_image_defaults,
-    image_engine_aliases,
+    get_image_model_reference,
+    get_image_model_spec,
+    image_edit_accepts_multiple_inputs,
     normalize_image_alias,
 )
-from ..utils.optional_deps import MFLUX_MISSING_MESSAGE
+from ..utils.optional_deps import MLX_VLM_MISSING_MESSAGE
 from .base import BaseNonStreamingEngine
 
 logger = logging.getLogger(__name__)
 
 ImageTask = Literal["generation", "edit"]
-EditInputStyle = Literal["image_paths", "image_path", "image_path_mask"]
 
 
 def _cleanup_mlx_cache() -> None:
@@ -48,36 +42,25 @@ def _clear_mlx_cache() -> None:
 
 
 @dataclass(frozen=True)
-class _MfluxModelSpec:
+class _ModelKey:
     task: ImageTask
-    module: str
-    class_name: str
-    config_name: str
-    edit_input_style: EditInputStyle | None = None
+    model_reference: str
 
 
 @dataclass(frozen=True)
-class _ModelKey:
-    task: ImageTask
-    quantize: int | None
-    model_path: str | None
+class _ImageAPI:
+    load_image_model: Any
+    generate_image: Any
+    ImageGenerationRequest: Any
+    ImageEditRequest: Any
 
 
 @dataclass(slots=True)
 class ImageEngineResult:
-    """Result returned by image engine calls.
-
-    ``image`` is the generated PIL Image object returned by mflux (or extracted
-    from mflux's ``GeneratedImage`` wrapper). ``metadata`` is intentionally
-    small and route-friendly; API adapters can serialize/extend it as needed.
-    """
+    """A route-friendly image result returned by an mlx-vlm model."""
 
     image: Any
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def _normalize_base_model(value: object) -> str:
-    return normalize_image_alias(value)
 
 
 def _coerce_int(value: object, field_name: str) -> int | None:
@@ -109,214 +92,29 @@ def _coerce_float(value: object, field_name: str) -> float | None:
     raise ValueError(f"Image manifest {field_name} must be a number")
 
 
-def _patch_ernie_latent_creator() -> None:
+def _image_api() -> _ImageAPI:
+    """Import mlx-vlm's generic image API after registering oMLX shims."""
     try:
-        latent_module = importlib.import_module(
-            "mflux.models.ernie_image.latent_creator.ernie_latent_creator"
+        from ..patches.mlx_vlm_image_compat import (
+            apply_mlx_vlm_image_compat_patch,
         )
-    except ImportError as exc:
-        raise ImportError(MFLUX_MISSING_MESSAGE) from exc
 
-    latent_creator = latent_module.ErnieLatentCreator
-    if getattr(latent_creator, "_omlx_pack_latents_patched", False):
-        return
+        apply_mlx_vlm_image_compat_patch()
+        image = importlib.import_module("mlx_vlm.generate.image")
+        edit_image = importlib.import_module("mlx_vlm.generate.edit_image")
+    except (AttributeError, ImportError) as exc:
+        raise ImportError(MLX_VLM_MISSING_MESSAGE) from exc
 
-    original_pack_latents = latent_creator.pack_latents
-
-    def pack_latents(latents: Any, height: int, width: int) -> Any:
-        if getattr(latents, "ndim", None) == 5 and latents.shape[2] == 1:
-            latents = latents[:, :, 0, :, :]
-        return original_pack_latents(latents, height, width)
-
-    latent_creator.pack_latents = staticmethod(pack_latents)
-    latent_creator._omlx_pack_latents_patched = True
-
-
-def _build_alias_map() -> dict[tuple[ImageTask, str], _MfluxModelSpec]:
-    specs: dict[tuple[ImageTask, str], _MfluxModelSpec] = {}
-
-    def add(spec: _MfluxModelSpec, *aliases: str) -> None:
-        for alias in aliases:
-            specs[(spec.task, _normalize_base_model(alias))] = spec
-
-    flux2_4b = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.flux2.variants.txt2img.flux2_klein",
-        class_name="Flux2Klein",
-        config_name="flux2-klein-4b",
+    return _ImageAPI(
+        load_image_model=image.load_image_model,
+        generate_image=image.generate_image,
+        ImageGenerationRequest=image.ImageGenerationRequest,
+        ImageEditRequest=edit_image.ImageEditRequest,
     )
-    add(flux2_4b, *image_engine_aliases("generation", "flux2-klein-4b"))
-
-    flux2_9b = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.flux2.variants.txt2img.flux2_klein",
-        class_name="Flux2Klein",
-        config_name="flux2-klein-9b",
-    )
-    add(flux2_9b, *image_engine_aliases("generation", "flux2-klein-9b"))
-
-    z_image = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.z_image.variants.z_image",
-        class_name="ZImage",
-        config_name="z-image",
-    )
-    add(z_image, *image_engine_aliases("generation", "z-image"))
-
-    z_image_turbo = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.z_image.variants.z_image",
-        class_name="ZImage",
-        config_name="z-image-turbo",
-    )
-    add(z_image_turbo, *image_engine_aliases("generation", "z-image-turbo"))
-
-    z_image_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.z_image.variants.z_image",
-        class_name="ZImage",
-        config_name="z-image",
-        edit_input_style="image_path",
-    )
-    add(z_image_edit, *image_engine_aliases("edit", "z-image"))
-
-    z_image_turbo_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.z_image.variants.z_image",
-        class_name="ZImage",
-        config_name="z-image-turbo",
-        edit_input_style="image_path",
-    )
-    add(z_image_turbo_edit, *image_engine_aliases("edit", "z-image-turbo"))
-
-    qwen_image = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.qwen.variants.txt2img.qwen_image",
-        class_name="QwenImage",
-        config_name="qwen-image",
-    )
-    add(qwen_image, *image_engine_aliases("generation", "qwen-image"))
-
-    fibo = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.fibo.variants.txt2img.fibo",
-        class_name="FIBO",
-        config_name="fibo",
-    )
-    add(fibo, *image_engine_aliases("generation", "fibo"))
-
-    fibo_img2img = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.fibo.variants.txt2img.fibo",
-        class_name="FIBO",
-        config_name="fibo",
-        edit_input_style="image_path",
-    )
-    add(fibo_img2img, *image_engine_aliases("edit", "fibo"))
-
-    ernie_image_turbo = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
-        class_name="ErnieImage",
-        config_name="ernie-image-turbo",
-    )
-    add(ernie_image_turbo, *image_engine_aliases("generation", "ernie-image-turbo"))
-
-    ernie_image = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
-        class_name="ErnieImage",
-        config_name="ernie-image",
-    )
-    add(ernie_image, *image_engine_aliases("generation", "ernie-image"))
-
-    ideogram4 = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.ideogram4.variants.txt2img.ideogram4",
-        class_name="Ideogram4",
-        config_name="ideogram-4-fp8",
-    )
-    add(ideogram4, *image_engine_aliases("generation", "ideogram-4-fp8"))
-
-    krea2 = _MfluxModelSpec(
-        task="generation",
-        module="mflux.models.krea2.variants.txt2img.krea2",
-        class_name="Krea2",
-        config_name="krea-2",
-    )
-    add(krea2, *image_engine_aliases("generation", "krea-2"))
-
-    flux2_4b_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.flux2.variants.edit.flux2_klein_edit",
-        class_name="Flux2KleinEdit",
-        config_name="flux2-klein-4b",
-        edit_input_style="image_paths",
-    )
-    add(flux2_4b_edit, *image_engine_aliases("edit", "flux2-klein-4b"))
-
-    flux2_9b_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.flux2.variants.edit.flux2_klein_edit",
-        class_name="Flux2KleinEdit",
-        config_name="flux2-klein-9b",
-        edit_input_style="image_paths",
-    )
-    add(flux2_9b_edit, *image_engine_aliases("edit", "flux2-klein-9b"))
-
-    qwen_image_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.qwen.variants.edit.qwen_image_edit",
-        class_name="QwenImageEdit",
-        config_name="qwen-image-edit",
-        edit_input_style="image_paths",
-    )
-    add(qwen_image_edit, *image_engine_aliases("edit", "qwen-image-edit"))
-
-    fibo_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.fibo.variants.edit.fibo_edit",
-        class_name="FIBOEdit",
-        config_name="fibo-edit",
-        edit_input_style="image_path_mask",
-    )
-    add(fibo_edit, *image_engine_aliases("edit", "fibo-edit"))
-
-    ernie_image_turbo_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
-        class_name="ErnieImage",
-        config_name="ernie-image-turbo",
-        edit_input_style="image_path",
-    )
-    add(ernie_image_turbo_edit, *image_engine_aliases("edit", "ernie-image-turbo"))
-
-    ernie_image_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.ernie_image.variants.txt2img.ernie_image",
-        class_name="ErnieImage",
-        config_name="ernie-image",
-        edit_input_style="image_path",
-    )
-    add(ernie_image_edit, *image_engine_aliases("edit", "ernie-image"))
-
-    krea2_edit = _MfluxModelSpec(
-        task="edit",
-        module="mflux.models.krea2.variants.txt2img.krea2",
-        class_name="Krea2",
-        config_name="krea-2",
-        edit_input_style="image_path",
-    )
-    add(krea2_edit, *image_engine_aliases("edit", "krea-2"))
-
-    return specs
-
-
-_MFLUX_SPECS = _build_alias_map()
 
 
 class ImageEngine(BaseNonStreamingEngine):
-    """Non-streaming mflux-backed image generation/editing engine."""
+    """Non-streaming image engine using mlx-vlm model loaders and requests."""
 
     def __init__(
         self,
@@ -334,6 +132,7 @@ class ImageEngine(BaseNonStreamingEngine):
         self._model_name = model_name
         self._model_id = model_id or model_name
         self._model_path = model_path or model_name
+        self._has_explicit_model_path = model_path is not None
         self._config_model_type = config_model_type
         self._image_metadata = dict(image_metadata or {})
         self._capabilities = list(capabilities or [])
@@ -351,34 +150,52 @@ class ImageEngine(BaseNonStreamingEngine):
 
     @property
     def base_model(self) -> str:
-        """Return the mflux base model alias from the image manifest."""
+        """Return the manifest's image family alias."""
         return str(self._image_metadata.get("base_model", "")).strip()
 
     async def start(self) -> None:
-        """Validate image model configuration and reserve the engine slot."""
+        """Validate the manifest and load the primary image task."""
         if self._started:
             return
 
-        backend = str(self._image_metadata.get("backend", "mflux")).strip().lower()
-        if backend != "mflux":
-            raise ValueError(f"Unsupported image backend for {self._model_id}: {backend!r}")
-
+        backend = str(self._image_metadata.get("backend", "mlx-vlm")).strip().lower()
+        if backend != "mlx-vlm":
+            raise ValueError(
+                f"Unsupported image backend for {self._model_id}: {backend!r}"
+            )
+        if "quantize" in self._image_metadata:
+            raise ValueError(
+                "Image manifest quantize is not supported by the mlx-vlm image backend"
+            )
         if not self._tasks:
             raise ValueError(f"Image model {self._model_id} declares no supported tasks")
         for task in self._tasks:
             self._resolve_spec(task)
 
         logger.info(
-            "Starting image engine: model=%s, base_model=%s, tasks=%s",
+            "Starting mlx-vlm image engine: model=%s, base_model=%s, tasks=%s",
             self._model_id,
             self.base_model,
             ",".join(self._tasks),
         )
+        await self._load_model_for_task(self._primary_task())
         self._started = True
-        logger.info("Image engine started: %s", self._model_id)
+
+    def _primary_task(self) -> ImageTask:
+        """Choose the task whose weights are accounted during pool admission."""
+        if "generation" in self._tasks:
+            return "generation"
+        return "edit"
 
     async def stop(self) -> None:
-        """Drop loaded mflux models and clear MLX resources."""
+        """Drop the loaded image variant and release MLX buffers."""
+        await self._stop(clear_mlx_cache=True)
+
+    async def stop_without_global_cleanup(self) -> None:
+        """Drop this model without synchronizing another active MLX workload."""
+        await self._stop(clear_mlx_cache=False)
+
+    async def _stop(self, *, clear_mlx_cache: bool) -> None:
         if not self._models and not self._started:
             return
 
@@ -386,13 +203,11 @@ class ImageEngine(BaseNonStreamingEngine):
             logger.info("Stopping image engine: %s", self._model_id)
             self._models.clear()
             self._started = False
-
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                get_mlx_executor(),
-                _cleanup_mlx_cache,
-            )
-        logger.info("Image engine stopped: %s", self._model_id)
+            if clear_mlx_cache:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(get_mlx_executor(), _cleanup_mlx_cache)
+            else:
+                gc.collect()
 
     async def generate(
         self,
@@ -405,23 +220,10 @@ class ImageEngine(BaseNonStreamingEngine):
         output_format: str = "png",
         **kwargs: Any,
     ) -> ImageEngineResult:
-        """Generate one image from a text prompt.
-
-        Args:
-            prompt: Text prompt.
-            width: Optional output width; mflux defaults are used when omitted.
-            height: Optional output height; mflux defaults are used when omitted.
-            seed: Optional seed; defaults to 0 for deterministic route behavior.
-            steps: Optional request override for manifest ``default_steps``.
-            guidance: Optional request override for manifest ``default_guidance``.
-            output_format: Route-facing desired encoding format; no file is written here.
-            **kwargs: Extra mflux ``generate_image`` parameters such as
-                ``negative_prompt``, ``scheduler``, ``image_path``, or
-                ``image_strength``. ``quantize`` and ``model_path`` can be used
-                to load a separate in-memory variant for this request.
-        """
+        """Generate one image through mlx-vlm's generic generation API."""
         self._ensure_started()
         self._ensure_task_supported("generation")
+        self._reject_quantize(kwargs)
 
         activity_id = self._begin_activity(
             "generating image",
@@ -430,42 +232,33 @@ class ImageEngine(BaseNonStreamingEngine):
         )
         try:
             async with self._call_lock:
-                quantize_override = kwargs.pop("quantize", None)
                 model_path_override = kwargs.pop("model_path", None)
-                key = self._model_key("generation", quantize_override, model_path_override)
-                model = await self._load_model_for_task(
+                key, model = await self._load_model_for_task(
                     "generation",
-                    quantize_override=quantize_override,
                     model_path_override=model_path_override,
                 )
-
-                resolved_steps = self._resolve_steps(steps)
-                resolved_guidance = self._resolve_guidance(guidance)
-                resolved_seed = 0 if seed is None else int(seed)
-
-                gen_kwargs: dict[str, Any] = {
-                    "prompt": prompt,
-                    "seed": resolved_seed,
-                }
-                if width is not None:
-                    gen_kwargs["width"] = int(width)
-                if height is not None:
-                    gen_kwargs["height"] = int(height)
-                if resolved_steps is not None:
-                    gen_kwargs["num_inference_steps"] = resolved_steps
-                if resolved_guidance is not None:
-                    gen_kwargs["guidance"] = resolved_guidance
-                gen_kwargs.update(kwargs)
-
-                return await self._run_image_call(
-                    model=model,
+                api = _image_api()
+                request = api.ImageGenerationRequest(
+                    prompt=prompt,
+                    seed=0 if seed is None else int(seed),
+                    steps=self._resolve_steps(steps, "generation"),
+                    width=None if width is None else int(width),
+                    height=None if height is None else int(height),
+                    guidance=self._resolve_guidance(guidance, "generation"),
+                    output_format="png",
+                    extra=self._request_extra(kwargs),
+                )
+                raw_result = await self._run_api_call(
+                    api.generate_image,
+                    model,
+                    request,
+                    task="generate",
+                )
+                return self._result_from_raw(
+                    raw_result,
                     task="generation",
-                    call_kwargs=gen_kwargs,
-                    result_metadata={
-                        "output_format": output_format,
-                        "quantize": key.quantize,
-                        "model_path": key.model_path,
-                    },
+                    output_format=output_format,
+                    model_key=key,
                 )
         finally:
             await self._finish_activity(activity_id)
@@ -483,15 +276,20 @@ class ImageEngine(BaseNonStreamingEngine):
         output_format: str = "png",
         **kwargs: Any,
     ) -> ImageEngineResult:
-        """Edit one or more input images using an mflux edit model.
-
-        Routes should parse/upload API image inputs and pass local file paths.
-        This method does not decode API payloads or write output files.
-        """
+        """Edit input images through mlx-vlm's generic edit API."""
         self._ensure_started()
         self._ensure_task_supported("edit")
+        self._reject_quantize(kwargs)
         if not image_paths:
             raise ValueError("edit requires at least one input image path")
+        if mask_path is not None:
+            raise ValueError("mlx-vlm image models do not support masks")
+        if not image_edit_accepts_multiple_inputs(self.base_model) and len(
+            image_paths
+        ) != 1:
+            raise ValueError(
+                f"{self.base_model} edit supports exactly one input image"
+            )
 
         activity_id = self._begin_activity(
             "editing image",
@@ -500,65 +298,42 @@ class ImageEngine(BaseNonStreamingEngine):
         )
         try:
             async with self._call_lock:
-                quantize_override = kwargs.pop("quantize", None)
                 model_path_override = kwargs.pop("model_path", None)
-                key = self._model_key("edit", quantize_override, model_path_override)
-                model = await self._load_model_for_task(
+                key, model = await self._load_model_for_task(
                     "edit",
-                    quantize_override=quantize_override,
                     model_path_override=model_path_override,
                 )
-
-                spec = self._resolve_spec("edit")
-                resolved_steps = self._resolve_steps(steps)
-                resolved_guidance = self._resolve_guidance(guidance)
-                request_image_strength = kwargs.pop("image_strength", None)
-                resolved_image_strength = self._resolve_image_strength(request_image_strength)
-                resolved_seed = 0 if seed is None else int(seed)
-
-                gen_kwargs: dict[str, Any] = {
-                    "prompt": prompt,
-                    "seed": resolved_seed,
-                }
-                gen_kwargs["width"] = None if width is None else int(width)
-                gen_kwargs["height"] = None if height is None else int(height)
-                if resolved_steps is not None:
-                    gen_kwargs["num_inference_steps"] = resolved_steps
-                if resolved_guidance is not None:
-                    gen_kwargs["guidance"] = resolved_guidance
-
-                if spec.edit_input_style == "image_path_mask":
-                    if len(image_paths) != 1:
-                        raise ValueError(f"{self.base_model} edit supports exactly one input image")
-                    gen_kwargs["image_path"] = image_paths[0]
-                    if mask_path is not None:
-                        gen_kwargs["mask_path"] = mask_path
-                elif spec.edit_input_style == "image_path":
-                    if len(image_paths) != 1:
-                        raise ValueError(f"{self.base_model} edit supports exactly one input image")
-                    if mask_path is not None:
-                        raise ValueError(f"{self.base_model} edit does not support mask_path")
-                    gen_kwargs["image_path"] = image_paths[0]
-                else:
-                    if mask_path is not None:
-                        raise ValueError(f"{self.base_model} edit does not support mask_path")
-                    gen_kwargs["image_paths"] = image_paths
-
-                if resolved_image_strength is not None:
-                    gen_kwargs["image_strength"] = resolved_image_strength
-                gen_kwargs.update(kwargs)
-
-                return await self._run_image_call(
-                    model=model,
+                api = _image_api()
+                image_strength = self._resolve_image_strength(
+                    kwargs.pop("image_strength", None),
+                    "edit",
+                )
+                request = api.ImageEditRequest(
+                    prompt=prompt,
+                    image_paths=tuple(image_paths),
+                    seed=0 if seed is None else int(seed),
+                    steps=self._resolve_steps(steps, "edit"),
+                    width=None if width is None else int(width),
+                    height=None if height is None else int(height),
+                    guidance=self._resolve_guidance(guidance, "edit"),
+                    output_format="png",
+                    extra=self._request_extra(
+                        kwargs,
+                        image_strength=image_strength,
+                    ),
+                )
+                raw_result = await self._run_api_call(
+                    api.generate_image,
+                    model,
+                    request,
                     task="edit",
-                    call_kwargs=gen_kwargs,
-                    result_metadata={
-                        "output_format": output_format,
-                        "input_image_count": len(image_paths),
-                        "mask_path": mask_path,
-                        "quantize": key.quantize,
-                        "model_path": key.model_path,
-                    },
+                )
+                return self._result_from_raw(
+                    raw_result,
+                    task="edit",
+                    output_format=output_format,
+                    model_key=key,
+                    input_image_count=len(image_paths),
                 )
         finally:
             await self._finish_activity(activity_id)
@@ -569,20 +344,11 @@ class ImageEngine(BaseNonStreamingEngine):
             "model_name": self._model_name,
             "model_id": self._model_id,
             "loaded": self._started,
-            "backend": self._image_metadata.get("backend", "mflux"),
+            "backend": self._image_metadata.get("backend", "mlx-vlm"),
             "base_model": self.base_model,
             "tasks": list(self._tasks),
             "loaded_tasks": sorted({key.task for key in self._models}),
         }
-
-    def _primary_task(self) -> ImageTask:
-        if self._tasks == ["edit"]:
-            return "edit"
-        if "generation" in self._tasks:
-            return "generation"
-        if "edit" in self._tasks:
-            return "edit"
-        raise ValueError(f"Image model {self._model_id} declares no supported tasks")
 
     @staticmethod
     def _normalize_tasks(raw_tasks: object) -> list[ImageTask]:
@@ -599,10 +365,17 @@ class ImageEngine(BaseNonStreamingEngine):
         for item in items:
             if not isinstance(item, str):
                 raise ValueError("Image model tasks must contain only strings")
-            task = _normalize_base_model(item)
+            task = normalize_image_alias(item)
             if task in {"generation", "generate", "text-to-image", "txt2img"}:
                 normalized.append("generation")
-            elif task in {"edit", "editing", "image-to-image", "img2img", "inpaint", "inpainting"}:
+            elif task in {
+                "edit",
+                "editing",
+                "image-to-image",
+                "img2img",
+                "inpaint",
+                "inpainting",
+            }:
                 normalized.append("edit")
             else:
                 raise ValueError(f"Unsupported image model task: {item!r}")
@@ -616,117 +389,114 @@ class ImageEngine(BaseNonStreamingEngine):
         if task not in self._tasks:
             raise ValueError(f"Image model {self._model_id} does not support task {task!r}")
 
-    def _resolve_spec(self, task: ImageTask) -> _MfluxModelSpec:
-        base_model = _normalize_base_model(self._image_metadata.get("base_model"))
-        spec = _MFLUX_SPECS.get((task, base_model))
-        if spec is None:
+    def _resolve_spec(self, task: ImageTask):
+        spec = get_image_model_spec(self.base_model)
+        if spec is None or task not in spec.tasks:
             raise ValueError(
-                f"Unsupported mflux image base_model {self.base_model!r} for task {task!r}"
+                f"Unsupported mlx-vlm image base_model {self.base_model!r} "
+                f"for task {task!r}"
             )
         return spec
 
-    def _default_quantize(self) -> int | None:
-        return _coerce_int(self._image_metadata.get("quantize"), "quantize")
-
-    def _default_model_path(self) -> str | None:
-        value = self._image_metadata.get("model_path")
+    def _resolve_model_reference(self, override: object = None) -> str:
+        value = self._image_metadata.get("model_path") if override is None else override
+        root = Path(self._model_path).expanduser()
         if value is None:
-            return None
+            if not root.exists() and not self._has_explicit_model_path:
+                # Programmatic callers can construct an engine from a known
+                # mlx-vlm alias without a discovered local model directory.
+                spec = get_image_model_spec(self.base_model)
+                return (
+                    get_image_model_reference(spec.base_model)
+                    if spec is not None
+                    else str(root)
+                )
+            return str(root)
         if not isinstance(value, str) or not value.strip():
-            raise ValueError("Image manifest model_path must be a non-empty string")
+            field = "Image manifest model_path" if override is None else "image model_path override"
+            raise ValueError(f"{field} must be a non-empty string")
         path = Path(value).expanduser()
         if not path.is_absolute():
-            path = Path(self._model_path).expanduser() / path
-        return str(path)
-
-    def _resolve_model_path_override(self, value: object) -> str | None:
-        if value is None:
-            return self._default_model_path()
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("image model_path override must be a non-empty string")
-        path = Path(value).expanduser()
-        if not path.is_absolute():
-            candidate = Path(self._model_path).expanduser() / path
-            path = candidate if candidate.exists() else path
+            candidate = root / path
+            path = candidate if override is None or candidate.exists() else path
+        if override is None and not path.exists():
+            raise ValueError(f"Image manifest model_path does not exist: {path}")
         return str(path)
 
     def _model_key(
         self,
         task: ImageTask,
-        quantize_override: object = None,
         model_path_override: object = None,
     ) -> _ModelKey:
-        quantize = (
-            self._default_quantize()
-            if quantize_override is None
-            else _coerce_int(quantize_override, "quantize")
+        return _ModelKey(
+            task=task,
+            model_reference=self._resolve_model_reference(model_path_override),
         )
-        model_path = self._resolve_model_path_override(model_path_override)
-        return _ModelKey(task=task, quantize=quantize, model_path=model_path)
 
-    def _resolve_steps(self, steps: int | None) -> int | None:
+    def _resolve_steps(self, steps: int | None, task: ImageTask) -> int | None:
         if steps is not None:
             return int(steps)
-        # Model-level manifest default.
         manifest_steps = _coerce_int(
             self._image_metadata.get("default_steps"), "default_steps"
         )
         if manifest_steps is not None:
             return manifest_steps
-        # Per-model quality defaults (applied when manifest has none).
-        base_model = self.base_model
-        model_defaults = get_image_defaults(base_model)
-        return _coerce_int(model_defaults.get("default_steps"), "default_steps")
+        return _coerce_int(
+            get_image_defaults(self.base_model, task).get("default_steps"),
+            "default_steps",
+        )
 
     def _resolve_guidance(
-        self, guidance: float | None
+        self, guidance: float | None, task: ImageTask
     ) -> float | None:
         if guidance is not None:
             return float(guidance)
-        # Model-level manifest default.
         manifest_guidance = _coerce_float(
             self._image_metadata.get("default_guidance"), "default_guidance"
         )
         if manifest_guidance is not None:
             return manifest_guidance
-        # Per-model quality defaults (applied when manifest has none).
-        base_model = self.base_model
-        model_defaults = get_image_defaults(base_model)
-        return model_defaults.get("default_guidance")
+        return _coerce_float(
+            get_image_defaults(self.base_model, task).get("default_guidance"),
+            "default_guidance",
+        )
 
-    def _resolve_image_strength(self, image_strength: object) -> float | None:
+    def _resolve_image_strength(
+        self, image_strength: object, task: ImageTask
+    ) -> float | None:
         if image_strength is not None:
             return _coerce_float(image_strength, "image_strength")
-        manifest_image_strength = _coerce_float(
-            self._image_metadata.get("default_image_strength"), "default_image_strength"
+        manifest_strength = _coerce_float(
+            self._image_metadata.get("default_image_strength"),
+            "default_image_strength",
         )
-        if manifest_image_strength is not None:
-            return manifest_image_strength
-        model_defaults = get_image_defaults(self.base_model)
+        if manifest_strength is not None:
+            return manifest_strength
         return _coerce_float(
-            model_defaults.get("default_image_strength"), "default_image_strength"
+            get_image_defaults(self.base_model, task).get("default_image_strength"),
+            "default_image_strength",
         )
 
     async def _load_model_for_task(
         self,
         task: ImageTask,
         *,
-        quantize_override: object = None,
         model_path_override: object = None,
-    ) -> Any:
-        key = self._model_key(task, quantize_override, model_path_override)
+    ) -> tuple[_ModelKey, Any]:
+        key = self._model_key(task, model_path_override)
         model = self._models.get(key)
         if model is not None:
-            return model
+            return key, model
 
         async with self._load_lock:
             model = self._models.get(key)
             if model is not None:
-                return model
+                return key, model
 
             if self._models:
                 logger.info(
-                    "Unloading previous image model variant before loading: model=%s, task=%s",
+                    "Unloading previous mlx-vlm image variant before loading: "
+                    "model=%s, task=%s",
                     self._model_id,
                     task,
                 )
@@ -734,117 +504,119 @@ class ImageEngine(BaseNonStreamingEngine):
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(get_mlx_executor(), _cleanup_mlx_cache)
 
-            spec = self._resolve_spec(task)
-            base_model = self.base_model
+            self._resolve_spec(task)
+            api = _image_api()
+            loader_task = "generate" if task == "generation" else "edit"
 
-            def _load_sync() -> Any:
-                try:
-                    config_module = importlib.import_module(
-                        "mflux.models.common.config.model_config"
-                    )
-                    if spec.class_name == "ErnieImage":
-                        _patch_ernie_latent_creator()
-                    model_module = importlib.import_module(spec.module)
-                except ImportError as exc:
-                    raise ImportError(MFLUX_MISSING_MESSAGE) from exc
-
-                model_config = config_module.ModelConfig.from_name(spec.config_name)
-                model_cls = getattr(model_module, spec.class_name)
-                init_kwargs = {
-                    "model_config": model_config,
-                    "quantize": key.quantize,
-                    "model_path": key.model_path,
-                }
-                return model_cls(**self._filter_supported_kwargs(model_cls, init_kwargs))
+            def load_sync() -> Any:
+                return api.load_image_model(key.model_reference, task=loader_task)
 
             logger.info(
-                "Loading image model: model=%s, base_model=%s, task=%s, quantize=%s, model_path=%s",
+                "Loading mlx-vlm image model: model=%s, base_model=%s, task=%s, "
+                "model_path=%s",
                 self._model_id,
-                base_model,
+                self.base_model,
                 task,
-                key.quantize,
-                key.model_path,
+                key.model_reference,
             )
             loop = asyncio.get_running_loop()
-            model = await loop.run_in_executor(get_mlx_executor(), _load_sync)
+            try:
+                model = await loop.run_in_executor(get_mlx_executor(), load_sync)
+            except ImportError as exc:
+                raise ImportError(MLX_VLM_MISSING_MESSAGE) from exc
             self._models[key] = model
-            return model
+            return key, model
 
-    async def _run_image_call(
-        self,
-        *,
+    @staticmethod
+    async def _run_api_call(
+        generate_image: Any,
         model: Any,
-        task: ImageTask,
-        call_kwargs: dict[str, Any],
-        result_metadata: dict[str, Any],
-    ) -> ImageEngineResult:
+        request: Any,
+        *,
+        task: str,
+    ) -> Any:
         loop = asyncio.get_running_loop()
-
-        def _call_sync() -> Any:
-            kwargs = self._filter_supported_kwargs(model.generate_image, call_kwargs)
-            return model.generate_image(**kwargs)
-
-        raw_result = await loop.run_in_executor(get_mlx_executor(), _call_sync)
-        image = getattr(raw_result, "image", raw_result)
-        metadata = self._build_result_metadata(raw_result, task, call_kwargs)
-        metadata.update({k: v for k, v in result_metadata.items() if v is not None})
-        return ImageEngineResult(image=image, metadata=metadata)
-
-    async def _finish_activity(self, activity_id: str) -> None:
-        self._end_activity(activity_id)
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        return await loop.run_in_executor(
             get_mlx_executor(),
-            _clear_mlx_cache,
+            lambda: generate_image(model, request, task=task),
         )
 
-    def _build_result_metadata(
+    def _request_extra(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        image_strength: float | None = None,
+    ) -> dict[str, Any]:
+        extra = {key: value for key, value in kwargs.items() if value is not None}
+        request_strength = extra.pop("image_strength", None)
+        if image_strength is None and request_strength is not None:
+            image_strength = _coerce_float(request_strength, "image_strength")
+        if image_strength is not None:
+            # Z-Image consumes ``strength`` while ERNIE-Image consumes
+            # ``image_strength``. Other mlx-vlm families safely ignore extras.
+            extra["image_strength"] = image_strength
+            extra["strength"] = image_strength
+        return extra
+
+    @staticmethod
+    def _reject_quantize(kwargs: dict[str, Any]) -> None:
+        if "quantize" in kwargs:
+            raise ValueError(
+                "Image request quantize is not supported by the mlx-vlm image backend"
+            )
+
+    def _result_from_raw(
         self,
         raw_result: Any,
+        *,
         task: ImageTask,
-        call_kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        metadata = {
-            "model_id": self._model_id,
-            "model_name": self._model_name,
-            "base_model": self.base_model,
-            "task": task,
-            "prompt": call_kwargs.get("prompt"),
-            "seed": call_kwargs.get("seed"),
-            "steps": call_kwargs.get("num_inference_steps"),
-            "guidance": call_kwargs.get("guidance"),
-            "width": call_kwargs.get("width"),
-            "height": call_kwargs.get("height"),
-        }
-        for attr in (
+        output_format: str,
+        model_key: _ModelKey,
+        input_image_count: int | None = None,
+    ) -> ImageEngineResult:
+        raw_metadata = getattr(raw_result, "metadata", {})
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+        metadata.update(
+            {
+                "model_id": self._model_id,
+                "model_name": self._model_name,
+                "base_model": self.base_model,
+                "task": task,
+                "output_format": output_format,
+                "model_path": model_key.model_reference,
+            }
+        )
+        if input_image_count is not None:
+            metadata["input_image_count"] = input_image_count
+        for attribute in (
             "seed",
             "prompt",
             "steps",
             "guidance",
             "width",
             "height",
-            "generation_time",
-            "quantization",
-            "negative_prompt",
+            "model",
+            "family",
+            "variant",
+            "prompt_tokens",
+            "peak_memory",
         ):
-            if hasattr(raw_result, attr):
-                metadata[attr] = getattr(raw_result, attr)
-        model_config = getattr(raw_result, "model_config", None)
-        if model_config is not None and hasattr(model_config, "model_name"):
-            metadata["mflux_model_name"] = model_config.model_name
-        return {k: v for k, v in metadata.items() if v is not None}
+            value = getattr(raw_result, attribute, None)
+            if value is not None:
+                metadata[attribute] = value
+        return ImageEngineResult(
+            image=getattr(raw_result, "image", raw_result),
+            metadata=metadata,
+        )
 
-    @staticmethod
-    def _filter_supported_kwargs(callable_obj: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
-        try:
-            signature = inspect.signature(callable_obj)
-        except (TypeError, ValueError):
-            return kwargs
-        params = signature.parameters
-        if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
-            return kwargs
-        return {key: value for key, value in kwargs.items() if key in params}
+    async def _finish_activity(self, activity_id: str) -> None:
+        self._end_activity(activity_id)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache)
 
     def __repr__(self) -> str:
         status = "running" if self._started else "stopped"
-        return f"<ImageEngine model={self._model_id} base={self.base_model!r} status={status}>"
+        return (
+            f"<ImageEngine model={self._model_id} base={self.base_model!r} "
+            f"status={status}>"
+        )

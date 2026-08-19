@@ -25,7 +25,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from omlx.utils.optional_deps import require_mflux_available
+from omlx.utils.optional_deps import require_mlx_vlm_available
 
 from .image_models import (
     ImageData,
@@ -161,7 +161,7 @@ def _get_engine_pool():
 
 def _require_image_dependency() -> None:
     try:
-        require_mflux_available()
+        require_mlx_vlm_available()
     except ImportError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -222,7 +222,7 @@ def _validate_image_entry(entry: Any | None, model_id: str, task: str) -> bool:
 
     Returns True when discovery metadata positively identifies the model as an
     image model. Tests may provide duck-typed fake engines without importing
-    MLX/mflux, so final engine validation remains duck-typed too.
+    MLX or mlx-vlm, so final engine validation remains duck-typed too.
     """
     if entry is None:
         return False
@@ -281,7 +281,7 @@ def _validate_image_engine(
         entry_is_image
         or type(engine).__name__ == "ImageEngine"
         or bool(stats_tasks)
-        or stats.get("backend") == "mflux"
+        or stats.get("backend") == "mlx-vlm"
     )
     if not looks_like_image or not has_task_method:
         raise HTTPException(
@@ -290,7 +290,7 @@ def _validate_image_engine(
         )
 
 
-async def _load_image_engine(model: str, task: str) -> tuple[str, Any]:
+async def _load_image_engine(model: str, task: str) -> tuple[str, Any, Any]:
     from omlx.exceptions import (
         EnginePoolError,
         InsufficientMemoryError,
@@ -306,7 +306,7 @@ async def _load_image_engine(model: str, task: str) -> tuple[str, Any]:
     )
 
     try:
-        engine = await pool.get_engine(resolved_model)
+        engine = await pool.get_engine(resolved_model, _lease=True)
     except ModelNotFoundError as exc:
         available = ", ".join(exc.available_models) if exc.available_models else "(none)"
         raise HTTPException(
@@ -322,13 +322,17 @@ async def _load_image_engine(model: str, task: str) -> tuple[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    _validate_image_engine(
-        engine,
-        resolved_model,
-        task,
-        entry_is_image=entry_is_image,
-    )
-    return resolved_model, engine
+    try:
+        _validate_image_engine(
+            engine,
+            resolved_model,
+            task,
+            entry_is_image=entry_is_image,
+        )
+    except Exception:
+        await pool.release_engine(resolved_model)
+        raise
+    return resolved_model, engine, pool
 
 
 def _image_tmpdir() -> Path:
@@ -779,7 +783,7 @@ async def _run_generation(
 ) -> ImageResponse:
     width, height = request.parsed_size()
     data: list[ImageData] = []
-    # ImageEngine serializes mflux/MLX calls for GPU safety, so keep n > 1 sequential.
+    # ImageEngine serializes mlx-vlm/MLX calls for GPU safety, so keep n > 1 sequential.
     for index in range(request.n):
         result = await engine.generate(
             request.prompt,
@@ -809,7 +813,7 @@ async def _run_edit(
 ) -> ImageResponse:
     width, height = request.parsed_size()
     data: list[ImageData] = []
-    # ImageEngine serializes mflux/MLX calls for GPU safety, so keep n > 1 sequential.
+    # ImageEngine serializes mlx-vlm/MLX calls for GPU safety, so keep n > 1 sequential.
     for index in range(request.n):
         result = await engine.edit(
             request.prompt,
@@ -897,15 +901,21 @@ async def create_image_generation(request: ImageGenerationRequest) -> ImageRespo
     _reject_unsupported_streaming(request)
     _reject_unsupported_response_format(request)
     _require_image_dependency()
-    resolved_model, engine = await _load_image_engine(request.model, "generation")
+    resolved_model, engine, pool = await _load_image_engine(
+        request.model, "generation"
+    )
     try:
         return await _run_generation(resolved_model, engine, request)
     except HTTPException:
         raise
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        await pool.release_engine(resolved_model)
 
 
 @router.post("/v1/images/edits", response_model=ImageResponse)
@@ -933,6 +943,11 @@ async def _create_json_image_edit(request: Request) -> ImageResponse:
     _reject_unsupported_lora(edit_request)
     _reject_unsupported_streaming(edit_request)
     _reject_unsupported_response_format(edit_request)
+    if edit_request.mask is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="mask is not supported by mlx-vlm image models",
+        )
     _require_image_dependency()
 
     image_paths: list[str] = []
@@ -940,19 +955,23 @@ async def _create_json_image_edit(request: Request) -> ImageResponse:
     try:
         for reference in edit_request.images:
             image_paths.append(await _image_reference_to_path(reference))
-        if edit_request.mask is not None:
-            mask_path = await _image_reference_to_path(edit_request.mask)
-
-        resolved_model, engine = await _load_image_engine(edit_request.model, "edit")
-        return await _run_edit(
-            resolved_model,
-            engine,
-            edit_request,
-            image_paths=image_paths,
-            mask_path=mask_path,
+        resolved_model, engine, pool = await _load_image_engine(
+            edit_request.model, "edit"
         )
+        try:
+            return await _run_edit(
+                resolved_model,
+                engine,
+                edit_request,
+                image_paths=image_paths,
+                mask_path=mask_path,
+            )
+        finally:
+            await pool.release_engine(resolved_model)
     except HTTPException:
         raise
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -975,6 +994,11 @@ async def _create_multipart_image_edit(request: Request) -> ImageResponse:
     mask_values = [value for value in _form_values(form, "mask") if _is_upload(value)]
     if len(mask_values) > 1:
         raise HTTPException(status_code=400, detail="Only one 'mask' upload is supported")
+    if mask_values:
+        raise HTTPException(
+            status_code=400,
+            detail="mask is not supported by mlx-vlm image models",
+        )
     _require_image_dependency()
 
     image_paths: list[str] = []
@@ -982,19 +1006,23 @@ async def _create_multipart_image_edit(request: Request) -> ImageResponse:
     try:
         for upload in uploads:
             image_paths.append(await _upload_to_path(upload, "image"))
-        if mask_values:
-            mask_path = await _upload_to_path(mask_values[0], "mask")
-
-        resolved_model, engine = await _load_image_engine(edit_request.model, "edit")
-        return await _run_edit(
-            resolved_model,
-            engine,
-            edit_request,
-            image_paths=image_paths,
-            mask_path=mask_path,
+        resolved_model, engine, pool = await _load_image_engine(
+            edit_request.model, "edit"
         )
+        try:
+            return await _run_edit(
+                resolved_model,
+                engine,
+                edit_request,
+                image_paths=image_paths,
+                mask_path=mask_path,
+            )
+        finally:
+            await pool.release_engine(resolved_model)
     except HTTPException:
         raise
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

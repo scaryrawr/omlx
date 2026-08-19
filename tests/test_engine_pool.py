@@ -140,8 +140,8 @@ class TestEnginePoolInit:
         (model_dir / "omlx-image-model.json").write_text(
             json.dumps(
                 {
-                    "backend": "mflux",
-                    "base_model": "schnell",
+                    "backend": "mlx-vlm",
+                    "base_model": "flux2-klein-4b",
                     "task": ["txt2img", "edit"],
                     "estimated_size": 4096,
                 }
@@ -155,18 +155,18 @@ class TestEnginePoolInit:
         assert entry is not None
         assert entry.model_type == "image"
         assert entry.engine_type == "image"
-        assert entry.config_model_type == "mflux"
+        assert entry.config_model_type == "mlx-vlm"
         assert entry.capabilities == ["generation", "edit"]
         assert entry.tasks == ["generation", "edit"]
         assert entry.image_metadata is not None
-        assert entry.image_metadata["base_model"] == "schnell"
+        assert entry.image_metadata["base_model"] == "flux2-klein-4b"
 
         status_model = pool.get_status()["models"][0]
         assert status_model["model_type"] == "image"
         assert status_model["engine_type"] == "image"
         assert status_model["capabilities"] == ["generation", "edit"]
         assert status_model["tasks"] == ["generation", "edit"]
-        assert status_model["image_metadata"]["backend"] == "mflux"
+        assert status_model["image_metadata"]["backend"] == "mlx-vlm"
 
 
 class TestExposedProfileModelResolution:
@@ -461,8 +461,8 @@ class TestEnginePoolErrors:
         assert pool.get_entry("model-a") is None
         assert pool.get_entry("model-a") is None
 
-    def test_image_engine_missing_mflux_raises_model_loading_error(self, tmp_path):
-        """Image engine load fails fast with install hint when mflux is missing."""
+    def test_image_engine_missing_mlx_vlm_raises_model_loading_error(self, tmp_path):
+        """Image engine load fails fast when mlx-vlm is unavailable."""
         model_dir = tmp_path / "Z-Image-Turbo-mxfp8"
         model_dir.mkdir()
         (model_dir / "tokenizer.json").write_text("{}")
@@ -475,15 +475,14 @@ class TestEnginePoolErrors:
         pool.discover_models(str(tmp_path))
 
         with (
-            patch("omlx.engine_pool.is_mflux_available", return_value=False),
+            patch("omlx.engine_pool.is_mlx_vlm_available", return_value=False),
             pytest.raises(ModelLoadingError) as exc_info,
         ):
             asyncio.run(pool.get_engine("Z-Image-Turbo-mxfp8"))
 
         assert exc_info.value.model_id == "Z-Image-Turbo-mxfp8"
         msg = str(exc_info.value)
-        assert "mflux" in msg
-        assert "omlx[image]" in msg
+        assert "mlx-vlm image support is unavailable" in msg
 
 
 class TestEnginePoolStatus:
@@ -642,7 +641,7 @@ class TestApplySettingsOverrides:
 
 
 class TestImageEngineLoading:
-    """Tests for lazy ImageEngine construction."""
+    """Tests for ImageEngine construction."""
 
     @pytest.mark.asyncio
     async def test_load_image_engine_passes_manifest_metadata(self, monkeypatch):
@@ -661,7 +660,7 @@ class TestImageEngineLoading:
         fake_module = types.ModuleType("omlx.engine.image")
         fake_module.ImageEngine = FakeImageEngine
         monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
-        monkeypatch.setattr("omlx.engine_pool.is_mflux_available", lambda: True)
+        monkeypatch.setattr("omlx.engine_pool.is_mlx_vlm_available", lambda: True)
         monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
         monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
 
@@ -672,10 +671,10 @@ class TestImageEngineLoading:
             model_type="image",
             engine_type="image",
             estimated_size=4096,
-            config_model_type="mflux",
+            config_model_type="mlx-vlm",
             capabilities=["generation"],
             tasks=["generation"],
-            image_metadata={"backend": "mflux", "base_model": "schnell"},
+            image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
         )
         pool._entries["flux-schnell"] = entry
 
@@ -687,13 +686,54 @@ class TestImageEngineLoading:
         assert created_kwargs["model_name"] == "/models/flux-schnell"
         assert created_kwargs["model_id"] == "flux-schnell"
         assert created_kwargs["model_path"] == "/models/flux-schnell"
-        assert created_kwargs["config_model_type"] == "mflux"
+        assert created_kwargs["config_model_type"] == "mlx-vlm"
         assert created_kwargs["image_metadata"] == {
-            "backend": "mflux",
-            "base_model": "schnell",
+            "backend": "mlx-vlm",
+            "base_model": "flux2-klein-4b",
         }
         assert created_kwargs["capabilities"] == ["generation"]
         assert created_kwargs["tasks"] == ["generation"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_image_engines_can_remain_loaded(self, monkeypatch):
+        started = []
+
+        class FakeImageEngine:
+            def __init__(self, **kwargs):
+                self.model_id = kwargs["model_id"]
+
+            async def start(self):
+                started.append(self.model_id)
+
+        fake_module = types.ModuleType("omlx.engine.image")
+        fake_module.ImageEngine = FakeImageEngine
+        monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
+        monkeypatch.setattr("omlx.engine_pool.is_mlx_vlm_available", lambda: True)
+        monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
+        monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        for model_id in ("first-image", "second-image"):
+            pool._entries[model_id] = EngineEntry(
+                model_id=model_id,
+                model_path=f"/models/{model_id}",
+                model_type="image",
+                engine_type="image",
+                estimated_size=4096,
+                capabilities=["generation"],
+                tasks=["generation"],
+                image_metadata={
+                    "backend": "mlx-vlm",
+                    "base_model": "flux2-klein-4b",
+                },
+            )
+
+        await pool._load_engine("first-image")
+        await pool._load_engine("second-image")
+
+        assert started == ["first-image", "second-image"]
+        assert pool._entries["first-image"].engine is not None
+        assert pool._entries["second-image"].engine is not None
 
 
 class TestVLMFallback:
@@ -3090,6 +3130,8 @@ class TestMemorySettleBarrier:
         other_engine = MagicMock()
         other_engine.has_active_requests = MagicMock(return_value=True)
         pool._entries["model-b"].engine = other_engine
+        target_engine = pool._entries["model-a"].engine
+        target_engine.stop_without_global_cleanup = AsyncMock()
 
         # Global gauge RISES during settle (concurrent prefill/KV growth),
         # so freed = pre_unload - active_now is negative every round.
@@ -3116,15 +3158,30 @@ class TestMemorySettleBarrier:
             mock_mx.clear_cache = MagicMock()
 
             await pool._unload_engine("model-a")
+            cleanup_counts_during_activity = (
+                mock_mx.synchronize.call_count,
+                mock_mx.clear_cache.call_count,
+            )
+            assert pool._deferred_mlx_cleanup is True
+
+            other_engine.has_active_requests.return_value = False
+            await pool._run_deferred_mlx_cleanup_if_idle()
+            cleanup_counts_after_drain = (
+                mock_mx.synchronize.call_count,
+                mock_mx.clear_cache.call_count,
+            )
 
         assert "indeterminate under concurrent activity" in caplog.text
         # No settle-round burn, no timeout warning, no emergency reclaim.
         assert sleep_calls.count(0.5) == 0
         assert "Settle barrier timed out" not in caplog.text
         assert "Emergency reclaim" not in caplog.text
-        # Only the initial pre-barrier release cycle touched the executor.
-        assert mock_mx.synchronize.call_count == 1
-        assert mock_mx.clear_cache.call_count == 1
+        # No global cleanup is queued behind the active inference.
+        target_engine.stop_without_global_cleanup.assert_awaited_once()
+        target_engine.stop.assert_not_awaited()
+        assert cleanup_counts_during_activity == (0, 0)
+        assert cleanup_counts_after_drain == (1, 1)
+        assert pool._deferred_mlx_cleanup is False
         # The unload itself still completes and is accounted.
         assert pool._entries["model-a"].engine is None
         assert pool._current_model_memory == 0

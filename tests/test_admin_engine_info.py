@@ -16,11 +16,11 @@ class _FakeDistribution:
         return None
 
 
-def test_engine_info_reports_mflux_version(monkeypatch):
-    """Image support should surface mflux in the dashboard Engine Versions card."""
+def test_engine_info_reports_mlx_vlm_version(monkeypatch):
+    """Image support should share the mlx-vlm Engine Versions entry."""
 
     def fake_distribution(pkg_name: str):
-        if pkg_name == "mflux":
+        if pkg_name == "mlx-vlm":
             return _FakeDistribution()
         raise importlib.metadata.PackageNotFoundError
 
@@ -29,8 +29,8 @@ def test_engine_info_reports_mflux_version(monkeypatch):
 
     engines = admin_routes._get_engine_info()
 
-    assert engines["mflux"] == {
-        "name": "mflux",
+    assert engines["mlx-vlm"] == {
+        "name": "mlx-vlm",
         "version": "9.9.9",
         "commit": None,
         "url": None,
