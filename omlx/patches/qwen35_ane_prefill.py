@@ -1989,6 +1989,64 @@ def _enable_dual_procedure_banks(
                 time.perf_counter() - warm_start,
             )
 
+        # When CPU sharing is on, the first dispatch additionally pays BNNS
+        # setup and the first touch of the eagerly dequantized FP16 CPU rows,
+        # which measured as a collapsed first request (prefill and decode).
+        # One dummy chunk per shared module moves that cost to load time; the
+        # merged output is discarded. Same soft-failure contract as above.
+        cpu_mlps = [
+            module
+            for module, state, _, _ in prepared_mlps
+            if getattr(state, "cpu_outputs", 0)
+            or getattr(state, "down_cpu", None) is not None
+        ]
+        cpu_gdns = [
+            module
+            for module, state, _, _ in prepared_gdns
+            if getattr(state, "cpu_outputs", 0)
+        ]
+        if cpu_mlps or cpu_gdns:
+            warm_start = time.perf_counter()
+            warmed = 0
+            inputs: dict[int, mx.array] = {}
+
+            def _warm_input(linear: Any) -> mx.array:
+                dim = int(linear.weight.shape[1]) * 32 // int(linear.bits)
+                x = inputs.get(dim)
+                if x is None:
+                    x = mx.zeros(
+                        (1, config.sequence_length, dim), dtype=linear.scales.dtype
+                    )
+                    mx.eval(x)
+                    inputs[dim] = x
+                return x
+
+            try:
+                for module in cpu_mlps:
+                    out = _backend(module, _warm_input(module.gate_proj))
+                    if out is not None:
+                        mx.eval(out)
+                        warmed += 1
+                for module in cpu_gdns:
+                    out = _gdn_backend(module, _warm_input(module.in_proj_qkv))
+                    if out is not None:
+                        mx.eval(*out)
+                        warmed += 1
+            except Exception:
+                logger.warning(
+                    "CPU sharing warmup failed after %d modules; continuing, "
+                    "the runtime failure latch handles broken modules at "
+                    "first use",
+                    warmed,
+                    exc_info=True,
+                )
+            if warmed:
+                logger.info(
+                    "Warmed the CPU sharing path on %d modules in %.1fs at load",
+                    warmed,
+                    time.perf_counter() - warm_start,
+                )
+
     return (
         len(prepared_mlps),
         len(prepared_mlps),
@@ -2264,6 +2322,32 @@ def enable_qwen35_ane_prefill(
             "the whole model runs prefill on GPU"
         )
     return count
+
+
+def ane_prefill_transient_bytes(model: Any) -> int:
+    """Bytes of fp16 ANE I/O surfaces held by ``model``'s compiled slices.
+
+    Every compiled procedure owns a fixed-shape input and output IOSurface of
+    ``dim * sequence_length * 2`` bytes, allocated at compile time and dirtied
+    at first use, which is exactly the first-request spike of issue #2841.
+    Reads the dims off the live native models, so packing, dual splits, and
+    partial banks are all accounted exactly. 0 when no ANE slice is attached.
+    """
+    total = 0
+    for module in model.modules() if hasattr(model, "modules") else ():
+        for state_attr in ("_omlx_ane_prefill_state", "_omlx_ane_gdn_state"):
+            state = getattr(module, state_attr, None)
+            if state is None:
+                continue
+            for ane_model in (state.model, getattr(state, "model1", None)):
+                input_dim = getattr(ane_model, "input_dim", 0)
+                output_dim = getattr(ane_model, "output_dim", 0)
+                seq = getattr(ane_model, "sequence_length", 0)
+                try:
+                    total += (int(input_dim) + int(output_dim)) * int(seq) * 2
+                except (TypeError, ValueError):
+                    continue
+    return total
 
 
 def qwen35_ane_prefill_status(model: Any) -> dict:

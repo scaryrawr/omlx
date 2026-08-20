@@ -2243,3 +2243,86 @@ def test_prepare_cpu_linear_needs_the_native_symbol(monkeypatch):
         fast, "has_symbol", lambda name: name == "qwen35_cpu_fp16_affine_qmm_t"
     )
     assert ane_patch._prepare_cpu_linear(linear, 0.25) is not None
+
+
+def test_enable_warms_the_cpu_sharing_path(monkeypatch):
+    """CPU-shared modules get one dummy dispatch at load, not at first use."""
+    monkeypatch.setattr(fast, "qwen35_ane_available", lambda: True)
+    monkeypatch.setattr(fast, "has_symbol", lambda name: True)
+    monkeypatch.setattr(ane_patch, "_install_dispatch", lambda: True)
+    monkeypatch.setattr(ane_patch, "_eligible_pair", lambda mlp: True)
+    monkeypatch.setattr(
+        fast,
+        "qwen35_ane_compile_linear_bank",
+        lambda weights, sequence_length, ane_instance: [object() for _ in weights],
+    )
+    warmed = []
+    monkeypatch.setattr(
+        ane_patch, "_backend", lambda module, x: warmed.append(module) or mx.zeros(1)
+    )
+
+    model = _Model(2)
+    for layer in model.layers:
+        for linear in (layer.gate_proj, layer.up_proj, layer.down_proj):
+            linear.scales = linear.scales.astype(mx.float16)
+            linear.biases = linear.biases.astype(mx.float16)
+
+    count = ane_patch.enable_qwen35_ane_prefill(
+        model,
+        sequence_length=2048,
+        fraction=0.5,
+        max_layers=2,
+        dual_ane=True,
+        cpu_fraction=0.25,
+    )
+
+    assert count == 2
+    assert {id(m) for m in warmed} == {id(layer) for layer in model.layers}
+
+    # Without a CPU share the dummy dispatch must not run.
+    warmed.clear()
+    plain = _Model(2)
+    count = ane_patch.enable_qwen35_ane_prefill(
+        plain,
+        sequence_length=2048,
+        fraction=0.5,
+        max_layers=2,
+        dual_ane=True,
+    )
+    assert count == 2
+    assert warmed == []
+
+
+# --- ANE prefill transient memory estimate (issue #2841) ---
+
+
+def test_ane_prefill_transient_bytes_reads_live_model_dims():
+    """The estimate sums (input + output) * seq * 2 over the compiled models."""
+    seq = 2048
+
+    def _ane_model(input_dim, output_dim):
+        return SimpleNamespace(
+            input_dim=input_dim, output_dim=output_dim, sequence_length=seq
+        )
+
+    mlp = SimpleNamespace(
+        _omlx_ane_prefill_state=SimpleNamespace(
+            model=_ane_model(5120, 4608), model1=_ane_model(5120, 4608)
+        )
+    )
+    gdn = SimpleNamespace(
+        _omlx_ane_gdn_state=SimpleNamespace(
+            model=_ane_model(5120, 768), model1=None
+        )
+    )
+    model = SimpleNamespace(modules=lambda: [mlp, gdn, SimpleNamespace()])
+
+    expected = 2 * (5120 + 4608) * seq * 2 + (5120 + 768) * seq * 2
+    assert ane_patch.ane_prefill_transient_bytes(model) == expected
+
+
+def test_ane_prefill_transient_bytes_zero_without_ane():
+    """A model with no compiled ANE slice reserves nothing."""
+    assert ane_patch.ane_prefill_transient_bytes(SimpleNamespace()) == 0
+    plain = SimpleNamespace(modules=lambda: [SimpleNamespace()])
+    assert ane_patch.ane_prefill_transient_bytes(plain) == 0
