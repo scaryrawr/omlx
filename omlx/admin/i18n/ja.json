@@ -620,6 +620,7 @@
   "modal.model_settings.qwen_ane": "Qwen ANE プロンプト処理",
   "modal.model_settings.qwen_ane_hint": "対応する Qwen 3.5/3.6/3.8 のプロンプト処理を 2 基の ANE と GPU に分散します。Apple の非公開インターフェースを使用し、モデルの再読み込み後に適用されます。",
   "modal.model_settings.qwen_ane_prompt_block": "プロンプトブロック",
+  "modal.model_settings.qwen_ane_tail_padding": "末尾をパディングする開始位置",
   "modal.model_settings.qwen_ane_mlp_fraction": "ANE 上の MLP",
   "modal.model_settings.qwen_ane_mlp_layers": "MLP レイヤー上限",
   "modal.model_settings.qwen_ane_dual": "両方の ANE を使用",

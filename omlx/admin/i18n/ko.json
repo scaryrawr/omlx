@@ -620,6 +620,7 @@
   "modal.model_settings.qwen_ane": "Qwen ANE 프롬프트 처리",
   "modal.model_settings.qwen_ane_hint": "지원되는 Qwen 3.5/3.6/3.8 프롬프트 처리를 두 ANE와 GPU에 분산합니다. Apple 비공개 인터페이스를 사용하며 모델을 다시 로드한 후 적용됩니다.",
   "modal.model_settings.qwen_ane_prompt_block": "프롬프트 블록",
+  "modal.model_settings.qwen_ane_tail_padding": "꼬리 패딩 시작",
   "modal.model_settings.qwen_ane_mlp_fraction": "ANE의 MLP",
   "modal.model_settings.qwen_ane_mlp_layers": "MLP 레이어 제한",
   "modal.model_settings.qwen_ane_dual": "두 ANE 모두 사용",

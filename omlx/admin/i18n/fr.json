@@ -620,6 +620,7 @@
   "modal.model_settings.qwen_ane": "Traitement des prompts Qwen sur ANE",
   "modal.model_settings.qwen_ane_hint": "Répartit le traitement compatible des prompts Qwen 3.5/3.6/3.8 entre les deux ANE et le GPU. Utilise des interfaces Apple privées et s'applique après le rechargement du modèle.",
   "modal.model_settings.qwen_ane_prompt_block": "Bloc de prompt",
+  "modal.model_settings.qwen_ane_tail_padding": "Remplir les fins à partir de",
   "modal.model_settings.qwen_ane_mlp_fraction": "MLP sur ANE",
   "modal.model_settings.qwen_ane_mlp_layers": "Limite de couches MLP",
   "modal.model_settings.qwen_ane_dual": "Utiliser les deux ANE",

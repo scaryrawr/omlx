@@ -6095,10 +6095,18 @@ async def create_response(
 
         resolved_model = _serving_model_id(lease, request.model)
 
+        # Images in function_call_output lists survive only for engines that
+        # can extract them; text engines get a placeholder instead so base64
+        # payloads never reach the prompt (#2989).
+        preserve_tool_images = isinstance(engine, VLMBatchedEngine) or getattr(
+            engine, "supports_multimodal_fallback", False
+        )
+
         current_input_messages = normalize_chat_messages_for_response_store(
             convert_responses_input_to_messages(
                 request.input,
                 consolidate_system_messages=False,
+                preserve_images=preserve_tool_images,
             )
         )
 
@@ -6115,6 +6123,7 @@ async def create_response(
             request.instructions,
             previous_messages,
             consolidate_system_messages=False,
+            preserve_images=preserve_tool_images,
         )
         messages = await _preprocess_response_files_for_llm(messages)
 

@@ -81,12 +81,14 @@ def priming_enabled() -> bool:
 
 
 def prime_window() -> int:
-    """Max prompt length (tokens) to prime; 0 = unlimited.
+    """Max tokens to fold into one prime context; 0 = unlimited.
 
-    Escape hatch for the head-cache memory cost on very long prompts (one
-    full-attention layer of KV over the prompt). Prompts longer than the
-    window run unprimed — a coarse cap, not a suffix window, because the
-    prompt length is unknown while chunks stream through the model.
+    Escape hatch for the head-cache memory cost of priming (one
+    full-attention layer of KV over the folded span). The cap is measured
+    against the span actually folded this request — with a warm prefix cache
+    that is only the boundary remainder, not the full prompt — so a
+    long-context request with a small remainder still primes. A remainder
+    larger than the window runs unprimed.
     """
     try:
         return max(0, int(os.environ.get("OMLX_MTP_PRIME_WINDOW", "0")))
@@ -123,6 +125,9 @@ class _PrimeCtx:
     # capture requires offset_now - S == expected_offset (contiguity).
     expected_offset: int = 0
     valid: bool = True
+    # The current contiguous timeline exceeded OMLX_MTP_PRIME_WINDOW. Keep a
+    # lightweight marker so later small chunks cannot restart priming.
+    window_exceeded: bool = False
 
 
 def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
@@ -322,11 +327,29 @@ def maybe_capture(
         # Rewind / trim / unknown path on this cache: never guess.
         drop_ctx(host, cache)
         ctx = None
-    window = prime_window()
-    if window and offset_after > window:
-        if ctx is not None:
-            drop_ctx(host, cache)
+    if ctx is not None and ctx.window_exceeded:
+        ctx.expected_offset = offset_after
         return
+    window = prime_window()
+    if window:
+        # Cap by the primed span (the head-KV the window exists to bound),
+        # not the absolute prompt offset: on a warm prefix cache only the
+        # boundary remainder is ever folded, so a long-context request with a
+        # small remainder is exactly the cheap case priming is for (#2909).
+        folded = ctx.folded if ctx is not None else 0
+        if folded + seq_len > window:
+            contexts = getattr(host, _CTX_ATTR, None)
+            if not isinstance(contexts, dict):
+                contexts = {}
+                setattr(host, _CTX_ATTR, contexts)
+            elif len(contexts) >= _MAX_CONTEXTS and id(cache) not in contexts:
+                contexts.pop(next(iter(contexts)))
+            contexts[id(cache)] = _PrimeCtx(
+                cache_id=id(cache),
+                expected_offset=offset_after,
+                window_exceeded=True,
+            )
+            return
     if ctx is None:
         if seq_len <= 1:
             # A lone decode step cannot start a prompt timeline.
@@ -440,7 +463,7 @@ def prime_ctx_stats(
 ) -> Optional[int]:
     """Folded pair count of a live context (introspection / tests)."""
     ctx = _find_ctx(model, cache)
-    return ctx.folded if ctx is not None else None
+    return ctx.folded if ctx is not None and not ctx.window_exceeded else None
 
 
 __all__ = [

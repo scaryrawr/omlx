@@ -620,6 +620,7 @@
   "modal.model_settings.qwen_ane": "Qwen ANE 提示詞處理",
   "modal.model_settings.qwen_ane_hint": "將支援的 Qwen 3.5/3.6/3.8 提示詞處理分配到兩個 ANE 與 GPU。此功能使用 Apple 私有執行階段介面，並在重新載入模型後生效。",
   "modal.model_settings.qwen_ane_prompt_block": "提示詞區塊",
+  "modal.model_settings.qwen_ane_tail_padding": "尾端填充起點",
   "modal.model_settings.qwen_ane_mlp_fraction": "ANE 上的 MLP",
   "modal.model_settings.qwen_ane_mlp_layers": "MLP 層數上限",
   "modal.model_settings.qwen_ane_dual": "使用兩個 ANE",
