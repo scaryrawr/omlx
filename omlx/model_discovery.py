@@ -511,11 +511,27 @@ def _validate_positive_int(value: object, field_name: str) -> int | None:
 
 
 def _has_local_image_layout(model_path: Path) -> bool:
-    """Detect known local mlx-vlm image layouts without assuming component names."""
-    if not (model_path / "tokenizer").is_dir() and not any(
-        (model_path / name).exists()
-        for name in ("tokenizer.json", "tokenizer_config.json")
-    ):
+    """Detect known local mlx-vlm image layouts without assuming component names.
+
+    Tokenizer artifacts may live at the model root, in a ``tokenizer/``
+    subdirectory, or nested in a component directory such as ``text_encoder/``
+    (used by Mage-Flow community checkpoints).
+    """
+    tokenizer_markers = ("tokenizer.json", "tokenizer_config.json")
+    has_tokenizer = (model_path / "tokenizer").is_dir() or any(
+        (model_path / marker).exists() for marker in tokenizer_markers
+    )
+    if not has_tokenizer:
+        try:
+            for child in model_path.iterdir():
+                if child.is_dir() and any(
+                    (child / marker).is_file() for marker in tokenizer_markers
+                ):
+                    has_tokenizer = True
+                    break
+        except OSError:
+            pass
+    if not has_tokenizer:
         return False
 
     weight_parents = {

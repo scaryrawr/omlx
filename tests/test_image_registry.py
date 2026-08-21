@@ -116,6 +116,37 @@ def test_local_mage_edit_layout_is_discovered_as_mlx_vlm_image(tmp_path):
     assert detect_model_type(model_dir) == "image"
 
 
+@pytest.mark.parametrize(
+    ("name", "tasks"),
+    [
+        ("Mage-Flow", ["generation"]),
+        ("Mage-Flow-Turbo", ["generation"]),
+        ("Mage-Flow-Edit", ["edit"]),
+        ("Mage-Flow-Edit-Turbo", ["edit"]),
+    ],
+)
+def test_mage_flow_text_encoder_tokenizer_layout_is_discovered(tmp_path, name, tasks):
+    """Mage-Flow community checkpoints keep tokenizer files in ``text_encoder/``."""
+    model_dir = tmp_path / name
+    text_encoder = model_dir / "text_encoder"
+    text_encoder.mkdir(parents=True)
+    (text_encoder / "tokenizer.json").write_text("{}")
+    (text_encoder / "tokenizer_config.json").write_text("{}")
+    for component in ("transformer", "vae"):
+        component_dir = model_dir / component
+        component_dir.mkdir()
+        (component_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+    (model_dir / "model_index.json").write_text("{}")
+
+    manifest = _load_image_manifest(model_dir)
+
+    assert manifest is not None
+    assert manifest.backend == "mlx-vlm"
+    assert manifest.tasks == tasks
+    assert manifest.metadata["model_path"] == "."
+    assert detect_model_type(model_dir) == "image"
+
+
 def test_manifest_keeps_quantize_for_clear_engine_validation(tmp_path):
     model_dir = tmp_path / "flux"
     model_dir.mkdir()
