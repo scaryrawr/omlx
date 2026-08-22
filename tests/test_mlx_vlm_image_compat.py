@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the vendored mlx-vlm Z-Image and ERNIE-Image registration."""
+"""Tests for native Z-Image and vendored ERNIE-Image compatibility."""
 
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -16,7 +17,8 @@ from omlx.patches.mlx_vlm_image_compat import apply_mlx_vlm_image_compat_patch
 def image_apis():
     pytest.importorskip("mlx_vlm")
     apply_mlx_vlm_image_compat_patch()
-    from mlx_vlm.generate import edit_image, image
+    image = importlib.import_module("mlx_vlm.generate.image")
+    edit_image = importlib.import_module("mlx_vlm.generate.edit_image")
 
     return image, edit_image
 
@@ -28,7 +30,7 @@ def image_apis():
         ("ernie-image-turbo", "ErnieImageGenerationModel", "ErnieImageEditModel"),
     ],
 )
-def test_vendored_image_families_register_with_generic_dispatch(
+def test_image_families_register_with_generic_dispatch(
     image_apis, alias, generation_name, edit_name
 ):
     image, edit_image = image_apis
@@ -40,6 +42,36 @@ def test_vendored_image_families_register_with_generic_dispatch(
     assert edit is not None
     assert generation.__name__ == generation_name
     assert edit.__name__ == edit_name
+
+
+def test_z_image_uses_native_mlx_vlm_package(image_apis):
+    import mlx_vlm.models.z_image as z_image
+
+    assert "omlx/patches" not in str(z_image.__file__)
+
+
+def test_z_image_tokenizer_disables_remote_code(image_apis, monkeypatch):
+    import transformers
+    from mlx_vlm.models.z_image import pipeline
+
+    received = {}
+
+    def fake_from_pretrained(*args, **kwargs):
+        received.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        transformers.AutoTokenizer, "from_pretrained", fake_from_pretrained
+    )
+
+    pipeline.AutoTokenizer.from_pretrained(
+        "/tmp/tokenizer",
+        local_files_only=False,
+        trust_remote_code=True,
+    )
+
+    assert received["local_files_only"] is True
+    assert received["trust_remote_code"] is False
 
 
 def test_existing_image_families_receive_backported_default_properties(image_apis):
@@ -82,7 +114,7 @@ def test_existing_image_families_receive_backported_default_properties(image_api
 
 
 @pytest.mark.parametrize("alias", ["z-image", "ernie-image-turbo"])
-def test_generic_loader_dispatches_vendored_families_without_weights(
+def test_generic_loader_dispatches_image_families_without_weights(
     image_apis, alias, monkeypatch
 ):
     image, edit_image = image_apis
@@ -105,7 +137,9 @@ def test_generic_loader_dispatches_vendored_families_without_weights(
         classmethod(fake_generation_load),
     )
     monkeypatch.setattr(edit_class, "from_model_id", classmethod(fake_edit_load))
-    monkeypatch.setattr(image, "_resolve_image_model_path", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        image, "_resolve_image_model_path", lambda *args, **kwargs: None
+    )
 
     assert image.load_image_model(alias, task="generate") is generation_sentinel
     assert image.load_image_model(alias, task="edit") is edit_sentinel
@@ -179,7 +213,7 @@ def test_generic_api_resolves_nullable_request_defaults(image_apis):
         ),
     ],
 )
-def test_component_indexes_dispatch_to_vendored_models(
+def test_component_indexes_dispatch_to_image_models(
     image_apis, markers, expected_model_type, tmp_path
 ):
     image, _ = image_apis
@@ -189,7 +223,9 @@ def test_component_indexes_dispatch_to_vendored_models(
         json.dumps({"weight_map": markers})
     )
 
-    assert image._image_model_type_from_component_indexes(tmp_path) == expected_model_type
+    assert (
+        image._image_model_type_from_component_indexes(tmp_path) == expected_model_type
+    )
 
 
 def test_ernie_legacy_mlx_checkpoint_layout_is_preserved(image_apis):

@@ -1,16 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Image-model compatibility layer for the pinned mlx-vlm dependency.
 
-This keeps the runtime portions of mlx-vlm PR #1952 (Z-Image, commit
-4301adf69d523fcf85095c9ac9c1bbdeab6b3754) and PR #1954 (ERNIE-Image,
-commit c50b0b363c3fc65b060ad098d4745e44e5c8cfdc) available while oMLX pins
-mlx-vlm main at 20eec6cb5564c6a196b046d869d2081c29e3ff92.
+Z-Image is native in the pinned mlx-vlm version. This layer retains the
+serving-time portion of unmerged PR #1954 (ERNIE-Image, commit
+c50b0b363c3fc65b060ad098d4745e44e5c8cfdc), plus oMLX's generic nullable
+request defaults and safe Z-Image tokenizer policy.
 
-The vendored model packages are appended to the real ``mlx_vlm.models``
-namespace so upstream packages take precedence once either PR merges. The
-small wrappers below backport only the generic image API behavior those model
-packages need: nullable request defaults, model-family type resolution, and
-resolution of omitted request values from a loaded model.
+The vendored ERNIE-Image package is appended to the real ``mlx_vlm.models``
+namespace so an upstream package takes precedence once the PR merges.
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ _APPLIED = False
 
 
 def apply_mlx_vlm_image_compat_patch() -> bool:
-    """Register vendored Z-Image and ERNIE-Image with mlx-vlm."""
+    """Register vendored ERNIE-Image and oMLX's image API compatibility."""
     global _APPLIED
     if _APPLIED:
         return False
@@ -49,11 +46,12 @@ def apply_mlx_vlm_image_compat_patch() -> bool:
     # generic APIs as upstream image families without loading model weights.
     importlib.import_module("mlx_vlm.models.z_image")
     importlib.import_module("mlx_vlm.models.ernie_image")
+    _patch_z_image_tokenizer_security()
     _patch_upstream_family_defaults()
     _clear_model_class_caches(image, edit_image)
 
     _APPLIED = True
-    logger.info("mlx-vlm Z-Image and ERNIE-Image compatibility patch applied")
+    logger.info("mlx-vlm image compatibility patch applied")
     return True
 
 
@@ -112,7 +110,9 @@ def _patch_request_helpers(image: Any, edit_image: Any) -> None:
         edit_request.resolve_guidance = resolve_guidance
 
 
-def _patch_nullable_request_defaults(request_class: Any, fields: tuple[str, ...]) -> None:
+def _patch_nullable_request_defaults(
+    request_class: Any, fields: tuple[str, ...]
+) -> None:
     """Backport ``None`` defaults without replacing mlx-vlm dataclasses."""
     if getattr(request_class, "_omlx_nullable_image_defaults", False):
         return
@@ -197,9 +197,7 @@ def _patch_default_resolution(image: Any, edit_image: Any) -> None:
             output_path: Any = None,
             **kwargs: Any,
         ) -> Any:
-            if task == "generate" and isinstance(
-                request, image.ImageGenerationRequest
-            ):
+            if task == "generate" and isinstance(request, image.ImageGenerationRequest):
                 request = _resolve_generation_request(image, model, request)
             return original_generate_image(
                 model,
@@ -241,8 +239,27 @@ def _patch_default_resolution(image: Any, edit_image: Any) -> None:
     edit_image.edit_image = edit_image_with_defaults
 
 
+def _patch_z_image_tokenizer_security() -> None:
+    """Keep native Z-Image tokenizer loading local and remote-code-free."""
+    pipeline = importlib.import_module("mlx_vlm.models.z_image.pipeline")
+    tokenizer = pipeline.AutoTokenizer
+    if getattr(tokenizer, "_omlx_safe_z_image_tokenizer", False):
+        return
+
+    class SafeAutoTokenizer:
+        _omlx_safe_z_image_tokenizer = True
+
+        @staticmethod
+        def from_pretrained(*args: Any, **kwargs: Any) -> Any:
+            kwargs["local_files_only"] = True
+            kwargs["trust_remote_code"] = False
+            return tokenizer.from_pretrained(*args, **kwargs)
+
+    pipeline.AutoTokenizer = SafeAutoTokenizer
+
+
 def _patch_upstream_family_defaults() -> None:
-    """Backport model defaults added alongside the two upstream image PRs."""
+    """Install model defaults used by oMLX's nullable request handling."""
     flux2 = importlib.import_module("mlx_vlm.models.flux2.model")
     mage_flow = importlib.import_module("mlx_vlm.models.mage_flow.model")
     for class_name in ("Flux2ImageGenerationModel", "Flux2ImageEditModel"):
