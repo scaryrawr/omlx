@@ -320,6 +320,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = None
     top_k: int | None = None
     repetition_penalty: float | None = None
+    repetition_context_size: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(
         default=None,
         validation_alias=AliasChoices("max_tokens", "max_completion_tokens"),
@@ -435,6 +436,7 @@ class CompletionRequest(BaseModel):
     top_p: float | None = None
     top_k: int | None = None
     repetition_penalty: float | None = None
+    repetition_context_size: int | None = Field(default=None, gt=0)
     max_tokens: int | None = None
     stream: bool = False
     stream_options: StreamOptions | None = None
