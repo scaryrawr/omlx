@@ -52,28 +52,18 @@ class ErnieImageGenerationModel(ImageGenerationModel):
     def default_guidance(self) -> float:
         return self.pipeline.variant.default_guidance
 
-    @property
-    def default_width(self) -> int:
-        return 1024
-
-    @property
-    def default_height(self) -> int:
-        return 1024
-
     def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         seed = 0 if request.seed is None else request.seed
         steps = self.default_steps if request.steps is None else request.steps
         guidance = (
             self.default_guidance if request.guidance is None else request.guidance
         )
-        width = self.default_width if request.width is None else request.width
-        height = self.default_height if request.height is None else request.height
         array = self.pipeline.generate_array(
             request.prompt,
             seed=seed,
             steps=steps,
-            width=width,
-            height=height,
+            width=request.width,
+            height=request.height,
             guidance=guidance,
             negative_prompt=str(request.extra.get("negative_prompt", "")),
         )
@@ -92,8 +82,8 @@ class ErnieImageGenerationModel(ImageGenerationModel):
         return ImageGenerationResult(
             array=array,
             seed=seed,
-            width=width,
-            height=height,
+            width=request.width,
+            height=request.height,
             steps=steps,
             model=self.model_id,
             family=self.family,
@@ -142,10 +132,9 @@ class ErnieImageGenerationModel(ImageGenerationModel):
             evict_text_encoder=kwargs.pop("evict_text_encoder", True),
             evict_transformer=kwargs.pop("evict_transformer", False),
             max_sequence_length=kwargs.pop("max_sequence_length", 2048),
+            prompt_cache_size=kwargs.pop("prompt_cache_size", 2),
             use_prompt_enhancer=kwargs.pop("use_prompt_enhancer", None),
-            prompt_enhancer_max_tokens=kwargs.pop(
-                "prompt_enhancer_max_tokens", None
-            ),
+            prompt_enhancer_max_tokens=kwargs.pop("prompt_enhancer_max_tokens", None),
         )
         return cls(pipeline=pipeline, model_id=str(model))
 
@@ -168,7 +157,12 @@ class ErnieImageEditModel(ImageEditModel):
 
     @property
     def default_guidance(self) -> float:
-        return self.pipeline.variant.default_guidance
+        # Editing is generic SDEdit rather than native instruction conditioning,
+        # so it needs classifier-free guidance to actually apply the requested
+        # change. Turbo ships at guidance 1.0 for generation (no CFG), which
+        # barely edits; the generation recommendation is left untouched and only
+        # this edit default is raised.
+        return self.pipeline.variant.edit_default_guidance
 
     def edit(self, request: ImageEditRequest) -> ImageGenerationResult:
         if len(request.image_paths) != 1:
@@ -176,11 +170,15 @@ class ErnieImageEditModel(ImageEditModel):
         seed = 0 if request.seed is None else request.seed
         steps = request.steps or self.default_steps
         guidance = (
-            self.default_guidance
-            if request.guidance is None
-            else request.guidance
+            self.default_guidance if request.guidance is None else request.guidance
         )
-        image_strength = float(request.extra.get("image_strength", 0.6))
+        # ``image_strength`` is the canonical key; ``strength`` is accepted as
+        # an alias so the edit command lines up with the z_image model and
+        # matches the naming used in the documentation.
+        raw_strength = request.extra.get(
+            "image_strength", request.extra.get("strength", 0.6)
+        )
+        image_strength = float(raw_strength)
         array = self.pipeline.edit_array(
             request.prompt,
             request.image_paths[0],
@@ -197,6 +195,7 @@ class ErnieImageEditModel(ImageEditModel):
             "architecture": "single-stream-dit-img2img",
             "classifier_free_guidance": guidance > 1.0,
             "image_strength": image_strength,
+            "prompt_enhancement": self.pipeline._should_enhance_prompt(for_edit=True),
             "native_instruction_edit": False,
             "reference_count": 1,
         }
@@ -231,19 +230,20 @@ class ErnieImageEditModel(ImageEditModel):
         model: str = "ernie-image-turbo",
         **kwargs: Any,
     ) -> "ErnieImageEditModel":
+        # The prompt enhancer is a text-to-image feature: it rewrites a short
+        # prompt into a standalone scene caption and never sees the source
+        # image, so it dilutes edit intent. Default it off for the edit task;
+        # callers can still opt back in with ``use_prompt_enhancer=True``.
+        kwargs.setdefault("use_prompt_enhancer", False)
         generation = ErnieImageGenerationModel.from_model_id(model, **kwargs)
         return cls(pipeline=generation.pipeline, model_id=generation.model_id)
 
 
-def load(
-    model: str = "ernie-image-turbo", **kwargs: Any
-) -> ErnieImageGenerationModel:
+def load(model: str = "ernie-image-turbo", **kwargs: Any) -> ErnieImageGenerationModel:
     return ErnieImageGenerationModel.from_model_id(model, **kwargs)
 
 
-def load_edit(
-    model: str = "ernie-image-turbo", **kwargs: Any
-) -> ErnieImageEditModel:
+def load_edit(model: str = "ernie-image-turbo", **kwargs: Any) -> ErnieImageEditModel:
     return ErnieImageEditModel.from_model_id(model, **kwargs)
 
 

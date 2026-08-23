@@ -232,3 +232,20 @@ def test_ernie_legacy_mlx_checkpoint_layout_is_preserved(image_apis):
     from mlx_vlm.models.ernie_image.weights import _tensor_layout
 
     assert _tensor_layout({"mflux_version": "0.1"}) == "mlx_nhwc"
+
+
+def test_ernie_edit_defaults_and_converted_source_metadata(image_apis, tmp_path):
+    from mlx_vlm.models.ernie_image.config import get_variant, variant_from_local_path
+    from mlx_vlm.models.ernie_image.model import ErnieImageEditModel
+
+    turbo = get_variant("ernie-image-turbo")
+    assert turbo.edit_default_guidance == 3.0
+
+    edit = object.__new__(ErnieImageEditModel)
+    edit.pipeline = SimpleNamespace(variant=turbo)
+    assert edit.default_guidance == 3.0
+
+    (tmp_path / "mlx_ernie_image.json").write_text(
+        json.dumps({"source": "baidu/ERNIE-Image-Turbo", "variant": "ernie-image"})
+    )
+    assert variant_from_local_path(tmp_path) is turbo

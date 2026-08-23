@@ -2,8 +2,9 @@
 """Image-model compatibility layer for the pinned mlx-vlm dependency.
 
 Z-Image is native in the pinned mlx-vlm version. This layer retains the
-serving-time portion of unmerged PR #1954 (ERNIE-Image, commit
-c50b0b363c3fc65b060ad098d4745e44e5c8cfdc), plus oMLX's generic nullable
+serving-time portion of unmerged PR #1954 (ERNIE-Image, synchronized with
+the scaryrawr-expert-carnival fork at
+f991a54bdaf720d3c8e822f3f3893410ff301f6b), plus oMLX's generic nullable
 request defaults and safe Z-Image tokenizer policy.
 
 The vendored ERNIE-Image package is appended to the real ``mlx_vlm.models``

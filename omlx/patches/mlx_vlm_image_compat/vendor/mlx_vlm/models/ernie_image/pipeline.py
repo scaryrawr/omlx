@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,12 +17,7 @@ from .config import ErnieImageVariant, get_variant, validate_dimensions
 from .download import download_model, validate_model_layout
 from .scheduler import ErnieImageFlowMatchScheduler
 from .text_encoder import ErnieImageTokenizer
-from .weights import (
-    load_prompt_enhancer,
-    load_text_encoder,
-    load_transformer,
-    load_vae,
-)
+from .weights import load_prompt_enhancer, load_text_encoder, load_transformer, load_vae
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +25,7 @@ class ErnieImageRuntimeConfig:
     evict_text_encoder: bool = True
     evict_transformer: bool = False
     max_sequence_length: int = 2048
+    prompt_cache_size: int = 2
     use_prompt_enhancer: bool | None = None
     prompt_enhancer_max_tokens: int | None = None
 
@@ -113,7 +110,7 @@ class ErnieImagePipeline:
         self.prompt_enhancer = None
         self.transformer = None
         self.vae = None
-        self.prompt_cache: dict[str, mx.array] = {}
+        self.prompt_cache: OrderedDict[str, mx.array] = OrderedDict()
         self.last_revised_prompt: str | None = None
 
     @classmethod
@@ -129,6 +126,7 @@ class ErnieImagePipeline:
         evict_text_encoder: bool = True,
         evict_transformer: bool = False,
         max_sequence_length: int = 2048,
+        prompt_cache_size: int = 2,
         use_prompt_enhancer: bool | None = None,
         prompt_enhancer_max_tokens: int | None = None,
     ) -> "ErnieImagePipeline":
@@ -151,6 +149,7 @@ class ErnieImagePipeline:
                 evict_text_encoder=evict_text_encoder,
                 evict_transformer=evict_transformer,
                 max_sequence_length=max_sequence_length,
+                prompt_cache_size=prompt_cache_size,
                 use_prompt_enhancer=use_prompt_enhancer,
                 prompt_enhancer_max_tokens=prompt_enhancer_max_tokens,
             ),
@@ -177,11 +176,15 @@ class ErnieImagePipeline:
     def _encode_prompt(self, prompt: str) -> mx.array:
         cached = self.prompt_cache.get(prompt)
         if cached is not None:
+            self.prompt_cache.move_to_end(prompt)
             return cached
         input_ids = self.tokenizer.encode(prompt)
         hidden_states = self._ensure_text_encoder()(input_ids)
         mx.eval(hidden_states)
-        self.prompt_cache[prompt] = hidden_states
+        if self.runtime_config.prompt_cache_size > 0:
+            self.prompt_cache[prompt] = hidden_states
+            while len(self.prompt_cache) > self.runtime_config.prompt_cache_size:
+                self.prompt_cache.popitem(last=False)
         return hidden_states
 
     def _encode_prompts(self, prompts: list[str]) -> tuple[mx.array, mx.array]:
@@ -202,13 +205,17 @@ class ErnieImagePipeline:
         if self.vae is None or (
             require_encoder and getattr(self.vae, "encoder", None) is None
         ):
-            self.vae = load_vae(
-                self.model_path, include_encoder=require_encoder
-            )
+            self.vae = load_vae(self.model_path, include_encoder=require_encoder)
             if config := getattr(self.vae, "quantization_config", None):
                 self.component_quantization["vae"] = dict(config)
 
-    def _should_enhance_prompt(self) -> bool:
+    def _should_enhance_prompt(self, *, for_edit: bool = False) -> bool:
+        """Return whether prompt enhancement is active for generation or editing.
+
+        Auto-detection is intentionally limited to text-to-image generation.
+        Img2img prompts depend on the source image, which the enhancer cannot
+        observe, so editing requires an explicit opt-in.
+        """
         available = (
             bool(list((self.model_path / "pe").glob("*.safetensors")))
             and (self.model_path / "pe_tokenizer" / "tokenizer.json").exists()
@@ -219,6 +226,8 @@ class ErnieImagePipeline:
                 "Prompt enhancement was requested but pe/ and pe_tokenizer/ "
                 "are not present in the model snapshot"
             )
+        if for_edit and requested is None:
+            return False
         return available if requested is None else requested
 
     def _enhance_prompt(
@@ -244,8 +253,8 @@ class ErnieImagePipeline:
         *,
         seed: int = 42,
         steps: int | None = None,
-        width: int = 1024,
-        height: int = 1024,
+        width: int = 512,
+        height: int = 512,
         guidance: float | None = None,
         negative_prompt: str = "",
     ) -> Image.Image:
@@ -269,8 +278,8 @@ class ErnieImagePipeline:
         *,
         seed: int = 42,
         steps: int | None = None,
-        width: int = 1024,
-        height: int = 1024,
+        width: int = 512,
+        height: int = 512,
         guidance: float | None = None,
         negative_prompt: str = "",
     ) -> mx.array:
@@ -284,9 +293,7 @@ class ErnieImagePipeline:
         if guidance < 0:
             raise ValueError(f"guidance must be >= 0, got {guidance}")
         if self._should_enhance_prompt():
-            prompt = self._enhance_prompt(
-                prompt, width=width, height=height, seed=seed
-            )
+            prompt = self._enhance_prompt(prompt, width=width, height=height, seed=seed)
             self.last_revised_prompt = prompt
         else:
             self.last_revised_prompt = None
@@ -329,22 +336,16 @@ class ErnieImagePipeline:
         if not prompt:
             raise ValueError("prompt must not be empty")
         if not 0.0 < image_strength <= 1.0:
-            raise ValueError(
-                f"image_strength must be in (0, 1], got {image_strength}"
-            )
-        pixels, width, height = _load_edit_image(
-            image, width=width, height=height
-        )
+            raise ValueError(f"image_strength must be in (0, 1], got {image_strength}")
+        pixels, width, height = _load_edit_image(image, width=width, height=height)
         steps = self.variant.default_steps if steps is None else steps
-        guidance = self.variant.default_guidance if guidance is None else guidance
+        guidance = self.variant.edit_default_guidance if guidance is None else guidance
         if steps < 1:
             raise ValueError(f"steps must be >= 1, got {steps}")
         if guidance < 0:
             raise ValueError(f"guidance must be >= 0, got {guidance}")
-        if self._should_enhance_prompt():
-            prompt = self._enhance_prompt(
-                prompt, width=width, height=height, seed=seed
-            )
+        if self._should_enhance_prompt(for_edit=True):
+            prompt = self._enhance_prompt(prompt, width=width, height=height, seed=seed)
             self.last_revised_prompt = prompt
         else:
             self.last_revised_prompt = None
@@ -359,9 +360,9 @@ class ErnieImagePipeline:
         mean = self.vae.bn.running_mean.reshape(1, -1, 1, 1).astype(
             source_latents.dtype
         )
-        std = mx.sqrt(
-            self.vae.bn.running_var.reshape(1, -1, 1, 1) + 1e-5
-        ).astype(source_latents.dtype)
+        std = mx.sqrt(self.vae.bn.running_var.reshape(1, -1, 1, 1) + 1e-5).astype(
+            source_latents.dtype
+        )
         source_latents = (source_latents - mean) / std
         noise = mx.random.normal(
             source_latents.shape,
@@ -411,9 +412,7 @@ class ErnieImagePipeline:
             )
             if do_cfg:
                 unconditional, conditional = mx.split(prediction, 2, axis=0)
-                prediction = unconditional + guidance * (
-                    conditional - unconditional
-                )
+                prediction = unconditional + guidance * (conditional - unconditional)
             latents = scheduler.step(
                 model_output=prediction, step_index=index, sample=latents
             )

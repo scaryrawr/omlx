@@ -14,6 +14,7 @@ class ErnieImageVariant:
     repo_id: str
     default_steps: int
     default_guidance: float
+    edit_default_guidance: float
     is_turbo: bool
 
 
@@ -60,6 +61,7 @@ def _variant(
     steps: int,
     guidance: float,
     turbo: bool,
+    edit_guidance: float | None = None,
     aliases: tuple[str, ...] = (),
 ) -> ErnieImageVariant:
     return ErnieImageVariant(
@@ -68,6 +70,11 @@ def _variant(
         repo_id=repo_id,
         default_steps=steps,
         default_guidance=guidance,
+        # Editing is generic SDEdit rather than native instruction conditioning,
+        # so it benefits from classifier-free guidance. Turbo ships at guidance
+        # 1.0 for generation (no CFG), which barely edits; the generation
+        # recommendation is left untouched and only the edit default is raised.
+        edit_default_guidance=guidance if edit_guidance is None else edit_guidance,
         is_turbo=turbo,
     )
 
@@ -87,6 +94,7 @@ VARIANTS: dict[str, ErnieImageVariant] = {
         steps=8,
         guidance=1.0,
         turbo=True,
+        edit_guidance=3.0,
         aliases=("ernie-turbo",),
     ),
 }
@@ -118,6 +126,11 @@ def variant_from_local_path(model_path: str | Path) -> ErnieImageVariant:
     native_metadata = root / "mlx_ernie_image.json"
     if native_metadata.exists():
         metadata = json.loads(native_metadata.read_text())
+        if source := metadata.get("source"):
+            try:
+                return get_variant(str(source))
+            except ValueError:
+                pass
         if variant := metadata.get("variant"):
             return get_variant(str(variant))
 
