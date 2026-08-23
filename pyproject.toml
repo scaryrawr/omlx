@@ -110,8 +110,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm main, including native Z-Image generation and img2img support.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4301adf69d523fcf85095c9ac9c1bbdeab6b3754",
+    # mlx-vlm main (e66d1ae), including native Z-Image generation and img2img
+    # support plus Mage-Flow quantization.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@e66d1ae2b371603630c565e8c18387729738523b",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.6 (b7f6255) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
