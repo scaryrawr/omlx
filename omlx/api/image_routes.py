@@ -1,15 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
-"""OpenAI-compatible image generation routes for oMLX."""
+"""OpenAI-compatible image generation and edit routes for oMLX."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import binascii
+import http.client
+import ipaddress
+import logging
+import os
+import socket
+import ssl
+import time
+import uuid
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from io import BytesIO
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
+from urllib.parse import ParseResult, unquote_to_bytes, urljoin, urlparse, urlunparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, UploadFile
+from PIL import Image, UnidentifiedImageError
+from pydantic import ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from omlx.exceptions import (
     EnginePoolError,
@@ -24,17 +40,125 @@ from omlx.utils.optional_deps import require_mlx_vlm_available
 
 from .image_models import (
     ImageData,
+    ImageEditRequest,
     ImageGenerationRequest,
+    ImageMultipartEditRequest,
+    ImageReference,
     ImageResponse,
     ImageUsage,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
+MAX_IMAGE_INPUT_BYTES = 25 * 1024 * 1024
+MAX_IMAGE_INPUT_PIXELS = 64 * 1024 * 1024
+MAX_IMAGE_INPUTS = 16
+MAX_IMAGE_DOWNLOAD_BYTES = MAX_IMAGE_INPUT_BYTES
+IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 20.0
+IMAGE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 5.0
+MAX_IMAGE_REDIRECTS = 3
+_IMAGE_TMPDIR_ENV = "OMLX_IMAGE_TMPDIR"
+_DEFAULT_IMAGE_TMPDIR = ".omlx_image_inputs"
+
+_IMAGE_SUFFIX_BY_MIME = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 _SAFE_ENGINE_KWARG_FIELDS = {
     "negative_prompt",
     "scheduler",
+    "image_strength",
 }
+_MULTIPART_FIELD_NAMES = {
+    "prompt",
+    "model",
+    "n",
+    "size",
+    "quality",
+    "output_format",
+    "response_format",
+    "background",
+    "style",
+    "moderation",
+    "user",
+    "stream",
+    "partial_images",
+    "seed",
+    "steps",
+    "guidance",
+    "negative_prompt",
+    "scheduler",
+    "image_strength",
+    "lora_paths",
+    "lora_scales",
+    "input_fidelity",
+}
+_MULTI_VALUE_FIELDS = {"lora_paths", "lora_scales"}
+
+
+@dataclass(frozen=True)
+class _ResolvedHTTPURL:
+    url: str
+    hostname: str
+    port: int
+    resolved_ip: str
+    scheme: str
+    deadline: float | None = None
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        resolved_ip: str,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> None:
+        super().__init__(host=host, port=port, timeout=connect_timeout)
+        self._resolved_ip = resolved_ip
+        self._read_timeout = read_timeout
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._resolved_ip, self.port),
+            self.timeout,
+            None,
+        )
+        self.sock.settimeout(self._read_timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        resolved_ip: str,
+        connect_timeout: float,
+        read_timeout: float,
+    ) -> None:
+        super().__init__(
+            host=host,
+            port=port,
+            timeout=connect_timeout,
+            context=ssl.create_default_context(),
+        )
+        self._resolved_ip = resolved_ip
+        self._read_timeout = read_timeout
+
+    def connect(self) -> None:
+        sock = socket.create_connection(
+            (self._resolved_ip, self.port),
+            self.timeout,
+            None,
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock.settimeout(self._read_timeout)
 
 
 def _get_engine_pool():
@@ -168,6 +292,405 @@ def _map_pool_error(exc: EnginePoolError, model_id: str) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+def _validation_detail(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        dict(error) for error in exc.errors(include_url=False, include_context=False)
+    ]
+
+
+def _image_tmpdir() -> Path:
+    configured = os.environ.get(_IMAGE_TMPDIR_ENV)
+    root = (
+        Path(configured).expanduser()
+        if configured
+        else Path.cwd() / _DEFAULT_IMAGE_TMPDIR
+    )
+    resolved_root = root.resolve()
+    if configured:
+        for forbidden in (Path("/tmp").resolve(), Path("/var/tmp").resolve()):
+            if resolved_root == forbidden or forbidden in resolved_root.parents:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"{_IMAGE_TMPDIR_ENV} must not point inside a system "
+                        "temporary directory"
+                    ),
+                )
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise HTTPException(
+            status_code=500,
+            detail=f"{_IMAGE_TMPDIR_ENV} path is not a directory",
+        )
+    try:
+        os.chmod(root, 0o700)
+        mode = root.stat().st_mode & 0o777
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to secure image temporary directory: {exc}",
+        ) from exc
+    if mode != 0o700:
+        raise HTTPException(
+            status_code=500,
+            detail="Image temporary directory must have mode 0700",
+        )
+    return root
+
+
+def _safe_suffix(filename: str | None = None, content_type: str | None = None) -> str:
+    if content_type:
+        suffix = _IMAGE_SUFFIX_BY_MIME.get(content_type.split(";")[0].strip().lower())
+        if suffix:
+            return suffix
+    if filename:
+        suffix = Path(filename).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            return suffix
+    return ".png"
+
+
+def _validate_image_bytes(data: bytes) -> None:
+    try:
+        with Image.open(BytesIO(data)) as image:
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * height > MAX_IMAGE_INPUT_PIXELS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Image dimensions exceed maximum allowed pixels "
+                        f"({MAX_IMAGE_INPUT_PIXELS})"
+                    ),
+                )
+            image.verify()
+    except Image.DecompressionBombError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Image dimensions exceed maximum allowed pixels "
+                f"({MAX_IMAGE_INPUT_PIXELS})"
+            ),
+        ) from exc
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Input is not a valid image"
+        ) from exc
+
+
+def _write_image_bytes(data: bytes, suffix: str) -> str:
+    if len(data) > MAX_IMAGE_INPUT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image input exceeds maximum allowed size ({MAX_IMAGE_INPUT_BYTES} bytes)",
+        )
+    _validate_image_bytes(data)
+
+    path = _image_tmpdir() / f"{uuid.uuid4().hex}{suffix}"
+    try:
+        with path.open("xb") as handle:
+            os.chmod(path, 0o600)
+            handle.write(data)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return str(path)
+
+
+def _cleanup_paths(paths: Iterable[str | None]) -> None:
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Failed to remove image temp file %s: %s", path, exc)
+
+
+async def _read_upload(file: UploadFile | StarletteUploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_IMAGE_INPUT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Image upload exceeds maximum allowed size "
+                    f"({MAX_IMAGE_INPUT_BYTES} bytes)"
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _decode_data_uri(uri: str) -> tuple[bytes, str]:
+    header, separator, payload = uri.partition(",")
+    if not separator or not header.lower().startswith("data:"):
+        raise HTTPException(status_code=400, detail="Invalid image data URI")
+
+    meta = header[5:]
+    media_type = meta.split(";", 1)[0].lower() if meta else "image/png"
+    if media_type and not media_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Data URI must contain an image")
+
+    try:
+        if ";base64" in meta.lower():
+            if len(payload) > int(MAX_IMAGE_INPUT_BYTES * 1.5):
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Image data URI exceeds maximum allowed size "
+                        f"({MAX_IMAGE_INPUT_BYTES} bytes)"
+                    ),
+                )
+            data = base64.b64decode(payload, validate=True)
+        else:
+            if len(payload) > MAX_IMAGE_INPUT_BYTES * 3:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Image data URI exceeds maximum allowed size "
+                        f"({MAX_IMAGE_INPUT_BYTES} bytes)"
+                    ),
+                )
+            data = unquote_to_bytes(payload)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image data URI") from exc
+
+    return data, _safe_suffix(content_type=media_type)
+
+
+def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped.is_global if mapped is not None else ip.is_global
+
+
+def _validate_public_http_url(url: str) -> _ResolvedHTTPURL:
+    """Resolve a URL once and reject any non-public destination."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid image_url") from exc
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=400,
+            detail="image_url must be a data URI or HTTP/HTTPS URL",
+        )
+    if not hostname:
+        raise HTTPException(status_code=400, detail="image_url host is required")
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to resolve image_url host: {hostname}",
+        ) from exc
+
+    try:
+        resolved_ips = [
+            ipaddress.ip_address(str(sockaddr[0]).split("%", 1)[0])
+            for *_, sockaddr in addr_infos
+        ]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to resolve image_url host: {hostname}",
+        ) from exc
+    if not resolved_ips or any(not _is_public_ip(ip) for ip in resolved_ips):
+        raise HTTPException(
+            status_code=400,
+            detail="image_url must resolve to a public internet address",
+        )
+    return _ResolvedHTTPURL(
+        url=url,
+        hostname=hostname,
+        port=port,
+        resolved_ip=str(resolved_ips[0]),
+        scheme=parsed.scheme,
+    )
+
+
+def _host_header(parsed: ParseResult) -> str:
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    return hostname if parsed.port is None else f"{hostname}:{parsed.port}"
+
+
+def _request_target(parsed: ParseResult) -> str:
+    return urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+
+
+def _remaining_download_time(deadline: float | None) -> float:
+    if deadline is None:
+        return IMAGE_DOWNLOAD_TIMEOUT_SECONDS
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    return min(remaining, IMAGE_DOWNLOAD_TIMEOUT_SECONDS)
+
+
+def _get_pinned_response(
+    resolved: _ResolvedHTTPURL,
+) -> tuple[http.client.HTTPResponse, http.client.HTTPConnection]:
+    parsed = urlparse(resolved.url)
+    remaining = _remaining_download_time(resolved.deadline)
+    if resolved.scheme == "https":
+        connection: http.client.HTTPConnection = _PinnedHTTPSConnection(
+            resolved.hostname,
+            resolved.port,
+            resolved.resolved_ip,
+            min(remaining, IMAGE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS),
+            remaining,
+        )
+    else:
+        connection = _PinnedHTTPConnection(
+            resolved.hostname,
+            resolved.port,
+            resolved.resolved_ip,
+            min(remaining, IMAGE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS),
+            remaining,
+        )
+    try:
+        connection.putrequest("GET", _request_target(parsed), skip_host=True)
+        connection.putheader("Host", _host_header(parsed))
+        connection.putheader("Accept", "image/*,*/*;q=0.8")
+        connection.putheader("User-Agent", "omlx-image-fetch/1.0")
+        connection.endheaders()
+        return connection.getresponse(), connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def _download_http_image(url: str) -> tuple[bytes, str]:
+    current_url = url
+    deadline = time.monotonic() + IMAGE_DOWNLOAD_TIMEOUT_SECONDS
+    try:
+        for _ in range(MAX_IMAGE_REDIRECTS + 1):
+            _remaining_download_time(deadline)
+            resolved = replace(
+                _validate_public_http_url(current_url),
+                deadline=deadline,
+            )
+            response, connection = _get_pinned_response(resolved)
+            if 300 <= response.status < 400:
+                location = response.getheader("location")
+                connection.close()
+                if not location:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Image download redirect missing Location header",
+                    )
+                next_url = urljoin(current_url, location)
+                if (
+                    urlparse(current_url).scheme == "https"
+                    and urlparse(next_url).scheme != "https"
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Image download redirects from HTTPS to HTTP are not allowed",
+                    )
+                current_url = next_url
+                continue
+            break
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image download exceeded {MAX_IMAGE_REDIRECTS} redirects",
+            )
+
+        try:
+            if response.status >= 400:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to download image: HTTP {response.status}",
+                )
+            content_length = response.getheader("content-length")
+            if content_length is not None:
+                try:
+                    length = int(content_length)
+                except ValueError:
+                    length = 0
+                if length > MAX_IMAGE_DOWNLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "Image download exceeds maximum allowed size "
+                            f"({MAX_IMAGE_DOWNLOAD_BYTES} bytes)"
+                        ),
+                    )
+
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                remaining = _remaining_download_time(deadline)
+                sock = getattr(connection, "sock", None)
+                if sock is not None:
+                    sock.settimeout(remaining)
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_IMAGE_DOWNLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "Image download exceeds maximum allowed size "
+                            f"({MAX_IMAGE_DOWNLOAD_BYTES} bytes)"
+                        ),
+                    )
+                chunks.append(chunk)
+            return (
+                b"".join(chunks),
+                _safe_suffix(
+                    filename=urlparse(current_url).path,
+                    content_type=response.getheader("content-type"),
+                ),
+            )
+        finally:
+            connection.close()
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=504, detail="Timed out downloading image"
+        ) from exc
+    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to download image: {exc}"
+        ) from exc
+
+
+async def _image_reference_to_path(reference: ImageReference) -> str:
+    if reference.file_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="file_id image references are not supported; no File API store exists",
+        )
+    image_url = reference.image_url
+    if image_url is None:
+        raise HTTPException(status_code=400, detail="image_url is required")
+    url = image_url if isinstance(image_url, str) else image_url.url
+    parsed = urlparse(url)
+
+    if parsed.scheme == "data":
+        data, suffix = _decode_data_uri(url)
+    elif parsed.scheme in {"http", "https"}:
+        data, suffix = await asyncio.to_thread(_download_http_image, url)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="image_url must be a data URI or HTTP/HTTPS URL",
+        )
+    return _write_image_bytes(data, suffix)
+
+
 @asynccontextmanager
 async def _acquire_image_engine(
     model: str,
@@ -226,7 +749,52 @@ def _validate_generation_request(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _request_engine_kwargs(request: ImageGenerationRequest) -> dict[str, Any]:
+def _validate_edit_request(
+    request: ImageEditRequest | ImageMultipartEditRequest,
+) -> tuple[int | None, int | None]:
+    if request.lora_paths is not None or request.lora_scales is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Request-level LoRA fields are not supported for image endpoints yet",
+        )
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="stream is not supported for image endpoints",
+        )
+    if request.partial_images is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="partial_images is not supported for image endpoints",
+        )
+    if request.response_format == "url":
+        raise HTTPException(
+            status_code=400,
+            detail="response_format='url' is not supported; use 'b64_json'",
+        )
+    if isinstance(request, ImageEditRequest):
+        if request.mask is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="mask is not supported by mlx-vlm image models",
+            )
+        if any(reference.file_id is not None for reference in request.images):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "file_id image references are not supported; "
+                    "no File API store exists"
+                ),
+            )
+    try:
+        return request.parsed_size()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _request_engine_kwargs(
+    request: ImageGenerationRequest | ImageEditRequest | ImageMultipartEditRequest,
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     for field in _SAFE_ENGINE_KWARG_FIELDS:
         value = getattr(request, field)
@@ -271,7 +839,7 @@ def _encode_image_b64(image: Any, output_format: str) -> str:
 
 def _image_data_from_result(
     result: Any,
-    request: ImageGenerationRequest,
+    request: ImageGenerationRequest | ImageEditRequest | ImageMultipartEditRequest,
 ) -> ImageData:
     image = getattr(result, "image", result)
     metadata = getattr(result, "metadata", None)
@@ -282,7 +850,7 @@ def _image_data_from_result(
         size=request.size,
         quality=request.quality,
         output_format=request.output_format,
-        background=request.background,
+        background=getattr(request, "background", None),
     )
 
 
@@ -315,6 +883,98 @@ async def _run_generation(
     )
 
 
+async def _run_edit(
+    resolved_model: str,
+    engine: Any,
+    request: ImageEditRequest | ImageMultipartEditRequest,
+    image_paths: list[str],
+    width: int | None,
+    height: int | None,
+) -> ImageResponse:
+    data: list[ImageData] = []
+    # ImageEngine serializes MLX calls, so n > 1 must remain sequential.
+    for index in range(request.n):
+        result = await engine.edit(
+            request.prompt,
+            image_paths=image_paths,
+            mask_path=None,
+            width=width,
+            height=height,
+            seed=_seed_for_output(request.seed, request.n, index),
+            steps=request.steps,
+            guidance=request.guidance,
+            output_format=request.output_format,
+            **_request_engine_kwargs(request),
+        )
+        data.append(_image_data_from_result(result, request))
+
+    return ImageResponse(
+        data=data,
+        model=resolved_model,
+        usage=ImageUsage(image_count=len(data)),
+    )
+
+
+def _is_upload(value: object) -> bool:
+    return isinstance(value, (UploadFile, StarletteUploadFile)) or (
+        hasattr(value, "read") and hasattr(value, "filename")
+    )
+
+
+def _form_values(form: Any, name: str) -> list[Any]:
+    getlist = getattr(form, "getlist", None)
+    if getlist is None:
+        value = form.get(name)
+        return [] if value is None else [value]
+    return list(getlist(name))
+
+
+def _parse_multi_value(values: list[str]) -> list[str]:
+    parsed: list[str] = []
+    for value in values:
+        parsed.extend(part.strip() for part in value.split(",") if part.strip())
+    return parsed
+
+
+def _multipart_request_from_form(form: Any) -> ImageMultipartEditRequest:
+    payload: dict[str, Any] = {}
+    for field in _MULTIPART_FIELD_NAMES:
+        values = [
+            str(value)
+            for value in _form_values(form, field)
+            if not _is_upload(value) and str(value) != ""
+        ]
+        if not values:
+            continue
+        if field in _MULTI_VALUE_FIELDS:
+            payload[field] = _parse_multi_value(values)
+        else:
+            payload[field] = values[-1]
+    try:
+        return cast(
+            ImageMultipartEditRequest,
+            ImageMultipartEditRequest.model_validate(payload),
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
+async def _upload_to_path(value: object, field_name: str) -> str:
+    if not _is_upload(value):
+        raise HTTPException(
+            status_code=400, detail=f"'{field_name}' must be a file upload"
+        )
+    upload = cast(UploadFile | StarletteUploadFile, value)
+    data = await _read_upload(upload)
+    return _write_image_bytes(
+        data,
+        _safe_suffix(
+            filename=getattr(upload, "filename", None),
+            content_type=getattr(upload, "content_type", None),
+        ),
+    )
+
+
 @router.post("/v1/images/generations", response_model=ImageResponse)
 async def create_image_generation(request: ImageGenerationRequest) -> ImageResponse:
     """Create images from a prompt using a discovered ImageEngine model."""
@@ -336,3 +996,110 @@ async def create_image_generation(request: ImageGenerationRequest) -> ImageRespo
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/v1/images/edits", response_model=ImageResponse)
+async def create_image_edit(request: Request) -> ImageResponse:
+    """Create edited images from JSON image refs or multipart uploads."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type == "application/json" or content_type.endswith("+json"):
+        return await _create_json_image_edit(request)
+    if content_type == "multipart/form-data":
+        return await _create_multipart_image_edit(request)
+    raise HTTPException(
+        status_code=415,
+        detail="Content-Type must be application/json or multipart/form-data",
+    )
+
+
+async def _create_json_image_edit(request: Request) -> ImageResponse:
+    try:
+        payload = await request.json()
+        edit_request = ImageEditRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    width, height = _validate_edit_request(edit_request)
+    _require_image_dependency()
+
+    image_paths: list[str] = []
+    try:
+        for reference in edit_request.images:
+            image_paths.append(await _image_reference_to_path(reference))
+        async with _acquire_image_engine(edit_request.model, "edit") as (
+            resolved_model,
+            engine,
+        ):
+            try:
+                return await _run_edit(
+                    resolved_model,
+                    engine,
+                    edit_request,
+                    image_paths,
+                    width,
+                    height,
+                )
+            except ImportError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup_paths(image_paths)
+
+
+async def _create_multipart_image_edit(request: Request) -> ImageResponse:
+    form = await request.form()
+    edit_request = _multipart_request_from_form(form)
+    width, height = _validate_edit_request(edit_request)
+
+    uploads = _form_values(form, "image") + _form_values(form, "image[]")
+    uploads = [value for value in uploads if _is_upload(value)]
+    if not uploads:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one 'image' upload is required",
+        )
+    if len(uploads) > MAX_IMAGE_INPUTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_IMAGE_INPUTS} image uploads are supported",
+        )
+
+    mask_values = [value for value in _form_values(form, "mask") if _is_upload(value)]
+    if len(mask_values) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Only one 'mask' upload is supported",
+        )
+    if mask_values:
+        raise HTTPException(
+            status_code=400,
+            detail="mask is not supported by mlx-vlm image models",
+        )
+    _require_image_dependency()
+
+    image_paths: list[str] = []
+    try:
+        for upload in uploads:
+            image_paths.append(await _upload_to_path(upload, "image"))
+        async with _acquire_image_engine(edit_request.model, "edit") as (
+            resolved_model,
+            engine,
+        ):
+            try:
+                return await _run_edit(
+                    resolved_model,
+                    engine,
+                    edit_request,
+                    image_paths,
+                    width,
+                    height,
+                )
+            except ImportError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        _cleanup_paths(image_paths)

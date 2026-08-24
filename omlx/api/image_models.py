@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .shared_models import get_unix_timestamp
 
@@ -36,6 +36,33 @@ def parse_image_size(size: str | None) -> tuple[int | None, int | None]:
     return width, height
 
 
+class ImageURLReference(BaseModel):
+    """URL reference for image edit inputs."""
+
+    url: str
+
+    model_config = {"extra": "allow"}
+
+
+class ImageReference(BaseModel):
+    """Reference to an input image by file ID or image URL/data URI."""
+
+    file_id: str | None = None
+    image_url: str | ImageURLReference | None = None
+
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="after")
+    def validate_single_reference(self) -> ImageReference:
+        has_file_id = self.file_id is not None
+        has_image_url = self.image_url is not None
+        if has_file_id == has_image_url:
+            raise ValueError(
+                "Image reference must include exactly one of file_id or image_url"
+            )
+        return self
+
+
 class _ImageRequestBase(BaseModel):
     """Fields shared by OpenAI-compatible image requests."""
 
@@ -56,6 +83,7 @@ class _ImageRequestBase(BaseModel):
     guidance: float | None = None
     negative_prompt: str | None = None
     scheduler: str | None = None
+    image_strength: float | None = None
     lora_paths: list[str] | None = None
     lora_scales: list[float] | None = None
 
@@ -98,6 +126,20 @@ class ImageGenerationRequest(_ImageRequestBase):
     background: str | None = "auto"
     style: str | None = None
     moderation: str | None = None
+
+
+class ImageEditRequest(_ImageRequestBase):
+    """Request body for POST /v1/images/edits using JSON image references."""
+
+    images: list[ImageReference] = Field(min_length=1, max_length=16)
+    mask: ImageReference | None = None
+    input_fidelity: str | None = None
+
+
+class ImageMultipartEditRequest(_ImageRequestBase):
+    """Parsed multipart edit fields; uploads are validated by the route."""
+
+    input_fidelity: str | None = None
 
 
 class ImageUsage(BaseModel):
