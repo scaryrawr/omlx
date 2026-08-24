@@ -12,6 +12,7 @@ Supports:
 - Reranker models: Use RerankerEngine for document reranking
 - Audio STT models: Use STTEngine for speech-to-text (Whisper, Qwen3-ASR, ...)
 - Audio TTS models: Use TTSEngine for text-to-speech (Qwen3-TTS, Kokoro, ...)
+- Image models: Use ImageEngine for mlx-vlm-backed image generation/editing
 """
 
 import contextlib
@@ -19,14 +20,41 @@ import json
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .image_registry import (
+    IMAGE_DEFAULT_ESTIMATED_SIZES,
+    IMAGE_UNKNOWN_FALLBACK_SIZE,
+    infer_image_model_spec_from_name,
+    normalize_image_alias,
+)
+
 logger = logging.getLogger(__name__)
 
-ModelType = Literal["llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
-EngineType = Literal["batched", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
+ModelType = Literal[
+    "llm",
+    "vlm",
+    "embedding",
+    "reranker",
+    "audio_stt",
+    "audio_tts",
+    "audio_sts",
+    "image",
+]
+EngineType = Literal[
+    "batched",
+    "vlm",
+    "embedding",
+    "reranker",
+    "audio_stt",
+    "audio_tts",
+    "audio_sts",
+    "image",
+]
+
+IMAGE_MANIFEST_NAME = "omlx-image-model.json"
 
 # Known VLM (Vision-Language Model) types from mlx-vlm
 VLM_MODEL_TYPES = {
@@ -380,6 +408,9 @@ class DiscoveredModel:
     model_context_length: int | None = None  # Declared context length from config.json (None if unknown)
     source_type: str = "local"  # "local" or "hf_cache"
     source_repo_id: str | None = None  # HuggingFace repo id for cache-backed models
+    capabilities: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
+    image_metadata: dict[str, object] | None = None
     is_helper: bool = False  # Speculative-decoding drafter (dFlash/Assistant/MTP)
 
 
@@ -390,6 +421,202 @@ class HfCacheEntry:
     snapshot_path: Path
     model_id: str
     source_repo_id: str
+
+
+@dataclass
+class ImageModelManifest:
+    """Validated mlx-vlm image model manifest."""
+
+    backend: str
+    base_model: str
+    tasks: list[str]
+    metadata: dict[str, object]
+    model_path: str | None = None
+    estimated_size: int | None = None
+
+
+def _normalize_image_tasks(raw_task: object) -> list[str] | None:
+    """Normalize manifest task values to supported image capabilities."""
+    if raw_task is None:
+        return ["generation"]
+    if isinstance(raw_task, str):
+        raw_tasks: list[object] = [raw_task]
+    elif isinstance(raw_task, list):
+        raw_tasks = raw_task
+    else:
+        return None
+
+    aliases = {
+        "generation": "generation",
+        "generate": "generation",
+        "text-to-image": "generation",
+        "txt2img": "generation",
+        "edit": "edit",
+        "editing": "edit",
+        "image-to-image": "edit",
+        "img2img": "edit",
+        "inpaint": "edit",
+        "inpainting": "edit",
+    }
+    normalized: set[str] = set()
+    for task in raw_tasks:
+        if not isinstance(task, str):
+            return None
+        capability = aliases.get(task.strip().lower().replace("_", "-"))
+        if capability is None:
+            return None
+        normalized.add(capability)
+    return sorted(normalized, key={"generation": 0, "edit": 1}.__getitem__)
+
+
+def _normalize_image_base_model(value: object) -> str:
+    return normalize_image_alias(value)
+
+
+def _validate_positive_int(value: object, field_name: str) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        logger.warning(f"Invalid image manifest {field_name}: {value!r}")
+        return None
+    return int(value)
+
+
+def _has_local_image_layout(model_path: Path) -> bool:
+    """Detect local mlx-vlm image layouts for supported native families."""
+    tokenizer_markers = ("tokenizer.json", "tokenizer_config.json")
+    has_tokenizer = (model_path / "tokenizer").is_dir() or any(
+        (model_path / marker).exists() for marker in tokenizer_markers
+    )
+    if not has_tokenizer:
+        try:
+            has_tokenizer = any(
+                child.is_dir()
+                and any((child / marker).is_file() for marker in tokenizer_markers)
+                for child in model_path.iterdir()
+            )
+        except OSError:
+            has_tokenizer = False
+    if not has_tokenizer:
+        return False
+
+    weight_parents = {
+        path.parent for path in model_path.rglob("*.safetensors") if path.is_file()
+    }
+    return len(weight_parents) >= 2
+
+
+def _infer_image_manifest(
+    model_path: Path,
+    *,
+    model_name: str | None = None,
+) -> ImageModelManifest | None:
+    """Safely infer a manifest only for a registered image-family folder."""
+    spec = infer_image_model_spec_from_name(model_name or model_path.name)
+    if spec is None or not _has_local_image_layout(model_path):
+        return None
+    tasks = list(spec.tasks)
+    metadata: dict[str, object] = {
+        "backend": "mlx-vlm",
+        "base_model": spec.base_model,
+        "model_path": ".",
+        "tasks": tasks,
+        "capabilities": tasks,
+        "inferred": True,
+    }
+    return ImageModelManifest(
+        backend="mlx-vlm",
+        base_model=spec.base_model,
+        tasks=tasks,
+        metadata=metadata,
+        model_path=".",
+    )
+
+
+def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
+    """Load and validate an mlx-vlm image manifest, or infer one if absent."""
+    manifest_path = model_path / IMAGE_MANIFEST_NAME
+    if not manifest_path.exists():
+        return _infer_image_manifest(model_path)
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(f"Invalid image manifest at {manifest_path}: {exc}")
+        return None
+    if not isinstance(manifest, dict):
+        logger.warning(f"Invalid image manifest at {manifest_path}: expected object")
+        return None
+
+    backend = manifest.get("backend")
+    if not isinstance(backend, str) or backend.strip().lower() != "mlx-vlm":
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: backend must be 'mlx-vlm'"
+        )
+        return None
+    base_model = manifest.get("base_model")
+    if not isinstance(base_model, str) or not base_model.strip():
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: base_model must be a string"
+        )
+        return None
+    tasks = _normalize_image_tasks(manifest.get("task"))
+    if tasks is None:
+        logger.warning(f"Invalid image manifest at {manifest_path}: unsupported task")
+        return None
+
+    model_path_value = manifest.get("model_path")
+    if model_path_value is not None and (
+        not isinstance(model_path_value, str) or not model_path_value.strip()
+    ):
+        logger.warning(
+            f"Invalid image manifest at {manifest_path}: model_path must be a string"
+        )
+        return None
+    estimated_size = None
+    if "estimated_size" in manifest:
+        estimated_size = _validate_positive_int(
+            manifest["estimated_size"], "estimated_size"
+        )
+        if estimated_size is None:
+            return None
+    default_steps = manifest.get("default_steps")
+    if (
+        default_steps is not None
+        and _validate_positive_int(default_steps, "default_steps") is None
+    ):
+        return None
+    for key in ("default_guidance", "default_image_strength"):
+        value = manifest.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+        ):
+            logger.warning(f"Invalid image manifest {key}: {value!r}")
+            return None
+
+    metadata_keys = (
+        "backend",
+        "base_model",
+        "model_path",
+        "quantize",
+        "default_steps",
+        "default_guidance",
+        "default_image_strength",
+        "estimated_size",
+    )
+    metadata = {key: manifest[key] for key in metadata_keys if key in manifest}
+    metadata["tasks"] = list(tasks)
+    metadata["capabilities"] = list(tasks)
+    metadata["manifest_path"] = str(manifest_path)
+    return ImageModelManifest(
+        backend="mlx-vlm",
+        base_model=base_model.strip(),
+        tasks=tasks,
+        metadata=metadata,
+        model_path=(
+            model_path_value.strip() if isinstance(model_path_value, str) else None
+        ),
+        estimated_size=estimated_size,
+    )
 
 
 def _is_unsupported_model(model_path: Path) -> bool:
@@ -603,6 +830,9 @@ def detect_model_type(model_path: Path) -> ModelType:
     Returns:
         Model type: "llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", or "audio_sts"
     """
+    if _load_image_manifest(model_path) is not None:
+        return "image"
+
     config_path = model_path / "config.json"
     if not config_path.exists():
         return "llm"
@@ -1049,6 +1279,55 @@ def _vision_weight_bytes(model_path: Path) -> int:
     return total
 
 
+def _resolve_image_model_path(
+    model_dir: Path, manifest: ImageModelManifest
+) -> Path | None:
+    if manifest.model_path is None:
+        return None
+    local_path = Path(manifest.model_path).expanduser()
+    if not local_path.is_absolute():
+        local_path = model_dir / local_path
+    return local_path if local_path.exists() else None
+
+
+def _sum_file_tree_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            with contextlib.suppress(OSError):
+                total += child.stat().st_size
+    return total
+
+
+def estimate_image_model_size(model_dir: Path, manifest: ImageModelManifest) -> int:
+    """Estimate image model size without importing or loading mlx-vlm."""
+    if manifest.estimated_size is not None:
+        return manifest.estimated_size
+
+    local_path = _resolve_image_model_path(model_dir, manifest)
+    if local_path is not None:
+        if local_path.is_dir():
+            with contextlib.suppress(ValueError, OSError):
+                return estimate_model_size(local_path)
+        with contextlib.suppress(OSError):
+            total_size = _sum_file_tree_size(local_path)
+            if total_size > 0:
+                return int(total_size * 1.05)
+
+    base_model = _normalize_image_base_model(manifest.base_model)
+    fallback_size = IMAGE_DEFAULT_ESTIMATED_SIZES.get(
+        base_model, IMAGE_UNKNOWN_FALLBACK_SIZE
+    )
+    if base_model not in IMAGE_DEFAULT_ESTIMATED_SIZES:
+        logger.warning(
+            "Using conservative image model size fallback for unknown base_model %r",
+            manifest.base_model,
+        )
+    return fallback_size
+
+
 def estimate_text_only_model_size(model_path: Path) -> int:
     """
     Estimate memory usage when only the language part of a VLM-shaped
@@ -1079,8 +1358,10 @@ def _is_adapter_dir(path: Path) -> bool:
 
 
 def _is_model_dir(path: Path) -> bool:
-    """Check if a directory contains a valid model (has config.json)."""
-    return (path / "config.json").exists() and not _is_adapter_dir(path)
+    """Check if a directory contains a model config or image manifest."""
+    return (
+        _load_image_manifest(path) is not None or (path / "config.json").exists()
+    ) and not _is_adapter_dir(path)
 
 
 _SHARD_FILE_RE = re.compile(r"-(\d+)-of-(\d+)\.safetensors$")
@@ -1406,6 +1687,8 @@ def _is_helper_checkpoint(model_path: Path) -> bool:
 
 def _is_hf_cache_mlx_compatible(model_dir: Path, source_repo_id: str) -> bool:
     """Heuristic for HF cache entries that can be loaded without conversion."""
+    if _infer_image_manifest(model_dir, model_name=source_repo_id) is not None:
+        return True
     if not _is_model_dir(model_dir):
         return False
     if not list(model_dir.glob("model*.safetensors")):
@@ -1464,42 +1747,63 @@ def _register_model(
             )
             return
 
-        model_type = detect_model_type(model_dir)
-        if model_type == "embedding":
-            engine_type: EngineType = "embedding"
-        elif model_type == "reranker":
-            engine_type = "reranker"
-        elif model_type == "vlm":
-            engine_type = "vlm"
-        elif model_type == "audio_stt":
-            engine_type = "audio_stt"
-        elif model_type == "audio_tts":
-            engine_type = "audio_tts"
-        elif model_type == "audio_sts":
-            engine_type = "audio_sts"
+        image_manifest = _load_image_manifest(model_dir)
+        if image_manifest is None and source_repo_id is not None:
+            image_manifest = _infer_image_manifest(
+                model_dir,
+                model_name=source_repo_id,
+            )
+        if image_manifest is not None:
+            model_type: ModelType = "image"
+            engine_type: EngineType = "image"
+            estimated_size = estimate_image_model_size(model_dir, image_manifest)
+            config_model_type = image_manifest.backend
+            thinking_default = None
+            preserve_thinking_default = None
+            capabilities = list(image_manifest.tasks)
+            tasks = list(image_manifest.tasks)
+            image_metadata = dict(image_manifest.metadata)
+            model_context_length = None
+            is_helper = False
         else:
-            engine_type = "batched"
-        estimated_size = estimate_model_size(model_dir)
+            model_type = detect_model_type(model_dir)
+            if model_type == "embedding":
+                engine_type = "embedding"
+            elif model_type == "reranker":
+                engine_type = "reranker"
+            elif model_type == "vlm":
+                engine_type = "vlm"
+            elif model_type == "audio_stt":
+                engine_type = "audio_stt"
+            elif model_type == "audio_tts":
+                engine_type = "audio_tts"
+            elif model_type == "audio_sts":
+                engine_type = "audio_sts"
+            else:
+                engine_type = "batched"
+            estimated_size = estimate_model_size(model_dir)
+
+            # Read raw config model_type for sub-type detection (e.g., OCR models)
+            # and flag speculative-decoding drafters (dFlash/Assistant/MTP).
+            config_model_type = ""
+            is_helper = False
+            try:
+                with open(model_dir / "config.json") as f:
+                    _config = json.load(f)
+                config_model_type = _config.get("model_type", "")
+                is_helper = is_helper_model_config(_config)
+            except Exception:
+                pass
+
+            thinking_default = detect_thinking_default(model_dir)
+            preserve_thinking_default = detect_preserve_thinking(model_dir)
+            model_context_length = _read_model_context_length(model_dir)
+            capabilities = []
+            tasks = []
+            image_metadata = None
         text_only_size = (
             estimate_text_only_model_size(model_dir) if model_type == "vlm" else 0
         )
-
-        # Read raw config model_type for sub-type detection (e.g., OCR models)
-        # and flag speculative-decoding drafters (dFlash/Assistant/MTP).
-        config_model_type = ""
-        is_helper = False
-        try:
-            import json
-            with open(model_dir / "config.json") as f:
-                _config = json.load(f)
-            config_model_type = _config.get("model_type", "")
-            is_helper = is_helper_model_config(_config)
-        except Exception:
-            pass
-
-        thinking_default = detect_thinking_default(model_dir)
-        preserve_thinking_default = detect_preserve_thinking(model_dir)
-        model_context_length = _read_model_context_length(model_dir)
 
         models[model_id] = DiscoveredModel(
             model_id=model_id,
@@ -1514,6 +1818,9 @@ def _register_model(
             model_context_length=model_context_length,
             source_type=source_type,
             source_repo_id=source_repo_id,
+            capabilities=capabilities,
+            tasks=tasks,
+            image_metadata=image_metadata,
             is_helper=is_helper,
         )
 

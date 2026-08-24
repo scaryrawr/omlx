@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the vendored MiniMax M3 mlx-vlm compatibility layer."""
+"""Regression tests for the MiniMax M3 mlx-vlm compatibility layer."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_minimax_m3_compat_installs_vendor_modules():
+def test_minimax_m3_compat_exposes_minimax_modules():
     from omlx.patches.mlx_vlm_minimax_m3_compat import (
         apply_mlx_vlm_minimax_m3_compat_patch,
     )
@@ -19,11 +19,9 @@ def test_minimax_m3_compat_installs_vendor_modules():
     import mlx_vlm.models.minimax_m3  # noqa: F401
     import mlx_vlm.models.minimax_m3_vl  # noqa: F401
     import mlx_vlm.models.minimax_m3_vl.language as language
-    import mlx_vlm.models.minimax_m3_vl.msa as msa
     import mlx_vlm.tool_parsers.minimax_m3 as parser
 
     assert hasattr(language, "MiniMaxM3KVCache")
-    assert hasattr(msa, "build_grouped_msa_topk")
     assert hasattr(parser, "parse_tool_call")
 
 
@@ -251,7 +249,10 @@ def test_minimax_unpacked_mixed_bit_moe_forward():
 
     apply_mlx_vlm_minimax_m3_compat_patch()
 
-    from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+    try:
+        from mlx_vlm.models.switch_layers import QuantizedSwitchLinear
+    except ImportError:
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
     from mlx_vlm.models.minimax_m3_vl.language import MiniMaxSparseMoeBlock
 
     block = MiniMaxSparseMoeBlock(_tiny_text_config(pack_shared_expert=False))

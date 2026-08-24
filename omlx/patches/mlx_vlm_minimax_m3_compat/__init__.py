@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""MiniMax M3 compatibility layer for newer mlx-vlm pins.
+"""MiniMax M3 compatibility layer for mlx-vlm dependency drift.
 
-The mlx-vlm e390667 pin removed the out-of-tree MiniMax M3 implementation
-that oMLX currently depends on. This module keeps the compatibility surface
-small: it vendors the removed model/parser modules and restores only the
-server-facing helpers oMLX uses.
+Some mlx-vlm pins removed or reshaped the out-of-tree MiniMax M3
+implementation that oMLX depends on. This module keeps the compatibility
+surface small: it can expose vendored fallback model/parser modules while
+restoring only the server-facing helpers oMLX uses.
 """
 
 from __future__ import annotations
