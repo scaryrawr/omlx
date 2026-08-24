@@ -14,18 +14,20 @@ when memory limits are exceeded. It supports:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .cluster.deployment import ClusterDeployment
     from .cluster.registry import ClusterRegistry
+    from .engine.image import ImageEngine
     from .model_settings import ModelSettingsManager
 
 import mlx.core as mx
@@ -48,8 +50,14 @@ from .exceptions import (
     ModelUnavailableError,
     describe_ceiling_binding,
 )
-from .model_discovery import discover_models, format_size, is_realtime_stt_model
+from .model_discovery import (
+    IMAGE_MANIFEST_NAME,
+    discover_models,
+    format_size,
+    is_realtime_stt_model,
+)
 from .scheduler import SchedulerConfig
+from .utils.optional_deps import MLX_VLM_MISSING_MESSAGE, is_mlx_vlm_available
 from .utils.proc_memory import get_phys_footprint
 
 logger = logging.getLogger(__name__)
@@ -183,7 +191,14 @@ class EngineEntry:
     model_id: str  # Directory name (e.g., "llama-3b")
     model_path: str  # Full path to model directory
     model_type: Literal[
-        "llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"
+        "llm",
+        "vlm",
+        "embedding",
+        "reranker",
+        "audio_stt",
+        "audio_tts",
+        "audio_sts",
+        "image",
     ]  # Model type
     engine_type: Literal[
         "batched",
@@ -194,6 +209,7 @@ class EngineEntry:
         "audio_stt",
         "audio_tts",
         "audio_sts",
+        "image",
     ]  # Engine type to use
     estimated_size: int  # Pre-calculated from safetensors (bytes)
     text_only_size: int = 0  # Language-only estimate for VLM checkpoints (0 = n/a)
@@ -213,6 +229,9 @@ class EngineEntry:
     )
     source_type: str = "local"
     source_repo_id: str | None = None
+    capabilities: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
+    image_metadata: dict[str, object] | None = None
     is_helper: bool = False  # Speculative-decoding drafter (dFlash/Assistant/MTP)
     engine: (
         BaseEngine
@@ -221,6 +240,7 @@ class EngineEntry:
         | STTEngine
         | STSEngine
         | TTSEngine
+        | ImageEngine
         | None
     ) = None  # Loaded engine instance
     last_access: float = 0.0  # Timestamp for LRU (0 if never loaded)
@@ -725,6 +745,9 @@ class EnginePool:
                     model_context_length=getattr(info, "model_context_length", None),
                     source_type=getattr(info, "source_type", "local"),
                     source_repo_id=getattr(info, "source_repo_id", None),
+                    capabilities=list(getattr(info, "capabilities", [])),
+                    tasks=list(getattr(info, "tasks", [])),
+                    image_metadata=getattr(info, "image_metadata", None),
                     is_helper=getattr(info, "is_helper", False),
                     is_pinned=model_id in pinned_set,
                 )
@@ -761,6 +784,7 @@ class EnginePool:
         "audio_stt": "audio_stt",
         "audio_tts": "audio_tts",
         "audio_sts": "audio_sts",
+        "image": "image",
     }
 
     @staticmethod
@@ -988,7 +1012,16 @@ class EnginePool:
     ) -> None:
         """Drop stale unloaded entries whose backing model directory vanished."""
         model_path = Path(entry.model_path)
-        if model_path.exists() and (model_path / "config.json").exists():
+        if model_path.exists() and (
+            (model_path / "config.json").exists()
+            or (
+                entry.engine_type == "image"
+                and (
+                    (model_path / IMAGE_MANIFEST_NAME).exists()
+                    or entry.image_metadata is not None
+                )
+            )
+        ):
             return
 
         if entry.engine is None:
@@ -1460,6 +1493,9 @@ class EnginePool:
 
             self._raise_if_model_path_missing_locked(model_id, entry)
             self._raise_if_load_failed(model_id, entry)
+
+            if entry.engine_type == "image" and not is_mlx_vlm_available():
+                raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
 
             # Pre-load admission against the memory ceiling from the
             # process memory enforcer (min of static and dynamic). Try
@@ -2355,6 +2391,16 @@ class EnginePool:
                 dflash_enabled = getattr(model_settings, "dflash_enabled", False)
                 dflash_draft = getattr(model_settings, "dflash_draft_model", None)
                 if (
+                    entry.engine_type == "image"
+                    and dflash_enabled
+                    and dflash_draft
+                ):
+                    logger.warning(
+                        "DFlash is not supported for image models; loading %s "
+                        "with its native image engine",
+                        model_id,
+                    )
+                elif (
                     dflash_enabled
                     and dflash_draft
                     and self._entry_is_diffusion_model(entry)
@@ -2475,6 +2521,26 @@ class EnginePool:
                     engine = STSEngine(
                         model_name=entry.model_path,
                         config_model_type=entry.config_model_type,
+                    )
+                elif effective_type == "image":
+                    if not is_mlx_vlm_available():
+                        raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
+                    try:
+                        from .engine.image import ImageEngine
+                    except ImportError as exc:
+                        raise ModelLoadingError(
+                            model_id, MLX_VLM_MISSING_MESSAGE
+                        ) from exc
+
+                    engine = ImageEngine(
+                        model_name=entry.model_path,
+                        model_id=model_id,
+                        model_path=entry.model_path,
+                        config_model_type=entry.config_model_type,
+                        image_metadata=entry.image_metadata or {},
+                        capabilities=list(entry.capabilities),
+                        tasks=list(entry.tasks),
+                        model_settings=model_settings,
                     )
                 else:
                     engine = BatchedEngine(
@@ -2615,6 +2681,20 @@ class EnginePool:
                     logger.info(
                         f"Successfully loaded {model_id} as LLM (fallback from VLM)"
                     )
+                elif entry.engine_type == "image" and isinstance(
+                    start_error, ImportError
+                ):
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(
+                        model_id, MLX_VLM_MISSING_MESSAGE
+                    ) from start_error
+                elif entry.engine_type == "image" and isinstance(
+                    start_error, ValueError
+                ):
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(model_id, str(start_error)) from start_error
                 else:
                     raise
 
@@ -2877,6 +2957,9 @@ class EnginePool:
                     "preserve_thinking_default": e.preserve_thinking_default,
                     "source_type": e.source_type,
                     "source_repo_id": e.source_repo_id,
+                    "capabilities": e.capabilities,
+                    "tasks": e.tasks,
+                    "image_metadata": e.image_metadata,
                     "last_access": e.last_access if e.last_access > 0 else None,
                 }
                 for mid, e in sorted(self._entries.items())

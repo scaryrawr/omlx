@@ -53,14 +53,9 @@ dependencies = [
     "regex",
     # mlx-embeddings from latest commit (32981fa)
     "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206",
-    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
-    # Keep <5.13 until the broader dependency set gets a dedicated resolver
-    # smoke test with transformers 5.13+. The mlx-lm pin above includes the
-    # known NewlineTokenizer registration fix. Floor 5.12.1: AutoTokenizer's
-    # fix_mistral_regex backend gate (used by get_tokenizer_config for
-    # mistral-common models) first shipped in 5.12.1 — on older 5.x the kwarg
-    # is silently swallowed and Tekken prompts stay corrupted.
-    "transformers>=5.12.1,<5.13",
+    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required.
+    # Native image loaders at the mlx-vlm pin below require Transformers 5.14+.
+    "transformers>=5.14.0",
     # transformers 5.x's tokenization_mistral_common module imports
     # ReasoningEffort from mistral_common (added in 1.10). The audio extras
     # transitively pull mistral-common via mlx-audio[stt], which historically
@@ -117,9 +112,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from commit 78b96eb. MiniMax M3 support is vendored under
-    # omlx.patches.mlx_vlm_minimax_m3_compat because upstream removed it.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@78b96eb5462141447b9a6b4943ef553891da56dd",
+    # mlx-vlm main (16feaeb), including native Z-Image and ERNIE-Image
+    # generation and img2img support plus Mage-Flow quantization.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@16feaebc904671d477f5c1cf01456608e02a4420",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.7 (c55324c) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
@@ -145,6 +140,8 @@ grammar = [
     "xgrammar==0.2.3",
     "apache-tvm-ffi==0.1.11",
 ]
+# Kept as a no-op compatibility extra. mlx-vlm image support is part of core.
+image = []
 mcp = [
     "mcp>=2.0.0,<3",
 ]
@@ -271,6 +268,7 @@ include = ["omlx*"]
 override-dependencies = [
     "mlx==0.32.0",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    "transformers>=5.14.0",
 ]
 
 [tool.black]
