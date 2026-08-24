@@ -6,8 +6,12 @@ from pydantic import ValidationError
 
 from omlx.api.image_models import (
     ImageData,
+    ImageEditRequest,
     ImageGenerationRequest,
+    ImageMultipartEditRequest,
+    ImageReference,
     ImageResponse,
+    ImageURLReference,
     ImageUsage,
     parse_image_size,
 )
@@ -22,6 +26,7 @@ def test_generation_request_defaults_and_extensions():
         guidance=3.5,
         negative_prompt="blurry",
         scheduler="euler",
+        image_strength=0.4,
         lora_paths=["style.safetensors"],
         lora_scales=[0.8],
     )
@@ -36,6 +41,7 @@ def test_generation_request_defaults_and_extensions():
 
     dumped = request.model_dump(exclude_none=True)
     assert dumped["negative_prompt"] == "blurry"
+    assert dumped["image_strength"] == 0.4
     assert dumped["lora_paths"] == ["style.safetensors"]
     assert dumped["lora_scales"] == [0.8]
 
@@ -83,6 +89,66 @@ def test_parse_image_size_helper():
         parse_image_size("wide")
     with pytest.raises(ValueError, match="positive"):
         parse_image_size("0x512")
+
+
+def test_edit_request_accepts_file_id_and_image_url_refs():
+    request = ImageEditRequest(
+        prompt="make it cinematic",
+        model="edit-model",
+        images=[
+            {"file_id": "file-abc123"},
+            {"image_url": {"url": "https://example.test/input.png"}},
+        ],
+        mask={"image_url": "data:image/png;base64,AAAA"},
+        output_format="jpeg",
+        input_fidelity="high",
+        partial_images=2,
+    )
+
+    assert request.images[0].file_id == "file-abc123"
+    assert isinstance(request.images[1].image_url, ImageURLReference)
+    assert request.mask is not None
+    assert request.mask.image_url == "data:image/png;base64,AAAA"
+    assert request.output_format == "jpeg"
+    assert request.input_fidelity == "high"
+    assert request.parsed_size() == (None, None)
+
+
+def test_multipart_edit_request_does_not_require_json_images():
+    request = ImageMultipartEditRequest(
+        prompt="make it cinematic",
+        model="edit-model",
+        seed=7,
+    )
+
+    assert request.prompt == "make it cinematic"
+    assert request.model == "edit-model"
+    assert request.seed == 7
+    assert not hasattr(request, "images")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"file_id": "file-abc123", "image_url": "https://example.test/input.png"},
+    ],
+)
+def test_image_reference_requires_exactly_one_shape(payload):
+    with pytest.raises(ValidationError, match="exactly one"):
+        ImageReference(**payload)
+
+
+def test_edit_request_caps_input_image_count():
+    with pytest.raises(ValidationError, match="at most 16"):
+        ImageEditRequest(
+            prompt="combine",
+            model="edit-model",
+            images=[
+                {"image_url": f"https://example.test/{index}.png"}
+                for index in range(17)
+            ],
+        )
 
 
 def test_image_response_serialization_and_usage():

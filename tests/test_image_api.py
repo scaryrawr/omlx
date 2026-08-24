@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import base64
+import tempfile
+from contextlib import suppress
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -22,11 +26,19 @@ from omlx.exceptions import (
 )
 
 
+def _png_bytes(color: tuple[int, int, int] = (255, 0, 0)) -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), color=color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 class FakeImageEngine:
     def __init__(self, tasks: list[str]) -> None:
         self.tasks = tasks
         self.pool: FakePool | None = None
         self.generate_calls: list[dict] = []
+        self.edit_calls: list[dict] = []
+        self.seen_paths: list[str] = []
         self.active_calls = 0
         self.max_active_calls = 0
 
@@ -43,6 +55,20 @@ class FakeImageEngine:
         return SimpleNamespace(
             image=Image.new("RGBA", (2, 2), color=(0, 255, 0, 255)),
             metadata={"revised_prompt": "revised"},
+        )
+
+    async def edit(self, prompt: str, image_paths: list[str], **kwargs):
+        assert self.pool is not None
+        assert self.pool.in_use > 0
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        self.edit_calls.append({"prompt": prompt, "image_paths": image_paths, **kwargs})
+        self.seen_paths.extend(image_paths)
+        assert all(Path(path).exists() for path in image_paths)
+        self.active_calls -= 1
+        return SimpleNamespace(
+            image=Image.new("RGB", (2, 2), color=(0, 0, 255)),
+            metadata={"revised_prompt": "revised edit"},
         )
 
 
@@ -95,9 +121,16 @@ def image_client(monkeypatch):
         image_routes, "_resolve_model", lambda model: "resolved-image-model"
     )
     monkeypatch.setattr(image_routes, "require_mlx_vlm_available", lambda: None)
+    temp_dir = Path(".omlx_image_inputs_test")
+    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(temp_dir))
 
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
+
+    for path in temp_dir.glob("*"):
+        path.unlink()
+    with suppress(OSError):
+        temp_dir.rmdir()
 
 
 def _install_pool(
@@ -325,6 +358,572 @@ def test_generation_maps_engine_pool_errors(
     assert pool.release_engine_calls == []
 
 
+def test_json_edit_accepts_data_uri_and_runs_outputs_sequentially(
+    image_client,
+    monkeypatch,
+):
+    engine, pool = _install_pool(monkeypatch, ["edit"])
+    data_uri = "data:image/png;base64," + base64.b64encode(_png_bytes()).decode("ascii")
+
+    response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "make it blue",
+            "images": [{"image_url": {"url": data_uri}}],
+            "n": 2,
+            "seed": 9,
+            "size": "640x480",
+            "negative_prompt": "blurry",
+            "scheduler": "euler",
+            "image_strength": 0.45,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["data"]) == 2
+    assert [call["seed"] for call in engine.edit_calls] == [9, 10]
+    assert engine.edit_calls[0]["image_strength"] == 0.45
+    assert engine.edit_calls[0]["negative_prompt"] == "blurry"
+    assert engine.edit_calls[0]["scheduler"] == "euler"
+    assert engine.edit_calls[0]["width"] == 640
+    assert engine.edit_calls[0]["height"] == 480
+    assert engine.max_active_calls == 1
+    assert pool.release_engine_calls == ["resolved-image-model"]
+    assert all(not Path(path).exists() for path in engine.seen_paths)
+
+
+def test_multipart_edit_accepts_multiple_uploads_and_cleans_paths(
+    image_client,
+    monkeypatch,
+):
+    engine, pool = _install_pool(monkeypatch, ["edit"])
+
+    response = image_client.post(
+        "/v1/images/edits",
+        data={
+            "model": "alias",
+            "prompt": "combine them",
+            "n": "2",
+            "seed": "3",
+            "image_strength": "0.6",
+        },
+        files=[
+            ("image[]", ("first.png", _png_bytes(), "image/png")),
+            (
+                "image[]",
+                ("second.anything", _png_bytes((0, 255, 0)), "image/png"),
+            ),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert [call["seed"] for call in engine.edit_calls] == [3, 4]
+    assert engine.edit_calls[0]["image_strength"] == 0.6
+    assert len(engine.edit_calls[0]["image_paths"]) == 2
+    assert pool.release_engine_calls == ["resolved-image-model"]
+    assert all(not Path(path).exists() for path in engine.seen_paths)
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        ({"response_format": "url"}, "response_format='url' is not supported"),
+        ({"stream": True}, "stream is not supported"),
+        ({"partial_images": 1}, "partial_images is not supported"),
+        ({"lora_paths": ["style.safetensors"]}, "LoRA"),
+        ({"lora_scales": [0.8]}, "LoRA"),
+        ({"size": "wide"}, "WIDTHxHEIGHT"),
+    ],
+)
+def test_json_edit_rejects_unsupported_fields_before_input_work(
+    image_client,
+    monkeypatch,
+    payload,
+    detail,
+):
+    def fail_input_work(_reference):
+        raise AssertionError("image input should not be processed")
+
+    def fail_pool_work():
+        raise AssertionError("engine pool should not be touched")
+
+    monkeypatch.setattr(image_routes, "_image_reference_to_path", fail_input_work)
+    monkeypatch.setattr(image_routes, "_get_engine_pool", fail_pool_work)
+
+    response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "edit it",
+            "images": [{"image_url": "data:image/png;base64,AA=="}],
+            **payload,
+        },
+    )
+
+    assert response.status_code == 400
+    assert detail in response.json()["detail"]
+
+
+def test_json_edit_rejects_file_id_and_mask_before_input_work(
+    image_client,
+    monkeypatch,
+):
+    def fail_input_work(_reference):
+        raise AssertionError("image input should not be processed")
+
+    monkeypatch.setattr(image_routes, "_image_reference_to_path", fail_input_work)
+
+    file_response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "edit it",
+            "images": [{"file_id": "file-123"}],
+        },
+    )
+    mask_response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "edit it",
+            "images": [{"image_url": "data:image/png;base64,AA=="}],
+            "mask": {"image_url": "data:image/png;base64,AA=="},
+        },
+    )
+
+    assert file_response.status_code == 400
+    assert "file_id" in file_response.json()["detail"]
+    assert mask_response.status_code == 400
+    assert "mask is not supported" in mask_response.json()["detail"]
+
+
+def test_multipart_edit_rejects_unsupported_fields_before_upload_work(
+    image_client,
+    monkeypatch,
+):
+    async def fail_upload_work(_value, _field_name):
+        raise AssertionError("upload should not be processed")
+
+    monkeypatch.setattr(image_routes, "_upload_to_path", fail_upload_work)
+
+    lora_response = image_client.post(
+        "/v1/images/edits",
+        data={
+            "model": "alias",
+            "prompt": "edit it",
+            "lora_paths": "style.safetensors",
+        },
+        files={"image": ("input.png", _png_bytes(), "image/png")},
+    )
+    mask_response = image_client.post(
+        "/v1/images/edits",
+        data={"model": "alias", "prompt": "edit it"},
+        files=[
+            ("image", ("input.png", _png_bytes(), "image/png")),
+            ("mask", ("mask.png", _png_bytes(), "image/png")),
+        ],
+    )
+
+    assert lora_response.status_code == 400
+    assert "LoRA" in lora_response.json()["detail"]
+    assert mask_response.status_code == 400
+    assert "mask is not supported" in mask_response.json()["detail"]
+
+
+def test_multipart_edit_caps_input_count_before_upload_work(
+    image_client,
+    monkeypatch,
+):
+    async def fail_upload_work(_value, _field_name):
+        raise AssertionError("upload should not be processed")
+
+    monkeypatch.setattr(image_routes, "_upload_to_path", fail_upload_work)
+    response = image_client.post(
+        "/v1/images/edits",
+        data={"model": "alias", "prompt": "combine them"},
+        files=[
+            ("image[]", (f"{index}.png", _png_bytes(), "image/png"))
+            for index in range(17)
+        ],
+    )
+
+    assert response.status_code == 400
+    assert "At most 16" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_edit_missing_dependency_precedes_file_and_engine_work(
+    image_client,
+    monkeypatch,
+    multipart,
+):
+    def missing_dependency():
+        raise ImportError("mlx-vlm image support is unavailable")
+
+    async def fail_input_work(*_args):
+        raise AssertionError("image input should not be processed")
+
+    def fail_pool_work():
+        raise AssertionError("engine pool should not be touched")
+
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", missing_dependency)
+    monkeypatch.setattr(image_routes, "_image_reference_to_path", fail_input_work)
+    monkeypatch.setattr(image_routes, "_upload_to_path", fail_input_work)
+    monkeypatch.setattr(image_routes, "_get_engine_pool", fail_pool_work)
+
+    if multipart:
+        response = image_client.post(
+            "/v1/images/edits",
+            data={"model": "alias", "prompt": "edit it"},
+            files={"image": ("input.png", _png_bytes(), "image/png")},
+        )
+    else:
+        response = image_client.post(
+            "/v1/images/edits",
+            json={
+                "model": "alias",
+                "prompt": "edit it",
+                "images": [{"image_url": "https://example.com/input.png"}],
+            },
+        )
+
+    assert response.status_code == 503
+    assert "mlx-vlm image support is unavailable" in response.json()["detail"]
+
+
+def test_edit_releases_engine_and_cleans_input_when_inference_fails(
+    image_client,
+    monkeypatch,
+):
+    engine, pool = _install_pool(monkeypatch, ["edit"])
+
+    async def fail_edit(prompt: str, image_paths: list[str], **kwargs):
+        engine.seen_paths.extend(image_paths)
+        assert all(Path(path).exists() for path in image_paths)
+        raise ValueError("exactly one input image")
+
+    monkeypatch.setattr(engine, "edit", fail_edit)
+    data_uri = "data:image/png;base64," + base64.b64encode(_png_bytes()).decode("ascii")
+
+    response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "edit it",
+            "images": [{"image_url": data_uri}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "exactly one input image" in response.json()["detail"]
+    assert pool.release_engine_calls == ["resolved-image-model"]
+    assert all(not Path(path).exists() for path in engine.seen_paths)
+
+
+def test_edit_rejects_wrong_task_and_cleans_input(image_client, monkeypatch):
+    engine, pool = _install_pool(monkeypatch, ["generation"])
+    data_uri = "data:image/png;base64," + base64.b64encode(_png_bytes()).decode("ascii")
+
+    response = image_client.post(
+        "/v1/images/edits",
+        json={
+            "model": "alias",
+            "prompt": "edit it",
+            "images": [{"image_url": data_uri}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does not support task 'edit'" in response.json()["detail"]
+    assert engine.edit_calls == []
+    assert pool.get_engine_calls == []
+    assert not list(Path(".omlx_image_inputs_test").glob("*"))
+
+
+@pytest.mark.parametrize(
+    ("host", "ip"),
+    [
+        ("127.0.0.1", "127.0.0.1"),
+        ("169.254.169.254", "169.254.169.254"),
+        ("100.64.0.1", "100.64.0.1"),
+        ("mapped.test", "::ffff:10.0.0.1"),
+    ],
+)
+def test_http_image_url_rejects_non_public_addresses(monkeypatch, host, ip):
+    monkeypatch.setattr(
+        image_routes.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                image_routes.socket.AF_INET,
+                image_routes.socket.SOCK_STREAM,
+                0,
+                "",
+                (ip, 443),
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException, match="public internet address"):
+        image_routes._validate_public_http_url(f"https://{host}/image.png")
+
+
+def test_http_image_download_pins_resolved_ip(monkeypatch):
+    calls: list[str] = []
+    png = _png_bytes()
+
+    def fake_getaddrinfo(host, port, *_args, **_kwargs):
+        calls.append(f"resolve:{host}:{port}")
+        return [
+            (
+                image_routes.socket.AF_INET,
+                image_routes.socket.SOCK_STREAM,
+                0,
+                "",
+                ("93.184.216.34", port),
+            )
+        ]
+
+    class Response:
+        status = 200
+
+        def __init__(self):
+            self.chunks = [png, b""]
+
+        def getheader(self, name):
+            return {
+                "content-type": "image/png",
+                "content-length": str(len(png)),
+            }.get(name.lower())
+
+        def read(self, _size):
+            return self.chunks.pop(0)
+
+    class Connection:
+        def close(self):
+            calls.append("closed")
+
+    def fake_response(resolved):
+        calls.append(f"connect:{resolved.hostname}:{resolved.resolved_ip}")
+        return Response(), Connection()
+
+    monkeypatch.setattr(image_routes.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(image_routes, "_get_pinned_response", fake_response)
+
+    data, suffix = image_routes._download_http_image("https://example.com/image.png")
+
+    assert data == png
+    assert suffix == ".png"
+    assert calls == [
+        "resolve:example.com:443",
+        "connect:example.com:93.184.216.34",
+        "closed",
+    ]
+
+
+def test_http_image_download_revalidates_redirect_target(monkeypatch):
+    calls: list[str] = []
+
+    def fake_getaddrinfo(host, port, *_args, **_kwargs):
+        ip = "93.184.216.34" if host == "example.com" else "127.0.0.1"
+        return [
+            (
+                image_routes.socket.AF_INET,
+                image_routes.socket.SOCK_STREAM,
+                0,
+                "",
+                (ip, port),
+            )
+        ]
+
+    class Response:
+        status = 302
+
+        def getheader(self, name):
+            return (
+                "https://127.0.0.1/private.png" if name.lower() == "location" else None
+            )
+
+    class Connection:
+        def close(self):
+            calls.append("closed")
+
+    monkeypatch.setattr(image_routes.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(
+        image_routes,
+        "_get_pinned_response",
+        lambda resolved: (Response(), Connection()),
+    )
+
+    with pytest.raises(HTTPException, match="public internet address"):
+        image_routes._download_http_image("https://example.com/image.png")
+
+    assert calls == ["closed"]
+
+
+def test_http_image_download_enforces_size_and_timeout(monkeypatch):
+    resolved = image_routes._ResolvedHTTPURL(
+        url="https://example.com/image.png",
+        hostname="example.com",
+        port=443,
+        resolved_ip="93.184.216.34",
+        scheme="https",
+    )
+    monkeypatch.setattr(
+        image_routes, "_validate_public_http_url", lambda _url: resolved
+    )
+
+    class OversizedResponse:
+        status = 200
+
+        def getheader(self, name):
+            if name.lower() == "content-length":
+                return str(image_routes.MAX_IMAGE_DOWNLOAD_BYTES + 1)
+            return "image/png" if name.lower() == "content-type" else None
+
+    class Connection:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        image_routes,
+        "_get_pinned_response",
+        lambda _resolved: (OversizedResponse(), Connection()),
+    )
+    with pytest.raises(HTTPException) as oversized:
+        image_routes._download_http_image(resolved.url)
+    assert oversized.value.status_code == 413
+
+    monkeypatch.setattr(
+        image_routes,
+        "_get_pinned_response",
+        lambda _resolved: (_ for _ in ()).throw(TimeoutError()),
+    )
+    with pytest.raises(HTTPException) as timed_out:
+        image_routes._download_http_image(resolved.url)
+    assert timed_out.value.status_code == 504
+
+
+def test_http_image_download_enforces_total_deadline(monkeypatch):
+    times = iter([0.0, 0.0, 21.0])
+    monkeypatch.setattr(image_routes.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        image_routes,
+        "_validate_public_http_url",
+        lambda url: image_routes._ResolvedHTTPURL(
+            url=url,
+            hostname="example.com",
+            port=443,
+            resolved_ip="93.184.216.34",
+            scheme="https",
+        ),
+    )
+
+    class Response:
+        status = 200
+
+        def getheader(self, _name):
+            return None
+
+    class Connection:
+        sock = None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        image_routes,
+        "_get_pinned_response",
+        lambda _resolved: (Response(), Connection()),
+    )
+
+    with pytest.raises(HTTPException) as timed_out:
+        image_routes._download_http_image("https://example.com/image.png")
+
+    assert timed_out.value.status_code == 504
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://example.com:bad/image.png", "http://[::1/image.png"],
+)
+def test_http_image_url_rejects_malformed_urls(url):
+    with pytest.raises(HTTPException, match="Invalid image_url"):
+        image_routes._validate_public_http_url(url)
+
+
+def test_input_limits_and_actual_image_validation(monkeypatch):
+    with pytest.raises(HTTPException) as invalid:
+        image_routes._validate_image_bytes(b"not an image")
+    assert invalid.value.status_code == 400
+
+    monkeypatch.setattr(image_routes, "MAX_IMAGE_INPUT_PIXELS", 1)
+    with pytest.raises(HTTPException) as too_many_pixels:
+        image_routes._validate_image_bytes(_png_bytes())
+    assert too_many_pixels.value.status_code == 413
+
+    monkeypatch.setattr(image_routes, "MAX_IMAGE_INPUT_BYTES", 8)
+    with pytest.raises(HTTPException) as too_many_bytes:
+        image_routes._write_image_bytes(b"x" * 9, ".png")
+    assert too_many_bytes.value.status_code == 413
+
+    monkeypatch.setattr(image_routes, "MAX_IMAGE_INPUT_BYTES", 1)
+    with pytest.raises(HTTPException) as oversized_data_uri:
+        image_routes._decode_data_uri("data:image/png,%41%41%41%41")
+    assert oversized_data_uri.value.status_code == 413
+
+
+def test_temp_directory_permissions_suffixes_and_restrictions(monkeypatch, tmp_path):
+    monkeypatch.delenv("OMLX_IMAGE_TMPDIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    image_dir = tmp_path / ".omlx_image_inputs"
+    image_dir.mkdir(mode=0o777)
+    image_dir.chmod(0o777)
+
+    assert image_routes._image_tmpdir() == image_dir
+    assert image_dir.stat().st_mode & 0o777 == 0o700
+    assert image_routes._safe_suffix(filename="../../payload.sh") == ".png"
+    assert (
+        image_routes._safe_suffix(filename="payload.sh", content_type="image/jpeg")
+        == ".jpg"
+    )
+    image_path = Path(image_routes._write_image_bytes(_png_bytes(), ".png"))
+    assert image_path.stat().st_mode & 0o777 == 0o600
+    image_path.unlink()
+
+    with tempfile.TemporaryDirectory(dir=Path("/tmp").resolve()) as temp_dir:
+        monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(Path(temp_dir) / "images"))
+        with pytest.raises(HTTPException, match="system temporary directory"):
+            image_routes._image_tmpdir()
+
+
+def test_edit_rejects_malformed_requests(image_client):
+    wrong_content_type = image_client.post(
+        "/v1/images/edits",
+        content=b"input",
+        headers={"content-type": "text/plain"},
+    )
+    invalid_json = image_client.post(
+        "/v1/images/edits",
+        content=b"{",
+        headers={"content-type": "application/json"},
+    )
+    missing_images = image_client.post(
+        "/v1/images/edits",
+        json={"model": "alias", "prompt": "edit it"},
+    )
+    missing_upload = image_client.post(
+        "/v1/images/edits",
+        data={"model": "alias", "prompt": "edit it"},
+    )
+
+    assert wrong_content_type.status_code == 415
+    assert invalid_json.status_code == 400
+    assert missing_images.status_code == 422
+    assert missing_upload.status_code == 415
+
+
 def test_server_image_route_inherits_api_key_auth(monkeypatch):
     from omlx import server
 
@@ -352,4 +951,39 @@ def test_server_image_route_inherits_api_key_auth(monkeypatch):
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
     assert len(engine.generate_calls) == 1
+    assert pool.release_engine_calls == ["resolved-image-model"]
+
+
+def test_server_image_edit_route_inherits_api_key_auth(monkeypatch, tmp_path):
+    from omlx import server
+
+    engine, pool = _install_pool(monkeypatch, ["edit"])
+    api_key = "image-edit-test-key"
+    monkeypatch.setattr(
+        image_routes, "_resolve_model", lambda model: "resolved-image-model"
+    )
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", lambda: None)
+    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(tmp_path / "image-inputs"))
+    monkeypatch.setattr(server._server_state, "api_key", api_key)
+    monkeypatch.setattr(server._server_state, "global_settings", None)
+    monkeypatch.setattr(server._server_state, "engine_pool", None)
+    monkeypatch.setattr(server._server_state, "process_memory_enforcer", None)
+    data_uri = "data:image/png;base64," + base64.b64encode(_png_bytes()).decode("ascii")
+    payload = {
+        "model": "alias",
+        "prompt": "edit it",
+        "images": [{"image_url": data_uri}],
+    }
+
+    with TestClient(server.app, raise_server_exceptions=False) as client:
+        unauthorized = client.post("/v1/images/edits", json=payload)
+        authorized = client.post(
+            "/v1/images/edits",
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert len(engine.edit_calls) == 1
     assert pool.release_engine_calls == ["resolved-image-model"]
