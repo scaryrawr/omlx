@@ -31,6 +31,7 @@ The server provides:
     - POST /v1/chat/completions - Chat completions
     - POST /v1/messages - Anthropic Messages API
     - POST /v1/responses - OpenAI Responses API (Codex compatibility)
+    - POST /v1/images/generations - Image generation
     - GET /v1/models - List available models (with load status)
     - GET /health - Health check
     - GET /v1/mcp/tools - List MCP tools
@@ -612,6 +613,12 @@ from .api.mcp_routes import set_mcp_manager_getter
 
 set_mcp_manager_getter(get_mcp_manager)
 app.include_router(mcp_router, dependencies=[Depends(verify_api_key)])
+
+# Keep the route registered when the image runtime is unavailable so the
+# handler can return an actionable dependency error.
+from .api.image_routes import router as image_router  # noqa: E402
+
+app.include_router(image_router, dependencies=[Depends(verify_api_key)])
 
 # Include web search routes (chat UI built-in web_search / fetch_url tools)
 from .api.websearch_routes import router as websearch_router
