@@ -544,8 +544,8 @@ def test_qwen_vlm_outer_load_weights_remaps_root_mtp(monkeypatch):
     assert model.received_strict is False
 
 
-def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
-    """Dense Qwen3.5 VLM MTP verify must satisfy mlx-vlm's output contract."""
+def test_dense_vlm_runtime_return_hidden_uses_exact_verifier(monkeypatch):
+    """Current Qwen VLM MTP verify must use the rollback-aware exact path."""
     from mlx_vlm.models.base import LanguageModelOutput
 
     from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
@@ -578,6 +578,11 @@ def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
             self.forward_kwargs = kwargs
             return FakeStockOutput()
 
+    monkeypatch.setitem(
+        FakeLanguageModel.__call__.__globals__,
+        "_EXACT_SPECULATIVE_VERIFIER",
+        object(),
+    )
     q35_lang = SimpleNamespace(LanguageModel=FakeLanguageModel)
     qwen35_vlm_runtime._patch_vlm_language_model(q35_lang)
 
@@ -600,6 +605,7 @@ def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
     assert out.gdn_states is gdn_states
     assert out.shared_kv_states == {}
     assert model.forward_kwargs["capture_layer_ids"] == [1]
+    assert model.forward_kwargs["speculative_verify"] is True
 
 
 def test_moe_vlm_sanitize_unfuses_gate_up_by_midpoint(monkeypatch):

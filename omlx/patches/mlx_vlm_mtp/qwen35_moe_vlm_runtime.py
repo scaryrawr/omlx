@@ -274,6 +274,13 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
         # "got multiple values for keyword argument" when the caller already
         # passed capture_layer_ids (e.g. speculative_verify_logits).
         kwargs.pop("capture_layer_ids", None)
+        # Current mlx-vlm performs exact multi-token verification through a
+        # dedicated verifier. The ordinary path neither captures rollback
+        # states nor preserves GDN cache correctness after rejected drafts.
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+            original_call, "__globals__", {}
+        ):
+            kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
             self,

@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import mlx.core as mx
 import mlx.nn as nn
 import pytest
 
 from omlx.patches.qwen35_gdn_decode import (
+    _vlm_gdn_projection,
+    _vlm_gdn_projections,
     apply_qwen35_gdn_decode_patch,
     fused_conv_silu,
 )
@@ -32,6 +36,26 @@ def test_fused_decode_conv_is_bit_exact(batch):
 
     assert mx.array_equal(actual_state, expected_state).item()
     assert mx.array_equal(actual_output, expected_output).item()
+
+
+def test_vlm_gdn_projections_fall_back_when_target_verify_helper_is_removed():
+    """Current mlx-vlm no longer exposes the older target-verify helper."""
+    calls = []
+
+    def decode_helper(linears, inputs):
+        calls.append("decode")
+        return None
+
+    linears = tuple(lambda value, i=i: value + i for i in range(4))
+    inputs = mx.array([1])
+    module = SimpleNamespace(_decode_quantized_linears_fused=decode_helper)
+
+    outputs = _vlm_gdn_projections(module, linears, inputs, target_verify=False)
+    mx.eval(*outputs)
+
+    assert calls == ["decode"]
+    assert [output.item() for output in outputs] == [1, 2, 3, 4]
+    assert _vlm_gdn_projection(module, linears[1], inputs, True).item() == 2
 
 
 def test_patch_installs_for_lm_and_vlm():

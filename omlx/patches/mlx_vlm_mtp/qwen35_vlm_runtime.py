@@ -317,6 +317,14 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
         # to avoid "got multiple values for keyword argument" when the caller
         # already passed capture_layer_ids.
         kwargs.pop("capture_layer_ids", None)
+        # Current mlx-vlm moved exact multi-token verification out of the
+        # ordinary model path into Qwen3_5ExactSpeculativeVerifier. Without
+        # this flag, verify windows mutate GDN caches without returning the
+        # rollback states, so rejected MTP drafts corrupt later output.
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+            original_call, "__globals__", {}
+        ):
+            kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
             self,

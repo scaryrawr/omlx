@@ -203,6 +203,33 @@ def _patch_lm() -> bool:
     return True
 
 
+def _vlm_gdn_projection(q35: Any, linear: Any, inputs, target_verify):
+    """Project one VLM GDN tensor with an optional legacy verify helper."""
+    target_helper = getattr(q35, "_target_verify_linear", None)
+    if callable(target_helper):
+        return target_helper(linear, inputs, target_verify)
+    return linear(inputs)
+
+
+def _vlm_gdn_projections(q35: Any, linears: tuple[Any, ...], inputs, target_verify):
+    """Project VLM GDN inputs across old and current mlx-vlm helper APIs.
+
+    Older mlx-vlm revisions exposed ``_target_verify_linears``. Current
+    revisions replaced it with a decode-only fused helper; ordinary linear
+    calls remain the correctness fallback for target verification.
+    """
+    target_helper = getattr(q35, "_target_verify_linears", None)
+    if callable(target_helper):
+        return target_helper(linears, inputs, target_verify)
+
+    decode_helper = getattr(q35, "_decode_quantized_linears_fused", None)
+    if callable(decode_helper) and not target_verify:
+        projected = decode_helper(linears, inputs)
+        if projected is not None:
+            return projected
+    return tuple(linear(inputs) for linear in linears)
+
+
 def _patch_vlm() -> bool:
     global _VLM_PATCHED
     if _VLM_PATCHED:
@@ -228,7 +255,8 @@ def _patch_vlm() -> bool:
     ):
         batch, seq_len, _ = inputs.shape
         target_verify = target_verify or gdn_sink is not None
-        mixed_qkv, z, b, a = q35._target_verify_linears(
+        mixed_qkv, z, b, a = _vlm_gdn_projections(
+            q35,
             (self.in_proj_qkv, self.in_proj_z, self.in_proj_b, self.in_proj_a),
             inputs,
             target_verify,
@@ -348,8 +376,11 @@ def _patch_vlm() -> bool:
                 q35._qwen3_5_advance_left_padding_info(cache, seq_len)
                 q35._qwen3_5_advance_lengths_info(cache, seq_len)
         out = self.norm(out, z)
-        return q35._target_verify_linear(
-            self.out_proj, out.reshape(batch, seq_len, -1), target_verify
+        return _vlm_gdn_projection(
+            q35,
+            self.out_proj,
+            out.reshape(batch, seq_len, -1),
+            target_verify,
         )
 
     call._omlx_fused_decode_conv = True
