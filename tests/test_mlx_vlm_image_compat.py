@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for native Z-Image and vendored ERNIE-Image compatibility."""
+"""Tests for native mlx-vlm image models and oMLX compatibility."""
 
 from __future__ import annotations
 
@@ -48,6 +48,12 @@ def test_z_image_uses_native_mlx_vlm_package(image_apis):
     import mlx_vlm.models.z_image as z_image
 
     assert "omlx/patches" not in str(z_image.__file__)
+
+
+def test_ernie_image_uses_native_mlx_vlm_package(image_apis):
+    import mlx_vlm.models.ernie_image as ernie_image
+
+    assert "omlx/patches" not in str(ernie_image.__file__)
 
 
 def test_z_image_tokenizer_disables_remote_code(image_apis, monkeypatch):
