@@ -30,7 +30,9 @@ Fail-safe invariant: every capture verifies the anchor offset advanced
 contiguously since the previous capture (``expected_offset``). Any rewind,
 trim, request switch, or unknown cache path breaks the equality and
 invalidates the context, degrading to the current unprimed behaviour —
-never to a wrong history.
+never to a wrong history. A batched (B>1) forward advances the anchor
+without capture seeing its tokens, so it drops the context outright rather
+than let a later singleton chunk read as contiguous across it.
 
 Capture sites (each calls :func:`maybe_capture` after the backbone forward):
 
@@ -130,6 +132,24 @@ class _PrimeCtx:
     window_exceeded: bool = False
 
 
+def _read_offset(entry: Any) -> Optional[int]:
+    """``entry.offset`` as a plain int, unwrapping size-1 array offsets.
+
+    Batch caches (``BatchKVCache`` / ``BatchRotatingKVCache``) hold their
+    offset as a 1-element ``mx.array``. Reading it costs one sync, so
+    callers do it once per forward at most.
+    """
+    offset = getattr(entry, "offset", None)
+    if type(offset) is int:
+        return offset
+    if offset is not None and getattr(offset, "size", 0) == 1:
+        try:
+            return int(offset.reshape(()).item())
+        except Exception:
+            return None
+    return None
+
+
 def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
     """First cache entry with a scalar offset.
 
@@ -148,29 +168,15 @@ def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
     return None
 
 
-def _read_offset(entry: Any) -> Optional[int]:
-    offset = getattr(entry, "offset", None)
-    if type(offset) is int:
-        return offset
-    if offset is not None and getattr(offset, "size", 0) == 1:
-        try:
-            return int(offset.reshape(()).item())
-        except Exception:
-            return None
-    return None
-
-
 def _activation_offset(cache: Optional[List[Any]]) -> Optional[int]:
     """Attention-layer offset at MTP activation, tolerant of batch caches.
 
     Between the last capture and activation, ``insert()`` runs mlx-lm's
     cache merge: scalar ``KVCache`` entries without singleton passthrough
-    become batch caches whose ``offset`` is a 1-element ``mx.array``. The
-    one-off ``int()`` sync here is activation-time only, never per-chunk.
+    become batch caches whose ``offset`` is a 1-element ``mx.array``.
     """
     if not cache:
         return None
-
     for c in cache:
         got = _read_offset(c)
         if got is not None:
@@ -300,14 +306,21 @@ def maybe_capture(
     forward is dispatched lazily and no GPU sync happens here.
 
     Call sites guard the cheap negatives (return_hidden / n_confirmed /
-    inputs_embeds / batch>1) before calling; everything here re-checks what
-    is load-bearing and bails silently, so a miss degrades to unprimed.
+    inputs_embeds) before calling; everything here re-checks what is
+    load-bearing and bails silently, so a miss degrades to unprimed.
     """
     if _suppressed() or not priming_enabled():
         return
     if cache is None or not _host_eligible(host):
         return
-    if inputs is None or getattr(inputs, "ndim", 0) != 2 or inputs.shape[0] != 1:
+    if inputs is None or getattr(inputs, "ndim", 0) != 2:
+        return
+    if inputs.shape[0] != 1:
+        # A B>1 forward advances the anchor invisibly to capture, so a later
+        # singleton chunk could look contiguous with a timeline it never
+        # belonged to (chunk boundaries are aligned across requests). Drop
+        # the slot rather than risk a wrong history.
+        drop_ctx(host)
         return
     anchor = _anchor(cache)
     if anchor is None:
@@ -430,9 +443,14 @@ def take_primed(
     for host in _host_candidates(model):
         hook = getattr(host, "mtp_take_primed", None)
         if callable(hook):
-            return hook(cache, main_tok)
+            primed = hook(cache, main_tok)
+            if primed is not None:
+                return primed
+            # A declining family-specific hook does not own the generic seam.
+            # Its context has already been discarded by the hook, if any.
+            break
     ctx = _find_ctx(model, cache)
-    if ctx is None:
+    if not isinstance(ctx, _PrimeCtx):
         return None
     drop_ctx(model, cache)
     if not (ctx.valid and ctx.folded > 0 and ctx.pending_hidden is not None):
