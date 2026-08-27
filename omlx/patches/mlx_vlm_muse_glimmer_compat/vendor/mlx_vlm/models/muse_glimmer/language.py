@@ -11,8 +11,8 @@ from ..base import (
 )
 from ..cache import KVCache, RotatingKVCache
 
-# oMLX: the pinned mlx-vlm's rope_utils has no initialize_rope (only MRoPE
-# machinery); source it from mlx-lm, whose signature matches upstream usage.
+# oMLX vendor provenance: this copy originally sourced initialize_rope from
+# mlx-lm before mlx-vlm exposed the helper.
 from mlx_lm.models.rope_utils import initialize_rope
 
 from .config import TextConfig

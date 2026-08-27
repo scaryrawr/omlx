@@ -2125,6 +2125,11 @@ class TestMtpCompatibilityHelpers:
     def test_is_mtp_compatible_qwen3_6(self):
         assert _is_mtp_compatible({"mtp_num_hidden_layers": 1}, "qwen3_6") is True
 
+    def test_is_mtp_compatible_qwen4_exp_rejected(self):
+        assert (
+            _is_mtp_compatible({"mtp_num_hidden_layers": 1}, "qwen4_exp") is False
+        )
+
     def test_is_mtp_compatible_deepseek_v4(self):
         assert (
             _is_mtp_compatible({"num_nextn_predict_layers": 1}, "deepseek_v4") is True

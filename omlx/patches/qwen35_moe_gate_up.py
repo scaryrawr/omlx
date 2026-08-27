@@ -143,19 +143,36 @@ def _make_patched_target_verify(orig_fn):
             return orig_fn(switch_mlp, x, indices, target_verify)
         if not (target_verify and x.ndim == 3 and x.shape[1] > 1):
             return switch_mlp(x, indices)
+        return _fused_target_verify(switch_mlp, x, indices)
 
-        B, T, D = x.shape
-        k = indices.shape[-1]
-        flat_x = mx.expand_dims(x.reshape(B * T, D), (-2, -3))
-        flat_indices = indices.reshape(B * T, k)
-        x_gate_up = gate_up(flat_x, flat_indices, sorted_indices=False)
-        x_gate, x_up = mx.split(x_gate_up, 2, axis=-1)
-        out = switch_mlp.down_proj(
-            switch_mlp.activation(x_up, x_gate),
-            flat_indices,
-            sorted_indices=False,
-        )
-        return out.squeeze(-2).reshape(B, T, k, -1)
+    return patched
+
+
+def _fused_target_verify(switch_mlp, x, indices):
+    batch, length, width = x.shape
+    k = indices.shape[-1]
+    flat_x = mx.expand_dims(x.reshape(batch * length, width), (-2, -3))
+    flat_indices = indices.reshape(batch * length, k)
+    x_gate_up = switch_mlp.gate_up_proj(
+        flat_x, flat_indices, sorted_indices=False
+    )
+    x_gate, x_up = mx.split(x_gate_up, 2, axis=-1)
+    out = switch_mlp.down_proj(
+        switch_mlp.activation(x_up, x_gate),
+        flat_indices,
+        sorted_indices=False,
+    )
+    return out.squeeze(-2).reshape(batch, length, k, -1)
+
+
+def _make_patched_verifier_switch_glu(orig_fn):
+    def patched(self, switch_mlp, x, indices):
+        gate_up = getattr(switch_mlp, "gate_up_proj", None)
+        if gate_up is None:
+            return orig_fn(self, switch_mlp, x, indices)
+        if x.ndim != 3 or x.shape[1] <= 1:
+            return switch_mlp(x, indices)
+        return _fused_target_verify(switch_mlp, x, indices)
 
     return patched
 
@@ -169,9 +186,22 @@ def _ensure_vlm_verify_patch() -> None:
     if getattr(module, "_omlx_gate_up_fused_verify", False):
         return
     orig = getattr(module, "_target_verify_switch_glu", None)
-    if orig is None:
+    if orig is not None:
+        module._target_verify_switch_glu = _make_patched_target_verify(orig)
+        module._omlx_gate_up_fused_verify = True
         return
-    module._target_verify_switch_glu = _make_patched_target_verify(orig)
+
+    verifier = module.LanguageModel.__call__.__globals__.get(
+        "_EXACT_SPECULATIVE_VERIFIER"
+    )
+    if verifier is None:
+        return
+    verifier_cls = type(verifier)
+    if not getattr(verifier_cls, "_omlx_gate_up_fused_verify", False):
+        verifier_cls._switch_glu = _make_patched_verifier_switch_glu(
+            verifier_cls._switch_glu
+        )
+        verifier_cls._omlx_gate_up_fused_verify = True
     module._omlx_gate_up_fused_verify = True
 
 

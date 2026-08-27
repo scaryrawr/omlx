@@ -97,6 +97,30 @@ def test_hidden_source_profile_excluded(tmp_path):
     assert _list_ids(state) == []
 
 
+def test_unavailable_model_and_profiles_are_excluded(tmp_path):
+    state = _state(
+        [
+            _model("chat-a"),
+            _model(
+                "qwen-next",
+                config_model_type="qwen4_exp",
+                unavailable_reason="QSA continuous batching is unavailable",
+            ),
+        ],
+        tmp_path,
+    )
+    state.settings_manager.save_profile(
+        "qwen-next",
+        "fast",
+        "Fast",
+        None,
+        {"temperature": 0.1},
+        expose_as_model=True,
+    )
+
+    assert _list_ids(state) == ["chat-a"]
+
+
 def test_hidden_ignored_when_helper_toggle_off(tmp_path):
     # A drafter is visible while the global toggle is off.
     models = [_model("chat-a"), _model("drafter", is_helper=True)]

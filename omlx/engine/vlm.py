@@ -44,7 +44,8 @@ from ..api.utils import (
     remove_special_tokens_preserve_whitespace,
 )
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
-from ..exceptions import InvalidRequestError
+from ..exceptions import InvalidRequestError, ModelUnavailableError
+from ..model_discovery import model_unavailable_reason
 from ..models.vlm import VLMModelAdapter
 from ..patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
@@ -1624,6 +1625,12 @@ class VLMBatchedEngine(BaseEngine):
         """Load VLM model and processor via mlx-vlm, create engine with VLMModelAdapter."""
         if self._loaded:
             return
+
+        unavailable_reason = model_unavailable_reason(
+            _read_config_model_type(self._model_name)
+        )
+        if unavailable_reason is not None:
+            raise ModelUnavailableError(self._model_name, unavailable_reason)
 
         from mlx_vlm.utils import load as vlm_load
 

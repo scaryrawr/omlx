@@ -758,7 +758,10 @@ def test_vlm_target_verify_attention_handles_tq_proxies():
     queries = mx.random.normal((B, n_q, L, D)).astype(mx.float16)
     scale = D**-0.5
 
-    out = q35_lang._target_verify_left_padded_attention(
+    helper = getattr(
+        q35_lang, q35_lang._omlx_tq_target_verify_helper
+    )
+    out = helper(
         queries, ks, vs, cache=tq, scale=scale, mask=None
     )
     mx.eval(out)
@@ -788,7 +791,7 @@ def test_vlm_target_verify_attention_handles_tq_proxies():
     # plain KVCache with no left padding -> caller uses its own path).
     plain_ks, plain_vs = fp_cache.state
     assert (
-        q35_lang._target_verify_left_padded_attention(
+        helper(
             queries, plain_ks, plain_vs, cache=fp_cache, scale=scale, mask=None
         )
         is None

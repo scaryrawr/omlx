@@ -873,6 +873,57 @@ class TestVLMFallback:
     """Tests for VLM-to-LLM fallback during engine loading."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("force_lm", [False, True])
+    async def test_qwen4_exp_rejected_before_engine_construction(
+        self, small_mock_model_dir, force_lm
+    ):
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+        entry = pool.get_entry("model-a")
+        entry.model_type = "vlm"
+        entry.engine_type = "vlm"
+        entry.config_model_type = "qwen4_exp"
+
+        with (
+            patch("omlx.engine_pool.VLMBatchedEngine") as vlm_engine,
+            patch("omlx.engine_pool.BatchedEngine") as batched_engine,
+            pytest.raises(ModelUnavailableError, match="QSA auxiliary cache"),
+        ):
+            await pool.get_engine("model-a", force_lm=force_lm)
+
+        vlm_engine.assert_not_called()
+        batched_engine.assert_not_called()
+        assert entry.is_loading is False
+        assert entry.load_failed is False
+        status = pool.get_status()["models"][0]
+        assert "QSA auxiliary cache" in status["unavailable_reason"]
+
+    @pytest.mark.asyncio
+    async def test_qwen4_exp_direct_load_rejects_dflash_variant(
+        self, small_mock_model_dir
+    ):
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+        entry = pool.get_entry("model-a")
+        entry.model_type = "vlm"
+        entry.engine_type = "vlm"
+        entry.config_model_type = "qwen4_exp"
+        settings = types.SimpleNamespace(
+            dflash_enabled=True,
+            dflash_draft_model="/models/draft",
+        )
+
+        with (
+            patch("omlx.engine_pool.VLMBatchedEngine") as vlm_engine,
+            patch("omlx.engine_pool.BatchedEngine") as batched_engine,
+            pytest.raises(ModelUnavailableError, match="QSA auxiliary cache"),
+        ):
+            await pool._load_engine("model-a", runtime_settings=settings)
+
+        vlm_engine.assert_not_called()
+        batched_engine.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_vlm_fallback_to_llm_on_start_failure(self, small_mock_model_dir):
         """Test that VLM loading failure falls back to LLM BatchedEngine."""
         pool = _make_pool(ceiling=10 * 1024**3)

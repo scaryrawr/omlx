@@ -3033,7 +3033,7 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
                 or m.get("model_path") in referenced_drafts
                 or (m.get("source_repo_id") in referenced_drafts)
             )
-            if is_hidden or is_hidden_helper:
+            if is_hidden or is_hidden_helper or m.get("unavailable_reason"):
                 excluded_model_ids.add(model_id)
                 continue
             if ms is not None and ms.is_favorite:

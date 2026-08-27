@@ -5,8 +5,8 @@ registration; includes the CenteredRMSNorm FP32 operation-order fix from
 commits edfb0ef1 + 6242d295), plus upstream #1848 (reasoning config,
 `_prepare_mlp_input`/`_finish_mlp` norm fusions, FP32 `qk_scale_factor`
 math, plain `nn.Embedding` + separate weightless `embed_norm`) synced in
-2026-08-16 (vendor commit 3a82f856). Vendored because these PRs are newer
-than oMLX's mlx-vlm pin (`78b96eb`).
+2026-08-16 (vendor commit 3a82f856). The current mlx-vlm pin now supplies the
+model; this copy remains as provenance for oMLX's narrow compatibility delta.
 
 The CenteredRMSNorm implementation is duplicated in dflash-mlx's
 `dflash_mlx/models/muse_glimmer.py`; the two must stay numerically
@@ -48,7 +48,6 @@ deleting this vendor package, verify upstream carries:
 - [ ] an `encode_image` public method (or update
       `_compute_vision_features` probing); if absent, the vision feature
       cache silently no-ops for muse_glimmer
-- [ ] `initialize_rope` importable at the new pin (upstream imports it
-      from `..rope_utils`, which needs a newer mlx-vlm than `78b96eb`)
+- [x] `initialize_rope` importable at the current pin
 - [ ] `prompt_utils.MODEL_CONFIG["muse_glimmer"]` registered upstream
 - [ ] a real-model smoke test (text + image + quantized load)

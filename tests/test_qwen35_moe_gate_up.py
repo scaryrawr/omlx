@@ -188,11 +188,23 @@ def test_vlm_target_verify_fused_bit_exact():
     x = (mx.random.normal(shape=(2, 3, HIDDEN)) * 0.5).astype(mx.bfloat16)
     idx = mx.random.randint(0, E, shape=(2, 3, TOPK))
 
-    ref = lang._target_verify_switch_glu(glu, x, idx, True)
+    legacy = getattr(lang, "_target_verify_switch_glu", None)
+    verifier = lang.LanguageModel.__call__.__globals__.get(
+        "_EXACT_SPECULATIVE_VERIFIER"
+    )
+    if legacy is None and verifier is None:
+        pytest.skip("mlx-vlm target verifier not available")
+
+    def verify(switch, values, indices):
+        if legacy is not None:
+            return lang._target_verify_switch_glu(switch, values, indices, True)
+        return verifier._switch_glu(switch, values, indices)
+
+    ref = verify(glu, x, idx)
     mx.eval(ref)
 
     assert apply_qwen35_moe_gate_up_fusion(model) == 1
-    out = lang._target_verify_switch_glu(glu, x, idx, True)
+    out = verify(glu, x, idx)
     mx.eval(out)
 
     assert ref.shape == out.shape

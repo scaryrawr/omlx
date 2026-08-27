@@ -31,6 +31,7 @@ from mlx_vlm.turboquant import (
     _QuantizedStateProxy,
     _slice_state,
     _slice_state_range,
+    _state_length,  # noqa: F401 - re-exported for local attention/cache helpers
     turboquant_enabled,
 )
 

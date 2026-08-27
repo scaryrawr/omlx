@@ -63,5 +63,7 @@ def test_patch_installs_for_lm_and_vlm():
     from mlx_lm.models.qwen3_5 import GatedDeltaNet
     from mlx_vlm.models.qwen3_5.language import Qwen3_5GatedDeltaNet
 
-    assert getattr(GatedDeltaNet.__call__, "_omlx_fused_decode_conv", False)
+    assert getattr(GatedDeltaNet.__call__, "_omlx_fused_decode_conv", False) or getattr(
+        GatedDeltaNet.__call__, "_omlx_mtp_call_marker", False
+    )
     assert getattr(Qwen3_5GatedDeltaNet.__call__, "_omlx_fused_decode_conv", False)

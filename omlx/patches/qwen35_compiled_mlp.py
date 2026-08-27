@@ -45,7 +45,7 @@ class CompiledMLPBlocks:
                 )
         for target in (Qwen3_5MLP, Qwen3_5MoeMLP, Qwen3_5MoeSparseMoeBlock):
             parameters = list(inspect.signature(target.__call__).parameters)
-            if parameters != ["self", "x", "target_verify"]:
+            if parameters not in (["self", "x"], ["self", "x", "target_verify"]):
                 raise RuntimeError(
                     f"mlx-vlm {target.__name__}.__call__ signature changed "
                     f"({parameters}); update the compiled MLP policy"
@@ -98,6 +98,11 @@ class CompiledMLPBlocks:
             for name in sorted(outermost)
         ]
         if replacements:
+            if any(
+                isinstance(replacement, CompiledTargetVerifyMLPBlock)
+                for _, replacement in replacements
+            ):
+                _patch_vlm_exact_verifier()
             model.update_modules(tree_unflatten(replacements))
             logger.info(
                 "Wrapped %d Qwen MLP blocks for compiled decode dispatch",
@@ -137,12 +142,47 @@ class CompiledMLPBlock(nn.Module):
 
 
 class CompiledTargetVerifyMLPBlock(CompiledMLPBlock):
-    """Wrapper for mlx-vlm blocks with a ``target_verify`` argument."""
+    """Wrapper that keeps mlx-vlm speculative verification eager."""
+
+    def __init__(self, inner: nn.Module):
+        super().__init__(inner)
+        self._inner_accepts_target_verify = (
+            "target_verify" in inspect.signature(inner.__call__).parameters
+        )
 
     def __call__(self, x: mx.array, target_verify: bool = False) -> mx.array:
         if not target_verify and self.routes_compiled(x):
             return self.dispatch_compiled(x)
-        return self.inner(x, target_verify)
+        if self._inner_accepts_target_verify:
+            return self.inner(x, target_verify)
+        return self.inner(x)
+
+
+def _patch_vlm_exact_verifier() -> None:
+    """Keep current mlx-vlm's exact verifier on the uncompiled inner block."""
+    try:
+        from mlx_vlm.models.qwen3_5 import language as q35
+    except ImportError:
+        return
+
+    verifier = q35.LanguageModel.__call__.__globals__.get(
+        "_EXACT_SPECULATIVE_VERIFIER"
+    )
+    if verifier is None:
+        return
+    verifier_cls = type(verifier)
+    if getattr(verifier_cls, "_omlx_compiled_mlp_unwrap", False):
+        return
+
+    original = verifier_cls._feed_forward
+
+    def feed_forward(self, module, x):
+        if isinstance(module, CompiledTargetVerifyMLPBlock):
+            module = module.inner
+        return original(self, module, x)
+
+    verifier_cls._feed_forward = feed_forward
+    verifier_cls._omlx_compiled_mlp_unwrap = True
 
 
 __all__ = [

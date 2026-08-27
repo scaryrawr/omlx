@@ -58,6 +58,7 @@ from .model_discovery import (
     discover_models,
     format_size,
     is_realtime_stt_model,
+    model_unavailable_reason,
 )
 from .scheduler import SchedulerConfig
 from .utils.optional_deps import MLX_VLM_MISSING_MESSAGE, is_mlx_vlm_available
@@ -801,6 +802,12 @@ class EnginePool:
         model_type = (entry.config_model_type or "").lower().replace("-", "_")
         return model_type == "diffusion_gemma"
 
+    @staticmethod
+    def _raise_if_entry_unavailable(entry: EngineEntry) -> None:
+        reason = model_unavailable_reason(entry.config_model_type)
+        if reason is not None:
+            raise ModelUnavailableError(entry.model_id, reason)
+
     def apply_settings_overrides(
         self, settings_manager: ModelSettingsManager
     ) -> None:
@@ -1478,6 +1485,7 @@ class EnginePool:
             entry = self._entries.get(model_id)
             if not entry:
                 raise ModelNotFoundError(model_id, list(self._entries.keys()))
+            self._raise_if_entry_unavailable(entry)
             if entry.pending_unload_reason:
                 raise ModelBusyError(model_id, "start work while unload is pending")
             expected_signature = self._engine_runtime_signature(
@@ -2608,6 +2616,7 @@ class EnginePool:
             ModelLoadingError: If model is already being loaded
         """
         entry = self._entries[model_id]
+        self._raise_if_entry_unavailable(entry)
         if entry.is_loading:
             raise ModelLoadingError(model_id)
 
@@ -3217,6 +3226,9 @@ class EnginePool:
                     "engine_type": e.engine_type,
                     "model_type": e.model_type,
                     "config_model_type": e.config_model_type,
+                    "unavailable_reason": model_unavailable_reason(
+                        e.config_model_type
+                    ),
                     "realtime_stt": is_realtime_stt_model(
                         e.model_type, e.config_model_type
                     ),

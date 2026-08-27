@@ -92,6 +92,22 @@ def _make_loaded_engine(model_type=None, tokenizer=None, **overrides):
     return engine
 
 
+@pytest.mark.asyncio
+async def test_qwen4_exp_rejected_before_vlm_loading(tmp_path):
+    from omlx.exceptions import ModelUnavailableError
+
+    (tmp_path / "config.json").write_text('{"model_type": "qwen4_exp"}')
+    engine = _make_engine(model_name=str(tmp_path))
+
+    with pytest.raises(ModelUnavailableError, match="QSA auxiliary cache"):
+        await engine.start()
+
+    assert engine._vlm_model is None
+    assert engine._processor is None
+    assert engine._adapter is None
+    assert engine._engine is None
+
+
 class FakeStreamingCore:
     """Minimal async engine core for VLM stream cleanup tests."""
 

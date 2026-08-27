@@ -26,6 +26,7 @@ from omlx.model_discovery import (
     is_helper_config_model_type,
     is_helper_model_config,
     model_directory_access_error,
+    model_unavailable_reason,
 )
 
 
@@ -310,6 +311,29 @@ class TestDetectModelType:
         }
         (vlm_dir / "config.json").write_text(json.dumps(config))
         assert detect_model_type(vlm_dir) == "vlm"
+
+    def test_detect_qwen4_exp_official_config_as_vlm(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+            "vision_config": {"hidden_size": 1152},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "vlm"
+        assert "QSA auxiliary cache" in model_unavailable_reason("qwen4_exp")
+
+    def test_qwen4_exp_without_vision_is_still_unavailable(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "llm"
+        assert model_unavailable_reason("qwen4_exp") is not None
 
     def test_missing_config_defaults_to_llm(self, tmp_path):
         """Test that missing config.json defaults to LLM."""

@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Baidu Unlimited-OCR compatibility layer for the pinned mlx-vlm.
+"""Baidu Unlimited-OCR compatibility layer for mlx-vlm.
 
-The `unlimited_ocr` model package landed in mlx-vlm PR #1427 (commit
-`9909cee`, 2026-07-01), which is newer than oMLX's current mlx-vlm pin
-(`78b96eb`, 2026-06-28). Rather than bumping the whole pin (8 upstream
-commits, KEEP-patch re-verification), this vendors the model package and
-wires up only the discovery surface oMLX needs:
+mlx-vlm now ships Unlimited-OCR natively. This idempotent layer preserves
+oMLX's tested remapping and single-image-token behavior across package
+revisions:
 
 - installs the vendored `mlx_vlm.models.unlimited_ocr` package onto the real
   `mlx_vlm.models` namespace so `get_model_and_args` can import it (its own

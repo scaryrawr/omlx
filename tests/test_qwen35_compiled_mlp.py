@@ -145,3 +145,30 @@ def test_batched_decode_prefill_and_target_verify_stay_eager(monkeypatch):
     host.mlp(prefill)
 
     assert compiled_calls == 1
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+def test_exact_verifier_unwraps_compiled_vlm_block(monkeypatch):
+    from mlx_vlm.models.qwen3_5 import language as q35
+
+    verifier = q35.LanguageModel.__call__.__globals__.get(
+        "_EXACT_SPECULATIVE_VERIFIER"
+    )
+    if verifier is None:
+        pytest.skip("mlx-vlm exact verifier not available")
+
+    inner = _dense_mlp(Qwen3_5MLP)
+    host = _Host(inner)
+    x = mx.random.normal((1, 1, 64)).astype(mx.float16)
+    expected = verifier._feed_forward(inner, x)
+
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+
+    def fail_compiled_dispatch(_value):
+        raise AssertionError("exact verification must bypass compiled dispatch")
+
+    monkeypatch.setattr(host.mlp, "dispatch_compiled", fail_compiled_dispatch)
+    actual = verifier._feed_forward(host.mlp, x)
+    mx.eval(expected, actual)
+
+    assert mx.array_equal(actual, expected).item()
