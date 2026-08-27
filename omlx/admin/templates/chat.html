@@ -5308,9 +5308,12 @@
         }
     },
 
-    async startNewChat() {
+    async startNewChat(options = {}) {
         this.cancelPersistModelSettingsTimer();
         const prevChatId = this.currentChatId;
+        const preserveDraft = options.preserveDraft === true && !prevChatId;
+        const draftSystemPrompt = this.systemPrompt;
+        const draftActiveProfile = this.activePromptProfile;
         if (prevChatId) {
             const prevSession = this.getChatSession(prevChatId, false);
             if (prevSession) {
@@ -5327,13 +5330,18 @@
 
         const chatId = 'chat_' + Date.now();
         const sysDefault = this.promptProfiles.find(p => p.name === 'System Default');
-        const systemPrompt = sysDefault ? sysDefault.content : '';
+        const systemPrompt = preserveDraft
+            ? draftSystemPrompt
+            : (sysDefault ? sysDefault.content : '');
+        const activeProfile = preserveDraft
+            ? draftActiveProfile
+            : (sysDefault ? sysDefault.name : null);
         this.currentChatId = chatId;
         this.uploadImages = [];
         this.uploadDocuments = [];
         this.inputMessage = '';
         this.systemPrompt = systemPrompt;
-        this.activePromptProfile = sysDefault ? sysDefault.name : null;
+        this.activePromptProfile = activeProfile;
         this.editingIndex = null;
         this.editContent = '';
         this.editImages = [];
@@ -5345,7 +5353,7 @@
             messages: [],
             model: this.currentModel,
             systemPrompt,
-            activeProfile: this.activePromptProfile,
+            activeProfile,
             modelSettings: null,
             speculativeEngine: null,
             speculativeDraftModel: null,
@@ -5353,7 +5361,15 @@
         };
         this.chatSessions[chatId] = session;
         this.messages = session.messages;
-        await this.ensureSessionModelSettings(session, this.currentModel);
+        if (preserveDraft && this.modelSettingsDirty) {
+            this.syncSessionModelSettingsFromUi(session);
+            await this.loadModelCapabilities(
+                this.resolveGatewayModelId(this.currentModel)
+            );
+            this.modelSettingsDirty = false;
+        } else {
+            await this.ensureSessionModelSettings(session, this.currentModel);
+        }
         if (this.currentModel) {
             this.saveModelSettingsForModel(session, this.currentModel);
         }
@@ -5589,7 +5605,7 @@
         });
 
         if (!this.currentChatId) {
-            await this.startNewChat();
+            await this.startNewChat({ preserveDraft: true });
         }
 
         const chatId = this.currentChatId;
@@ -5642,7 +5658,7 @@
         this.uploadAudio = null;
 
         if (!this.currentChatId) {
-            await this.startNewChat();
+            await this.startNewChat({ preserveDraft: true });
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;
@@ -5833,7 +5849,7 @@
         }
 
         if (!this.currentChatId) {
-            await this.startNewChat();
+            await this.startNewChat({ preserveDraft: true });
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;

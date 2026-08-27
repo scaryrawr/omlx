@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any
 
+from ..exceptions import InvalidRequestError
 from .openai_models import Message
 
 # Model families whose chat templates consume message.reasoning_content directly.
