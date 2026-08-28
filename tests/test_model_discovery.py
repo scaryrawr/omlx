@@ -322,9 +322,9 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
 
         assert detect_model_type(tmp_path) == "vlm"
-        assert "QSA auxiliary cache" in model_unavailable_reason("qwen4_exp")
+        assert model_unavailable_reason("qwen4_exp") is None
 
-    def test_qwen4_exp_without_vision_is_still_unavailable(self, tmp_path):
+    def test_qwen4_exp_without_vision_is_available_as_llm(self, tmp_path):
         config = {
             "model_type": "qwen4_exp",
             "architectures": ["Qwen4ExpForConditionalGeneration"],
@@ -333,7 +333,7 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
 
         assert detect_model_type(tmp_path) == "llm"
-        assert model_unavailable_reason("qwen4_exp") is not None
+        assert model_unavailable_reason("qwen4_exp") is None
 
     def test_missing_config_defaults_to_llm(self, tmp_path):
         """Test that missing config.json defaults to LLM."""

@@ -122,7 +122,13 @@ def _report_native_vlm_mtp_readiness(
 ) -> bool:
     """Log and return whether a loaded VLM can enter native-head MTP decode."""
     language_model = getattr(adapter, "_language_model", None)
-    has_mtp_head = getattr(language_model, "mtp", None) is not None
+    get_mtp_module = getattr(language_model, "get_mtp_module", None)
+    mtp_head = (
+        get_mtp_module()
+        if callable(get_mtp_module)
+        else getattr(language_model, "mtp", None)
+    )
+    has_mtp_head = mtp_head is not None
     decode_enabled = bool(
         getattr(language_model, "_omlx_mtp_decode_enabled", False)
     )

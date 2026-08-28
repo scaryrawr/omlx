@@ -1700,6 +1700,14 @@ def _call_backbone(
     _set_verify_qmm_armed(not dspark_verify)
     _set_dspark_target_verify(model, dspark_verify)
     try:
+        speculative_verify = getattr(model, "speculative_verify_logits", None)
+        if n_confirmed and callable(speculative_verify):
+            hidden, _, rollback_state, logits = speculative_verify(
+                inputs,
+                cache,
+                lambda verify_logits: verify_logits,
+            )
+            return logits, hidden, rollback_state
         result = model(inputs, **kwargs)
     finally:
         if dspark_verify:

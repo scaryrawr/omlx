@@ -423,6 +423,33 @@ def test_qwen4_batch_factory_honors_model_owned_cache_conversion():
     ).item()
 
 
+def test_qwen4_singleton_cache_extend_promotes_to_batch():
+    from mlx_vlm.models.qwen4_exp.language import BatchQSAKVCache, QSAKVCache
+
+    rows = []
+    for length in (3, 1):
+        cache = QSAKVCache()
+        cache.update_and_fetch(
+            mx.ones((1, 2, length, 4)) * length,
+            mx.ones((1, 2, length, 4)) * (length + 1),
+        )
+        cache.update_indexer(
+            mx.arange(length * 4).reshape(1, length, 4),
+            mx.arange(length, dtype=mx.int32)[None],
+        )
+        rows.append(cache)
+
+    rows[0].extend(rows[1])
+
+    assert isinstance(rows[0], BatchQSAKVCache)
+    assert rows[0].offset.tolist() == [3, 1]
+    assert rows[0].left_padding.tolist() == [0, 2]
+    restored = rows[0].extract(1)
+    mx.eval(*restored.state)
+    assert restored.offset == 1
+    assert mx.array_equal(restored.index_keys, rows[1].index_keys).item()
+
+
 def test_qwen4_fp8_ple_dequantizes_only_selected_rows():
     _tiny_config()
     from mlx_vlm.models.qwen4_exp.language import ShardedEmbedding
@@ -474,7 +501,54 @@ def test_qwen4_qsa_cache_round_trip_preserves_greedy_decode():
     assert restored[1].index_position_ids.shape[-1] == 4
 
 
-def test_qwen4_verify_matches_singleton_greedy_and_rolls_back_qsa():
+def test_qwen4_batched_qsa_decode_matches_singleton_greedy():
+    config = _tiny_config()
+    from mlx_vlm.models.qwen4_exp.language import (
+        ArraysCache,
+        BatchQSAKVCache,
+        LanguageModel,
+    )
+
+    model = LanguageModel(config.text_config, config)
+    prefixes = (
+        mx.array([[2, 3, 4, 5]], dtype=mx.int32),
+        mx.array([[6, 7, 8, 9]], dtype=mx.int32),
+    )
+    expected = []
+    batch_rows = []
+    for prefix, token in zip(prefixes, (10, 11)):
+        singleton_cache = model.make_cache()
+        model(prefix, cache=singleton_cache)
+        expected.append(
+            model(
+                mx.array([[token]], dtype=mx.int32),
+                cache=singleton_cache,
+            ).logits
+        )
+
+        row_cache = model.make_cache()
+        model(prefix, cache=row_cache)
+        batch_rows.append(row_cache)
+
+    batch_cache = [
+        ArraysCache.merge([rows[layer] for rows in batch_rows])
+        if layer == 0
+        else BatchQSAKVCache.merge([rows[layer] for rows in batch_rows])
+        for layer in range(len(batch_rows[0]))
+    ]
+    actual = model(
+        mx.array([[10], [11]], dtype=mx.int32),
+        cache=batch_cache,
+    ).logits
+    expected = mx.concatenate(expected, axis=0)
+    mx.eval(actual, expected)
+
+    assert mx.allclose(actual, expected, atol=1e-5, rtol=1e-5).item()
+    assert batch_cache[1].index_keys.shape == (2, 5, 8)
+    assert batch_cache[1].index_position_ids.shape == (2, 5)
+
+
+def test_qwen4_exact_verify_matches_singleton_greedy_and_rolls_back_qsa():
     config = _tiny_config()
     from mlx_vlm.models.qwen4_exp.language import LanguageModel
 
@@ -485,25 +559,21 @@ def test_qwen4_verify_matches_singleton_greedy_and_rolls_back_qsa():
     model(prefix, cache=verify_cache)
     model(prefix, cache=singleton_cache)
 
-    verified = model(
+    hidden, _, rollback_state, verified_logits = model.speculative_verify_logits(
         mx.array([[5, 6]], dtype=mx.int32),
         cache=verify_cache,
-        return_hidden=True,
+        sampler=lambda logits: logits,
     )
     first = model(mx.array([[5]], dtype=mx.int32), cache=singleton_cache)
     second = model(mx.array([[6]], dtype=mx.int32), cache=singleton_cache)
     singleton_logits = mx.concatenate([first.logits, second.logits], axis=1)
-    verified_tokens = mx.argmax(verified.logits, axis=-1)
-    singleton_tokens = mx.argmax(singleton_logits, axis=-1)
-    mx.eval(verified_tokens, singleton_tokens)
+    mx.eval(hidden, verified_logits, singleton_logits)
 
-    assert mx.array_equal(verified_tokens, singleton_tokens).item()
-    assert verified.hidden_states[0].shape == (1, 2, 64)
-    assert len(verified.gdn_states) == 1
-
+    assert mx.allclose(verified_logits, singleton_logits, atol=1e-5, rtol=1e-5).item()
+    assert hidden.shape == (1, 2, 64)
     model.rollback_speculative_cache(
         verify_cache,
-        verified.gdn_states,
+        rollback_state,
         accepted=0,
         block_size=2,
     )

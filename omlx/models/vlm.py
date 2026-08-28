@@ -136,6 +136,13 @@ class VLMModelAdapter(nn.Module):
             block_size,
         )
 
+    def speculative_verify_logits(self, inputs, cache, sampler):
+        return self._language_model.speculative_verify_logits(
+            inputs,
+            cache,
+            sampler,
+        )
+
     # Runtime family patches use this marker to avoid installing an older,
     # model-specific copy of the same adapter plumbing.
     _omlx_mtp_adapter_patched = True

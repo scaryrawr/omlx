@@ -861,3 +861,27 @@ class TestCallBackbone:
         assert result[0] is logits
         assert result[1] is hidden
         assert result[2] is gdn
+
+    def test_verify_uses_model_exact_speculative_path(self):
+        import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
+
+        logits = mx.zeros((1, 3, 100))
+        hidden = mx.zeros((1, 3, 64))
+        rollback_state = object()
+        model = MagicMock()
+        model.speculative_verify_logits.return_value = (
+            hidden,
+            {},
+            rollback_state,
+            logits,
+        )
+        inputs = mx.zeros((1, 3), dtype=mx.uint32)
+        cache = [object()]
+
+        result = _call_backbone(model, inputs, cache, n_confirmed=1)
+
+        assert result == (logits, hidden, rollback_state)
+        model.speculative_verify_logits.assert_called_once()
+        model.assert_not_called()

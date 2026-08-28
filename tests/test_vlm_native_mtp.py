@@ -203,6 +203,27 @@ def test_native_vlm_mtp_readiness_logs_ready(caplog):
     assert "Native VLM MTP ready" in caplog.text
 
 
+def test_native_vlm_mtp_readiness_accepts_owner_bound_head(caplog):
+    head = object()
+    adapter = SimpleNamespace(
+        _language_model=SimpleNamespace(
+            get_mtp_module=lambda: head,
+            _omlx_mtp_decode_enabled=True,
+        ),
+        mtp_forward=lambda *_args, **_kwargs: None,
+    )
+
+    with caplog.at_level(logging.INFO, logger="omlx.engine.vlm"):
+        ready = _report_native_vlm_mtp_readiness(
+            "/models/qwen3.8-flash-next-mtp",
+            adapter,
+            has_mtp_weights=True,
+        )
+
+    assert ready is True
+    assert "Native VLM MTP ready" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("has_head", "has_adapter_bridge"),
     [(False, True), (True, False)],

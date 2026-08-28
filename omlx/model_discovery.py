@@ -60,21 +60,10 @@ IMAGE_MANIFEST_NAME = "omlx-image-model.json"
 
 QWEN4_EXP_MODEL_TYPE = "qwen4_exp"
 QWEN4_EXP_ARCHITECTURE = "Qwen4ExpForConditionalGeneration"
-QWEN4_EXP_UNAVAILABLE_REASON = (
-    "Qwen3.8-Flash-Next (qwen4_exp) is recognized but unavailable in oMLX: "
-    "mlx-vlm's QSA auxiliary cache is not wired for continuous batching. "
-    "Use mlx-vlm's single-request generation path until batch-safe support "
-    "is available."
-)
 
 
 def model_unavailable_reason(config_model_type: str | None) -> str | None:
     """Return a stable serving-policy reason for a known unavailable family."""
-    if not isinstance(config_model_type, str):
-        return None
-    normalized = config_model_type.lower().replace("-", "_")
-    if normalized == QWEN4_EXP_MODEL_TYPE:
-        return QWEN4_EXP_UNAVAILABLE_REASON
     return None
 
 

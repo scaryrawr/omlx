@@ -110,9 +110,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm v0.6.17 (11e1262), including Qwen3.8-Flash-Next base support.
-    # oMLX keeps qwen4_exp unavailable until QSA supports batching.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@11e12626ca7dd979bebca2bba96f66ad51c857aa",
+    # mlx-vlm after v0.6.17 (dda2e04), including Qwen3.8-Flash-Next
+    # continuous batching, MTP, FP8 conversion, and APC disk-cache support.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@dda2e04660eca41cc168670eee971c5bb1a15e5c",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.7 (c55324c) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
