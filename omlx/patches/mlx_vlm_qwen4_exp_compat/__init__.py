@@ -20,7 +20,7 @@ def _append_package_path(package: Any, path: Path) -> None:
         return
     path_string = str(path)
     if path_string not in package_path:
-        package_path.append(path_string)
+        package_path.insert(0, path_string)
 
 
 def apply_mlx_vlm_qwen4_exp_compat_patch() -> bool:

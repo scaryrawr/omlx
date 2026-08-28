@@ -17,16 +17,24 @@ import mlx.nn as nn
 import numpy as np
 
 from .cache import ArraysCache, BatchKVCache, KVCache, QuantizedKVCache, dynamic_roll
+from ..qwen3_5 import language as qwen3_5_language
 from ..qwen3_5.language import LanguageModel as Qwen3_5LanguageModel
 from ..qwen3_5.language import (
     Qwen3_5Attention,
     Qwen3_5GatedDeltaNet,
     _create_qwen3_5_attention_mask,
     _create_qwen3_5_ssm_mask,
-    _target_verify_linear,
 )
 from ..qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
 from .config import ModelConfig, TextConfig
+
+
+def _target_verify_linear(linear, inputs, target_verify: bool = False):
+    helper = getattr(qwen3_5_language, "_target_verify_linear", None)
+    if helper is not None:
+        return helper(linear, inputs, target_verify)
+    return linear(inputs)
+
 
 _PLE_RUNTIME_MODEL_PATH: Path | None = None
 _PLE_RUNTIME_MODE = "resident"

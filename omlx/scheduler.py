@@ -952,14 +952,6 @@ def _patched_make_cache(model, left_padding, max_kv_size):
 
     model_cache = model.make_cache()
 
-    def has_model_owned_conversion(cache_obj):
-        if callable(getattr(cache_obj, "to_batch", None)):
-            return True
-        sub_caches = getattr(cache_obj, "caches", None)
-        return isinstance(sub_caches, (list, tuple)) and any(
-            has_model_owned_conversion(child) for child in sub_caches
-        )
-
     class _SingleCacheModel:
         layers = (None,)
 
@@ -975,10 +967,17 @@ def _patched_make_cache(model, left_padding, max_kv_size):
             return to_batch(left_padding)
 
         sub_caches = getattr(cache_obj, "caches", None)
-        if isinstance(sub_caches, (list, tuple)) and any(
-            has_model_owned_conversion(child) for child in sub_caches
-        ):
+        if isinstance(sub_caches, (list, tuple)):
             return type(cache_obj)(*(convert(child) for child in sub_caches))
+
+        if type(cache_obj).__name__ in {"ArraysCache", "SizedArraysCache"}:
+            cache_obj.left_padding = mx.array(left_padding)
+            return cache_obj
+
+        if type(cache_obj).__name__ in {"KVCache", "RotatingKVCache"}:
+            merge = getattr(cache_obj, "merge", None)
+            if callable(merge):
+                return merge([cache_obj])
 
         return _original_make_cache(
             _SingleCacheModel(cache_obj), left_padding, max_kv_size

@@ -113,25 +113,6 @@ def test_make_cache_finds_nested_model_owned_batch_conversion():
     assert nested == ("custom-batch", (2, 0))
 
 
-def test_make_cache_finds_nested_model_owned_batch_conversion():
-    gen = importlib.import_module("mlx_lm.generate")
-
-    class CustomCache:
-        def to_batch(self, left_padding):
-            return ("custom-batch", tuple(left_padding))
-
-    class Model:
-        layers = (object(),)
-
-        def make_cache(self):
-            return [CacheList(CacheList(CustomCache()))]
-
-    caches = gen._make_cache(Model(), [2, 0], None)
-
-    nested = caches[0].caches[0].caches[0]
-    assert nested == ("custom-batch", (2, 0))
-
-
 def test_prompt_batch_full_split_moves_cache_without_copy():
     arrays = _arrays_cache()
     kv = _kv_cache(3)
