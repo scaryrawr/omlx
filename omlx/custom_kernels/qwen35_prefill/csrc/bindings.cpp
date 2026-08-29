@@ -34,6 +34,7 @@ NB_MODULE(_ext, m) {
   m.def(
       "nax_qmm_runtime_active",
       &omlx::qwen35_prefill_kernels::nax_qmm_runtime_active);
+  m.attr("QMM_HAS_NARROW_AFFINE") = true;
   m.def(
       "qwen35_ane_available",
       &omlx::qwen35_prefill_kernels::qwen35_ane_available);
@@ -472,6 +473,22 @@ NB_MODULE(_ext, m) {
       "weight"_a,
       "bits"_a,
       "group_count"_a,
+      "stream"_a = nb::none());
+  m.def(
+      "qwen35_mxfp4_qmm_t",
+      &omlx::qwen35_prefill_kernels::qwen35_mxfp4_qmm_t,
+      "x"_a,
+      "weight"_a,
+      "scales"_a,
+      "variant"_a = 8,
+      "stream"_a = nb::none());
+  m.def(
+      "qwen35_mxfp8_qmm_t",
+      &omlx::qwen35_prefill_kernels::qwen35_mxfp8_qmm_t,
+      "x"_a,
+      "weight"_a,
+      "scales"_a,
+      "variant"_a = 8,
       "stream"_a = nb::none());
   m.def(
       "qwen35_moe_weighted_sum",

@@ -51,6 +51,7 @@ target_link_libraries(
 if(MLX_BUILD_METAL)
   set(OMLX_QWEN35_PREFILL_METAL_SOURCES
       ${CMAKE_CURRENT_LIST_DIR}/qwen35_attention.metal
+      ${CMAKE_CURRENT_LIST_DIR}/qwen35_fp_qmm.metal
       ${CMAKE_CURRENT_LIST_DIR}/qwen35_qmm.metal
       ${CMAKE_CURRENT_LIST_DIR}/qwen35_oq_a8.metal
       ${CMAKE_CURRENT_LIST_DIR}/qwen35_ane.metal)
