@@ -6,6 +6,8 @@ import concurrent.futures
 import json
 import logging
 import shutil
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -134,6 +136,41 @@ class TestEnginePoolInit:
         entry_b = pool.get_entry("model-b")
         assert entry_b is not None
         assert entry_b.is_pinned is False
+
+    def test_discover_image_model_preserves_metadata_in_status(self, tmp_path):
+        """Image manifest metadata is copied into EngineEntry and status."""
+        model_dir = tmp_path / "flux-schnell"
+        model_dir.mkdir()
+        (model_dir / "omlx-image-model.json").write_text(
+            json.dumps(
+                {
+                    "backend": "mlx-vlm",
+                    "base_model": "flux2-klein-4b",
+                    "task": ["txt2img", "edit"],
+                    "estimated_size": 4096,
+                }
+            )
+        )
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(tmp_path))
+
+        entry = pool.get_entry("flux-schnell")
+        assert entry is not None
+        assert entry.model_type == "image"
+        assert entry.engine_type == "image"
+        assert entry.config_model_type == "mlx-vlm"
+        assert entry.capabilities == ["generation", "edit"]
+        assert entry.tasks == ["generation", "edit"]
+        assert entry.image_metadata is not None
+        assert entry.image_metadata["base_model"] == "flux2-klein-4b"
+
+        status_model = pool.get_status()["models"][0]
+        assert status_model["model_type"] == "image"
+        assert status_model["engine_type"] == "image"
+        assert status_model["capabilities"] == ["generation", "edit"]
+        assert status_model["tasks"] == ["generation", "edit"]
+        assert status_model["image_metadata"]["backend"] == "mlx-vlm"
 
 
 class TestExposedProfileModelResolution:
@@ -424,9 +461,32 @@ class TestEnginePoolErrors:
 
         with pytest.raises(ModelNotFoundError) as exc_info:
             asyncio.run(pool.get_engine("model-a"))
-
         assert exc_info.value.model_id == "model-a"
         assert pool.get_entry("model-a") is None
+        assert pool.get_entry("model-a") is None
+
+    def test_image_engine_missing_mlx_vlm_raises_model_loading_error(self, tmp_path):
+        """Image engine load fails fast when mlx-vlm is unavailable."""
+        model_dir = tmp_path / "Z-Image-Turbo-mxfp8"
+        model_dir.mkdir()
+        (model_dir / "tokenizer.json").write_text("{}")
+        (model_dir / "transformer").mkdir()
+        (model_dir / "transformer" / "0.safetensors").write_text("weights")
+        (model_dir / "vae").mkdir()
+        (model_dir / "vae" / "0.safetensors").write_text("weights")
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(tmp_path))
+
+        with (
+            patch("omlx.engine_pool.is_mlx_vlm_available", return_value=False),
+            pytest.raises(ModelLoadingError) as exc_info,
+        ):
+            asyncio.run(pool.get_engine("Z-Image-Turbo-mxfp8"))
+
+        assert exc_info.value.model_id == "Z-Image-Turbo-mxfp8"
+        msg = str(exc_info.value)
+        assert "mlx-vlm image support is unavailable" in msg
 
 
 class TestEnginePoolStatus:
@@ -469,6 +529,16 @@ class TestEnginePoolStatus:
 
         assert pool.get_loaded_model_ids() == []
 
+    def test_get_status_includes_is_loading(self, small_mock_model_dir):
+        """Test get_status includes is_loading field."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        status = pool.get_status()
+        for model in status["models"]:
+            assert "is_loading" in model
+            assert model["is_loading"] is False
+
 
 class TestEngineEntry:
     """Tests for EngineEntry dataclass."""
@@ -487,6 +557,9 @@ class TestEngineEntry:
         assert entry.last_access == 0.0
         assert entry.is_loading is False
         assert entry.is_pinned is False
+        assert entry.capabilities == []
+        assert entry.tasks == []
+        assert entry.image_metadata is None
 
     def test_entry_with_values(self):
         """Test EngineEntry with custom values."""
@@ -777,6 +850,121 @@ class TestApplySettingsOverrides:
 
         assert pool.get_entry("model-a").model_type == "llm"
         assert pool.get_entry("model-a").engine_type == "batched"
+
+    def test_image_override_maps_to_image_engine(self, small_mock_model_dir):
+        """Test that image override changes both model and engine type."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        from omlx.model_settings import ModelSettings
+
+        settings_manager = MagicMock()
+        settings_manager.get_settings.side_effect = lambda mid: (
+            ModelSettings(model_type_override="image")
+            if mid == "model-a"
+            else ModelSettings()
+        )
+
+        pool.apply_settings_overrides(settings_manager)
+
+        assert pool.get_entry("model-a").model_type == "image"
+        assert pool.get_entry("model-a").engine_type == "image"
+
+
+class TestImageEngineLoading:
+    """Tests for ImageEngine construction."""
+
+    @pytest.mark.asyncio
+    async def test_load_image_engine_passes_manifest_metadata(self, monkeypatch):
+        """ImageEngine is imported lazily and receives discovery metadata."""
+        created_kwargs = {}
+
+        class FakeImageEngine:
+            def __init__(self, **kwargs):
+                created_kwargs.update(kwargs)
+                self.start_calls = 0
+
+            async def start(self):
+                self.start_calls += 1
+                return None
+
+        fake_module = types.ModuleType("omlx.engine.image")
+        fake_module.ImageEngine = FakeImageEngine
+        monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
+        monkeypatch.setattr("omlx.engine_pool.is_mlx_vlm_available", lambda: True)
+        monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
+        monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        entry = EngineEntry(
+            model_id="flux-schnell",
+            model_path="/models/flux-schnell",
+            model_type="image",
+            engine_type="image",
+            estimated_size=4096,
+            config_model_type="mlx-vlm",
+            capabilities=["generation"],
+            tasks=["generation"],
+            image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        )
+        pool._entries["flux-schnell"] = entry
+
+        await pool._load_engine("flux-schnell")
+
+        assert isinstance(entry.engine, FakeImageEngine)
+        assert entry.engine.start_calls == 1
+        assert pool.current_model_memory == 4096
+        assert created_kwargs["model_name"] == "/models/flux-schnell"
+        assert created_kwargs["model_id"] == "flux-schnell"
+        assert created_kwargs["model_path"] == "/models/flux-schnell"
+        assert created_kwargs["config_model_type"] == "mlx-vlm"
+        assert created_kwargs["image_metadata"] == {
+            "backend": "mlx-vlm",
+            "base_model": "flux2-klein-4b",
+        }
+        assert created_kwargs["capabilities"] == ["generation"]
+        assert created_kwargs["tasks"] == ["generation"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_image_engines_can_remain_loaded(self, monkeypatch):
+        started = []
+
+        class FakeImageEngine:
+            def __init__(self, **kwargs):
+                self.model_id = kwargs["model_id"]
+
+            async def start(self):
+                started.append(self.model_id)
+
+        fake_module = types.ModuleType("omlx.engine.image")
+        fake_module.ImageEngine = FakeImageEngine
+        monkeypatch.setitem(sys.modules, "omlx.engine.image", fake_module)
+        monkeypatch.setattr("omlx.engine_pool.is_mlx_vlm_available", lambda: True)
+        monkeypatch.setattr("omlx.engine_pool.mx.synchronize", lambda: None)
+        monkeypatch.setattr("omlx.engine_pool.mx.clear_cache", lambda: None)
+
+        pool = _make_pool(ceiling=10 * 1024**3)
+        for model_id in ("first-image", "second-image"):
+            pool._entries[model_id] = EngineEntry(
+                model_id=model_id,
+                model_path=f"/models/{model_id}",
+                model_type="image",
+                engine_type="image",
+                estimated_size=4096,
+                capabilities=["generation"],
+                tasks=["generation"],
+                image_metadata={
+                    "backend": "mlx-vlm",
+                    "base_model": "flux2-klein-4b",
+                },
+            )
+
+        await pool._load_engine("first-image")
+        await pool._load_engine("second-image")
+
+        assert started == ["first-image", "second-image"]
+        assert pool._entries["first-image"].engine is not None
+        assert pool._entries["second-image"].engine is not None
 
 
 class TestVLMFallback:
@@ -1498,11 +1686,11 @@ class TestEnginePoolAsync:
         with patch(
             "omlx.engine_pool.EmbeddingEngine",
             return_value=mock_engine,
-        ) as MockEmbeddingEngine:
+        ) as mock_embedding_engine_cls:
             engine = await pool.get_engine("embed-model")
 
         assert engine is mock_engine
-        MockEmbeddingEngine.assert_called_once_with(
+        mock_embedding_engine_cls.assert_called_once_with(
             model_name=str(model_path),
             trust_remote_code=False,
             scheduler_config=scheduler_config,
@@ -1529,11 +1717,11 @@ class TestEnginePoolAsync:
         with patch(
             "omlx.engine_pool.EmbeddingEngine",
             return_value=mock_engine,
-        ) as MockEmbeddingEngine:
+        ) as mock_embedding_engine_cls:
             engine = await pool.get_engine("embed-model")
 
         assert engine is mock_engine
-        MockEmbeddingEngine.assert_called_once_with(
+        mock_embedding_engine_cls.assert_called_once_with(
             model_name=str(model_path),
             trust_remote_code=False,
             scheduler_config=pool._scheduler_config,
@@ -1879,7 +2067,6 @@ class TestEnginePoolEviction:
             with pytest.raises(InsufficientMemoryError):
                 await pool.get_engine("model-b")
 
-
 class TestAdmissionSoftTargetEviction:
     """#2319: idle-model eviction starts at the soft watermark, before load.
 
@@ -1989,7 +2176,6 @@ class TestAdmissionSoftTargetEviction:
         assert pool._entries["model-a"].engine is not None
         assert pool._entries["model-b"].engine is not None
         assert pool.loaded_model_count == 2
-
 
 class TestGuardOffBestEffortAdmission:
     """#2290: model-swap eviction must survive disabling the memory guard.
@@ -2666,7 +2852,7 @@ class TestEnginePoolPrefillEviction:
         assert f"phys_footprint={released_gb:.2f}GB" in decisions[1]
 
 
-class TestEnginePoolStatus:
+class TestEnginePoolLoadingStatus:
     """Tests for get_status is_loading field."""
 
     def test_get_status_includes_is_loading(self, small_mock_model_dir):
@@ -2975,6 +3161,37 @@ class TestResolveModelId:
         result = pool.resolve_model_id("gpt-4", settings_manager)
         assert result == "model-a"
 
+    def test_alias_conflicting_with_model_id_is_not_active(self, small_mock_model_dir):
+        """Test aliases that collide with model IDs are ignored."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="model-b"),
+            "model-b": ModelSettings(),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("model-b", settings_manager) == "model-b"
+        assert pool.resolve_model_id("omlx/model-b", settings_manager) == "model-b"
+
+    def test_duplicate_alias_is_not_active(self, small_mock_model_dir):
+        """Test duplicate aliases are ignored instead of resolving arbitrarily."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        settings_manager = MagicMock()
+        from omlx.model_settings import ModelSettings
+        settings_manager.get_all_settings.return_value = {
+            "model-a": ModelSettings(model_alias="gpt-4"),
+            "model-b": ModelSettings(model_alias="gpt-4"),
+        }
+
+        assert pool.get_active_model_aliases(settings_manager) == {}
+        assert pool.resolve_model_id("gpt-4", settings_manager) == "gpt-4"
+
     def test_no_match_returns_original(self, small_mock_model_dir):
         """Test unresolved name returns original string."""
         pool = _make_pool(ceiling=10 * 1024**3)
@@ -3119,6 +3336,75 @@ class TestMemorySettleBarrier:
 
         assert pool._entries["model-a"].engine is None
         assert pool._current_model_memory == initial_memory - est_size
+
+    @pytest.mark.asyncio
+    async def test_unload_finishes_after_caller_cancellation(
+        self, pool_with_loaded_model
+    ):
+        """Cancellation cannot strand tensors after the entry is detached."""
+        pool = pool_with_loaded_model
+        entry = pool._entries["model-a"]
+        stop_started = asyncio.Event()
+        allow_stop = asyncio.Event()
+
+        async def blocking_stop():
+            stop_started.set()
+            await allow_stop.wait()
+
+        entry.engine.stop.side_effect = blocking_stop
+        active_memory_values = iter([10 * 1024**3, 5 * 1024**3])
+
+        with (
+            patch("omlx.engine_pool.mx") as mock_mx,
+            patch("omlx.engine_pool.get_mlx_executor", return_value=None),
+        ):
+            mock_mx.get_active_memory.side_effect = lambda: next(
+                active_memory_values, 5 * 1024**3
+            )
+            caller = asyncio.create_task(pool._unload_engine("model-a"))
+            await stop_started.wait()
+
+            caller.cancel()
+            await asyncio.sleep(0)
+            assert not caller.done()
+
+            caller.cancel()
+            await asyncio.sleep(0)
+            assert not caller.done()
+
+            allow_stop.set()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+
+        assert entry.engine is None
+        assert pool._current_model_memory == 0
+        assert pool._engine_unload_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_unload_failure_does_not_replace_caller_cancellation(
+        self, pool_with_loaded_model
+    ):
+        """A teardown failure is logged without masking caller cancellation."""
+        pool = pool_with_loaded_model
+        unload_started = asyncio.Event()
+        allow_failure = asyncio.Event()
+
+        async def failing_unload(_model_id):
+            unload_started.set()
+            await allow_failure.wait()
+            raise RuntimeError("teardown failed")
+
+        pool._unload_engine_impl = failing_unload
+        caller = asyncio.create_task(pool._unload_engine("model-a"))
+        await unload_started.wait()
+
+        caller.cancel()
+        allow_failure.set()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await asyncio.sleep(0)
+
+        assert pool._engine_unload_tasks == {}
 
     @pytest.mark.asyncio
     async def test_settle_takes_multiple_rounds(self, pool_with_loaded_model):
@@ -3361,6 +3647,8 @@ class TestMemorySettleBarrier:
         other_engine = MagicMock()
         other_engine.has_active_requests = MagicMock(return_value=True)
         pool._entries["model-b"].engine = other_engine
+        target_engine = pool._entries["model-a"].engine
+        target_engine.stop_without_global_cleanup = AsyncMock()
 
         # Global gauge RISES during settle (concurrent prefill/KV growth),
         # so freed = pre_unload - active_now is negative every round.
@@ -3387,15 +3675,30 @@ class TestMemorySettleBarrier:
             mock_mx.clear_cache = MagicMock()
 
             await pool._unload_engine("model-a")
+            cleanup_counts_during_activity = (
+                mock_mx.synchronize.call_count,
+                mock_mx.clear_cache.call_count,
+            )
+            assert pool._deferred_mlx_cleanup is True
+
+            other_engine.has_active_requests.return_value = False
+            await pool._run_deferred_mlx_cleanup_if_idle()
+            cleanup_counts_after_drain = (
+                mock_mx.synchronize.call_count,
+                mock_mx.clear_cache.call_count,
+            )
 
         assert "indeterminate under concurrent activity" in caplog.text
         # No settle-round burn, no timeout warning, no emergency reclaim.
         assert sleep_calls.count(0.5) == 0
         assert "Settle barrier timed out" not in caplog.text
         assert "Emergency reclaim" not in caplog.text
-        # Only the initial pre-barrier release cycle touched the executor.
-        assert mock_mx.synchronize.call_count == 1
-        assert mock_mx.clear_cache.call_count == 1
+        # No global cleanup is queued behind the active inference.
+        target_engine.stop_without_global_cleanup.assert_awaited_once()
+        target_engine.stop.assert_not_awaited()
+        assert cleanup_counts_during_activity == (0, 0)
+        assert cleanup_counts_after_drain == (1, 1)
+        assert pool._deferred_mlx_cleanup is False
         # The unload itself still completes and is accounted.
         assert pool._entries["model-a"].engine is None
         assert pool._current_model_memory == 0
