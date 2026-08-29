@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import logging
 import sys
 from pathlib import Path
@@ -25,6 +26,15 @@ PR_HEAD_SHA = "0857ee1cf1f4ba7c43e73b836309d9c884529ca8"
 PR_URL = "https://github.com/ml-explore/mlx-lm/pull/1223"
 
 _APPLIED = False
+
+
+def _upstream_supports_omlx_laguna(module: object) -> bool:
+    """Return whether the installed Laguna model supports oMLX's config surface."""
+    model_args = getattr(module, "ModelArgs", None)
+    if model_args is None:
+        return False
+    parameters = inspect.signature(model_args).parameters
+    return {"gating_types", "swa_rope_parameters"} <= parameters.keys()
 
 
 def _register_module(qualname: str, filename: str, package: str) -> None:
@@ -89,7 +99,7 @@ def apply_laguna_patch() -> bool:
         return False
 
     try:
-        importlib.import_module("mlx_lm.models.laguna")
+        upstream_laguna = importlib.import_module("mlx_lm.models.laguna")
     except ModuleNotFoundError as error:
         if error.name == "mlx_lm":
             logger.debug("mlx_lm not importable - laguna patch skipped")
@@ -105,7 +115,23 @@ def apply_laguna_patch() -> bool:
         )
         applied = True
     else:
-        applied = False
+        if _upstream_supports_omlx_laguna(upstream_laguna):
+            applied = False
+        else:
+            # Newer upstream Laguna support omits the mixed-attention and
+            # per-layer gating fields required by oMLX's S-2.1 compatibility.
+            # Keep the richer vendored implementation until upstream exposes
+            # an equivalent config surface.
+            sys.modules.pop("mlx_lm.models.laguna", None)
+            models_package = importlib.import_module("mlx_lm.models")
+            if getattr(models_package, "laguna", None) is upstream_laguna:
+                delattr(models_package, "laguna")
+            _register_module(
+                "mlx_lm.models.laguna",
+                "laguna_model.py",
+                "mlx_lm.models",
+            )
+            applied = True
 
     if _register_tool_parser():
         applied = True

@@ -283,10 +283,14 @@ def apply() -> bool:
         logger.debug(f"inkling language module not importable: {e}")
         return False
 
-    _patch_model_config(inkling_pkg)
-    _register_mtp_classes(inkling_lang)
-    _patch_language_model(inkling_lang)
-    _patch_inner_model_capture(inkling_lang)
+    try:
+        _patch_model_config(inkling_pkg)
+        _register_mtp_classes(inkling_lang)
+        _patch_language_model(inkling_lang)
+        _patch_inner_model_capture(inkling_lang)
+    except (AttributeError, ImportError) as e:
+        logger.debug(f"inkling runtime API is incompatible with MTP patch: {e}")
+        return False
 
     # Shared VLMModelAdapter pass-throughs (idempotent).
     from .qwen35_vlm_runtime import _patch_vlm_model_adapter
@@ -330,7 +334,11 @@ def _patch_model_config(inkling_pkg: Any) -> None:
         cls.from_dict = classmethod(patched_from_dict)
         cls._omlx_mtp_from_dict_patched = True
 
-    text_cls = inkling_pkg.TextConfig
+    text_cls = getattr(inkling_pkg, "TextConfig", None)
+    if text_cls is None:
+        from mlx_vlm.models.inkling.config import TextConfig
+
+        text_cls = TextConfig
     if not getattr(text_cls, "_omlx_mtp_from_dict_patched", False):
         original_text_from_dict = text_cls.from_dict.__func__
 
@@ -452,9 +460,6 @@ def _patch_language_model(inkling_lang: Any) -> None:
             # (vLLM re-prefill equivalent). The generator's
             # _mtp_head_trim_to no-ops on CacheList entries (no .offset).
             self._omlx_mtp_head_clone = False
-            # Row-wise batch MTP threads per-row extract/merge state the
-            # multi-block window bookkeeping does not model.
-            self._omlx_mtp_rowwise_unsupported = True
             # The head normalizes its hidden input per block
             # (chain_hidden_post_norm=false) — fold must NOT trunk-norm.
             self._omlx_mtp_head_prenorm = True
