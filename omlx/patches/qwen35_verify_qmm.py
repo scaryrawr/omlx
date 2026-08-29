@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: N803, N806, SIM300
 #
 # Adapted from MTPLX (mtplx/verify_kernels.py)
 #   Copyright 2026 Youssof Altoukhi
@@ -38,9 +39,8 @@ at bf16 tail-ULP level. Greedy outputs can therefore occasionally diverge
 from the unrouted path (the token is still trunk-verified — the divergence
 class is the same as any kernel change).
 
-Supported: 4-bit and 8-bit affine, group_size in {32, 64, 128}, bf16/fp16
-activations, M in 3..6, K % 64 == 0, N % 4 == 0. Everything else falls
-back to stock.
+Supported: 4-bit and 8-bit affine, MXFP4, and MXFP8; bf16/fp16 activations,
+M in 3..6, K % 64 == 0, N % 4 == 0. Everything else falls back to stock.
 """
 
 from __future__ import annotations
@@ -63,6 +63,55 @@ _MSG_NSG = 8  # simdgroups per threadgroup for the msg (lm_head) kernel
 # few calls with real wins (lm_head 2.6-3.3x at M=3-4).
 _MIN_ROUTE_N = 16384
 
+_FP_HEADER = r"""
+struct OMLXFP4E2M1 {
+    operator float16_t() {
+        half converted = as_type<half>(ushort((bits & 7) << 9));
+        converted *= 16384.0;
+        return bits & 8 ? -converted : converted;
+    }
+    operator float() {
+        return static_cast<float>(this->operator float16_t());
+    }
+    uint8_t bits;
+};
+
+struct OMLXFP8E4M3 {
+    operator float16_t() {
+        uint16_t value = (bits & 127) << 7;
+        half converted = as_type<half>(value);
+        converted *= 256.0;
+        return bits & 128 ? -converted : converted;
+    }
+    operator float() {
+        return static_cast<float>(this->operator float16_t());
+    }
+    uint8_t bits;
+};
+
+struct OMLXFP8E8M0 {
+    operator float() {
+        uint32_t value = bits == 0
+            ? 0x400000
+            : (static_cast<uint32_t>(bits) << 23);
+        return as_type<float>(value);
+    }
+    uint8_t bits;
+};
+
+inline float omlx_fp4_weight(uint8_t value) {
+    return float(*(thread OMLXFP4E2M1*)(&value));
+}
+
+inline float omlx_fp8_weight(uint8_t value) {
+    return float(*(thread OMLXFP8E4M3*)(&value));
+}
+
+inline float omlx_fp_scale(uint8_t value) {
+    return float(*(thread OMLXFP8E8M0*)(&value));
+}
+"""
+
 
 def set_verify_qmm_armed(flag: bool) -> None:
     """Arm/disarm verify-qmm routing (MTP verify forwards only)."""
@@ -78,15 +127,22 @@ def _is_armed() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _fma_block(m: int, bits: int) -> str:
+def _fma_block(m: int, bits: int, mode: str) -> str:
     per = 8 if bits == 4 else 4
     mask = "0xFu" if bits == 4 else "0xFFu"
     shift = 4 if bits == 4 else 8
     lines = [f"for (int ki = 0; ki < {per}; ++ki) {{"]
-    for j in range(4):
-        lines.append(
-            f"    float w{j} = float((p{j} >> (ki * {shift})) & {mask}) * s{j} + b{j};"
+    if mode == "affine":
+        weight_expr = (
+            f"float((p{{j}} >> (ki * {shift})) & {mask}) * s{{j}} + b{{j}}"
         )
+    else:
+        converter = "omlx_fp4_weight" if bits == 4 else "omlx_fp8_weight"
+        weight_expr = (
+            f"{converter}(uint8_t((p{{j}} >> (ki * {shift})) & {mask})) * s{{j}}"
+        )
+    for j in range(4):
+        lines.append(f"    float w{j} = {weight_expr.format(j=j)};")
     for j in range(4):
         for r in range(m):
             lines.append(
@@ -97,10 +153,12 @@ def _fma_block(m: int, bits: int) -> str:
     return "\n            ".join(lines)
 
 
-def _build_msg_kernel(m: int, bits: int, group_size: int, dtype, nsg: int):
+def _build_msg_kernel(
+    m: int, bits: int, group_size: int, mode: str, dtype, nsg: int
+):
     import mlx.core as mx
 
-    key = ("msg", m, bits, group_size, dtype, nsg)
+    key = ("msg", m, bits, group_size, mode, dtype, nsg)
     if key in _KERNEL_CACHE:
         return _KERNEL_CACHE[key]
 
@@ -116,23 +174,55 @@ def _build_msg_kernel(m: int, bits: int, group_size: int, dtype, nsg: int):
             uint32_t p2 = w_q[(n0 + 2) * K_by_p + pack];
             uint32_t p3 = w_q[(n0 + 3) * K_by_p + pack];
         """
+        scale_loads = (
+            "\n".join(
+                f"            float s{j} = omlx_fp_scale(scales[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+            if mode != "affine"
+            else "\n".join(
+                f"            float s{j} = float(scales[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+        )
+        bias_loads = (
+            ""
+            if mode != "affine"
+            else "\n".join(
+                f"            float b{j} = float(biases[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+        )
         body = f"""
         for (int pack = int(lane); pack < K_by_p; pack += 32) {{
             {pack_setup}
             {xloads}
-            float s0 = float(scales[(n0 + 0) * K_by_gs + gi]);
-            float s1 = float(scales[(n0 + 1) * K_by_gs + gi]);
-            float s2 = float(scales[(n0 + 2) * K_by_gs + gi]);
-            float s3 = float(scales[(n0 + 3) * K_by_gs + gi]);
-            float b0 = float(biases[(n0 + 0) * K_by_gs + gi]);
-            float b1 = float(biases[(n0 + 1) * K_by_gs + gi]);
-            float b2 = float(biases[(n0 + 2) * K_by_gs + gi]);
-            float b3 = float(biases[(n0 + 3) * K_by_gs + gi]);
+{scale_loads}
+{bias_loads}
             _Pragma("unroll")
-            {_fma_block(m, 4)}
+            {_fma_block(m, 4, mode)}
         }}
         """
     else:
+        scale_loads = (
+            "\n".join(
+                f"                float s{j} = omlx_fp_scale(scales[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+            if mode != "affine"
+            else "\n".join(
+                f"                float s{j} = float(scales[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+        )
+        bias_loads = (
+            ""
+            if mode != "affine"
+            else "\n".join(
+                f"                float b{j} = float(biases[(n0 + {j}) * K_by_gs + gi]);"
+                for j in range(4)
+            )
+        )
         body = f"""
         for (int pair = int(lane); pair < K_by_p; pair += 32) {{
             int k_base = pair * 8;
@@ -145,16 +235,10 @@ def _build_msg_kernel(m: int, bits: int, group_size: int, dtype, nsg: int):
                 uint32_t p1 = w_q[(n0 + 1) * (K / 4) + pair * 2 + wsel];
                 uint32_t p2 = w_q[(n0 + 2) * (K / 4) + pair * 2 + wsel];
                 uint32_t p3 = w_q[(n0 + 3) * (K / 4) + pair * 2 + wsel];
-                float s0 = float(scales[(n0 + 0) * K_by_gs + gi]);
-                float s1 = float(scales[(n0 + 1) * K_by_gs + gi]);
-                float s2 = float(scales[(n0 + 2) * K_by_gs + gi]);
-                float s3 = float(scales[(n0 + 3) * K_by_gs + gi]);
-                float b0 = float(biases[(n0 + 0) * K_by_gs + gi]);
-                float b1 = float(biases[(n0 + 1) * K_by_gs + gi]);
-                float b2 = float(biases[(n0 + 2) * K_by_gs + gi]);
-                float b3 = float(biases[(n0 + 3) * K_by_gs + gi]);
+{scale_loads}
+{bias_loads}
                 _Pragma("unroll")
-                {_fma_block(m, 8)}
+                {_fma_block(m, 8, mode)}
             }}
         }}
         """
@@ -202,9 +286,10 @@ def _build_msg_kernel(m: int, bits: int, group_size: int, dtype, nsg: int):
 
     dtype_tag = {mx.bfloat16: "bf16", mx.float16: "fp16"}.get(dtype, "unk")
     kernel = mx.fast.metal_kernel(
-        name=f"omlx_vk_m{m}_q{bits}_nsg{nsg}_gs{group_size}_{dtype_tag}",
+        name=f"omlx_vk_m{m}_{mode}{bits}_nsg{nsg}_gs{group_size}_{dtype_tag}",
         input_names=["x", "w_q", "scales", "biases", "K_size", "N_size"],
         output_names=["y"],
+        header=_FP_HEADER if mode != "affine" else "",
         source=source,
     )
     _KERNEL_CACHE[key] = kernel
@@ -216,7 +301,7 @@ def _build_msg_kernel(m: int, bits: int, group_size: int, dtype, nsg: int):
 # ---------------------------------------------------------------------------
 
 
-def _pack_block(m: int, bits: int, sfx: str) -> str:
+def _pack_block(m: int, bits: int, mode: str, sfx: str) -> str:
     p = f"pack{sfx}"
     lines = [f"int k_base{sfx} = {p} * 8;", f"int gi{sfx} = k_base{sfx} / GS;"]
     for r in range(m):
@@ -225,19 +310,35 @@ def _pack_block(m: int, bits: int, sfx: str) -> str:
         for j in range(4):
             lines.append(f"uint32_t p{sfx}_{j} = w_q[(n0 + {j}) * K_by_p + {p}];")
         for j in range(4):
-            lines.append(
-                f"float s{sfx}_{j} = float(scales[(n0 + {j}) * K_by_gs + gi{sfx}]);"
-                f" float b{sfx}_{j} = float(biases[(n0 + {j}) * K_by_gs + gi{sfx}]);"
+            scale = (
+                f"omlx_fp_scale(scales[(n0 + {j}) * K_by_gs + gi{sfx}])"
+                if mode != "affine"
+                else f"float(scales[(n0 + {j}) * K_by_gs + gi{sfx}])"
             )
+            bias = (
+                ""
+                if mode != "affine"
+                else f" float b{sfx}_{j} = float(biases[(n0 + {j}) * K_by_gs + gi{sfx}]);"
+            )
+            lines.append(f"float s{sfx}_{j} = {scale};{bias}")
         for j in range(4):
             block = [
                 "{",
                 f"    uint32_t packed = p{sfx}_{j};",
                 f"    float s = s{sfx}_{j};",
-                f"    float b = b{sfx}_{j};",
-                "    for (int ki = 0; ki < 8; ++ki) {",
-                "        float wv = float((packed >> (ki * 4)) & 0xFu) * s + b;",
             ]
+            if mode == "affine":
+                block.append(f"    float b = b{sfx}_{j};")
+            block.extend(
+                [
+                    "    for (int ki = 0; ki < 8; ++ki) {",
+                    (
+                        "        float wv = omlx_fp4_weight(uint8_t((packed >> (ki * 4)) & 0xFu)) * s;"
+                        if mode == "mxfp4"
+                        else "        float wv = float((packed >> (ki * 4)) & 0xFu) * s + b;"
+                    ),
+                ]
+            )
             for r in range(m):
                 block.append(
                     f"        acc[{j} * {m} + {r}] += float(v{sfx}_{r}[ki]) * wv;"
@@ -251,21 +352,41 @@ def _pack_block(m: int, bits: int, sfx: str) -> str:
                 f" uint32_t pb{sfx}_{j} = w_q[(n0 + {j}) * K_by_w + {p} * 2 + 1];"
             )
         for j in range(4):
-            lines.append(
-                f"float s{sfx}_{j} = float(scales[(n0 + {j}) * K_by_gs + gi{sfx}]);"
-                f" float b{sfx}_{j} = float(biases[(n0 + {j}) * K_by_gs + gi{sfx}]);"
+            scale = (
+                f"omlx_fp_scale(scales[(n0 + {j}) * K_by_gs + gi{sfx}])"
+                if mode != "affine"
+                else f"float(scales[(n0 + {j}) * K_by_gs + gi{sfx}])"
             )
+            bias = (
+                ""
+                if mode != "affine"
+                else f" float b{sfx}_{j} = float(biases[(n0 + {j}) * K_by_gs + gi{sfx}]);"
+            )
+            lines.append(f"float s{sfx}_{j} = {scale};{bias}")
         for j in range(4):
             block = [
                 "{",
                 f"    uint32_t pa = pa{sfx}_{j};",
                 f"    uint32_t pb = pb{sfx}_{j};",
                 f"    float s = s{sfx}_{j};",
-                f"    float b = b{sfx}_{j};",
-                "    for (int ki = 0; ki < 4; ++ki) {",
-                "        float wa = float((pa >> (ki * 8)) & 0xFFu) * s + b;",
-                "        float wb = float((pb >> (ki * 8)) & 0xFFu) * s + b;",
             ]
+            if mode == "affine":
+                block.append(f"    float b = b{sfx}_{j};")
+            block.extend(
+                [
+                    "    for (int ki = 0; ki < 4; ++ki) {",
+                    (
+                        "        float wa = omlx_fp8_weight(uint8_t((pa >> (ki * 8)) & 0xFFu)) * s;"
+                        if mode == "mxfp8"
+                        else "        float wa = float((pa >> (ki * 8)) & 0xFFu) * s + b;"
+                    ),
+                    (
+                        "        float wb = omlx_fp8_weight(uint8_t((pb >> (ki * 8)) & 0xFFu)) * s;"
+                        if mode == "mxfp8"
+                        else "        float wb = float((pb >> (ki * 8)) & 0xFFu) * s + b;"
+                    ),
+                ]
+            )
             for r in range(m):
                 block.append(
                     f"        acc[{j} * {m} + {r}] += float(v{sfx}_{r}[ki]) * wa;"
@@ -278,17 +399,25 @@ def _pack_block(m: int, bits: int, sfx: str) -> str:
     return "\n            ".join(lines)
 
 
-def _build_ksplit_kernel(m: int, bits: int, group_size: int, dtype, *, k_parts: int):
+def _build_ksplit_kernel(
+    m: int,
+    bits: int,
+    group_size: int,
+    mode: str,
+    dtype,
+    *,
+    k_parts: int,
+):
     import mlx.core as mx
 
-    key = ("ksplit", m, bits, group_size, dtype, k_parts)
+    key = ("ksplit", m, bits, group_size, mode, dtype, k_parts)
     if key in _KERNEL_CACHE:
         return _KERNEL_CACHE[key]
 
     n_acc = 4 * m
     loop = f"""
         for (int packA = p_start + int(lane); packA < p_end; packA += 32) {{
-            {_pack_block(m, bits, "A")}
+            {_pack_block(m, bits, mode, "A")}
         }}
     """
 
@@ -350,9 +479,10 @@ def _build_ksplit_kernel(m: int, bits: int, group_size: int, dtype, *, k_parts: 
 
     dtype_tag = {mx.bfloat16: "bf16", mx.float16: "fp16"}.get(dtype, "unk")
     kernel = mx.fast.metal_kernel(
-        name=f"omlx_vk_ks_m{m}_q{bits}_kp{k_parts}_gs{group_size}_{dtype_tag}",
+        name=f"omlx_vk_ks_m{m}_{mode}{bits}_kp{k_parts}_gs{group_size}_{dtype_tag}",
         input_names=["x", "w_q", "scales", "biases", "K_size", "N_size"],
         output_names=["y"],
+        header=_FP_HEADER if mode != "affine" else "",
         source=source,
     )
     _KERNEL_CACHE[key] = kernel
@@ -372,7 +502,16 @@ def _pad_rows(mx, x2, m: int):
     return mx.contiguous(x2), M
 
 
-def vk_qmm(x2, w_q, scales, biases, *, bits: int, group_size: int):
+def vk_qmm(
+    x2,
+    w_q,
+    scales,
+    biases,
+    *,
+    bits: int,
+    group_size: int,
+    mode: str = "affine",
+):
     """Verify-shape qmm: (M, K) x (N, K)^T -> (M, N), M in 2..6.
 
     Rows are padded up to the kernel's M template. split-K for regular
@@ -387,7 +526,9 @@ def vk_qmm(x2, w_q, scales, biases, *, bits: int, group_size: int):
 
     if N >= 100000 and N % (4 * _MSG_NSG) == 0:
         xm, M0 = _pad_rows(mx, x2, m)
-        kernel = _build_msg_kernel(m, bits, group_size, x2.dtype, _MSG_NSG)
+        kernel = _build_msg_kernel(
+            m, bits, group_size, mode, x2.dtype, _MSG_NSG
+        )
         cols = 4 * _MSG_NSG
         (y,) = kernel(
             inputs=[xm, w_q, scales, biases, K, N],
@@ -403,7 +544,9 @@ def vk_qmm(x2, w_q, scales, biases, *, bits: int, group_size: int):
     m = max(2, min(6, M))
     xm, M0 = _pad_rows(mx, x2, m)
     k_parts = 2 if N >= 4096 else 4
-    kernel = _build_ksplit_kernel(m, bits, group_size, x2.dtype, k_parts=k_parts)
+    kernel = _build_ksplit_kernel(
+        m, bits, group_size, mode, x2.dtype, k_parts=k_parts
+    )
     (y,) = kernel(
         inputs=[xm, w_q, scales, biases, K, N],
         template=[("T", x2.dtype)],
@@ -415,15 +558,31 @@ def vk_qmm(x2, w_q, scales, biases, *, bits: int, group_size: int):
     return y[:M0, :] if M0 < m else y
 
 
-def vk_eligible(M: int, K: int, N: int, bits: int, group_size: int, dtype) -> bool:
+def vk_eligible(
+    M: int,
+    K: int,
+    N: int,
+    bits: int,
+    group_size: int,
+    dtype,
+    mode: str = "affine",
+) -> bool:
     import mlx.core as mx
 
     # M >= 3: at M=2 (depth-1 verify) the dispatch overhead eats the GPU win
     # AND skipping it keeps depth-1 greedy output bit-identical to the
     # unrouted path. Depth >= 2 verifies at M >= 3 where the kernels pay.
-    return (
-        int(bits) in (4, 8)
+    quantization_supported = (
+        mode == "affine"
+        and int(bits) in (4, 8)
         and int(group_size) in (32, 64, 128)
+    ) or (
+        mode in ("mxfp4", "mxfp8")
+        and int(bits) == (4 if mode == "mxfp4" else 8)
+        and int(group_size) == 32
+    )
+    return (
+        quantization_supported
         and dtype in (mx.bfloat16, mx.float16)
         and 3 <= int(M) <= 6
         and int(K) % 64 == 0
@@ -451,7 +610,6 @@ def apply_verify_qmm_patch() -> bool:
     if _QL_PATCHED:
         return True
 
-    import mlx.core as mx
     import mlx.nn as nn
 
     cls = nn.QuantizedLinear
@@ -467,7 +625,6 @@ def apply_verify_qmm_patch() -> bool:
             and x.ndim == 3
             and x.shape[0] == 1
             and 2 <= x.shape[1] <= 6
-            and getattr(self, "mode", "affine") == "affine"
             and vk_eligible(
                 x.shape[1],
                 x.shape[-1],
@@ -475,6 +632,7 @@ def apply_verify_qmm_patch() -> bool:
                 self.bits,
                 self.group_size,
                 x.dtype,
+                getattr(self, "mode", "affine"),
             )
         ):
             try:
@@ -482,9 +640,10 @@ def apply_verify_qmm_patch() -> bool:
                     x[0],
                     self.weight,
                     self.scales,
-                    self.biases,
+                    self.biases if self.biases is not None else self.scales,
                     bits=self.bits,
                     group_size=self.group_size,
+                    mode=getattr(self, "mode", "affine"),
                 )
                 if hasattr(self, "bias"):
                     y = y + self.bias
@@ -497,5 +656,5 @@ def apply_verify_qmm_patch() -> bool:
     cls.__call__ = patched_call
     cls._omlx_verify_qmm_patched = True
     _QL_PATCHED = True
-    logger.info("MTP verify qmm patch applied (M=2..6 affine 4/8-bit)")
+    logger.info("MTP verify qmm patch applied (M=2..6 affine/MXFP 4/8-bit)")
     return True
