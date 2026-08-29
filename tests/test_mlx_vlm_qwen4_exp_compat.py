@@ -794,6 +794,61 @@ def test_disk_backed_affine_ple_supports_all_oq_bits(tmp_path, bits):
     embedding.close()
 
 
+def test_disk_backed_mxfp4_ple_supports_scale_only_shards(tmp_path):
+    compat.apply_mlx_vlm_qwen4_exp_compat_patch()
+    from mlx_vlm.models.qwen4_exp.language import DiskBackedShardedEmbedding
+
+    source_prefix = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding"
+    stored_prefix = "language_model.model.layers.1.ple.ple_embedding.ngram_embedding"
+    tensors = {}
+    expected_rows = []
+    for shard_index in range(2):
+        dense = (
+            mx.arange(4 * 160, dtype=mx.float32).reshape(4, 160) / 97
+            + shard_index * 10
+        ).astype(mx.bfloat16)
+        weight, scales = mx.quantize(
+            dense, group_size=32, bits=4, mode="mxfp4"
+        )
+        base = f"{stored_prefix}.shards.{shard_index}"
+        tensors[f"{base}.weight"] = weight
+        tensors[f"{base}.scales"] = scales
+        expected_rows.append(
+            mx.dequantize(
+                weight,
+                scales,
+                None,
+                group_size=32,
+                bits=4,
+                mode="mxfp4",
+            )
+        )
+
+    filename = "model-00001-of-00001.safetensors"
+    mx.save_safetensors(str(tmp_path / filename), tensors, metadata={"format": "mlx"})
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {key: filename for key in tensors}}),
+        encoding="utf-8",
+    )
+
+    embedding = DiskBackedShardedEmbedding(
+        tmp_path,
+        source_prefix,
+        num_embeddings=8,
+        dims=160,
+        num_shards=2,
+    )
+    values = embedding(mx.array([[1, 6]], dtype=mx.int32))
+    mx.eval(values)
+    expected = mx.stack([expected_rows[0][1], expected_rows[1][2]])[None]
+
+    assert mx.allclose(values, expected, atol=2e-2, rtol=2e-2).item()
+    assert embedding.last_touched_shards == (0, 1)
+    assert embedding.rows_read == 2
+    assert embedding._shard_specs[0][2:] == (None, 4, 32)
+    embedding.close()
+
+
 def test_external_ple_path_is_bounded_and_ssd_alias_resolves(tmp_path):
     compute = tmp_path / "compute"
     ple = tmp_path / "ple"

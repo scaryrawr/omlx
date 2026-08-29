@@ -1070,6 +1070,7 @@ class _SafeTensorMMap:
             "BF16": (np.dtype("<u2"), 2),
             "F16": (np.dtype("<f2"), 2),
             "F32": (np.dtype("<f4"), 4),
+            "U8": (np.dtype("u1"), 1),
             "U32": (np.dtype("<u4"), 4),
             "F8_E4M3": (np.dtype("u1"), 1),
         }.get(dtype)
@@ -1199,6 +1200,36 @@ class DiskBackedShardedEmbedding(nn.Module):
                 )
                 continue
 
+            if scales_key in weight_map and biases_key not in weight_map:
+                if weight_dtype != "U32":
+                    raise TypeError(
+                        f"MXFP4 Qwen4 PLE weight must be U32, got {weight_dtype} "
+                        f"for {weight_key}"
+                    )
+                scales_reader = register_reader(scales_key)
+                scales_shape = scales_reader.tensor_shape(scales_key)
+                scales_dtype = scales_reader.tensor_dtype(scales_key)
+                expected_weight_shape = (shard_size, dims * 4 // 32)
+                expected_scales_shape = (shard_size, dims // 32)
+                if (
+                    weight_shape != expected_weight_shape
+                    or scales_shape != expected_scales_shape
+                    or scales_dtype not in {"U8", "F8_E8M0"}
+                ):
+                    raise ValueError(
+                        f"Invalid MXFP4 PLE layout for {base}: "
+                        f"weight={weight_shape}/{weight_dtype}, "
+                        f"scales={scales_shape}/{scales_dtype}, dims={dims}"
+                    )
+                self._shard_specs[shard_index] = (
+                    weight_key,
+                    scales_key,
+                    None,
+                    4,
+                    32,
+                )
+                continue
+
             if scales_key not in weight_map or biases_key not in weight_map:
                 raise ValueError(
                     f"Incomplete affine PLE tensors for {base}: both scales and "
@@ -1283,17 +1314,20 @@ class DiskBackedShardedEmbedding(nn.Module):
             values = self._tensor_readers[weight_key].rows(weight_key, local)
             if bits is not None:
                 assert scales_key is not None
-                assert biases_key is not None
                 assert group_size is not None
                 scales = self._tensor_readers[scales_key].rows(scales_key, local)
-                biases = self._tensor_readers[biases_key].rows(biases_key, local)
+                biases = (
+                    self._tensor_readers[biases_key].rows(biases_key, local)
+                    if biases_key is not None
+                    else None
+                )
                 values = mx.dequantize(
                     values,
                     scales,
                     biases,
                     group_size=group_size,
                     bits=bits,
-                    mode="affine",
+                    mode="affine" if biases is not None else "mxfp4",
                 )
             values = values.astype(mx.bfloat16) * self.weight_scale
             self.rows_read += len(local)
