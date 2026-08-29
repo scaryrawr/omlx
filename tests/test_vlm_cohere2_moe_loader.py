@@ -40,15 +40,22 @@ def test_cohere2_moe_loader_uses_upstream_processor(monkeypatch, tmp_path):
 
     model = SimpleNamespace(config=SimpleNamespace(eos_token_id=[2]))
     processor = object()
+    calls = []
 
     monkeypatch.setattr(vlm_utils, "get_model_path", lambda model_name: tmp_path)
     monkeypatch.setattr(vlm_utils, "load_model", lambda *a, **k: model)
-    monkeypatch.setattr(vlm_utils, "load_processor", lambda *a, **k: processor)
+
+    def load_processor(*args, **kwargs):
+        calls.append(kwargs)
+        return processor
+
+    monkeypatch.setattr(vlm_utils, "load_processor", load_processor)
 
     loaded_model, loaded_processor = _load_cohere2_moe_text_model("cohere")
 
     assert loaded_model is model
     assert loaded_processor is processor
+    assert calls[0]["eos_token_ids"] == [2]
 
 
 def test_cohere2_moe_loader_falls_back_to_tokenizer(monkeypatch, tmp_path):
@@ -86,6 +93,30 @@ def test_cohere2_moe_loader_falls_back_to_tokenizer(monkeypatch, tmp_path):
     assert isinstance(tokenizer.detokenizer, _FakeDetokenizer)
     assert isinstance(tokenizer.stopping_criteria, _FakeStoppingCriteria)
     assert tokenizer.stopping_criteria.eos_token_ids == [7]
+
+
+def test_cohere2_moe_loader_merges_generation_config_eos(monkeypatch, tmp_path):
+    import mlx_vlm.utils as vlm_utils
+
+    model = SimpleNamespace(config=SimpleNamespace(eos_token_id=[7]))
+    processor = object()
+    calls = []
+    (tmp_path / "generation_config.json").write_text('{"eos_token_id": [7, 9, 11]}')
+
+    monkeypatch.setattr(vlm_utils, "get_model_path", lambda model_name: tmp_path)
+    monkeypatch.setattr(vlm_utils, "load_model", lambda *a, **k: model)
+
+    def load_processor(*args, **kwargs):
+        calls.append(kwargs)
+        return processor
+
+    monkeypatch.setattr(vlm_utils, "load_processor", load_processor)
+
+    loaded_model, loaded_processor = _load_cohere2_moe_text_model("cohere")
+
+    assert loaded_model is model
+    assert loaded_processor is processor
+    assert calls[0]["eos_token_ids"] == [7, 9, 11]
 
 
 def test_cohere2_moe_rejects_image_input():
