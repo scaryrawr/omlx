@@ -70,6 +70,8 @@ omlx start
 
 # Optional: MCP (Model Context Protocol) support
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+
+# mlx-vlm image generation and editing support is included with oMLX.
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
@@ -83,13 +85,17 @@ brew install jundot/omlx/omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
-pip install -e .          # Core only
+pip install -e .          # Core runtime, including mlx-vlm image support
 pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
 # GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
 # if you serve those families -- see note below)
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
 ```
+
+Image generation and editing use the core `mlx-vlm` dependency. The retained
+`image` extra is a no-op compatibility alias; source and released installs do
+not need it.
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4/M5).
 
@@ -107,6 +113,9 @@ Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/
 > ```bash
 > python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
 > ```
+
+Core installs include text, VLM, embedding, reranker, and mlx-vlm image
+generation/editing support. MCP remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -131,7 +140,7 @@ omlx restart
 omlx serve --model-dir ~/models
 ```
 
-The server discovers LLMs, VLMs, embedding models, and rerankers from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
+The server discovers LLMs, VLMs, embedding models, rerankers, and image model manifests from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
 
 ### Homebrew Service
 
@@ -156,7 +165,8 @@ Logs are written to two locations:
 
 ## Features
 
-Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon.
+Supports text LLMs, vision-language models (VLM), OCR models, embeddings,
+rerankers, and mlx-vlm image generation/editing models on Apple Silicon.
 
 ### Admin Dashboard
 
@@ -205,7 +215,7 @@ Context scaling support for running smaller context models with Claude Code. Sca
 
 ### Multi-Model Serving
 
-Load LLMs, VLMs, embedding models, and rerankers within the same server. Models are managed through a combination of automatic and manual controls:
+Load LLMs, VLMs, embedding models, rerankers, and image models within the same server. Models are managed through a combination of automatic and manual controls:
 
 - **LRU eviction**: Least-recently-used models are evicted automatically when memory runs low.
 - **Manual load/unload**: Interactive status badges in the admin panel let you load or unload models on demand.
@@ -277,6 +287,8 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
+| `POST /v1/images/generations` | Image generation |
+| `POST /v1/images/edits` | Image editing |
 | `GET /v1/models` | List available models |
 
 ### Tool Calling & Structured Output
@@ -318,6 +330,42 @@ Models are auto-detected by type. You can also download models directly from the
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
+| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+
+### Image Model Manifests
+
+Image generation and editing use the core mlx-vlm dependency. Add an
+`omlx-image-model.json` manifest when a local image-model directory needs an
+explicit family or task declaration.
+
+Add an `omlx-image-model.json` file in a model subdirectory to expose an
+mlx-vlm image model through `/v1/images/generations` and/or `/v1/images/edits`:
+
+```json
+{
+  "backend": "mlx-vlm",
+  "base_model": "flux2-klein-4b",
+  "task": ["generation", "edit"],
+  "model_path": ".",
+  "default_steps": 28,
+  "default_guidance": 3.5,
+  "default_image_strength": 0.4,
+  "estimated_size": 4294967296
+}
+```
+
+`model_path`, defaults, and `estimated_size` are optional. When
+`estimated_size` is omitted, oMLX uses the local `model_path` size when
+available, otherwise a conservative family estimate for memory accounting.
+`quantize` is not a valid image manifest setting because mlx-vlm loads the
+checkpoint's native weight format directly.
+
+Supported `base_model` aliases include FLUX.2 Klein 4B/9B/base/KV variants
+(generation and multi-image edit), Mage-Flow base/aligned/turbo and their edit
+variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
+Ideogram 4 FP8, and Bonsai Ternary. Z-Image and ERNIE-Image edit modes require
+exactly one source image; masks are not supported by the current mlx-vlm image
+families.
 
 ## CLI Configuration
 
