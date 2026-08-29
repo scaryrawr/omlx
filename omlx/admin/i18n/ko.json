@@ -2065,5 +2065,6 @@
   "modal.model_settings.moe_expert_offload_resident_25": "25% resident",
   "modal.model_settings.moe_expert_offload_resident_50": "50% resident",
   "modal.model_settings.moe_expert_offload_resident_75": "75% resident",
-  "navbar.tab.imagine": "Imagine"
+  "navbar.tab.imagine": "Imagine",
+  "modal.model_settings.model_type_image": "이미지"
 }
