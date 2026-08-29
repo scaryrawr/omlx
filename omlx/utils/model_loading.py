@@ -1081,8 +1081,36 @@ def _checkpoint_weight_prefix(
 
 
 def _checkpoint_qwen4_mtp_weight_prefix(model_path: str | Path) -> str | None:
-    """Return the embedded MTP prefix supported by the Qwen4 runtime."""
-    return _checkpoint_weight_prefix(model_path, _MTP_WEIGHT_PREFIXES)
+    """Return the Qwen4 MTP checkpoint layout supported by the runtime."""
+    embedded_prefix = _checkpoint_weight_prefix(model_path, _MTP_WEIGHT_PREFIXES)
+    if embedded_prefix is not None:
+        return embedded_prefix
+
+    sidecar_path = _qwen4_mtp_sidecar_path(model_path)
+    if sidecar_path is None:
+        return None
+    sidecar_prefix = _checkpoint_weight_prefix(
+        sidecar_path,
+        ("fc_embedding.", "fc_hidden.", "layers."),
+    )
+    return "mtp/" if sidecar_prefix is not None else None
+
+
+def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
+    """Resolve a standalone Qwen4 Lightning MTP checkpoint directory."""
+    model_path = Path(model_path)
+    sidecar_path = model_path / "mtp"
+    config_path = sidecar_path / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+    except Exception as e:
+        logger.debug("Failed to read Qwen4 MTP sidecar config %s: %s", config_path, e)
+        return None
+    if config.get("model_type") != "qwen4_exp_mtp":
+        return None
+    return sidecar_path
 
 
 def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
@@ -1105,6 +1133,8 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
     False when neither resolves — callers treat that as "no MTP weights"
     (the conservative choice: skip MTPModule attachment).
     """
+    if _checkpoint_qwen4_mtp_weight_prefix(model_path) is not None:
+        return True
     prefixes = _MTP_WEIGHT_PREFIXES + _nextn_weight_prefixes(model_path)
     return _checkpoint_weight_prefix(model_path, prefixes) is not None
 

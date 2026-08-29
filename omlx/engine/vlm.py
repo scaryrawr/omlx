@@ -1145,10 +1145,23 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
         yield
         return
 
+    import mlx_vlm.utils as _vu
     import safetensors
 
     original_safe_open = safetensors.safe_open
+    original_load_safetensors = _vu._load_safetensors
     target_dir = model_dir.resolve()
+    mtp_sidecar = None
+    mtp_loaded = False
+    if model_type == QWEN4_EXP_MODEL_TYPE:
+        from ..utils.model_loading import _qwen4_mtp_sidecar_path
+
+        candidate_sidecar = _qwen4_mtp_sidecar_path(model_dir)
+        if candidate_sidecar is not None:
+            from mlx_vlm.models.qwen4_exp.language import get_mtp_runtime
+
+            if get_mtp_runtime().checkpoint_prefix == "mtp/":
+                mtp_sidecar = candidate_sidecar
 
     class _SafeOpenMetadataWrapper:
         def __init__(self, inner):
@@ -1181,7 +1194,32 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
             return _SafeOpenMetadataWrapper(handle)
         return handle
 
+    def _patched_load_safetensors(path):
+        nonlocal mtp_loaded
+        weights = original_load_safetensors(path)
+        if mtp_sidecar is None or mtp_loaded:
+            return weights
+        try:
+            loaded_path = Path(path).resolve()
+        except TypeError:
+            return weights
+        if loaded_path.parent != target_dir:
+            return weights
+
+        sidecar_weights = {}
+        for sidecar_file in sorted(mtp_sidecar.glob("*.safetensors")):
+            sidecar_weights.update(original_load_safetensors(str(sidecar_file)))
+        weights.update({f"mtp.{key}": value for key, value in sidecar_weights.items()})
+        mtp_loaded = True
+        logger.info(
+            "Loaded %d Qwen4-Exp Lightning MTP tensors from %s",
+            len(sidecar_weights),
+            mtp_sidecar,
+        )
+        return weights
+
     safetensors.safe_open = _patched_safe_open
+    _vu._load_safetensors = _patched_load_safetensors
     try:
         logger.info(
             "%s pre-quantization sanitize active for %s",
@@ -1191,6 +1229,7 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
         yield
     finally:
         safetensors.safe_open = original_safe_open
+        _vu._load_safetensors = original_load_safetensors
 
 
 @contextlib.contextmanager

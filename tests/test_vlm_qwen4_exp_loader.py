@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("mlx.core")
 
 from omlx.engine import vlm as vlm_module
-from omlx.engine.vlm import VLMBatchedEngine
+from omlx.engine.vlm import VLMBatchedEngine, _force_qwen4_exp_sanitize_on_load
 from omlx.exceptions import InvalidRequestError
 from omlx.utils.model_loading import maybe_apply_pre_load_patches
 
@@ -137,6 +137,62 @@ def test_qwen4_exp_loader_enables_adaptive_depth_three_lightning_mtp(tmp_path):
     )
     assert get_mtp_runtime().enabled is False
     assert is_mtp_active() is False
+
+
+def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen4_exp",
+                "text_config": {
+                    "model_type": "qwen4_exp_text",
+                    "mtp_num_hidden_layers": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    parent_weights = tmp_path / "model.safetensors"
+    parent_weights.touch()
+    mtp_dir = tmp_path / "mtp"
+    mtp_dir.mkdir()
+    (mtp_dir / "config.json").write_text(
+        json.dumps({"model_type": "qwen4_exp_mtp"}),
+        encoding="utf-8",
+    )
+    mtp_weights = mtp_dir / "model.safetensors"
+    mtp_weights.touch()
+
+    import mlx_vlm.utils as vlm_utils
+
+    def fake_load_safetensors(path):
+        if str(path).endswith("/mtp/model.safetensors"):
+            return {"fc_embedding.weight": "mtp-weight"}
+        return {"language_model.lm_head.weight": "parent-weight"}
+
+    monkeypatch.setattr(vlm_utils, "_load_safetensors", fake_load_safetensors)
+    monkeypatch.setattr(
+        "omlx.utils.model_loading._checkpoint_weight_prefix",
+        lambda path, prefixes: (
+            "fc_embedding."
+            if path == mtp_dir and "fc_embedding." in prefixes
+            else None
+        ),
+    )
+    settings = SimpleNamespace(mtp_enabled=True, mtp_num_draft_tokens=None)
+
+    maybe_apply_pre_load_patches(str(tmp_path), settings, for_vlm=True)
+
+    from mlx_vlm.models.qwen4_exp.language import get_mtp_runtime
+
+    assert get_mtp_runtime().checkpoint_prefix == "mtp/"
+    with _force_qwen4_exp_sanitize_on_load(tmp_path):
+        loaded = vlm_utils._load_safetensors(str(parent_weights))
+
+    assert loaded == {
+        "language_model.lm_head.weight": "parent-weight",
+        "mtp.fc_embedding.weight": "mtp-weight",
+    }
 
 
 def test_qwen4_exp_loader_uses_explicit_ple_ssd_offload_setting(tmp_path):

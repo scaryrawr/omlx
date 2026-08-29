@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,15 @@ def apply_mlx_vlm_qwen4_exp_compat_patch() -> bool:
 
         _append_package_path(mlx_vlm, _VENDOR_MLX_VLM)
         _append_package_path(mlx_vlm.models, _VENDOR_MLX_VLM / "models")
+        module_prefix = "mlx_vlm.models.qwen4_exp"
+        for module_name in tuple(sys.modules):
+            if module_name == module_prefix or module_name.startswith(
+                f"{module_prefix}."
+            ):
+                del sys.modules[module_name]
+        if hasattr(mlx_vlm.models, "qwen4_exp"):
+            delattr(mlx_vlm.models, "qwen4_exp")
+        importlib.invalidate_caches()
         importlib.import_module("mlx_vlm.models.qwen4_exp")
         _patch_prompt_utils()
     except Exception as exc:  # noqa: BLE001
