@@ -1,0 +1,71 @@
+# oMLX agent guide
+
+## Project overview
+
+oMLX is a Python/FastAPI inference server for Apple Silicon Macs. It serves OpenAI-, Anthropic-, and Responses-compatible APIs over MLX models, with continuous batching, multi-model loading, VLM/audio/embedding/reranker engines, MCP tools, and tiered KV caching.
+
+Keep durable shared guidance in this file. Add nested `AGENTS.md` files only for directories with meaningfully different rules, and avoid scoped Copilot instruction files unless they add targeted value beyond these repo-wide rules.
+
+This is a fork maintained by rebasing onto `upstream/main`; its history is intentionally not kept stable. Squashing/rewriting the fork's commits since the `upstream/main` merge-base and force-pushing (`git push --force-with-lease`) is acceptable when cleaning up. Always create a `backup/*` tag before a destructive rewrite, and verify the rewrite changed no code (`git diff <backup> HEAD` is empty) before pushing. When regrouping heavily interleaved commits (features scattered among dependency bumps and rebase-cleanup chores), prefer `git reset --soft <merge-base>` then re-stage per file into logical commits over an interactive reorder; the soft-reset approach keeps the final tree byte-identical and avoids reorder conflicts on shared files such as `pyproject.toml`, `README.md`, and `AGENTS.md`. The regroup pattern that stays byte-identical is a stable file-to-group mapping (image engine/registry/routes + admin Imagine + i18n; audio/video API + VLM; server/admin-chat; upstream-rebase reconciliation; git-pinned deps; Copilot integration). Because `git reset --soft`/mixed reset does NOT scrub the working tree, run the regroup only from a verified-clean checkout of the original tip (`git status` empty and `git rev-parse HEAD^{tree}` equal to the backup tree); a dirty tree left over from diagnostics silently commits stale file content and breaks tree identity. If a run drifts, `git reset --hard <backup>` and re-run rather than patching in place. **Never use `git stash` during a merge** — it can discard `MERGE_HEAD` and break the index, leaving you stranded without merge state or staged conflict resolutions. Pushing requires the `scaryrawr` account: the default git credential helper (gcm-core / a `copilot` host helper) can resolve to a different account and 403; push with `gh auth switch --user scaryrawr` active plus an inline helper override, e.g. `git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push --force-with-lease origin main`, then unset any local `credential.helper` entries you added.
+
+Key areas:
+
+- `omlx/server.py` wires the FastAPI app, route handlers, auth, streaming responses, and server state.
+- `omlx/cli.py`, `omlx/settings.py`, and `omlx/config.py` handle startup, persisted settings, CLI/env/file precedence, and user-visible defaults.
+- `omlx/engine_pool.py` discovers models, selects engine types, tracks loaded engines, and enforces LRU/pinning behavior.
+- `omlx/scheduler.py`, `omlx/engine/`, and `omlx/engine_core.py` own request scheduling and MLX generation.
+- `omlx/utils/model_loading.py` and `omlx/model_discovery.py` handle model loading, tokenizer setup, model classification, and image-manifest discovery. Keep `model_discovery.py`'s image exports aligned with `engine_pool.py`; validate `import omlx.server` after discovery refactors so missing cross-module exports fail fast.
+- `omlx/cache/` owns paged, prefix, hot, SSD, hybrid, vision-feature, and recovery cache behavior. Treat cache serialization and MLX buffer lifetime carefully.
+- `omlx/api/` contains API models, protocol adapters, route helpers, tool calling, thinking parsing, structured output, and SSE formatting.
+- `omlx/adapter/` contains model-family output parsers and Harmony/Gemma-specific adaptation; keep model quirks there instead of in generic server paths.
+- `omlx/admin/` contains the web admin dashboard routes and utilities; templates/static assets/i18n files are packaged as package data.
+- `omlx/integrations/`, `omlx/mcp/`, and `omlx/eval/` cover editor/client setup, MCP execution, and evaluation helpers.
+- `packaging/` builds the macOS menubar app bundle and DMG using venvstacks.
+
+## Setup and validation
+
+Use `uv run` for Python tooling and tests. If dependencies are missing, start with `uv sync --dev`. Pin validation commands to Python 3.12 (for example, `UV_PYTHON=python3.12 uv run --python python3.12 pytest ...`): `onnxruntime==1.20.1` does not support CPython 3.14, while the pinned `xgrammar==0.2.4` has no CPython 3.13 wheel.
+
+`uv.lock` is intentionally ignored in this repository; dependency pin changes should be tracked in `pyproject.toml` unless a task explicitly changes the lockfile policy.
+
+When bumping git-sourced dependencies, audit `[project].dependencies`, `[project.optional-dependencies]`, and `tool.uv.override-dependencies`; compare the upstream dependency metadata at the new commit (`pyproject.toml`, `requirements.txt`, or equivalent) for changed version constraints that must be mirrored locally; also check mirrors in `packaging/build.py`, `omlx/admin/routes.py` engine metadata, `Formula/omlx.rb`, `tests/test_admin_engine_info.py`, and user-facing install examples such as `README.md`. Some packaging paths intentionally duplicate pins from `pyproject.toml`; if an optional extra pin changes, run targeted validation with that extra enabled (for example `uv sync --dev --extra audio` for `mlx-audio`). For `mlx-lm` bumps, validate the scheduler and MTP BatchGenerator integration against upstream API shape changes such as stop matching (`StopSequenceMatcher` / `stop_matchers` in current pins, replacing older `SequenceStateMachine` / `state_machines`) and `GenerationBatch.Response` fields; keep every MTP response construction routed through `_generation_response`, including unfinished singleton emissions. For `mlx-vlm` bumps, smoke Qwen3.5 dense and MoE VLM generation when available: model loading alone does not exercise oMLX patches whose upstream helper APIs or call signatures may have changed. When native MTP is enabled, include a multi-token verify/rejection cycle and confirm rollback states are returned without cache-rebuild warnings; a one-token smoke does not exercise the dedicated speculative verifier.
+
+- Default fast test run: `uv run pytest`
+- Explicit fast test selection: `uv run pytest -m "not slow and not integration"`
+- Narrow test run: `uv run pytest tests/test_config.py -v`
+- Lint: `uv run ruff check .` is the intended Python lint command, but the current tree may have pre-existing full-repo ruff diagnostics; when a task is not a lint cleanup, prefer `uv run ruff check <touched Python paths>` plus focused tests and call out any baseline failures separately. Do not include non-Python files such as `README.md` or `Formula/*.rb` in Ruff path lists; use `git diff --check` for whitespace on mixed-file changes. Ruff's SIM118 suggestion is unsafe for `safetensors.safe_open` handles in this environment; keep `f.keys()` there and add a targeted `# noqa: SIM118` if needed.
+- Type check: `uv run mypy omlx`
+- Format when needed: `uv run black .`
+- macOS app build checks live under `packaging/`; see `packaging/README.md` before running `python build.py`.
+
+`pytest.ini` defaults to verbose tests excluding `slow` and `integration`. Mark tests that require real model files with `@pytest.mark.slow`, and tests that require a live server with `@pytest.mark.integration`.
+
+For manual server smoke tests, remember `omlx serve` persists non-default CLI flags to `~/.omlx/settings.json`. Prefer a disposable base path such as `--base-path "$(mktemp -d /tmp/omlx-smoke.XXXXXX)"` for temporary runs with flags such as `--model-dir`, `--memory-guard`, or `--max-concurrent-requests`; `--memory-guard` accepts only `safe`, `balanced`, or `aggressive`, so use `aggressive` for light smoke runs rather than `off`. If the Homebrew service is already running, prefer an isolated temporary server on an alternate port rather than stopping the service unless you specifically need to validate the service instance. When `brew services` is slow or hangs, manage the service directly with the user launch agent label/path (`homebrew.mxcl.omlx`, `~/Library/LaunchAgents/homebrew.mxcl.omlx.plist`) via `launchctl list`, `launchctl bootout`, and `launchctl bootstrap`. For unauthenticated smoke servers, unset `OMLX_API_KEY` before launching; if auth is enabled, the generated key is stored under `auth.api_key` in that temporary settings file. Restart any stopped Homebrew service afterward, and verify it on the configured `server.port` from `~/.omlx/settings.json` rather than assuming the default 8000. Query `/v1/models` before smoke requests and use the returned IDs; models stored under nested `owner/model` directories may be served by basename. For Responses API smoke tests, validate nested `.output[].content[].text` in addition to any convenience `.output_text` field. For lightweight image-generation smoke tests with local mlx-vlm models, use the core mlx-vlm dependency and at least two steps because `steps=1` can fail inside backend progress math rather than validating route behavior. For local image-edit smoke tests with large inputs, prefer multipart `/v1/images/edits` uploads (`-F image=@...`, plus `prompt`, `model`, `steps`, `guidance`, and `image_strength` fields) over JSON data URIs to avoid shell/base64 argument-size limits.
+
+## Code conventions
+
+- Keep the Apache 2.0 SPDX header at the top of Python source and test files.
+- Prefer dataclasses for configuration and request/response state where surrounding code already uses them.
+- Keep protocol-specific conversion in `omlx/api/` or `omlx/api/adapters/`; avoid mixing API wire-format logic into scheduler/cache internals.
+- Preserve async boundaries: FastAPI handlers and engine orchestration are async, while MLX generation is isolated through scheduler/engine abstractions.
+- Keep optional dependency behavior explicit. Extras such as `mcp`, `audio`, `grammar`, `image`, `modelscope`, and `paroquant` are intentionally separated; use availability helpers such as `omlx/utils/optional_deps.py` rather than importing heavy optional packages in core paths.
+- For Copilot CLI integration launches, keep `COPILOT_OFFLINE=true` alongside custom BYOK provider environment variables so subagents do not fall back to GitHub-hosted services.
+- When adding admin UI i18n keys, update every file under `omlx/admin/i18n/*.json` (including `pt-BR.json`) and run focused tests or JSON parsing checks that cover missing locale keys.
+- Admin templates ship with precompiled `omlx/admin/static/css/tailwind.css`; if you use new arbitrary Tailwind classes (for example `w-[...]`, `h-[...]`, `z-[...]`, or dynamic responsive grid classes), either rebuild and commit the CSS or prefer local semantic CSS in the template so installed pages do not lose layout.
+- For image generation/edit defaults, keep request-level `steps`/`guidance`/`image_strength` overrides ahead of manifest `default_*` values, and manifest values ahead of `omlx/image_registry.py` family defaults; resolve family defaults through canonical base-model aliases so every supported alias gets the same behavior, and cover changes with focused `tests/test_image_engine.py` cases. Family-level defaults must be backed by mlx-vlm model configuration or manifests rather than subjective manual results.
+- For mlx-vlm image editing, preserve each family’s documented input contract: FLUX.2 and Mage-Flow edit support multi-image requests, while Z-Image and ERNIE-Image require exactly one source image. Current mlx-vlm image families do not support masks. Route `image_strength` through request extras as both `strength` and `image_strength` so Z-Image and ERNIE-Image receive their respective names.
+- For VLM/chat media handling, prefer `omlx/utils/image.py`'s `extract_media_from_messages()` in engine paths so image, audio, and video handling stays aligned; keep `extract_images_from_messages()` as compatibility-only unless a three-value API is specifically required.
+- Keep Pixtral serving preprocessing MLX-resident via `return_tensors="mlx"` while preserving the image processor's default NumPy output for compatibility.
+- For VLM speculative decoding, keep standalone MTP drafter artifacts such as `gemma4_assistant`, `gemma4_unified_assistant`, and `qwen3_5_mtp` out of normal model discovery; they are loaded through parent VLM drafter paths and are not chat-capable models.
+- In SpecPrefill chunk selection, reduce chunk scores in one MLX operation and transfer the score vector once; per-chunk `.item()` calls serialize GPU work. Preserve deterministic Python tie ordering.
+- For model-family patches under `omlx/patches/`, keep changes narrow and covered by focused regression tests. These files mirror upstream behavior and can be brittle across dependency updates.
+- When changing cache, scheduler, streaming, adapters, or tool-call behavior, add focused tests for token accounting, finish reasons, cancellation/disconnect behavior, cache reuse/regression paths, and protocol output shape.
+- Keep streaming `RequestOutput.output_token_ids` empty until the terminal output to avoid quadratic cumulative-list copies; streaming consumers should use `new_token_ids`, while terminal and non-streaming consumers receive the complete token sequence.
+
+## Safety notes
+
+- The project targets Apple Silicon and MLX. Avoid adding torch-heavy dependencies to core paths unless they are guarded by an optional extra.
+- Do not enable Hugging Face `trust_remote_code` by default; tests assert the safer default.
+- Do not swallow MLX, GPU synchronization, cache corruption, model-loading, or settings-persistence errors with broad fallbacks. Surface errors through existing exception types in `omlx/exceptions.py`, route-level HTTP error mapping, or explicit user-facing warnings consistent with nearby code.
+- Do not run slow/integration/model-loading tests unless the task needs them and the environment has the required models or server.
+- Be careful with commands that build the macOS app or DMG; they can be expensive and may write large artifacts under `packaging/build/` and `packaging/dist/`.
