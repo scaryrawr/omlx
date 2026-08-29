@@ -2156,6 +2156,22 @@ class TestMtpCompatibilityHelpers:
 
 class TestPreLoadPatchDispatch:
     @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe", "qwen3_6"])
+    def test_qwen3_dispatch_defaults_to_depth_three_without_sidecar(
+        self, tmp_path, model_type
+    ):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": model_type, "mtp_num_hidden_layers": 1})
+        )
+
+        maybe_apply_pre_load_patches(
+            str(tmp_path), model_settings=ModelSettings(mtp_enabled=True)
+        )
+
+        from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+        assert get_mtp_depth() == 3
+
+    @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe", "qwen3_6"])
     def test_qwen3_dispatch_uses_sidecar_draft_depth(self, tmp_path, model_type):
         (tmp_path / "config.json").write_text(
             json.dumps({"model_type": model_type, "mtp_num_hidden_layers": 1})
