@@ -1,23 +1,17 @@
-"""Tests for the torch-free Pixtral/Mistral3 processor patch (issue #2263).
-
-Covers the vendored PixtralImageProcessor geometry (ported from upstream
-mlx-vlm PR #1502 tests), the method transplant onto the pinned classes,
-and the TokenizersBackend pin for tekken.json checkpoints.
-"""
-
 import json
 from pathlib import Path
 from unittest.mock import patch
 
+import mlx.core as mx
 import numpy as np
 import pytest
-from PIL import Image
-
-from omlx.patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
-from omlx.patches.mlx_vlm_pixtral_torch_free.vendor.image_processing_pixtral import (
+from mlx_vlm.models.pixtral.image_processing_pixtral import (
     PixtralImageProcessor,
     split_image_sizes_by_sample,
 )
+from PIL import Image
+
+from omlx.patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
 
 DEVSTRAL_DIR = Path.home() / "Workspace/models/Devstral-Small-2-24B-Instruct-2512-4bit"
 
@@ -63,9 +57,7 @@ def _fake_processor_init(
     self.chat_template = chat_template
 
 
-class TestVendoredImageProcessor:
-    """Geometry tests ported from upstream mlx-vlm PR #1502."""
-
+class TestNativeImageProcessor:
     def test_preprocess_resizes_to_patch_multiple_and_pads(self):
         image_processor = PixtralImageProcessor(
             size={"longest_edge": 40},
@@ -81,6 +73,27 @@ class TestVendoredImageProcessor:
         assert output["image_sizes"] == [(28, 42), (28, 28)]
         assert output["pixel_values"].shape == (2, 3, 28, 42)
 
+    def test_mlx_preprocessing_matches_numpy_output(self):
+        image_processor = PixtralImageProcessor(
+            size={"longest_edge": 40},
+            patch_size=14,
+        )
+        images = [[_make_image(31, 55), _make_image(20, 20)]]
+
+        numpy_output = image_processor(images)
+        assert isinstance(numpy_output["pixel_values"], np.ndarray)
+
+        assert apply_pixtral_torch_free_patch() is True
+        mlx_output = image_processor(images, return_tensors="mlx")
+        mx.eval(mlx_output["pixel_values"])
+
+        assert isinstance(mlx_output["pixel_values"], mx.array)
+        assert mlx_output["image_sizes"] == numpy_output["image_sizes"]
+        np.testing.assert_array_equal(
+            np.asarray(mlx_output["pixel_values"]),
+            numpy_output["pixel_values"],
+        )
+
     def test_split_image_sizes_by_sample_handles_flat_sizes(self):
         images = [[_make_image(), _make_image()], [_make_image()]]
         sizes = [(28, 42), (28, 28), (56, 56)]
@@ -92,38 +105,23 @@ class TestVendoredImageProcessor:
 
 
 class TestPatchInstallation:
-    def test_apply_is_idempotent_and_transplants_methods(self):
+    def test_apply_is_idempotent_and_installs_narrow_wrappers(self):
         from mlx_vlm.models.mistral3 import processing_mistral3 as pin_m3
         from mlx_vlm.models.pixtral import processing_pixtral as pin_px
 
-        from omlx.patches.mlx_vlm_pixtral_torch_free.vendor import (
-            processing_mistral3 as vendor_m3,
-        )
-        from omlx.patches.mlx_vlm_pixtral_torch_free.vendor import (
-            processing_pixtral as vendor_px,
-        )
-
         assert apply_pixtral_torch_free_patch() is True
+        mistral_loader = pin_m3.Mistral3Processor.from_pretrained.__func__
+        pixtral_loader = pin_px.PixtralProcessor.from_pretrained.__func__
+        pixtral_call = pin_px.PixtralProcessor.__call__
         assert apply_pixtral_torch_free_patch() is True
 
-        assert (
-            pin_m3.Mistral3Processor.__call__
-            is vendor_m3.Mistral3Processor.__dict__["__call__"]
-        )
-        assert (
-            pin_m3.Mistral3Processor.__dict__["from_pretrained"]
-            is vendor_m3.Mistral3Processor.__dict__["from_pretrained"]
-        )
-        assert (
-            pin_px.PixtralProcessor.__call__
-            is vendor_px.PixtralProcessor.__dict__["__call__"]
-        )
-        assert (
-            pin_px.PixtralProcessor.__dict__["from_pretrained"]
-            is vendor_px.PixtralProcessor.__dict__["from_pretrained"]
-        )
+        assert pin_m3.Mistral3Processor.from_pretrained.__func__ is mistral_loader
+        assert pin_px.PixtralProcessor.from_pretrained.__func__ is pixtral_loader
+        assert pin_px.PixtralProcessor.__call__ is pixtral_call
+        assert hasattr(mistral_loader, "__wrapped__")
+        assert hasattr(pixtral_loader, "__wrapped__")
 
-    def test_from_pretrained_uses_vendored_image_processor(self, tmp_path):
+    def test_from_pretrained_uses_native_image_processor(self, tmp_path):
         assert apply_pixtral_torch_free_patch() is True
 
         from mlx_vlm.models.mistral3.processing_mistral3 import Mistral3Processor
@@ -170,6 +168,7 @@ class TestPatchInstallation:
         assert tok_mock.call_args.kwargs.get("fix_mistral_regex") is True
 
         output = processor(text=["[IMG]Describe"], images=[[_make_image()]])
+        assert isinstance(output["pixel_values"], mx.array)
         assert output["pixel_values"].shape[0] == 1
         assert output["pixel_values"].shape[1] == 3
         assert int(output["image_sizes"][0, 0].item()) % 28 == 0
