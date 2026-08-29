@@ -19,6 +19,7 @@ class SpecPrefillTargetPlan:
     sparse_selected_token_count: int
     total_tracker_prefill_count: int
     position_offset: int
+    sparse_selected_indices: Sequence[int] | None = None
 
 
 def plan_specprefill_target(
@@ -35,7 +36,11 @@ def plan_specprefill_target(
 
     # BatchGenerator processes the generation-kickoff token separately.
     remove_kickoff_index = generation_kickoff_index in selected_indices
-    sparse_selected_token_count = len(selected_indices) - int(remove_kickoff_index)
+    sparse_selected_indices = list(selected_indices)
+    if remove_kickoff_index:
+        sparse_selected_indices.remove(generation_kickoff_index)
+        sparse_selected_indices.sort()
+    sparse_selected_token_count = len(sparse_selected_indices)
 
     return SpecPrefillTargetPlan(
         system_token_count=system_token_count,
@@ -48,4 +53,5 @@ def plan_specprefill_target(
             system_token_count + sparse_selected_token_count
         ),
         position_offset=position_offset,
+        sparse_selected_indices=sparse_selected_indices,
     )

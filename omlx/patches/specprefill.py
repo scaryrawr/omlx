@@ -26,7 +26,8 @@ from __future__ import annotations
 import inspect
 import logging
 import math
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import mlx.core as mx
 
@@ -167,7 +168,7 @@ def _nemotron_h_extract_queries(attn, x, cache=None, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def _find_attention_layers(model) -> List[Tuple[int, Any]]:
+def _find_attention_layers(model) -> list[tuple[int, Any]]:
     """Find all full-attention layers across architectures.
 
     Supports self_attn (standard) and block_type=="*" (Nemotron-H).
@@ -198,7 +199,7 @@ def _set_attn_module(layer, module):
         layer.mixer = module
 
 
-def _build_layer_to_cache_map(model) -> Dict[int, int]:
+def _build_layer_to_cache_map(model) -> dict[int, int]:
     """Build layer_idx → cache_idx mapping.
 
     Standard models: identity. Nemotron-H: compacted (only M/* layers).
@@ -229,7 +230,7 @@ def _build_layer_to_cache_map(model) -> Dict[int, int]:
     return layer_to_cache
 
 
-def _linear_output_dims(linear) -> Optional[int]:
+def _linear_output_dims(linear) -> int | None:
     """Best-effort output dimension lookup for Linear / QuantizedLinear layers."""
     if linear is None:
         return None
@@ -453,10 +454,10 @@ def score_tokens(
     temp: float = 0.6,
     top_p: float = 0.95,
     prefill_step_size: int = 2048,
-    query_extractor: Optional[Callable] = None,
-    existing_cache: Optional[List[Any]] = None,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
-) -> Tuple[mx.array, Any]:
+    query_extractor: Callable | None = None,
+    existing_cache: list[Any] | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> tuple[mx.array, Any]:
     """Score token importance using attention patterns on a draft model.
 
     Pipeline:
@@ -619,6 +620,8 @@ def select_chunks(
         sorted mx.array of kept token indices
     """
     M = importance.shape[0]
+    if M == 0:
+        return mx.array([], dtype=mx.int32)
     if keep_pct >= 1.0:
         return mx.arange(M)
 
@@ -629,11 +632,28 @@ def select_chunks(
     )
     ranked_end = n_chunks - n_tail_chunks
 
-    chunk_scores = []
-    for i in range(ranked_end):
-        start = i * chunk_size
-        end = min(start + chunk_size, M)
-        chunk_scores.append(mx.mean(importance[start:end]).item())
+    ranked_token_count = min(M, ranked_end * chunk_size)
+    full_chunks, remainder = divmod(ranked_token_count, chunk_size)
+    score_parts = []
+    if full_chunks:
+        score_parts.append(
+            mx.mean(
+                importance[: full_chunks * chunk_size].reshape(
+                    full_chunks, chunk_size
+                ),
+                axis=1,
+            )
+        )
+    if remainder:
+        score_parts.append(mx.mean(importance[full_chunks * chunk_size :]).reshape(1))
+
+    # Transfer all scores once instead of synchronizing MLX once per chunk.
+    if not score_parts:
+        chunk_scores = []
+    else:
+        chunk_scores = (
+            score_parts[0] if len(score_parts) == 1 else mx.concatenate(score_parts)
+        ).tolist()
 
     budget = max(0, keep_n - n_tail_chunks)
     top_chunks = sorted(range(ranked_end), key=lambda i: chunk_scores[i], reverse=True)[
@@ -832,7 +852,7 @@ def sparse_prefill(
     cache,
     step_size: int = 2048,
     position_offset: int = 0,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> mx.array:
     """Prefill model cache with selected tokens at their original positions.
 

@@ -48,9 +48,15 @@ class ExactPrefixCache(Protocol):
 CheckAbort = Callable[[int], None]
 ReportProgress = Callable[[int, int], None]
 SyncAndClearCache = Callable[[], None]
+EvalCacheStates = Callable[[list[Any]], None]
 # Issue #2177: helper signature mirroring Scheduler._extract_cache_states.
 # Returns the per-layer extracted state dicts and an optional ModelCacheConfig.
 ExtractCacheStates = Callable[[list[Any]], tuple[list[dict[str, Any]], Any | None]]
+
+
+def _eval_cache_states(cache_layers: list[Any]) -> None:
+    """Materialize prompt-cache states with MLX's standard cache layout."""
+    mx.eval([cache_layer.state for cache_layer in cache_layers])
 
 
 def run_specprefill_target_prefill(
@@ -67,6 +73,7 @@ def run_specprefill_target_prefill(
     report_sparse_progress: ReportProgress,
     sync_and_clear_cache: SyncAndClearCache,
     log: logging.Logger,
+    eval_cache_states: EvalCacheStates | None = None,
     # Issue #2177: opt-in static system/tool prefix reuse. When the cache,
     # tokens, and extraction callback are provided, the first request stores
     # the prefetched system state in the tiered cache; later requests restore
@@ -102,6 +109,7 @@ def run_specprefill_target_prefill(
         conversation_token_count = plan.conversation_token_count
         generation_kickoff_index = plan.generation_kickoff_index
         prefill_started_at = time.monotonic()
+        cache_evaluator = eval_cache_states or _eval_cache_states
         prompt_cache = (
             request.prompt_cache
             if request.cached_tokens > 0 and request.prompt_cache is not None
@@ -140,7 +148,7 @@ def run_specprefill_target_prefill(
                 report_system_progress(system_processed, system_token_count)
                 with mx.stream(stream):
                     target_model(sys_arr[:prefill_step_size][None], cache=prompt_cache)
-                    mx.eval([cache_layer.state for cache_layer in prompt_cache])
+                    cache_evaluator(prompt_cache)
                     # Keep the next chunk view on the target-model stream.
                     sys_arr = sys_arr[prefill_step_size:]
                 system_processed += prefill_step_size
@@ -154,7 +162,7 @@ def run_specprefill_target_prefill(
                 report_system_progress(system_processed, system_token_count)
                 with mx.stream(stream):
                     target_model(sys_arr[None], cache=prompt_cache)
-                    mx.eval([cache_layer.state for cache_layer in prompt_cache])
+                    cache_evaluator(prompt_cache)
                 system_processed += final_system_token_count
                 check_abort(system_processed)
                 report_system_progress(system_processed, system_token_count)
@@ -189,9 +197,12 @@ def run_specprefill_target_prefill(
         selected = selected_indices
         # BatchGenerator processes the generation-kickoff token separately.
         if plan.remove_kickoff_index:
-            selected_indices_list = selected.tolist()
-            selected_indices_list.remove(generation_kickoff_index)
-            selected = mx.array(sorted(selected_indices_list))
+            selected_indices_list = plan.sparse_selected_indices
+            if selected_indices_list is None:
+                selected_indices_list = selected.tolist()
+                selected_indices_list.remove(generation_kickoff_index)
+                selected_indices_list.sort()
+            selected = mx.array(selected_indices_list)
 
         with mx.stream(stream):
             sparse_prefill(
