@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.responses import StreamingResponse
 
@@ -549,6 +550,23 @@ def test_preprocess_still_rejects_missing_latest_file_part():
         )
 
 
+def test_parse_file_part_missing_source_requires_file_data():
+    with pytest.raises(
+        MarkItDownRequestError,
+        match=r"file\.file_data",
+    ):
+        parse_file_part(
+            {
+                "type": "file",
+                "file": {
+                    "filename": "paper.pdf",
+                    "mime_type": "application/pdf",
+                },
+            },
+            max_file_size_mb=10,
+        )
+
+
 def test_async_preprocess_allows_missing_historical_file_parts(monkeypatch):
     def fake_convert(file: MarkItDownFile, **kwargs) -> str:
         raise AssertionError("missing historical files should not be converted")
@@ -628,6 +646,42 @@ def test_server_llm_preprocess_allows_stored_document_placeholders(monkeypatch):
     assert "Attached file unavailable: paper.pdf" in (parts[0].text or "")
 
 
+def test_server_llm_preprocess_preserves_media_file_parts():
+    state = ServerState()
+    state.engine_pool = _EmptyPool()
+    state.global_settings = GlobalSettings()
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": _data_uri(b"video", mime_type="video/mp4"),
+                        },
+                    },
+                    {"type": "text", "text": "Describe it."},
+                ],
+            )
+        ],
+    )
+
+    async def exercise():
+        with patch("omlx.server._server_state", state):
+            return await server_module._preprocess_markitdown_files_for_llm(request)
+
+    processed = asyncio.run(exercise())
+    content = processed.messages[0].content
+
+    assert isinstance(content, list)
+    assert content[0]["type"] == "input_video"
+    assert content[0]["input_video"]["filename"] == "clip.mp4"
+
+
 def test_preprocess_file_parts_rejects_when_disabled():
     settings = GlobalSettings()
     settings.integrations.markitdown_enabled = False
@@ -637,6 +691,29 @@ def test_preprocess_file_parts_rejects_when_disabled():
             [Message(role="user", content=[_file_part()])],
             global_settings=settings,
         )
+
+
+def test_responses_file_url_is_rejected_without_downloading():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "notes.txt",
+                        "mime_type": "text/plain",
+                        "file_url": "https://example.com/notes.txt",
+                    },
+                }
+            ],
+        }
+    ]
+
+    with patch("urllib.request.build_opener") as download:
+        with pytest.raises(HTTPException, match="File URLs are not supported"):
+            asyncio.run(server_module._preprocess_response_files_for_llm(messages))
+        download.assert_not_called()
 
 
 def test_xlsx_is_rejected_without_pandas_dependency():
