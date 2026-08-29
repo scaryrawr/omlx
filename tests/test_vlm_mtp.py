@@ -53,12 +53,10 @@ def test_qwen38_block_fp8_rejects_invalid_scale_grid():
         )
 
 
-def _fake_drafter_model(model_type: str = "gemma4_assistant") -> MagicMock:
+def _fake_drafter_model(model_type: str = "gemma4_assistant") -> SimpleNamespace:
     """Build a stand-in for Gemma4AssistantDraftModel that satisfies the
     minimum API used by VLMMTPDrafter."""
-    drafter = MagicMock()
-    drafter.config = MagicMock(model_type=model_type)
-    return drafter
+    return SimpleNamespace(config=SimpleNamespace(model_type=model_type))
 
 
 def test_load_vlm_mtp_drafter_happy_path():
@@ -546,9 +544,10 @@ def test_qwen_vlm_outer_load_weights_remaps_root_mtp(monkeypatch):
     assert model.received_strict is False
 
 
-def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
-    """Dense Qwen3.5 VLM MTP verify must satisfy mlx-vlm's output contract."""
+def test_dense_vlm_runtime_return_hidden_uses_exact_verifier(monkeypatch):
+    """Current Qwen VLM MTP verify must use the rollback-aware exact path."""
     from mlx_vlm.models.base import LanguageModelOutput
+
     from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
 
     logits = mx.zeros((1, 2, 16))
@@ -579,6 +578,11 @@ def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
             self.forward_kwargs = kwargs
             return FakeStockOutput()
 
+    monkeypatch.setitem(
+        FakeLanguageModel.__call__.__globals__,
+        "_EXACT_SPECULATIVE_VERIFIER",
+        object(),
+    )
     q35_lang = SimpleNamespace(LanguageModel=FakeLanguageModel)
     qwen35_vlm_runtime._patch_vlm_language_model(q35_lang)
 
@@ -601,6 +605,7 @@ def test_dense_vlm_runtime_return_hidden_uses_language_model_output_contract():
     assert out.gdn_states is gdn_states
     assert out.shared_kv_states == {}
     assert model.forward_kwargs["capture_layer_ids"] == [1]
+    assert model.forward_kwargs["speculative_verify"] is True
 
 
 def test_dense_vlm_runtime_delegates_foreign_subclasses_unchanged():
@@ -860,9 +865,9 @@ class TestCallBackbone:
 
     def test_tuple_2_return(self):
         """mlx-lm dense path returns (logits, hidden) 2-tuple."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
@@ -875,9 +880,9 @@ class TestCallBackbone:
 
     def test_tuple_3_return(self):
         """mlx-vlm MoE path returns (logits, hidden, gdn_states) 3-tuple."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
@@ -891,10 +896,10 @@ class TestCallBackbone:
 
     def test_language_model_output_return(self):
         """LanguageModelOutput is correctly unpacked."""
-        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
-
         import mlx.core as mx
         from mlx_vlm.models.base import LanguageModelOutput
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
 
         logits = mx.zeros((1, 1, 100))
         hidden = mx.zeros((1, 1, 64))
@@ -910,3 +915,27 @@ class TestCallBackbone:
         assert result[0] is logits
         assert result[1] is hidden
         assert result[2] is gdn
+
+    def test_verify_uses_model_exact_speculative_path(self):
+        import mlx.core as mx
+
+        from omlx.patches.mlx_lm_mtp.batch_generator import _call_backbone
+
+        logits = mx.zeros((1, 3, 100))
+        hidden = mx.zeros((1, 3, 64))
+        rollback_state = object()
+        model = MagicMock()
+        model.speculative_verify_logits.return_value = (
+            hidden,
+            {},
+            rollback_state,
+            logits,
+        )
+        inputs = mx.zeros((1, 3), dtype=mx.uint32)
+        cache = [object()]
+
+        result = _call_backbone(model, inputs, cache, n_confirmed=1)
+
+        assert result == (logits, hidden, rollback_state)
+        model.speculative_verify_logits.assert_called_once()
+        model.assert_not_called()
