@@ -12,11 +12,12 @@ import os
 import re
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 
@@ -116,7 +117,7 @@ class BenchmarkRequest(BaseModel):
     # When set, the benchmark runs against a remote OpenAI-compatible
     # endpoint instead of a local engine and model_id is the remote
     # model name (not validated against the local catalog).
-    external: Optional[ExternalEndpointConfig] = None
+    external: ExternalEndpointConfig | None = None
 
     @field_validator("prompt_lengths")
     @classmethod
@@ -171,7 +172,7 @@ class BenchmarkRun:
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     terminal: bool = False
-    task: Optional[asyncio.Task] = None
+    task: asyncio.Task | None = None
     results: list[dict] = field(default_factory=list)
     error_message: str = ""
     # Acceleration features active when the benchmark started. Results are
@@ -181,9 +182,9 @@ class BenchmarkRun:
     # Same snapshot in the upload payload's shape: [{key, label, detail?}].
     feature_flags: list[dict] = field(default_factory=list)
     # Performance-relevant subset of the model's settings at run start.
-    model_settings_snapshot: Optional[dict] = None
+    model_settings_snapshot: dict | None = None
     # Host telemetry sampler, running for the duration of the tests.
-    sampler: Optional[Any] = None
+    sampler: Any | None = None
     # Lifetime footprint high-water mark before the tests began, so the run's
     # own peak can be told apart from a larger one set earlier in the process.
     lifetime_footprint_at_start: int = 0
@@ -227,9 +228,9 @@ class _FeatureFlagSpec:
     legacy: str
     key: str
     label: str
-    detail_attr: Optional[str] = None
-    detail_key_fmt: Optional[str] = None
-    detail_label_fmt: Optional[str] = None
+    detail_attr: str | None = None
+    detail_key_fmt: str | None = None
+    detail_label_fmt: str | None = None
 
 
 # `mtp_enabled` is surfaced as "Lightning MTP" everywhere in the UI, so the
@@ -259,7 +260,7 @@ _FEATURE_FLAG_SPECS = (
 )
 
 
-def _sample_window(run: "BenchmarkRun", window_start: float) -> Optional[dict]:
+def _sample_window(run: "BenchmarkRun", window_start: float) -> dict | None:
     """Aggregate host telemetry for the interval a single test occupied."""
     if run.sampler is None:
         return None
@@ -279,7 +280,7 @@ def _detect_experimental_features(model_settings: Any) -> list[str]:
     ]
 
 
-def _format_bits(value: Any) -> Optional[str]:
+def _format_bits(value: Any) -> str | None:
     """Render a bit-width for display, dropping a trailing .0 (4.0 -> "4")."""
     try:
         number = float(value)
@@ -396,7 +397,7 @@ _PATH_VALUED_SETTING_FIELDS = frozenset(
 _MAX_UPLOADED_SETTINGS_BYTES = 4096
 
 
-def _filter_uploaded_settings(model_settings: Any) -> Optional[dict]:
+def _filter_uploaded_settings(model_settings: Any) -> dict | None:
     """Project model settings onto the uploadable allowlist."""
     to_dict = getattr(model_settings, "to_dict", None)
     if not callable(to_dict):
@@ -442,12 +443,12 @@ def _with_benchmark_context(
     }
 
 
-def get_run(bench_id: str) -> Optional[BenchmarkRun]:
+def get_run(bench_id: str) -> BenchmarkRun | None:
     """Get a benchmark run by ID."""
     return _benchmark_runs.get(bench_id)
 
 
-def get_active_run() -> Optional[BenchmarkRun]:
+def get_active_run() -> BenchmarkRun | None:
     """Return the currently-running throughput benchmark, if any.
 
     Discovery surface for clients that need to attach to an in-progress
@@ -714,10 +715,8 @@ async def _run_single_test(
         )
 
     # Reset peak memory tracking
-    try:
+    with suppress(Exception):
         mx.reset_peak_memory()
-    except Exception:
-        pass
 
     start_time = time.perf_counter()
     first_token_time = None
@@ -1309,7 +1308,7 @@ def _upload_model_name(model_id: str) -> str:
 
 def _upload_model_repo(
     model_id: str, entry: Any = None, model_dirs: Any = None
-) -> Optional[str]:
+) -> str | None:
     """Org-qualified repo id to publish alongside the model name (#1808).
 
     Uses the same derivation as the models UI display name: the HF repo id
@@ -1833,7 +1832,6 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             run.sampler = None
 
         # Phase 3: Single request tests
-        single_pp1024_gen_tps = None
         ane_trace_config: dict[str, Any] | None = None
         if model_settings is not None and getattr(
             model_settings, "qwen35_ane_prefill_enabled", False
@@ -1928,7 +1926,6 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             getattr(effective_scheduler, "prefill_speed_priority", None),
             getattr(effective_scheduler, "max_num_batched_tokens", None),
         )
-
         for pp_len in single_prompt_lengths:
             current_test += 1
             await _send_event(
@@ -1972,10 +1969,6 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             run.results.append(result)
 
             await _send_event(run, {"type": "result", "data": result})
-
-            # Store pp1024 gen_tps for speedup calculation
-            if pp_len == 1024:
-                single_pp1024_gen_tps = metrics["gen_tps"]
 
         # Phase 4: Batch tests
         # Each request has a unique UUID prefix (no cache hits)
@@ -2103,10 +2096,8 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             },
         )
         # Try to unload the model on cancellation
-        try:
+        with suppress(Exception):
             await engine_pool._unload_engine(request.model_id)
-        except Exception:
-            pass
 
     except Exception as e:
         logger.error(f"Benchmark error: {e}", exc_info=True)
@@ -2120,10 +2111,8 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             },
         )
         # Try to unload the model on error
-        try:
+        with suppress(Exception):
             await engine_pool._unload_engine(request.model_id)
-        except Exception:
-            pass
 
     finally:
         if run.sampler is not None:
