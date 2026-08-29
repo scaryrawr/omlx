@@ -345,10 +345,13 @@ class TestServerExtractionRouting:
                 role="user",
                 content=[
                     MagicMock(
-                        model_dump=lambda: {"type": "text", "text": "Describe this"},
+                        model_dump=lambda **_: {
+                            "type": "text",
+                            "text": "Describe this",
+                        },
                     ),
                     MagicMock(
-                        model_dump=lambda: {
+                        model_dump=lambda **_: {
                             "type": "image_url",
                             "image_url": {"url": "data:image/png;base64,abc"},
                         },
@@ -375,10 +378,13 @@ class TestServerExtractionRouting:
                 role="user",
                 content=[
                     MagicMock(
-                        model_dump=lambda: {"type": "text", "text": "Describe this"},
+                        model_dump=lambda **_: {
+                            "type": "text",
+                            "text": "Describe this",
+                        },
                     ),
                     MagicMock(
-                        model_dump=lambda: {
+                        model_dump=lambda **_: {
                             "type": "image_url",
                             "image_url": {"url": "data:image/png;base64,abc"},
                         },
