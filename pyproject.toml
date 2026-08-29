@@ -25,17 +25,17 @@ authors = [
 ]
 keywords = ["llm", "mlx", "apple-silicon", "vllm", "inference", "transformers"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "Operating System :: MacOS",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 dependencies = [
@@ -48,8 +48,8 @@ dependencies = [
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@872ae88d1fac77350db23c8c04fe8dd372a9e3e8",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
-    # mlx-embeddings from latest commit (32981fa)
-    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206",
+    # mlx-embeddings from latest scaryrawr commit (71329b8)
+    "mlx-embeddings @ git+https://github.com/scaryrawr/mlx-embeddings@71329b8a18f02273279ca766afb66ed0665a97f9",
     # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
     # The mlx-lm pin above includes the NewlineTokenizer registration fix
     # required by transformers 5.13+. mlx-vlm requires the 5.14 processor API.
@@ -75,7 +75,7 @@ dependencies = [
     "pyyaml>=6.0",
     "itsdangerous>=2.0",
     "jinja2>=3.0",
-    # mlx-lm 0.31.3 imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
+    # mlx-lm imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
     "rich>=13.0.0",
     "sentencepiece",
     "tiktoken",
@@ -140,6 +140,8 @@ grammar = [
     "xgrammar==0.2.3",
     "apache-tvm-ffi==0.1.11",
 ]
+# Kept as a no-op compatibility extra. mlx-vlm image support is part of core.
+image = []
 mcp = [
     "mcp>=2.0.0,<3",
 ]
@@ -187,19 +189,23 @@ paroquant = [
 bundle = [
     "mcp>=2.0.0,<3",
     "modelscope>=1.10.0",
-    # mlx-audio[tts,stt,sts] transitives:
+    # mlx-audio core deps needed when packaging installs the git wheel --no-deps.
+    "huggingface-hub>=1.0",
+    "tqdm>=4.67.1",
+    # Audio runtime deps bundled for TTS/STT/STS support:
     "scipy>=1.11.0",
     "librosa>=0.10.0",
-    "miniaudio>=1.59",
+    "miniaudio>=1.61",
     "numba>=0.59.0",
     "pyloudnorm>=0.1.0",
-    "sounddevice>=0.4.6",
+    "sounddevice>=0.5.3",
     "misaki>=0.9.4",
     "num2words>=0.5.14",
     "spacy>=3.8.4",
     "phonemizer-fork>=3.3.2",
     "espeakng-loader>=0.2.4",
     "webrtcvad>=2.0.10",
+    "setuptools<81",
     # [audio] extra on top of pyproject's plain mistral-common>=1.10
     "mistral-common[audio]>=1.10",
     # realtime STT WebSocket endpoint
@@ -250,7 +256,7 @@ Repository = "https://github.com/jundot/omlx"
 omlx = "omlx.cli:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "omlx._version.__version__"}
+version = { attr = "omlx._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -285,11 +291,11 @@ target-version = ["py310", "py311", "py312", "py313"]
 
 [tool.ruff]
 line-length = 88
+extend-exclude = ["omlx/patches/*/vendor"]
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501", "B905"]
-# Vendored upstream files (mlx-vlm copies under patches) keep their
-# original formatting for pin-bump diffability.
-extend-exclude = ["omlx/patches/*/vendor"]
 
 [tool.mypy]
 python_version = "3.10"
