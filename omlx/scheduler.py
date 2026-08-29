@@ -16,6 +16,7 @@ import copy
 import gc
 import importlib
 import inspect
+import json
 import logging
 import os
 import threading
@@ -34,7 +35,7 @@ from mlx_lm.generate import (
     BatchGenerator,
     GenerationBatch,
     PromptProcessingBatch,
-    SequenceStateMachine,
+    StopSequenceMatcher,
 )
 from mlx_lm.models.cache import (
     KVCache as _MLXKVCache,
@@ -56,6 +57,7 @@ from .exceptions import (
     describe_ceiling_binding,
     is_cache_corruption_error,
 )
+from .models.vlm import rope_delta_to_float
 from .patches.sdpa256_attention import set_unfused_headroom_provider
 from .decode_activity import get_decode_activity
 from .prefill_progress import get_prefill_tracker
@@ -207,7 +209,7 @@ class _VLMMTPDecodeState:
     state_machine: Any
     max_tokens: int
     # Plain stop-token set (EOS + request-specific) for direct membership
-    # check; mlx-lm's SequenceStateMachine doesn't expose a "did the last
+    # check; mlx-lm's StopSequenceMatcher doesn't expose a "did the last
     # token finish" helper, so we keep a copy.
     stop_token_ids: set[int] = field(default_factory=set)
     emitted: int = 0
@@ -226,7 +228,7 @@ class _VLMMTPResponse:
 
     uid: int
     token: int
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     logprobs: Any = None
     prompt_cache: Any = None
 
@@ -401,6 +403,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
+
 
 class _PrefillAbortedError(Exception):
     """Raised when prefill is interrupted by a pending abort."""
@@ -571,6 +575,13 @@ def _register_uid_rows(model, uids, samplers, lps_rows) -> None:
             )
         while len(_uid_row_registry) > _UID_ROW_REGISTRY_MAX:
             _uid_row_registry.popitem(last=False)
+
+
+def _record_native_mtp_request_eligibility(model, uid: int, request) -> None:
+    """Tell an optional VLM adapter whether this UID used embeddings prefill."""
+    setter = getattr(model, "set_native_mtp_request_eligible", None)
+    if callable(setter):
+        setter(uid, getattr(request, "vlm_inputs_embeds", None) is None)
 
 
 def _unregister_uid_row(model, uid) -> None:
@@ -927,6 +938,11 @@ _original_make_cache = _mlx_lm_generate_module._make_cache
 _original_merge_caches = _mlx_lm_generate_module._merge_caches
 _original_ppb_split = PromptProcessingBatch.split
 _REGULAR_SINGLETON_CACHE_TYPES = (_MLXKVCache, _MLXRotatingKVCache)
+_SINGLETON_PASSTHROUGH_CACHE_TYPE_NAMES = frozenset(
+    {
+        "PoolQuantizedV4Cache",
+    }
+)
 
 
 def _patched_make_cache(model, left_padding, max_kv_size):
@@ -935,14 +951,6 @@ def _patched_make_cache(model, left_padding, max_kv_size):
         return _original_make_cache(model, left_padding, max_kv_size)
 
     model_cache = model.make_cache()
-
-    def has_model_owned_conversion(cache_obj):
-        if callable(getattr(cache_obj, "to_batch", None)):
-            return True
-        sub_caches = getattr(cache_obj, "caches", None)
-        return isinstance(sub_caches, (list, tuple)) and any(
-            has_model_owned_conversion(child) for child in sub_caches
-        )
 
     class _SingleCacheModel:
         layers = (None,)
@@ -959,10 +967,17 @@ def _patched_make_cache(model, left_padding, max_kv_size):
             return to_batch(left_padding)
 
         sub_caches = getattr(cache_obj, "caches", None)
-        if isinstance(sub_caches, (list, tuple)) and any(
-            has_model_owned_conversion(child) for child in sub_caches
-        ):
+        if isinstance(sub_caches, (list, tuple)):
             return type(cache_obj)(*(convert(child) for child in sub_caches))
+
+        if type(cache_obj).__name__ in {"ArraysCache", "SizedArraysCache"}:
+            cache_obj.left_padding = mx.array(left_padding)
+            return cache_obj
+
+        if type(cache_obj).__name__ in {"KVCache", "RotatingKVCache"}:
+            merge = getattr(cache_obj, "merge", None)
+            if callable(merge):
+                return merge([cache_obj])
 
         return _original_make_cache(
             _SingleCacheModel(cache_obj), left_padding, max_kv_size
@@ -975,6 +990,8 @@ def _cache_layer_supports_singleton_passthrough(cache_obj: Any) -> bool:
     sub_caches = getattr(cache_obj, "caches", None)
     if isinstance(sub_caches, (list, tuple)):
         return all(_cache_layer_supports_singleton_passthrough(c) for c in sub_caches)
+    if type(cache_obj).__name__ in _SINGLETON_PASSTHROUGH_CACHE_TYPE_NAMES:
+        return True
     return hasattr(cache_obj, "filter") and hasattr(cache_obj, "extract")
 
 
@@ -985,6 +1002,9 @@ def _to_batched_cache_layer(cache_obj: Any) -> Any:
         if all(a is b for a, b in zip(sub_caches, converted)):
             return cache_obj
         return type(cache_obj)(*converted)
+    to_batch = getattr(cache_obj, "to_batch", None)
+    if callable(to_batch):
+        return to_batch([0])
     if isinstance(cache_obj, _REGULAR_SINGLETON_CACHE_TYPES):
         return cache_obj.merge([cache_obj])
     if (
@@ -992,13 +1012,6 @@ def _to_batched_cache_layer(cache_obj: Any) -> Any:
         and type(cache_obj) is _TQ_SINGLETON_CACHE_TYPE
     ):
         return cache_obj.merge([cache_obj])
-    # Model-owned singletons (e.g. qwen4_exp QSAKVCache) declare their batch
-    # conversion via to_batch, which _patched_make_cache honors at creation;
-    # honor it on the continuous-batching join path too, or extend() hits a
-    # singleton without the method. A warm singleton is one unpadded row.
-    to_batch = getattr(cache_obj, "to_batch", None)
-    if callable(to_batch):
-        return to_batch([0])
     return cache_obj
 
 
@@ -1057,7 +1070,7 @@ def _patched_ppb_split(self, indices):
         # Defensive: normalise None → [] to avoid mlx-lm crash in _step
         lps = self.logits_processors if self.logits_processors is not None else []
         new_batch.logits_processors = lps
-        new_batch.state_machines = self.state_machines
+        new_batch.stop_matchers = self.stop_matchers
         new_batch.max_tokens = self.max_tokens
         if hasattr(self, "_omlx_glm_dsa_adaptive_prefill"):
             new_batch._omlx_glm_dsa_adaptive_prefill = (
@@ -1069,7 +1082,7 @@ def _patched_ppb_split(self, indices):
         self.tokens = []
         self.samplers = []
         self.logits_processors = []
-        self.state_machines = []
+        self.stop_matchers = []
         self.max_tokens = []
         return new_batch
     return _original_ppb_split(self, indices)
@@ -1373,6 +1386,40 @@ def _collect_cache_storage_arrays(cache_obj: Any) -> list[mx.array]:
             arrays.append(value)
 
     return arrays
+
+
+def _collect_arrays_from_tree(value: Any, seen: dict[int, Any] | None = None) -> list[mx.array]:
+    """Collect mx arrays from nested cache-state containers."""
+    if seen is None:
+        seen = {}
+    obj_id = id(value)
+    if obj_id in seen:
+        return []
+    seen[obj_id] = value
+
+    if isinstance(value, mx.array):
+        return [value]
+
+    arrays: list[mx.array] = []
+    if isinstance(value, dict):
+        iterable = value.values()
+    elif isinstance(value, (list, tuple)):
+        iterable = value
+    else:
+        iterable = ()
+    for item in iterable:
+        arrays.extend(_collect_arrays_from_tree(item, seen))
+    return arrays
+
+
+def _eval_cache_states(cache_list: list[Any]) -> None:
+    """Evaluate cache state arrays without relying on mx.eval pytree handling."""
+    arrays: list[mx.array] = []
+    seen: dict[int, Any] = {}
+    for cache_obj in cache_list:
+        arrays.extend(_collect_arrays_from_tree(cache_obj.state, seen))
+    if arrays:
+        mx.eval(*arrays)
 
 
 def _materialize_cache_storage(cache_list: list[Any]) -> None:
@@ -2837,17 +2884,42 @@ class Scheduler:
             )
         return type(cache_obj).__name__ in ("ArraysCache", "SizedArraysCache")
 
+    def _declares_deepseek_v4(self, model_ref: str | None) -> bool:
+        """Return true when model metadata identifies DeepSeek-V4."""
+        model_config = getattr(self.model, "config", None)
+        model_type = getattr(model_config, "model_type", None)
+        if model_type == "deepseek_v4":
+            return True
+
+        if model_ref is None:
+            return False
+
+        config_path = Path(model_ref) / "config.json"
+        if not config_path.is_file():
+            return False
+
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read model config from %s: %s", config_path, exc)
+            return False
+        return config.get("model_type") == "deepseek_v4"
+
     def _load_generation_config_eos(self) -> set[int] | None:
         """Load EOS token IDs from generation_config.json if available."""
         try:
             model_ref = getattr(self.tokenizer, "name_or_path", None) or getattr(
                 self.config, "model_name", None
             )
-            if not model_ref:
-                return None
-
             result = load_generation_config_token_ids(model_ref, "eos_token_id")
             if result is None:
+                result = set()
+
+            if self._declares_deepseek_v4(model_ref):
+                result.update(_DEEPSEEK_V4_EOS_TOKEN_IDS)
+
+            if not result:
                 return None
 
             # Only return if there are tokens beyond what tokenizer already provides
@@ -2950,7 +3022,7 @@ class Scheduler:
         return stop_tokens
 
     # _update_stop_tokens deleted — per-request stop tokens are now
-    # handled via SequenceStateMachine passed to insert().
+    # handled via StopSequenceMatcher passed to insert().
 
     def _get_detokenizer(self, request_id: str):
         """Get or create a streaming detokenizer for a request.
@@ -3429,7 +3501,11 @@ class Scheduler:
         n_tokens = len(tokens)
         if n_tokens <= 1:
             # Nothing to prefill, return cache + tokens as-is.
-            cache = existing_cache or make_prompt_cache(self.model)
+            if existing_cache is not None:
+                cache = existing_cache
+            else:
+                with mx.stream(self._stream):
+                    cache = make_prompt_cache(self.model)
             # TurboQuant: a TQ cache here makes _merge_caches() build a
             # BatchTurboQuantKVCache (via the monkey-patched merge), so the
             # one decode token quantizes against TQ history. An empty fresh
@@ -3447,7 +3523,8 @@ class Scheduler:
         if existing_cache is not None:
             prompt_cache = existing_cache
         else:
-            prompt_cache = make_prompt_cache(self.model)
+            with mx.stream(self._stream):
+                prompt_cache = make_prompt_cache(self.model)
 
         # Fresh TurboQuant requests run fp16 during the cold prefill loop and
         # are quantized once at the end. Restored TurboQuant prefix caches stay
@@ -3610,7 +3687,7 @@ class Scheduler:
                     cache=prompt_cache,
                     **model_kwargs,
                 )
-                mx.eval([c.state for c in prompt_cache])
+                _eval_cache_states(prompt_cache)
                 input_arr = input_arr[:, n_to_process:]
                 if embeds_array is not None:
                     embeds_array = embeds_array[:, n_to_process:]
@@ -5058,8 +5135,11 @@ class Scheduler:
         prompt_cache = (
             existing_cache
             if existing_cache is not None
-            else make_prompt_cache(self.model)
+            else None
         )
+        if prompt_cache is None:
+            with mx.stream(self._stream):
+                prompt_cache = make_prompt_cache(self.model)
 
         block_size = self.config.paged_cache_block_size
         boundary_enabled = (
@@ -5178,7 +5258,7 @@ class Scheduler:
                 self.model(chunk, cache=state.cache, skip_lm_head=True)
             else:
                 self.model(chunk, cache=state.cache)
-            mx.eval([c.state for c in state.cache])
+            _eval_cache_states(state.cache)
         _trace_model_ms = (time.perf_counter() - _trace_model_start) * 1000.0
         _throttle_post = get_phys_footprint()
         self._record_chunk_transient(
@@ -5421,11 +5501,12 @@ class Scheduler:
                 all_tokens=[_batch_generator_all_tokens(request)],
                 samplers=[state.sampler],
                 logits_processors=[per_row_lps],
-                state_machines=[state.sm],
+                stop_matchers=[state.sm],
             )
         if uids:
             _register_uid_rows(self.model, uids, [state.sampler], [per_row_lps])
             uid = uids[0]
+            _record_native_mtp_request_eligibility(self.model, uid, request)
             self.request_id_to_uid[request.request_id] = uid
             self.uid_to_request_id[uid] = request.request_id
             now = time.monotonic()
@@ -5576,8 +5657,8 @@ class Scheduler:
 
         self.prefilling = still_prefilling
 
-    def _build_state_machine(self, request: "Request") -> SequenceStateMachine:
-        """Build a SequenceStateMachine for per-request stop tokens.
+    def _build_state_machine(self, request: "Request") -> StopSequenceMatcher:
+        """Build a StopSequenceMatcher for per-request stop tokens.
 
         Combines base stop tokens (EOS, Harmony) with request-specific
         stop_token_ids and tokenized stop strings into a single state
@@ -5588,13 +5669,11 @@ class Scheduler:
         if request.sampling_params.stop_token_ids:
             stop_tokens_set.update(request.sampling_params.stop_token_ids)
 
-        transitions: dict[str, list] = {
-            "normal": [([t], None) for t in stop_tokens_set]
-        }
+        stop_sequences: list[tuple[int, ...]] = [(int(t),) for t in stop_tokens_set]
         stop_sequence_strings: dict[tuple[int, ...], str] = {}
 
         # Tokenize stop strings into token sequences. mlx-lm's
-        # SequenceStateMachine uses Aho-Corasick, so per-token match
+        # StopSequenceMatcher uses Aho-Corasick, so per-token match
         # cost stays O(1) regardless of how many sequences are added.
         # BPE merge edge cases (where a stop string boundary lands
         # mid-token) may miss; that is a known limitation.
@@ -5607,7 +5686,7 @@ class Scheduler:
                 seq = self.tokenizer.encode(stop_str)
             if seq:
                 token_sequence = tuple(int(token) for token in seq)
-                transitions["normal"].append((list(token_sequence), None))
+                stop_sequences.append(token_sequence)
                 stop_sequence_strings[token_sequence] = stop_str
 
         # Response-side buffering is request-local so normal completion,
@@ -5616,9 +5695,7 @@ class Scheduler:
             strings=stop_sequence_strings
         )
 
-        if transitions["normal"]:
-            return SequenceStateMachine(transitions, initial="normal")
-        return SequenceStateMachine({}, initial="normal")
+        return StopSequenceMatcher(stop_sequences)
 
     def _buffer_stop_sequence_output(
         self,
@@ -5628,10 +5705,10 @@ class Scheduler:
     ) -> list[RequestOutput]:
         """Suppress every output chunk belonging to a matched stop sequence.
 
-        mlx-lm reports the full ``match_sequence`` but marks only its final
-        token as ``finish_reason=stop``.  Keep only a suffix that is a token
-        prefix of a configured stop string, then discard that suffix when the
-        full sequence matches.  All other output is released immediately.
+        Keep only a suffix that is a token prefix of a configured stop string,
+        then discard that suffix when the full sequence matches. Newer mlx-lm
+        responses report only ``finish_reason=stop``, so infer the match from
+        the buffered suffix when ``match_sequence`` is unavailable.
         """
         state = getattr(request, "_stop_output_state", None)
         if state is None or not state.strings:
@@ -5645,11 +5722,19 @@ class Scheduler:
             int(token)
             for token in (getattr(response, "match_sequence", None) or ())
         )
-        matched_sequence = (
-            reported_match
-            if output.finish_reason == "stop" and reported_match in state.strings
-            else None
-        )
+        matched_sequence = None
+        if output.finish_reason == "stop":
+            if reported_match in state.strings:
+                matched_sequence = reported_match
+            else:
+                suffix_matches = [
+                    sequence
+                    for sequence in state.strings
+                    if len(sequence) <= len(pending_tokens)
+                    and pending_tokens[-len(sequence) :] == sequence
+                ]
+                if suffix_matches:
+                    matched_sequence = max(suffix_matches, key=len)
         if matched_sequence is not None:
             terminal_output = output
             matched_outputs = []
@@ -7947,7 +8032,14 @@ class Scheduler:
     _CACHE_FRESHNESS_WAIT_MIN_PROMPT_TOKENS = 4096
     _CACHE_FRESHNESS_WAIT_MIN_COMMON_TOKENS = 8192
     _CACHE_FRESHNESS_WAIT_MIN_PROMPT_RATIO = 0.30
-    _CACHE_FRESHNESS_WAIT_TIMEOUT_S = 4.0
+    # A relevant in-flight store still owns the completed request's full GPU
+    # KV cache. Letting an immediate follow-up proceed after only four seconds
+    # duplicates that cache while the writer continues, so a long sequential
+    # conversation can stack up to the store-cache gate cap worth of 30k+
+    # token caches. Match the existing stalled-writer bound: normal stores
+    # drain and release their batch row before the next prefix lookup, while a
+    # genuinely stuck writer still has a finite escape hatch.
+    _CACHE_FRESHNESS_WAIT_TIMEOUT_S = _STORE_CACHE_ADMISSION_STALL_TIMEOUT_S
 
     @staticmethod
     def _store_extra_keys_match(
@@ -8612,7 +8704,7 @@ class Scheduler:
                     return_hidden=True,
                     return_shared_kv=True,
                 )
-                mx.eval([c.state for c in prefilled_cache])
+                _eval_cache_states(prefilled_cache)
         except Exception as e:
             logger.warning(
                 "vlm_mtp final-prefill forward failed (%s); falling back "
@@ -10349,6 +10441,7 @@ class Scheduler:
                         report_sparse_progress=_report_sparse_progress,
                         sync_and_clear_cache=lambda: _sync_and_clear_cache(self._stream),
                         log=logger,
+                        eval_cache_states=_eval_cache_states,
                         extract_cache_states=self._extract_cache_states,
                         # Preserve an ordinary cache hit that already extends
                         # beyond the static boundary; exact restoration is only
@@ -10583,7 +10676,9 @@ class Scheduler:
                     # singleton, so the dashboard entry leaks across model
                     # reload (#1405). Mirrors the cleanup in
                     # _advance_chunked_prefills (d736bfd).
-                    logger.error("Prefill failed for %s: %s", request.request_id, e)
+                    logger.exception(
+                        "Prefill failed for %s: %s", request.request_id, e
+                    )
                     self.uid_to_request_id.pop(temp_uid, None)
                     self.request_id_to_uid.pop(request.request_id, None)
                     self._release_paged_cache_for_request(request.request_id)
@@ -10624,10 +10719,7 @@ class Scheduler:
                 extra = request.vlm_extra_kwargs or {}
                 captured = extra.get("_captured_rope_deltas")
                 if captured is not None:
-                    if hasattr(captured, "item"):
-                        request.rope_deltas = float(captured.item())
-                    else:
-                        request.rope_deltas = float(captured)
+                    request.rope_deltas = rope_delta_to_float(captured)
                 elif hasattr(self.model, "get_last_rope_deltas"):
                     request.rope_deltas = self.model.get_last_rope_deltas()
 
@@ -10701,11 +10793,12 @@ class Scheduler:
                     all_tokens=[_batch_generator_all_tokens(request)],
                     samplers=[sampler],
                     logits_processors=[per_row_lps],
-                    state_machines=[sm],
+                    stop_matchers=[sm],
                 )
             if uids:
                 _register_uid_rows(self.model, uids, [sampler], [per_row_lps])
                 uid = uids[0]
+                _record_native_mtp_request_eligibility(self.model, uid, request)
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id
                 now = time.monotonic()
@@ -10875,7 +10968,9 @@ class Scheduler:
                 request_id=request_id,
                 new_token_ids=[response.token] if not is_stop else [],
                 new_text=new_text,
-                output_token_ids=list(request.output_token_ids),
+                output_token_ids=(
+                    list(request.output_token_ids) if is_finished else []
+                ),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
                 generated_at=output_generated_at,

@@ -8,8 +8,7 @@ providing non-blocking output collection with intelligent aggregation.
 """
 
 import asyncio
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
 
 from .request import RequestOutput
 
@@ -46,7 +45,7 @@ class RequestOutputCollector:
             aggregate: If True, merge outputs when producer gets ahead.
                        This prevents buffer explosion under load.
         """
-        self.output: Optional[RequestOutput] = None
+        self.output: RequestOutput | None = None
         self.ready = asyncio.Event()
         self.aggregate = aggregate
         self._is_waiting = False
@@ -71,7 +70,7 @@ class RequestOutputCollector:
             self.output = output
         self.ready.set()
 
-    def get_nowait(self) -> Optional[RequestOutput]:
+    def get_nowait(self) -> RequestOutput | None:
         """
         Get output without blocking.
 
@@ -132,7 +131,6 @@ class RequestOutputCollector:
         Returns:
             Merged RequestOutput
         """
-        # Combine new tokens
         merged_new_token_ids = existing.new_token_ids + new.new_token_ids
         merged_new_text = existing.new_text + new.new_text
 
@@ -140,8 +138,8 @@ class RequestOutputCollector:
             request_id=new.request_id,
             new_token_ids=merged_new_token_ids,
             new_text=merged_new_text,
-            output_token_ids=new.output_token_ids,  # Use latest cumulative
-            output_text=new.output_text,  # Use latest cumulative
+            output_token_ids=new.output_token_ids,
+            output_text=new.output_text,
             finished=new.finished,
             finish_reason=new.finish_reason,
             prompt_tokens=new.prompt_tokens,
@@ -156,7 +154,7 @@ class RequestOutputCollector:
                 if new.generated_until is not None
                 else existing.generated_until
             ),
-            tool_calls=new.tool_calls,  # Preserve tool_calls for Harmony models
+            tool_calls=new.tool_calls,
             cached_tokens=new.cached_tokens,
             error=new.error or existing.error,
             error_code=new.error_code or existing.error_code,
