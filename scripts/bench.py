@@ -40,10 +40,42 @@ import argparse
 import asyncio
 import sys
 import time
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal
+
+from omlx.model_settings import ModelSettings
 
 
-def _parse_args() -> argparse.Namespace:
+class NativeMTPMode(StrEnum):
+    OFF = "off"
+    ON = "on"
+    BOTH = "both"
+
+
+@dataclass(frozen=True)
+class BenchmarkVariant:
+    name: Literal["native-mtp=off", "native-mtp=on"]
+    model_settings: ModelSettings
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    model_path: str
+    variant: BenchmarkVariant
+
+
+@dataclass
+class BenchmarkResult:
+    label: str
+    single_results: list[dict[str, object]]
+    batch_results: list[dict[str, object]]
+
+
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="omlx native benchmark",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -80,7 +112,18 @@ def _parse_args() -> argparse.Namespace:
         default=1,
         help="Warmup runs before timing (default: 1)",
     )
-    return p.parse_args()
+    p.add_argument(
+        "--native-mtp",
+        type=NativeMTPMode,
+        choices=tuple(NativeMTPMode),
+        default=NativeMTPMode.OFF,
+        help="Native MTP variant(s): off (default), on, or both.",
+    )
+    return p
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
 
 
 # ── formatting helpers ────────────────────────────────────────────────────────
@@ -117,10 +160,119 @@ def _short_name(path: str) -> str:
     return name
 
 
+def _native_mtp_variants(mode: NativeMTPMode) -> tuple[BenchmarkVariant, ...]:
+    if mode is NativeMTPMode.ON:
+        return (
+            BenchmarkVariant(
+                name="native-mtp=on",
+                model_settings=ModelSettings(mtp_enabled=True),
+            ),
+        )
+    off = BenchmarkVariant(
+        name="native-mtp=off",
+        model_settings=ModelSettings(mtp_enabled=False),
+    )
+    if mode is NativeMTPMode.OFF:
+        return (off,)
+    return (
+        off,
+        BenchmarkVariant(
+            name="native-mtp=on",
+            model_settings=ModelSettings(mtp_enabled=True),
+        ),
+    )
+
+
+def _expand_cases(
+    model_paths: Sequence[str], mode: NativeMTPMode
+) -> list[BenchmarkCase]:
+    return [
+        BenchmarkCase(model_path, variant)
+        for model_path in model_paths
+        for variant in _native_mtp_variants(mode)
+    ]
+
+
+def _allocate_labels(
+    cases: Sequence[BenchmarkCase], *, include_variant: bool
+) -> list[str]:
+    bases = [
+        (
+            f"{'baseline' if case.variant.name == 'native-mtp=off' else 'native-mtp'} "
+            f"{_short_name(case.model_path)}"
+            if include_variant
+            else _short_name(case.model_path)
+        )
+        for case in cases
+    ]
+    totals: dict[str, int] = defaultdict(int)
+    for base in bases:
+        totals[base] += 1
+
+    ordinals: dict[str, int] = defaultdict(int)
+    labels: list[str] = []
+    used: set[str] = set()
+    for base in bases:
+        if totals[base] == 1:
+            label = base
+        else:
+            ordinals[base] += 1
+            label = f"{base} #{ordinals[base]}"
+
+        collision_ordinal = 1
+        candidate = label
+        while candidate in used:
+            candidate = f"{label} #{collision_ordinal}"
+            collision_ordinal += 1
+        labels.append(candidate)
+        used.add(candidate)
+    return labels
+
+
+def _truncate_label(label: str, width: int) -> str:
+    return label[:width] if len(label) > width else label
+
+
+def _label_with_ordinal(label: str, width: int, ordinal: int) -> str:
+    suffix = f"#{ordinal}"
+    prefix_width = width - len(suffix)
+    if len(label) <= prefix_width:
+        return f"{label}{suffix}"
+    return f"{label[:prefix_width - 1]}…{suffix}"
+
+
+def _display_labels(labels: Sequence[str], width: int) -> list[str]:
+    if width < 3:
+        raise ValueError("display label width must leave room for an ordinal")
+
+    displays = [_truncate_label(label, width) for label in labels]
+    groups: dict[str, list[int]] = defaultdict(list)
+    for index, display in enumerate(displays):
+        groups[display].append(index)
+
+    for indexes in groups.values():
+        if len(indexes) > 1:
+            for ordinal, index in enumerate(indexes, start=1):
+                displays[index] = _label_with_ordinal(labels[index], width, ordinal)
+
+    while True:
+        collisions: dict[str, list[int]] = defaultdict(list)
+        for index, display in enumerate(displays):
+            collisions[display].append(index)
+        duplicate_groups = [
+            indexes for indexes in collisions.values() if len(indexes) > 1
+        ]
+        if not duplicate_groups:
+            return displays
+        for indexes in duplicate_groups:
+            for index in indexes:
+                displays[index] = _label_with_ordinal(labels[index], width, index + 1)
+
+
 # ── per-model benchmark runner ────────────────────────────────────────────────
 
 async def _bench_model(
-    model_path: str,
+    case: BenchmarkCase,
     pp_lengths: list[int],
     gen_tokens: int,
     batch_sizes: list[int],
@@ -134,71 +286,75 @@ async def _bench_model(
     )
     from omlx.engine.vlm import VLMBatchedEngine
 
-    print(f"\nLoading {model_path} …")
+    print(f"\nLoading {case.model_path} …")
     t0 = time.perf_counter()
-    engine = VLMBatchedEngine(model_path)
+    engine = VLMBatchedEngine(
+        model_name=case.model_path,
+        model_settings=case.variant.model_settings,
+    )
     await engine.start()
-    print(f"Loaded in {time.perf_counter() - t0:.1f}s")
+    try:
+        print(f"Loaded in {time.perf_counter() - t0:.1f}s")
 
-    tokenizer = engine.tokenizer
-    prompts: dict[int, str] = {pp: _generate_prompt(tokenizer, pp) for pp in sorted(set(pp_lengths))}
+        tokenizer = engine.tokenizer
+        prompts: dict[int, str] = {
+            pp: _generate_prompt(tokenizer, pp) for pp in sorted(set(pp_lengths))
+        }
 
-    if warmup > 0 and pp_lengths:
-        warmup_pp = min(pp_lengths)
-        print(f"Warming up ({warmup}× pp={warmup_pp}) …")
-        for _ in range(warmup):
-            await _run_single_test(engine, prompts[warmup_pp], gen_tokens, warmup_pp)
+        if warmup > 0 and pp_lengths:
+            warmup_pp = min(pp_lengths)
+            print(f"Warming up ({warmup}× pp={warmup_pp}) …")
+            for _ in range(warmup):
+                await _run_single_test(engine, prompts[warmup_pp], gen_tokens, warmup_pp)
 
-    single_results: list[dict] = []
-    for pp in sorted(pp_lengths):
-        print(f"  pp={pp} gen={gen_tokens} …", end="", flush=True)
-        r = await _run_single_test(engine, prompts[pp], gen_tokens, pp)
-        single_results.append(r)
-        print(
-            f"  ttft={_fmt_metric(r['ttft_ms'], 0)}ms  "
-            f"{_fmt_metric(r['gen_tps'])} t/s"
-        )
+        single_results: list[dict[str, object]] = []
+        for pp in sorted(pp_lengths):
+            print(f"  pp={pp} gen={gen_tokens} …", end="", flush=True)
+            r = await _run_single_test(engine, prompts[pp], gen_tokens, pp)
+            single_results.append(r)
+            print(
+                f"  ttft={_fmt_metric(r['ttft_ms'], 0)}ms  "
+                f"{_fmt_metric(r['gen_tps'])} t/s"
+            )
 
-    batch_results: list[dict] = []
-    batch_pp = sorted(pp_lengths)[0] if pp_lengths else 1024
-    for bs in sorted(batch_sizes):
-        batch_prompts = [_generate_prompt(tokenizer, batch_pp) for _ in range(bs)]
-        print(f"  batch={bs} pp={batch_pp} gen={gen_tokens} …", end="", flush=True)
-        r = await _run_batch_test(engine, batch_prompts, batch_pp, gen_tokens, bs)
-        batch_results.append(r)
-        print(
-            f"  pp={_fmt_metric(r['pp_tps'], 0)}/s  "
-            f"tg={_fmt_metric(r['tg_tps'], 0)}/s"
-        )
-
-    await engine.stop()
-    return single_results, batch_results
+        batch_results: list[dict[str, object]] = []
+        batch_pp = sorted(pp_lengths)[0] if pp_lengths else 1024
+        for bs in sorted(batch_sizes):
+            batch_prompts = [_generate_prompt(tokenizer, batch_pp) for _ in range(bs)]
+            print(f"  batch={bs} pp={batch_pp} gen={gen_tokens} …", end="", flush=True)
+            r = await _run_batch_test(engine, batch_prompts, batch_pp, gen_tokens, bs)
+            batch_results.append(r)
+            print(
+                f"  pp={_fmt_metric(r['pp_tps'], 0)}/s  "
+                f"tg={_fmt_metric(r['tg_tps'], 0)}/s"
+            )
+        return single_results, batch_results
+    finally:
+        await engine.stop()
 
 
 # ── table printers ────────────────────────────────────────────────────────────
 
 def _print_single_comparison(
-    labels: list[str],
-    all_results: list[list[dict]],
+    results: Sequence[BenchmarkResult],
     pp_lengths: list[int],
 ) -> None:
     """Print a side-by-side comparison table for single-request results."""
     # Column widths: fixed per metric, repeated per model
     col = 9  # width of one model's metric block
-    n = len(labels)
+    n = len(results)
 
     # Header: model names spanning their columns
     metrics = ["ttft", "gen_tps", "pp_tps", "mem"]
     block_w = col * len(metrics) + len(metrics) - 1  # e.g. 4*9+3 = 39
+    labels = _display_labels([result.label for result in results], block_w)
 
     print()
     print("  Single-request")
     # Model name header row
     name_row = f"  {'pp':>6}  "
     for label in labels:
-        # Truncate/pad label to block_w
-        display = label[:block_w] if len(label) > block_w else label
-        name_row += f"{display:^{block_w}}  "
+        name_row += f"{label:^{block_w}}  "
     print(name_row.rstrip())
 
     # Sub-header: metric names per model
@@ -213,7 +369,8 @@ def _print_single_comparison(
     # Data rows
     for pp in sorted(pp_lengths):
         row = f"  {pp:>6}  "
-        for model_results in all_results:
+        for result in results:
+            model_results = result.single_results
             r = next((x for x in model_results if x["prompt_tokens"] == pp), None)
             if r is None:
                 row += f"{'—':>{col}} {'—':>{col}} {'—':>{col}} {'—':>{col}}  "
@@ -230,22 +387,21 @@ def _print_single_comparison(
 
 
 def _print_batch_comparison(
-    labels: list[str],
-    all_results: list[list[dict]],
+    results: Sequence[BenchmarkResult],
     batch_sizes: list[int],
 ) -> None:
     """Print a side-by-side comparison table for batch results."""
     col = 9
-    n = len(labels)
+    n = len(results)
     metrics = ["pp_tps", "tg_tps", "ttft"]
     block_w = col * len(metrics) + len(metrics) - 1
+    labels = _display_labels([result.label for result in results], block_w)
 
     print()
     print("  Continuous-batching")
     name_row = f"  {'bs':>4}  "
     for label in labels:
-        display = label[:block_w] if len(label) > block_w else label
-        name_row += f"{display:^{block_w}}  "
+        name_row += f"{label:^{block_w}}  "
     print(name_row.rstrip())
 
     sub_row = f"  {'':>4}  "
@@ -258,7 +414,8 @@ def _print_batch_comparison(
 
     for bs in sorted(batch_sizes):
         row = f"  {bs:>4}  "
-        for model_results in all_results:
+        for result in results:
+            model_results = result.batch_results
             r = next((x for x in model_results if x["batch_size"] == bs), None)
             if r is None:
                 row += f"{'—':>{col}} {'—':>{col}} {'—':>{col}}  "
@@ -277,33 +434,34 @@ def _print_batch_comparison(
 
 async def _run(args: argparse.Namespace) -> None:
     model_paths = [str(Path(m).expanduser().resolve()) for m in args.models]
-    labels = [_short_name(p) for p in model_paths]
     pp_lengths = sorted(set(args.pp))
+    cases = _expand_cases(model_paths, args.native_mtp)
+    labels = _allocate_labels(
+        cases,
+        include_variant=args.native_mtp is not NativeMTPMode.OFF,
+    )
+    results: list[BenchmarkResult] = []
 
-    all_single: list[list[dict]] = []
-    all_batch: list[list[dict]] = []
-
-    for path in model_paths:
+    for case, label in zip(cases, labels, strict=True):
         single, batch = await _bench_model(
-            path, pp_lengths, args.gen, sorted(args.batch), args.warmup
+            case, pp_lengths, args.gen, sorted(args.batch), args.warmup
         )
-        all_single.append(single)
-        all_batch.append(batch)
+        results.append(BenchmarkResult(label, single, batch))
 
     # ── summary ───────────────────────────────────────────────────────────────
     print(f"\n{'═' * 60}")
     print(f"  gen_tokens={args.gen}")
 
-    if len(model_paths) == 1:
+    if len(results) == 1:
         # Single model: original compact table
-        _print_single_comparison(labels, all_single, pp_lengths)
-        if all_batch[0]:
-            _print_batch_comparison(labels, all_batch, sorted(args.batch))
+        _print_single_comparison(results, pp_lengths)
+        if results[0].batch_results:
+            _print_batch_comparison(results, sorted(args.batch))
     else:
         # Multiple models: side-by-side
-        _print_single_comparison(labels, all_single, pp_lengths)
-        if any(all_batch):
-            _print_batch_comparison(labels, all_batch, sorted(args.batch))
+        _print_single_comparison(results, pp_lengths)
+        if any(result.batch_results for result in results):
+            _print_batch_comparison(results, sorted(args.batch))
 
     print()
 
