@@ -26,6 +26,7 @@ from omlx.model_discovery import (
     is_helper_config_model_type,
     is_helper_model_config,
     model_directory_access_error,
+    model_unavailable_reason,
 )
 
 
@@ -310,6 +311,29 @@ class TestDetectModelType:
         }
         (vlm_dir / "config.json").write_text(json.dumps(config))
         assert detect_model_type(vlm_dir) == "vlm"
+
+    def test_detect_qwen4_exp_official_config_as_vlm(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+            "vision_config": {"hidden_size": 1152},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "vlm"
+        assert model_unavailable_reason("qwen4_exp") is None
+
+    def test_qwen4_exp_without_vision_is_available_as_llm(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "llm"
+        assert model_unavailable_reason("qwen4_exp") is None
 
     def test_missing_config_defaults_to_llm(self, tmp_path):
         """Test that missing config.json defaults to LLM."""
@@ -1679,6 +1703,32 @@ class TestDiscoverModelsFromDirs:
 
 class TestUnsupportedModels:
     """Tests for _is_unsupported_model() — audio models are now supported."""
+
+    @pytest.mark.parametrize(
+        ("model_type", "architectures"),
+        [
+            ("gemma4_assistant", ["Gemma4AssistantForCausalLM"]),
+            ("gemma4_unified_assistant", ["Gemma4UnifiedAssistantForCausalLM"]),
+            ("qwen3_5_mtp", None),
+        ],
+    )
+    def test_vlm_mtp_helpers_are_discovered(
+        self, tmp_path, model_type, architectures
+    ):
+        """Assistant/MTP checkpoints must reach status and drafter selectors."""
+        model_dir = tmp_path / model_type
+        model_dir.mkdir()
+        config = {"model_type": model_type}
+        if architectures is not None:
+            config["architectures"] = architectures
+        (model_dir / "config.json").write_text(json.dumps(config))
+        (model_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        models = discover_models(tmp_path)
+
+        assert _is_unsupported_model(model_dir) is False
+        assert models[model_type].is_helper is True
+        assert models[model_type].config_model_type == model_type
 
     def test_whisper_not_unsupported(self, tmp_path):
         """Whisper is now an audio_stt model, not unsupported."""
