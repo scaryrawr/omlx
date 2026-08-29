@@ -38,6 +38,7 @@ from omlx.api.anthropic_utils import (
     map_finish_reason_to_stop_reason,
     request_has_cache_control,
 )
+from omlx.api.media_inputs import normalize_media_file_parts_in_messages
 from omlx.api.openai_models import ContentPart, FunctionCall, Message, ToolCall
 from omlx.api.utils import (
     SPECIAL_TOKENS_PATTERN,
@@ -56,7 +57,6 @@ from omlx.api.utils import (
     prepare_system_messages_for_template,
     uses_native_reasoning_content,
 )
-from omlx.exceptions import InvalidRequestError
 
 
 class TestReasoningEffortChatTemplateKwargs:
@@ -663,6 +663,126 @@ class TestUsesNativeReasoningContent:
 
     def test_plain_model_is_not_native(self):
         assert not uses_native_reasoning_content("llama-3")
+
+
+class TestExtractMultimodalVideoContent:
+    def test_extract_multimodal_preserves_input_video(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": "Describe this clip"},
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "https://example.com/clip.mp4",
+                            "format": "mp4",
+                        },
+                    },
+                ],
+            )
+        ]
+
+        result = extract_multimodal_content(messages)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][1]["type"] == "input_video"
+        assert result[0]["content"][1]["input_video"]["format"] == "mp4"
+
+    def test_audio_file_part_normalizes_to_input_audio(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "sound.wav",
+                            "mime_type": "audio/wav",
+                            "file_data": "data:audio/wav;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_audio"
+        assert content[0]["input_audio"]["format"] == "wav"
+
+    def test_audio_webm_mime_overrides_ambiguous_extension(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "recording.webm",
+                            "mime_type": "audio/webm",
+                            "file_data": "data:audio/webm;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_audio"
+        assert content[0]["input_audio"]["mime_type"] == "audio/webm"
+
+    def test_video_file_part_normalizes_to_input_video(self):
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": "data:video/mp4;base64,ZA==",
+                        },
+                    }
+                ],
+            )
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0].content
+
+        assert isinstance(content, list)
+        assert content[0]["type"] == "input_video"
+        assert content[0]["input_video"]["filename"] == "clip.mp4"
+
+    def test_dict_file_part_normalizes_to_input_video(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": "data:video/mp4;base64,ZA==",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        normalized = normalize_media_file_parts_in_messages(messages)
+        content = normalized[0]["content"]
+
+        assert content[0]["type"] == "input_video"
+        assert content[0]["input_video"]["filename"] == "clip.mp4"
 
 
 class TestConvertAnthropicToInternal:
@@ -3051,6 +3171,15 @@ class TestExtractMultimodalContent:
         )
         assert len(parts) == 0
 
+    def test_input_video_string_form_pass_through(self):
+        """input_video string paths survive multimodal content extraction."""
+        parts = _extract_multimodal_content_list(
+            [
+                {"type": "input_video", "input_video": "/tmp/clip.mp4"},
+            ]
+        )
+        assert parts == [{"type": "input_video", "input_video": "/tmp/clip.mp4"}]
+
     def test_input_audio_pass_through(self):
         """input_audio parts survive multimodal content extraction."""
         parts = _extract_multimodal_content_list(
@@ -3111,11 +3240,19 @@ class TestExtractMultimodalContent:
         assert parts[0]["input_audio"]["format"] == "wav"
 
     @pytest.mark.parametrize("part_type", ["video_url", "input_video"])
-    def test_video_input_is_rejected(self, part_type):
-        with pytest.raises(InvalidRequestError, match="Video input is not supported"):
-            _extract_multimodal_content_list(
-                [{"type": part_type, part_type: {"url": "data:video/mp4;base64,AA=="}}]
-            )
+    def test_video_input_handling(self, part_type):
+        parts = _extract_multimodal_content_list(
+            [{"type": part_type, part_type: {"url": "data:video/mp4;base64,AA=="}}]
+        )
+        if part_type == "input_video":
+            assert parts == [
+                {
+                    "type": part_type,
+                    part_type: {"url": "data:video/mp4;base64,AA=="},
+                }
+            ]
+        else:
+            assert parts == []
 
 
 # =============================================================================
