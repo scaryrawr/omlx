@@ -1138,7 +1138,7 @@ def _qwen4_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
     if (
         isinstance(block_size, bool)
         or not isinstance(block_size, int)
-        or not 2 <= block_size <= 9
+        or block_size < 2
     ):
         logger.warning(
             "Qwen4 MTP sidecar config %s has invalid block_size=%r; "

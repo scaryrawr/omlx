@@ -211,6 +211,7 @@ def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch
     ("sidecar_content", "warning"),
     [
         ("{", None),
+        (b"\xff", None),
         ("[]", "must contain an object"),
         (
             json.dumps({"model_type": "qwen4_exp_mtp", "block_size": "2"}),
@@ -239,7 +240,11 @@ def test_qwen4_exp_loader_safely_falls_back_for_invalid_sidecar_contract(
     )
     mtp_dir = tmp_path / "mtp"
     mtp_dir.mkdir()
-    (mtp_dir / "config.json").write_text(sidecar_content, encoding="utf-8")
+    sidecar_config_path = mtp_dir / "config.json"
+    if isinstance(sidecar_content, bytes):
+        sidecar_config_path.write_bytes(sidecar_content)
+    else:
+        sidecar_config_path.write_text(sidecar_content, encoding="utf-8")
 
     maybe_apply_pre_load_patches(
         str(tmp_path),
