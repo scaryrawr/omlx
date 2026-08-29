@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""MiniMax M3 compatibility layer for newer mlx-vlm pins.
+"""MiniMax M3 compatibility layer for mlx-vlm dependency drift.
 
-The mlx-vlm e390667 pin removed the out-of-tree MiniMax M3 implementation
-that oMLX currently depends on. This module keeps the compatibility surface
-small: it vendors the removed model/parser modules and restores only the
-server-facing helpers oMLX uses.
+Some mlx-vlm pins removed or reshaped the out-of-tree MiniMax M3
+implementation that oMLX depends on. This module keeps the compatibility
+surface small: it can expose vendored fallback model/parser modules while
+restoring only the server-facing helpers oMLX uses.
 """
 
 from __future__ import annotations
@@ -114,12 +114,15 @@ def _patch_get_model_and_args(vlm_utils: Any) -> None:
     if original is None or getattr(original, "_omlx_minimax_m3_compat", False):
         return
 
-    def patched_get_model_and_args(config: dict):
+    def patched_get_model_and_args(
+        config: dict,
+        model_path: Path | None = None,
+    ):
         raw_model_type = (
             config.get("model_type") if isinstance(config, dict) else None
         )
         if raw_model_type == "minimax_m3_vl":
-            module, model_type = original(config)
+            module, model_type = original(config, model_path=model_path)
             if model_type != "minimax_m3_vl":
                 module = importlib.import_module("mlx_vlm.models.minimax_m3_vl")
                 return module, "minimax_m3_vl"
@@ -132,8 +135,8 @@ def _patch_get_model_and_args(vlm_utils: Any) -> None:
         ):
             patched_config = dict(config)
             patched_config["model_type"] = "minimax_m3"
-            return original(patched_config)
-        return original(config)
+            return original(patched_config, model_path=model_path)
+        return original(config, model_path=model_path)
 
     patched_get_model_and_args._omlx_minimax_m3_compat = True
     patched_get_model_and_args._omlx_original = original

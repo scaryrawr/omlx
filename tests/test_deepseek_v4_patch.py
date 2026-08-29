@@ -319,8 +319,9 @@ class TestTokenizerPatch:
     def test_fallback_on_max_position_embeddings_error(self, applied_patch):
         """The exact AttributeError that transformers raises when it cannot
         recognize deepseek_v4 must trigger a retry with PreTrainedConfig()."""
-        import pytest as _pytest
         from unittest.mock import patch as mock_patch
+
+        import pytest as _pytest
 
         from omlx.patches.deepseek_v4 import tokenizer_patch
 
@@ -351,8 +352,9 @@ class TestTokenizerPatch:
 
     def test_fallback_on_deepseek_v4_value_error(self, applied_patch):
         """ValueError mentioning deepseek_v4 also triggers fallback."""
-        import pytest as _pytest
         from unittest.mock import patch as mock_patch
+
+        import pytest as _pytest
 
         from omlx.patches.deepseek_v4 import tokenizer_patch
 
@@ -425,10 +427,10 @@ class TestTokenizerPatch:
         forward to the upstream class so mlx-lm's NewlineTokenizer
         registration still works."""
         import mlx_lm.tokenizer_utils as tu
-        from transformers import AutoTokenizer as upstream_at
+        from transformers import AutoTokenizer as UpstreamAutoTokenizer
 
         # register is an upstream classmethod — wrapped class must expose it.
-        assert tu.AutoTokenizer.register is upstream_at.register
+        assert tu.AutoTokenizer.register is UpstreamAutoTokenizer.register
 
 
 class TestDSMLToolParser:
@@ -987,6 +989,130 @@ class TestChatTemplateV4:
         )
         assert render_through_next_turn.startswith(prev_full_text)
 
+
+class TestDSV4CanonicalChatEncoder:
+    """Canonical DSV4 encoder shim — reasoning mode and idempotent install."""
+
+    @pytest.mark.parametrize(
+        ("enable_thinking", "reasoning_effort", "expected"),
+        [
+            (False, None, ("chat", None)),
+            (True, None, ("thinking", None)),
+            (True, "low", ("thinking", "high")),
+            (True, "medium", ("thinking", "high")),
+            (True, "high", ("thinking", "high")),
+            (None, "medium", ("thinking", "high")),
+            (False, "max", ("thinking", "max")),
+        ],
+    )
+    def test_reasoning_kwargs_map_to_canonical_modes(
+        self, enable_thinking, reasoning_effort, expected
+    ):
+        from omlx.patches.deepseek_v4 import dsv4_chat_encoder as enc
+
+        assert (
+            enc._resolve_mode_and_effort(enable_thinking, reasoning_effort)
+            == expected
+        )
+
+    def test_apply_chat_template_passes_canonical_kwargs(self, monkeypatch):
+        from omlx.patches.deepseek_v4 import dsv4_chat_encoder as enc
+
+        class FakeEncoding:
+            def __init__(self):
+                self.calls = []
+
+            def encode_messages(self, messages, **kwargs):
+                self.calls.append({"messages": messages, **kwargs})
+                return (
+                    f"{kwargs['thinking_mode']}|"
+                    f"{kwargs['reasoning_effort']}|"
+                    f"{kwargs['drop_thinking']}"
+                )
+
+        fake = FakeEncoding()
+        monkeypatch.setattr(enc, "_encoding_cache", {})
+        monkeypatch.setattr(
+            enc, "_load_encoding_dsv4_module", lambda **kwargs: fake
+        )
+
+        messages = [
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "서울"},
+                        },
+                    }
+                ],
+            },
+        ]
+        tools = [{"type": "function", "function": {"name": "get_weather"}}]
+
+        prompt = enc.apply_chat_template(
+            messages,
+            enable_thinking=True,
+            reasoning_effort="medium",
+            drop_earlier_reasoning=False,
+            tools=tools,
+            model_path="/models/dsv4",
+        )
+
+        assert prompt == "thinking|high|False"
+        call = fake.calls[-1]
+        assert call["messages"][0] == {
+            "role": "system",
+            "content": "",
+            "tools": tools,
+        }
+        arguments = call["messages"][2]["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(arguments, str)
+        assert "서울" in arguments
+        assert call["add_default_bos_token"] is True
+
+    def test_install_canonical_chat_template_is_idempotent(self, monkeypatch):
+        from omlx.patches.deepseek_v4 import dsv4_chat_encoder as enc
+
+        class FakeEncoding:
+            def __init__(self):
+                self.calls = []
+
+            def encode_messages(self, messages, **kwargs):
+                self.calls.append(kwargs)
+                return "canonical"
+
+        class DummyTokenizer:
+            has_chat_template = False
+
+            @staticmethod
+            def _chat_template(*args, **kwargs):
+                return "original"
+
+        fake = FakeEncoding()
+        tokenizer = DummyTokenizer()
+        monkeypatch.setattr(enc, "_encoding_cache", {})
+        monkeypatch.setattr(
+            enc, "_load_encoding_dsv4_module", lambda **kwargs: fake
+        )
+
+        assert enc.install_canonical_chat_template(tokenizer, "/models/dsv4") is True
+        installed = tokenizer._chat_template
+        assert enc.install_canonical_chat_template(tokenizer, "/models/dsv4") is False
+        assert tokenizer._chat_template is installed
+        assert tokenizer._omlx_dsv4_chat_template_orig is DummyTokenizer._chat_template
+        assert tokenizer.has_chat_template is True
+
+        assert tokenizer._chat_template(
+            [{"role": "user", "content": "Hi"}],
+            enable_thinking=False,
+        ) == "canonical"
+        assert fake.calls[-1]["thinking_mode"] == "chat"
+        assert fake.calls[-1]["reasoning_effort"] is None
 
 class TestChatTemplateModuleRegistration:
     """sys.modules registration so mlx-lm's importlib path picks up our types."""

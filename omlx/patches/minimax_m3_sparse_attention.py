@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import inspect
 import logging
 from typing import Any
 
@@ -72,10 +74,8 @@ def _make_patched_call(original_call):
         finally:
             if installed:
                 if previous is None:
-                    try:
+                    with contextlib.suppress(AttributeError):
                         delattr(self, _LEFT_PADDING_ATTR)
-                    except AttributeError:
-                        pass
                 else:
                     setattr(self, _LEFT_PADDING_ATTR, previous)
 
@@ -161,6 +161,15 @@ def _make_patched_sparse_decode_attention(original):
     return patched_sparse_decode_attention
 
 
+def _native_attention_handles_left_padding(attention_cls: Any) -> bool:
+    """Return whether upstream already adjusts sparse positions for left padding."""
+    call = attention_cls.__dict__.get("__call__")
+    with contextlib.suppress(OSError, TypeError):
+        source = inspect.getsource(call)
+        return "left_padding" in source and "sparse_q_positions" in source
+    return False
+
+
 def apply_minimax_m3_sparse_attention_patch() -> bool:
     """Patch mlx-vlm MiniMax M3 sparse attention once.
 
@@ -192,16 +201,19 @@ def apply_minimax_m3_sparse_attention_patch() -> bool:
     current_call = attention_cls.__dict__.get("__call__")
     if getattr(current_call, _PATCH_MARKER, False):
         return False
+    if _native_attention_handles_left_padding(attention_cls):
+        return False
 
     attention_cls.__call__ = _make_patched_call(current_call)
     attention_cls._build_sparse_mask = _make_patched_build_sparse_mask(
         attention_cls.__dict__["_build_sparse_mask"]
     )
-    attention_cls._build_sparse_decode_indices = (
-        _make_patched_build_sparse_decode_indices(
-            attention_cls.__dict__["_build_sparse_decode_indices"]
+    if "_build_sparse_decode_indices" in attention_cls.__dict__:
+        attention_cls._build_sparse_decode_indices = (  # type: ignore[attr-defined]
+            _make_patched_build_sparse_decode_indices(
+                attention_cls.__dict__["_build_sparse_decode_indices"]
+            )
         )
-    )
     attention_cls._sparse_decode_attention = _make_patched_sparse_decode_attention(
         attention_cls.__dict__["_sparse_decode_attention"]
     )

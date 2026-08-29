@@ -422,6 +422,24 @@ class _CompatNaiveStreamingDetokenizer:
         return segment
 
 
+class _DecodeOnlyTokenizerAdapter:
+    """Adapt decode-only tokenizers to mlx-lm's naive detokenizer probe."""
+
+    def __init__(self, tokenizer: Any):
+        self._tokenizer = tokenizer
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tokenizer, name)
+
+    def decode(self, *args: Any, **kwargs: Any) -> Any:
+        return self._tokenizer.decode(*args, **kwargs)
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        if text == "a ,b" and add_special_tokens is False:
+            return []
+        raise AttributeError("decode-only tokenizer does not support encode")
+
+
 def create_streaming_detokenizer(
     tokenizer: Any,
     model_path: str | Path | None = None,
@@ -490,6 +508,17 @@ def create_streaming_detokenizer(
 
     try:
         return NaiveStreamingDetokenizer(tokenizer)
+    except AttributeError as exc:
+        if not hasattr(tokenizer, "encode"):
+            try:
+                return NaiveStreamingDetokenizer(_DecodeOnlyTokenizerAdapter(tokenizer))
+            except Exception as adapter_exc:
+                logger.debug(
+                    "Failed to create naive streaming detokenizer with "
+                    "decode-only tokenizer adapter: %s",
+                    adapter_exc,
+                )
+        logger.debug("Failed to create naive streaming detokenizer: %s", exc)
     except Exception as exc:
         logger.debug("Failed to create naive streaming detokenizer: %s", exc)
 

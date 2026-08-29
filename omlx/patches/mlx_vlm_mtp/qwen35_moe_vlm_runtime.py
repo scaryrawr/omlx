@@ -119,7 +119,11 @@ def _register_mtp_classes_for_vlm(q35moe_lang: Any) -> None:
 
     from mlx_vlm.models.qwen3_5.language import (
         Qwen3_5Attention as MoeAttention,
+    )
+    from mlx_vlm.models.qwen3_5.language import (
         Qwen3_5MLP as MoeMLP,
+    )
+    from mlx_vlm.models.qwen3_5.language import (
         create_attention_mask,
     )
 
@@ -206,8 +210,8 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
     original_call = cls.__call__
 
     def __init__(self, args, config=None):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
+        from . import is_mtp_attach_enabled
 
         original_init(self, args, config)
         # Attach MTPModule when the config declares MTP heads, so mlx-vlm's
@@ -270,6 +274,13 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
         # "got multiple values for keyword argument" when the caller already
         # passed capture_layer_ids (e.g. speculative_verify_logits).
         kwargs.pop("capture_layer_ids", None)
+        # Current mlx-vlm performs exact multi-token verification through a
+        # dedicated verifier. The ordinary path neither captures rollback
+        # states nor preserves GDN cache correctness after rejected drafts.
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+            original_call, "__globals__", {}
+        ):
+            kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
             self,
@@ -495,7 +506,7 @@ def _patch_vlm_outer_model_sanitize(q35moe_outer: Any) -> None:
         )
 
         # MTP-head norms can ship in a different convention than the backbone,
-        # even MIXED within the head (JANG MXFP4 Qwen3.6 bundles keep
+        # even MIXED within the head (some Qwen3.6 bundles keep
         # ``mtp.norm`` in MLX's +1 convention while the per-layer head norms
         # remain raw-HF, mean ~= 0). The backbone-only conv1d signal never
         # shifts those head norms, so every head RMSNorm multiplies by ~0 and
