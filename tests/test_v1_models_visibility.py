@@ -21,6 +21,14 @@ class _Pool:
     def resolve_model_id(self, model_id_or_alias: str, settings_manager) -> str:
         return model_id_or_alias
 
+    def get_active_model_aliases(self, settings_manager) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        model_ids = {model["id"] for model in self._models}
+        for model_id, settings in settings_manager.get_all_settings().items():
+            if model_id in model_ids and settings.model_alias:
+                aliases[model_id] = settings.model_alias
+        return aliases
+
     def get_status(self) -> dict:
         return {
             "final_ceiling": 0,
@@ -87,6 +95,30 @@ def test_hidden_source_profile_excluded(tmp_path):
         expose_as_model=True,
     )
     assert _list_ids(state) == []
+
+
+def test_unavailable_model_and_profiles_are_excluded(tmp_path):
+    state = _state(
+        [
+            _model("chat-a"),
+            _model(
+                "qwen-next",
+                config_model_type="qwen4_exp",
+                unavailable_reason="QSA continuous batching is unavailable",
+            ),
+        ],
+        tmp_path,
+    )
+    state.settings_manager.save_profile(
+        "qwen-next",
+        "fast",
+        "Fast",
+        None,
+        {"temperature": 0.1},
+        expose_as_model=True,
+    )
+
+    assert _list_ids(state) == ["chat-a"]
 
 
 def test_hidden_ignored_when_helper_toggle_off(tmp_path):
