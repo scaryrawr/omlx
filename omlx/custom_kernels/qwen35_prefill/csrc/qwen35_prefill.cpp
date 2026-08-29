@@ -78,6 +78,20 @@ bool qwen_q_affine_packed_shape_matches(int packed_dim, int K, int bits) {
       static_cast<int64_t>(packed_dim) * 32 == static_cast<int64_t>(K) * bits;
 }
 
+bool qwen_fp_mode_supported(const std::string& mode) {
+  return mode == "mxfp4" || mode == "mxfp8";
+}
+
+int qwen_fp_mode_bits(const std::string& mode) {
+  if (mode == "mxfp4") {
+    return 4;
+  }
+  if (mode == "mxfp8") {
+    return 8;
+  }
+  throw std::invalid_argument("Unsupported Qwen floating-point quantization mode.");
+}
+
 constexpr const char* kNaxMetallibName = "omlx_qwen35_prefill_kernels_nax";
 
 // Set to false once loading the NAX metallib (or one of its pipelines) fails
@@ -112,6 +126,16 @@ QwenQAffineVariant qwen_q_affine_variant(int variant) {
       throw std::invalid_argument(msg.str());
     }
   }
+}
+
+QwenQAffineVariant qwen_fp_variant(int variant) {
+  auto config = qwen_q_affine_variant(variant);
+  if (config.bn > 64) {
+    std::ostringstream msg;
+    msg << "Unsupported Qwen floating-point qmm variant " << variant << ".";
+    throw std::invalid_argument(msg.str());
+  }
+  return config;
 }
 
 // Must stay in sync with the instantiations in qwen35_qmm_nax.metal.
@@ -585,8 +609,13 @@ class Qwen35QAffineQmmTPrimitive : public Primitive {
     const auto cfg = qwen_q_affine_variant(variant);
     const int K = x.shape(-1);
     const int N = weight.shape(0);
+    const int M = K > 0 ? x.size() / K : 0;
+    const bool use_narrow_affine = variant == 8 && group_size == 64 &&
+        x.dtype() == bfloat16 && M >= 2048 && N == 48 &&
+        (bits == 4 || bits == 5);
     if (K <= 0 || N <= 0 || x.size() <= 0 || K % group_size != 0 ||
-        K % cfg.bk != 0 || N % cfg.bn != 0) {
+        K % (use_narrow_affine ? 64 : cfg.bk) != 0 ||
+        (!use_narrow_affine && N % cfg.bn != 0)) {
       return true;
     }
     if (!qwen_q_affine_packed_shape_matches(weight.shape(1), K, bits) ||
@@ -620,6 +649,9 @@ class Qwen35QAffineQmmTPrimitive : public Primitive {
     const int K = x.shape(-1);
     const int N = weight.shape(0);
     const int M = x.size() / K;
+    const bool use_narrow_affine = variant_ == 8 && group_size_ == 64 &&
+        x.dtype() == bfloat16 && M >= 2048 && N == 48 &&
+        (bits_ == 4 || bits_ == 5);
 
     auto& compute_encoder = metal::get_command_encoder(s);
     auto encode = [&](MTL::ComputePipelineState* kernel,
@@ -642,7 +674,8 @@ class Qwen35QAffineQmmTPrimitive : public Primitive {
       compute_encoder.dispatch_threadgroups(grid_dims, group_dims);
     };
 
-    if (use_nax_ && nax_qmm_runtime_ok.load(std::memory_order_relaxed)) {
+    if (!use_narrow_affine && use_nax_ &&
+        nax_qmm_runtime_ok.load(std::memory_order_relaxed)) {
       const auto cfg = qwen_q_affine_nax_variant(nax_variant_);
       std::string kname;
       concatenate(
@@ -676,7 +709,10 @@ class Qwen35QAffineQmmTPrimitive : public Primitive {
       }
     }
 
-    const auto cfg = qwen_q_affine_variant(variant_);
+    const auto cfg = use_narrow_affine
+        ? QwenQAffineVariant{
+              /* bm = */ 32, /* bk = */ 64, /* bn = */ 16}
+        : qwen_q_affine_variant(variant_);
     std::string kname;
     concatenate(
         kname,
@@ -715,6 +751,135 @@ class Qwen35QAffineQmmTPrimitive : public Primitive {
   bool use_nax_;
   int nax_variant_;
   int group_size_;
+};
+
+class Qwen35FpQmmTPrimitive : public Primitive {
+ public:
+  Qwen35FpQmmTPrimitive(Stream stream, std::string mode, int variant)
+      : Primitive(stream), mode_(std::move(mode)), variant_(variant) {
+    if (!qwen_fp_mode_supported(mode_)) {
+      throw std::invalid_argument("Unsupported Qwen floating-point qmm mode.");
+    }
+    (void)qwen_fp_variant(variant_);
+  }
+
+  static bool unsupported(
+      const array& x,
+      const array& weight,
+      const array& scales,
+      const std::string& mode,
+      int variant,
+      Stream s) {
+    if (s.device == Device::cpu || !qwen_fp_mode_supported(mode)) {
+      return true;
+    }
+    if (x.dtype() != float16 && x.dtype() != bfloat16) {
+      return true;
+    }
+    if (weight.dtype() != uint32 || scales.dtype() != uint8) {
+      return true;
+    }
+    if (x.ndim() < 2 || weight.ndim() != 2 || scales.ndim() != 2) {
+      return true;
+    }
+    if (!row_contiguous(x) || !row_contiguous(weight) ||
+        !row_contiguous(scales)) {
+      return true;
+    }
+
+    const auto cfg = qwen_fp_variant(variant);
+    const int bits = qwen_fp_mode_bits(mode);
+    const int K = x.shape(-1);
+    const int N = weight.shape(0);
+    const int M = x.size() / K;
+    const bool use_narrow_mxfp4 = mode == "mxfp4" && variant == 8 &&
+        x.dtype() == bfloat16 && M >= 8192 && N == 48;
+    if (K <= 0 || N <= 0 || K % 32 != 0 ||
+        (use_narrow_mxfp4 ? K % 64 != 0 : K % cfg.bk != 0) ||
+        (!use_narrow_mxfp4 && N % cfg.bn != 0)) {
+      return true;
+    }
+    if (!qwen_q_affine_packed_shape_matches(weight.shape(1), K, bits) ||
+        scales.shape(0) != N || scales.shape(1) != K / 32) {
+      return true;
+    }
+    return false;
+  }
+
+  void eval_cpu(
+      const std::vector<array>& /* inputs */,
+      std::vector<array>& /* outputs */) override {
+    throw std::runtime_error("Qwen35FpQmmTPrimitive has no CPU path.");
+  }
+
+  void eval_gpu(
+      const std::vector<array>& inputs,
+      std::vector<array>& outputs) override {
+    auto& s = stream();
+    auto& d = metal::device(s.device);
+    auto& out = outputs[0];
+
+    const auto& x = inputs[0];
+    const auto& weight = inputs[1];
+    const auto& scales = inputs[2];
+
+    out.set_data(allocator::malloc(out.nbytes()));
+
+    const int K = x.shape(-1);
+    const int N = weight.shape(0);
+    const int M = x.size() / K;
+    const bool use_narrow_mxfp4 = mode_ == "mxfp4" && variant_ == 8 &&
+        x.dtype() == bfloat16 && M >= 8192 && N == 48;
+    const auto cfg = use_narrow_mxfp4
+        ? QwenQAffineVariant{
+              /* bm = */ 32, /* bk = */ 64, /* bn = */ 16}
+        : qwen_fp_variant(variant_);
+
+    std::string kname;
+    concatenate(
+        kname,
+        "qwen35_",
+        mode_,
+        "_qmm_t_",
+        qwen_type_name(x.dtype()),
+        "_bm_",
+        cfg.bm,
+        "_bk_",
+        cfg.bk,
+        "_bn_",
+        cfg.bn);
+
+    auto lib = d.get_library("omlx_qwen35_prefill_kernels", current_binary_dir());
+    auto kernel = d.get_kernel(kname, lib);
+    auto& compute_encoder = metal::get_command_encoder(s);
+    compute_encoder.set_compute_pipeline_state(kernel);
+    compute_encoder.set_input_array(weight, 0);
+    compute_encoder.set_input_array(scales, 1);
+    compute_encoder.set_input_array(x, 2);
+    compute_encoder.set_output_array(out, 3);
+    compute_encoder.set_bytes(K, 4);
+    compute_encoder.set_bytes(N, 5);
+    compute_encoder.set_bytes(M, 6);
+
+    MTL::Size grid_dims(
+        (N + cfg.bn - 1) / cfg.bn, (M + cfg.bm - 1) / cfg.bm, 1);
+    MTL::Size group_dims(32, 2, 2);
+    compute_encoder.dispatch_threadgroups(grid_dims, group_dims);
+  }
+
+  DEFINE_NAME(Qwen35FpQmmTPrimitive)
+  DEFINE_INPUT_OUTPUT_SHAPE()
+  bool is_equivalent(const Primitive& other) const override {
+    const auto& rhs = static_cast<const Qwen35FpQmmTPrimitive&>(other);
+    return mode_ == rhs.mode_ && variant_ == rhs.variant_;
+  }
+  auto state() const {
+    return std::make_tuple(mode_, variant_);
+  }
+
+ private:
+  std::string mode_;
+  int variant_;
 };
 
 class Qwen35MoeWeightedSumPrimitive : public Primitive {
@@ -1082,6 +1247,82 @@ array qwen35_q8_affine_qmm_t(
     StreamOrDevice s) {
   return qwen35_q_affine_qmm_t(
       x, weight, scales, biases, 8, variant, use_nax, nax_variant, group_size, s);
+}
+
+array qwen35_fp_qmm_t(
+    const array& x,
+    const array& weight,
+    const array& scales,
+    const std::string& mode,
+    int variant,
+    StreamOrDevice s) {
+  (void)qwen_fp_variant(variant);
+  const int bits = qwen_fp_mode_bits(mode);
+  if (x.ndim() < 2 || weight.ndim() != 2 || scales.ndim() != 2) {
+    throw std::invalid_argument(
+        "[omlx_qwen35_prefill.qwen35_fp_qmm_t] expected x [...,K], packed "
+        "weight, and scales [N,K/32].");
+  }
+
+  const int K = x.shape(-1);
+  const int N = weight.shape(0);
+  if (K <= 0 || N <= 0 || K % 32 != 0 ||
+      !qwen_q_affine_packed_shape_matches(weight.shape(1), K, bits) ||
+      scales.shape(0) != N || scales.shape(1) != K / 32) {
+    std::ostringstream msg;
+    msg << "[omlx_qwen35_prefill.qwen35_" << mode
+        << "_qmm_t] incompatible shapes: " << x.shape() << ", "
+        << weight.shape() << ", " << scales.shape() << ".";
+    throw std::invalid_argument(msg.str());
+  }
+  if (x.dtype() != float16 && x.dtype() != bfloat16) {
+    std::ostringstream msg;
+    msg << "[omlx_qwen35_prefill.qwen35_" << mode
+        << "_qmm_t] expected float16 or bfloat16 input, got " << x.dtype()
+        << ".";
+    throw std::invalid_argument(msg.str());
+  }
+  if (weight.dtype() != uint32 || scales.dtype() != uint8) {
+    std::ostringstream msg;
+    msg << "[omlx_qwen35_prefill.qwen35_" << mode
+        << "_qmm_t] expected uint32 weight and uint8 scales, got "
+        << weight.dtype() << ", " << scales.dtype() << ".";
+    throw std::invalid_argument(msg.str());
+  }
+
+  auto stream = to_stream(s);
+  if (Qwen35FpQmmTPrimitive::unsupported(
+          x, weight, scales, mode, variant, stream)) {
+    throw std::invalid_argument(
+        "[omlx_qwen35_prefill.qwen35_fp_qmm_t] unsupported shape.");
+  }
+
+  Shape out_shape = x.shape();
+  out_shape.back() = N;
+  std::vector<array> inputs = {x, weight, scales};
+  return array(
+      std::move(out_shape),
+      x.dtype(),
+      std::make_shared<Qwen35FpQmmTPrimitive>(stream, mode, variant),
+      std::move(inputs));
+}
+
+array qwen35_mxfp4_qmm_t(
+    const array& x,
+    const array& weight,
+    const array& scales,
+    int variant,
+    StreamOrDevice s) {
+  return qwen35_fp_qmm_t(x, weight, scales, "mxfp4", variant, s);
+}
+
+array qwen35_mxfp8_qmm_t(
+    const array& x,
+    const array& weight,
+    const array& scales,
+    int variant,
+    StreamOrDevice s) {
+  return qwen35_fp_qmm_t(x, weight, scales, "mxfp8", variant, s);
 }
 
 array qwen35_moe_weighted_sum(

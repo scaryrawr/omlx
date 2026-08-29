@@ -79,6 +79,8 @@ NATIVE_SYMBOLS = (
     "qwen35_q5_affine_qmm_t",
     "qwen35_q6_affine_qmm_t",
     "qwen35_q8_affine_qmm_t",
+    "qwen35_mxfp4_qmm_t",
+    "qwen35_mxfp8_qmm_t",
     "qwen35_moe_weighted_sum",
     "qwen35_ane_q4_affine_qmm_t",
     "qwen35_ane_affine_qmm_t",
@@ -434,9 +436,7 @@ def qwen35_ane_compile_linear_bank(
 ):
     if not qwen35_ane_bank_compiler_available():
         raise RuntimeError("Private ANE procedure-bank compiler is unavailable")
-    return _ext.qwen35_ane_compile_linear_bank(
-        weights, sequence_length, ane_instance
-    )
+    return _ext.qwen35_ane_compile_linear_bank(weights, sequence_length, ane_instance)
 
 
 def qwen35_ane_linear_bank_builder(sequence_length: int):
@@ -799,6 +799,9 @@ _EXT_HAS_FA256_DISPATCH_BUDGET = _ext is not None and hasattr(
 # presence marks the new ABI.  Older builds only carry gs=64 kernels; callers
 # must keep gs!=64 layers on stock mlx (see qmm_supports_group_size).
 _EXT_HAS_QMM_GROUP_SIZE = _ext is not None and hasattr(_ext, "qwen35_q2_affine_qmm_t")
+_EXT_HAS_NARROW_AFFINE = bool(
+    _ext is not None and getattr(_ext, "QMM_HAS_NARROW_AFFINE", False)
+)
 
 
 def _qmm_group_size_kwargs(group_size: int) -> dict:
@@ -815,6 +818,11 @@ def qmm_supports_group_size(group_size: int) -> bool:
     an old build would silently run the gs=64 kernel on gs=128 data.
     """
     return group_size == 64 or _EXT_HAS_QMM_GROUP_SIZE
+
+
+def qmm_supports_narrow_affine() -> bool:
+    """True if the extension contains the specialized 48-output qmm kernels."""
+    return _EXT_HAS_NARROW_AFFINE
 
 
 _NAX_ARCH_RE = re.compile(r"applegpu_g(\d+)([a-z])")
@@ -1139,6 +1147,44 @@ def qwen35_q8_affine_qmm_t(
             **_native_stream_kwargs(stream),
         )
     raise RuntimeError("qwen35_q8_affine_qmm_t native kernel is unavailable")
+
+
+def qwen35_mxfp4_qmm_t(
+    x: mx.array,
+    weight: mx.array,
+    scales: mx.array,
+    variant: int = 8,
+    *,
+    stream=None,
+) -> mx.array:
+    if _ext is not None and hasattr(_ext, "qwen35_mxfp4_qmm_t"):
+        return _ext.qwen35_mxfp4_qmm_t(
+            x,
+            weight,
+            scales,
+            variant,
+            **_native_stream_kwargs(stream),
+        )
+    raise RuntimeError("qwen35_mxfp4_qmm_t native kernel is unavailable")
+
+
+def qwen35_mxfp8_qmm_t(
+    x: mx.array,
+    weight: mx.array,
+    scales: mx.array,
+    variant: int = 8,
+    *,
+    stream=None,
+) -> mx.array:
+    if _ext is not None and hasattr(_ext, "qwen35_mxfp8_qmm_t"):
+        return _ext.qwen35_mxfp8_qmm_t(
+            x,
+            weight,
+            scales,
+            variant,
+            **_native_stream_kwargs(stream),
+        )
+    raise RuntimeError("qwen35_mxfp8_qmm_t native kernel is unavailable")
 
 
 def qwen35_moe_weighted_sum(
