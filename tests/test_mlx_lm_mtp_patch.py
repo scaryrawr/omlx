@@ -2155,6 +2155,63 @@ class TestMtpCompatibilityHelpers:
 
 
 class TestPreLoadPatchDispatch:
+    @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe", "qwen3_6"])
+    def test_qwen3_dispatch_uses_sidecar_draft_depth(self, tmp_path, model_type):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": model_type, "mtp_num_hidden_layers": 1})
+        )
+        sidecar = tmp_path / "mtp"
+        sidecar.mkdir()
+        (sidecar / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_mtp", "block_size": 3})
+        )
+
+        maybe_apply_pre_load_patches(
+            str(tmp_path), model_settings=ModelSettings(mtp_enabled=True)
+        )
+
+        from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+        assert get_mtp_depth() == 2
+
+    def test_qwen3_explicit_depth_overrides_sidecar(self, tmp_path):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_moe", "mtp_num_hidden_layers": 1})
+        )
+        sidecar = tmp_path / "mtp"
+        sidecar.mkdir()
+        (sidecar / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_mtp", "block_size": 3})
+        )
+
+        maybe_apply_pre_load_patches(
+            str(tmp_path),
+            model_settings=ModelSettings(
+                mtp_enabled=True,
+                mtp_num_draft_tokens=1,
+            ),
+        )
+
+        from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+        assert get_mtp_depth() == 1
+
+    def test_qwen3_invalid_sidecar_keeps_default_depth(self, tmp_path):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_moe", "mtp_num_hidden_layers": 1})
+        )
+        sidecar = tmp_path / "mtp"
+        sidecar.mkdir()
+        (sidecar / "config.json").write_bytes(b"\xff")
+
+        maybe_apply_pre_load_patches(
+            str(tmp_path), model_settings=ModelSettings(mtp_enabled=True)
+        )
+
+        from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+        assert get_mtp_depth() == 3
+
     def test_dispatch_skips_when_mtp_disabled(self, tmp_path):
         config_path = tmp_path / "config.json"
         config_path.write_text(

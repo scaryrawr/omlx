@@ -746,8 +746,11 @@ def maybe_apply_pre_load_patches(
             # (M >= 3), whose numerics can diverge from the unrouted path at
             # bf16 tail-ULP level.
             depth = getattr(model_settings, "mtp_num_draft_tokens", None)
-            if depth:
+            if depth is not None:
                 set_mtp_depth(int(depth))
+            elif model_type.startswith(("qwen3_5", "qwen3_6")):
+                sidecar_depth = _qwen35_mtp_sidecar_draft_depth(model_name)
+                set_mtp_depth(sidecar_depth if sidecar_depth is not None else 3)
             elif model_type.startswith("nemotron_h"):
                 # The stock nemotron_h head is depth-1 trained; the adaptive
                 # controller's exploration costs ~10% throughput vs fixed
@@ -1101,22 +1104,43 @@ def _qwen4_mtp_sidecar_config(
     model_path: str | Path,
 ) -> tuple[Path, dict[str, Any]] | None:
     """Return the validated standalone Qwen4 Lightning MTP sidecar config."""
+    return _qwen_mtp_sidecar_config(
+        model_path,
+        family="Qwen4",
+        expected_model_type="qwen4_exp_mtp",
+    )
+
+
+def _qwen_mtp_sidecar_config(
+    model_path: str | Path,
+    *,
+    family: str,
+    expected_model_type: str,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return a validated standalone Qwen MTP sidecar config."""
     model_path = Path(model_path)
     sidecar_path = model_path / "mtp"
     config_path = sidecar_path / "config.json"
     if not config_path.is_file():
         return None
     try:
-        config = json.loads(config_path.read_text())
+        config = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        logger.debug("Failed to read Qwen4 MTP sidecar config %s: %s", config_path, e)
+        logger.debug(
+            "Failed to read %s MTP sidecar config %s: %s",
+            family,
+            config_path,
+            e,
+        )
         return None
     if not isinstance(config, dict):
         logger.warning(
-            "Qwen4 MTP sidecar config %s must contain an object", config_path
+            "%s MTP sidecar config %s must contain an object",
+            family,
+            config_path,
         )
         return None
-    if config.get("model_type") != "qwen4_exp_mtp":
+    if config.get("model_type") != expected_model_type:
         return None
     return sidecar_path, config
 
@@ -1130,10 +1154,30 @@ def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
 def _qwen4_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
     """Map a Qwen4 MTP sidecar's verify block size to native draft depth."""
     sidecar = _qwen4_mtp_sidecar_config(model_path)
+    return _qwen_mtp_sidecar_draft_depth(sidecar, family="Qwen4")
+
+
+def _qwen35_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
+    """Map a Qwen3.5/3.6 MTP sidecar block size to native draft depth."""
+    sidecar = _qwen_mtp_sidecar_config(
+        model_path,
+        family="Qwen3",
+        expected_model_type="qwen3_5_mtp",
+    )
+    return _qwen_mtp_sidecar_draft_depth(sidecar, family="Qwen3")
+
+
+def _qwen_mtp_sidecar_draft_depth(
+    sidecar: tuple[Path, dict[str, Any]] | None,
+    *,
+    family: str,
+) -> int | None:
+    """Map a Qwen sidecar's verify block size to native draft depth."""
     if sidecar is None:
         return None
 
     sidecar_path, config = sidecar
+    config_path = sidecar_path / "config.json"
     block_size = config.get("block_size")
     if (
         isinstance(block_size, bool)
@@ -1141,9 +1185,10 @@ def _qwen4_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
         or block_size < 2
     ):
         logger.warning(
-            "Qwen4 MTP sidecar config %s has invalid block_size=%r; "
+            "%s MTP sidecar config %s has invalid block_size=%r; "
             "using the native default draft depth",
-            sidecar_path / "config.json",
+            family,
+            config_path,
             block_size,
         )
         return None
