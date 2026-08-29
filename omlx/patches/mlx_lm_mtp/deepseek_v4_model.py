@@ -331,9 +331,6 @@ def _patch_model(dsv4: Any) -> None:
             if is_dspark:
                 depth = min(depth, int(config.dspark_block_size))
                 self._omlx_mtp_head_clone = False
-                # DSpark context caches are singleton and committed-only. The
-                # existing row-wise extract/merge path does not model them.
-                self._omlx_mtp_rowwise_unsupported = True
                 logger.info(
                     "DeepSeek speculative backend selected: embedded DSpark "
                     "(%d stages, draft width %d)",

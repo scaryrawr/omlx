@@ -72,7 +72,10 @@ def apply_generate_patch() -> bool:
                 return model_owned_to_batch(left_padding)
             elif type(c) is KVCache:
                 return BatchKVCache(left_padding)
-            elif isinstance(c, ArraysCache):
+            elif isinstance(c, ArraysCache) or type(c).__name__ in {
+                "ArraysCache",
+                "SizedArraysCache",
+            }:
                 c.left_padding = mx.array(left_padding)
                 return c
             elif isinstance(c, PoolingCache):
@@ -85,6 +88,13 @@ def apply_generate_patch() -> bool:
                 return BatchRotatingKVCache(c.max_size, left_padding)
             elif isinstance(c, CacheList):
                 return CacheList(*(to_batch_cache(sub_c) for sub_c in c.caches))
+            elif type(c).__name__ == "CacheList":
+                return type(c)(*(to_batch_cache(sub_c) for sub_c in c.caches))
+            elif type(c).__name__ in {"KVCache", "RotatingKVCache"}:
+                merge = getattr(c, "merge", None)
+                if callable(merge):
+                    return merge([c])
+                raise ValueError(f"{type(c)} does not yet support batching")
             else:
                 raise ValueError(f"{type(c)} does not yet support batching")
 

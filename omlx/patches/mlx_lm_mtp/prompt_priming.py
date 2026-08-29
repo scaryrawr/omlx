@@ -12,17 +12,19 @@ available for free. Each chunk is folded into a head cache immediately and
 the chunk hidden is discarded — only a single (1, 1, H) pending row carries
 across chunks.
 
-Transport: the context lives in a single slot on the patched language-model
-instance (the ``host``). Cache-entry attributes cannot carry it — mlx-lm's
+Transport: contexts live in a cache-list-identity keyed map on the patched
+language-model instance (the ``host``). Cache-entry attributes cannot carry
+them — mlx-lm's
 insert merge rebuilds every layer cache that lacks filter/extract support
 (all of DeepSeek-V4's and GLM-5.2's CacheList entries, and TurboQuant
 replaces KVCache entries at end of prefill) — while the model instance is
-the one object every forward and the activation both see. The engine thread
-serializes forwards, and the offset-contiguity invariant below makes the
-single slot safe across interleaved requests: a chunk from a different
-request can never look contiguous with another request's timeline (its
-first forward starts at offset 0), so it invalidates or restarts the slot,
-and the activating request is always the slot's last writer.
+the one object every forward and the activation both see. The outer cache
+list stays stable while a request's prefill chunks stream, so separate
+singleton prefills can retain their own timelines while the engine
+interleaves them. mlx-lm's ``PromptProcessingBatch.split`` and
+``GenerationBatch.extend`` rebuild the outer list as requests move between
+queues; the BatchGenerator patch calls ``transfer_ctx`` at those ownership
+boundaries.
 
 Fail-safe invariant: every capture verifies the anchor offset advanced
 contiguously since the previous capture (``expected_offset``). Any rewind,
@@ -34,12 +36,6 @@ than let a later singleton chunk read as contiguous across it.
 
 Capture sites (each calls :func:`maybe_capture` after the backbone forward):
 
-- mlx-lm qwen3_5 text path: the patched ``TextModel.__call__``
-  (``qwen35_model``), which computes the trunk-normed hidden inline.
-- mlx-vlm qwen3_5 path: a wrap on the inner ``Qwen3_5Model.__call__``
-  (``qwen35_vlm_runtime``), whose return value *is* the trunk-normed
-  hidden; the MoE inner model inherits it. The outer ``LanguageModel`` is
-  reached via a weakref stamped at init.
 - DeepSeek-V4 (``deepseek_v4_model``): the patched ``Model.__call__``
   requests ``return_raw_hidden`` and passes the raw 4D Hyper-stream hidden
   (the head input variant; no trunk norm).
@@ -72,6 +68,8 @@ HEAD_HIDDEN_POST_NORM = True
 
 _CTX_ATTR = "_omlx_mtp_prime_ctx"
 _PLAN_ATTR = "_omlx_mtp_prime_plan"
+
+_MAX_CONTEXTS = 64
 
 _SUPPRESS = threading.local()
 
@@ -117,8 +115,9 @@ def _suppressed() -> bool:
 
 @dataclass
 class _PrimeCtx:
-    """Streaming priming state in the host model's single slot."""
+    """Streaming priming state owned by one outer prompt-cache list."""
 
+    cache_id: int = 0
     mtp_cache: List[Any] = field(default_factory=list)
     # Head-input hidden of the newest seen token, (1, 1, ..., H) — pairs
     # with the first token of the next chunk (or main_tok at activation).
@@ -198,43 +197,8 @@ def _read_offset(entry: Any) -> Optional[int]:
     return None
 
 
-def _offset_readable(entry: Any) -> bool:
-    """Whether :func:`_read_offset` can serve this entry — no sync."""
-    offset = getattr(entry, "offset", None)
-    return type(offset) is int or (
-        offset is not None and getattr(offset, "size", 0) == 1
-    )
-
-
-class _IntOffsetAnchor:
-    """Anchor view exposing a scalar-or-size-1-array offset as an int.
-
-    Under ``BatchGenerator`` every request's caches are merged into
-    ``Batch*`` entries at ``PromptProcessingBatch.__init__``, whose
-    ``offset`` is a 1-element ``mx.array`` **even for a single request**
-    (B==1). The plain-int probe this replaces therefore found no anchor on
-    any batch-engine prefill, so ``maybe_capture`` bailed silently and
-    priming never activated there (#3079).
-
-    The unwrap is unambiguous because :func:`maybe_capture` only captures
-    ``(1, S)`` forwards — a singleton timeline. It does cost one ``int()``
-    sync per captured forward, which is what the contiguity invariant is
-    built on; ``BatchRotatingKVCache._offset`` would be sync-free but
-    counts buffer slots rather than tokens.
-    """
-
-    __slots__ = ("_cache",)
-
-    def __init__(self, cache: Any) -> None:
-        self._cache = cache
-
-    @property
-    def offset(self) -> Optional[int]:
-        return _read_offset(self._cache)
-
-
 def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
-    """First cache entry whose offset can be read as an int, as a view.
+    """First cache entry with a scalar offset.
 
     Container layers (``CacheList``-style, exposing ``.caches`` — DeepSeek-V4
     and GLM-5.2 backbones) are searched one level deep: the container itself
@@ -243,11 +207,11 @@ def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
     if not cache:
         return None
     for c in cache:
-        if _offset_readable(c):
-            return _IntOffsetAnchor(c)
+        if _read_offset(c) is not None:
+            return c
         for sub in getattr(c, "caches", ()) or ():
-            if _offset_readable(sub):
-                return _IntOffsetAnchor(sub)
+            if _read_offset(sub) is not None:
+                return sub
     return None
 
 
@@ -285,12 +249,79 @@ def _host_candidates(model: Any):
             yield inner
 
 
-def _find_ctx(model: Any) -> Optional[_PrimeCtx]:
+def _find_ctx(
+    model: Any, cache: Optional[List[Any]] = None
+) -> Optional[_PrimeCtx]:
     for host in _host_candidates(model):
-        ctx = getattr(host, _CTX_ATTR, None)
-        if ctx is not None:
-            return ctx
+        contexts = getattr(host, _CTX_ATTR, None)
+        if not isinstance(contexts, dict):
+            continue
+        if cache is not None:
+            ctx = contexts.get(id(cache))
+            if ctx is not None and ctx.cache_id == id(cache):
+                return ctx
+            continue
+        if contexts:
+            return next(reversed(contexts.values()))
     return None
+
+
+def drop_ctx(model: Any, cache: Optional[List[Any]] = None) -> None:
+    """Remove one cache-owned context, or every context and plan."""
+    if model is None:
+        return
+    for host in _host_candidates(model):
+        contexts = getattr(host, _CTX_ATTR, None)
+        if not isinstance(contexts, dict):
+            contexts = {}
+        elif cache is None:
+            contexts.clear()
+        else:
+            ctx = contexts.get(id(cache))
+            if ctx is not None and ctx.cache_id == id(cache):
+                contexts.pop(id(cache), None)
+                plan = getattr(host, _PLAN_ATTR, None)
+                if (
+                    isinstance(plan, _PrimePlan)
+                    and plan.request_id == ctx.request_id
+                ):
+                    try:
+                        delattr(host, _PLAN_ATTR)
+                    except AttributeError:
+                        pass
+        if not contexts:
+            try:
+                delattr(host, _CTX_ATTR)
+            except AttributeError:
+                pass
+        if cache is None:
+            try:
+                delattr(host, _PLAN_ATTR)
+            except AttributeError:
+                pass
+
+
+def transfer_ctx(
+    model: Any,
+    source_cache: Optional[List[Any]],
+    target_cache: Optional[List[Any]],
+) -> None:
+    """Move a live context when mlx-lm rebuilds the outer cache list."""
+    if model is None or source_cache is None or target_cache is None:
+        return
+    if source_cache is target_cache:
+        return
+    for host in _host_candidates(model):
+        contexts = getattr(host, _CTX_ATTR, None)
+        if not isinstance(contexts, dict):
+            continue
+        ctx = contexts.get(id(source_cache))
+        if ctx is None or ctx.cache_id != id(source_cache):
+            continue
+        contexts.pop(id(source_cache), None)
+        ctx.cache_id = id(target_cache)
+        contexts[id(target_cache)] = ctx
+        return
 
 
 def _find_plan(model: Any) -> Optional[_PrimePlan]:
@@ -299,19 +330,6 @@ def _find_plan(model: Any) -> Optional[_PrimePlan]:
         if isinstance(plan, _PrimePlan):
             return plan
     return None
-
-
-def drop_ctx(model: Any) -> None:
-    """Remove any priming context/plan from the model's host slots."""
-    if model is None:
-        return
-    for host in _host_candidates(model):
-        for attr in (_CTX_ATTR, _PLAN_ATTR):
-            if getattr(host, attr, None) is not None:
-                try:
-                    delattr(host, attr)
-                except AttributeError:
-                    pass
 
 
 def _host_eligible(host: Any) -> bool:
@@ -519,7 +537,11 @@ def prepare_prefix_context(
         extra_key_token_start=extra_key_token_start,
         extra_key_ranges=plan.extra_key_ranges,
     )
-    setattr(host, _CTX_ATTR, ctx)
+    contexts = getattr(host, _CTX_ATTR, None)
+    if not isinstance(contexts, dict):
+        contexts = {}
+        setattr(host, _CTX_ATTR, contexts)
+    contexts[0] = ctx
     try:
         arrays = [pending_hidden, *_snapshot_arrays(snapshot)]
         if arrays:
@@ -659,16 +681,29 @@ def maybe_capture(
     import mlx.core as mx
 
     seq_len = int(inputs.shape[1])
-    offset_after = anchor.offset  # forward already ran; offset includes S
+    offset_after = _read_offset(anchor)  # forward already ran; includes S
     if offset_after is None:
         return
 
-    ctx = getattr(host, _CTX_ATTR, None)
+    ctx = _find_ctx(host, cache)
+    if ctx is None:
+        contexts = getattr(host, _CTX_ATTR, None)
+        if isinstance(contexts, dict):
+            unbound = contexts.get(0)
+            if (
+                isinstance(unbound, _PrimeCtx)
+                and unbound.cache_id == 0
+                and unbound.expected_offset == offset_after - seq_len
+            ):
+                contexts.pop(0)
+                unbound.cache_id = id(cache)
+                contexts[id(cache)] = unbound
+                ctx = unbound
     if ctx is not None and (
         not ctx.valid or ctx.expected_offset != offset_after - seq_len
     ):
-        # Rewind / trim / request switch / unknown path: never guess.
-        drop_ctx(host)
+        # Rewind / trim / unknown path on this cache: never guess.
+        drop_ctx(host, cache)
         ctx = None
     if ctx is not None and ctx.window_exceeded:
         ctx.expected_offset = offset_after
@@ -681,21 +716,28 @@ def maybe_capture(
         # small remainder is exactly the cheap case priming is for (#2909).
         folded = ctx.folded_this_request if ctx is not None else 0
         if folded + seq_len > window:
-            setattr(
-                host,
-                _CTX_ATTR,
-                _PrimeCtx(
-                    expected_offset=offset_after,
-                    window_exceeded=True,
-                ),
+            contexts = getattr(host, _CTX_ATTR, None)
+            if not isinstance(contexts, dict):
+                contexts = {}
+                setattr(host, _CTX_ATTR, contexts)
+            elif len(contexts) >= _MAX_CONTEXTS and id(cache) not in contexts:
+                contexts.pop(next(iter(contexts)))
+            contexts[id(cache)] = _PrimeCtx(
+                cache_id=id(cache),
+                expected_offset=offset_after,
+                window_exceeded=True,
             )
             return
     if ctx is None:
         if seq_len <= 1:
             # A lone decode step cannot start a prompt timeline.
             return
+        # Keep only the identity token. Holding the outer list here pins every
+        # main-model KV tensor on the long-lived model if a handoff is missed.
+        # Offset contiguity below still rejects stale or reused identities.
         plan = _find_plan(host)
         ctx = _PrimeCtx(
+            cache_id=id(cache),
             mtp_cache=host.make_mtp_cache(),
             request_id=plan.request_id if plan is not None else None,
             prompt_tokens=plan.prompt_tokens if plan is not None else None,
@@ -709,7 +751,13 @@ def maybe_capture(
         )
         if not ctx.mtp_cache:
             return
-        setattr(host, _CTX_ATTR, ctx)
+        contexts = getattr(host, _CTX_ATTR, None)
+        if not isinstance(contexts, dict):
+            contexts = {}
+            setattr(host, _CTX_ATTR, contexts)
+        elif len(contexts) >= _MAX_CONTEXTS:
+            contexts.pop(next(iter(contexts)))
+        contexts[id(cache)] = ctx
 
     if ctx.pending_hidden is not None:
         if seq_len > 1:
@@ -781,20 +829,13 @@ def take_primed(
             primed = hook(cache, main_tok)
             if primed is not None:
                 return primed
-            # None means the hook declined ownership, not "no priming": the
-            # DeepSeek-V4 patch registers ``mtp_take_primed`` on the class
-            # but only DSpark builds answer it, so legacy single-head MTP
-            # models could never reach the generic seam below and priming
-            # was structurally dead for them (#3079). Every hook pops its
-            # own context before declining, so the fallthrough cannot adopt
-            # a foreign timeline.
+            # A declining family-specific hook does not own the generic seam.
+            # Its context has already been discarded by the hook, if any.
             break
-    ctx = _find_ctx(model)
+    ctx = _find_ctx(model, cache)
     if not isinstance(ctx, _PrimeCtx):
-        # No context, or a host-owned one sharing the slot (inkling's) whose
-        # hook declined without popping it — not ours to consume.
         return None
-    drop_ctx(model)
+    drop_ctx(model, cache)
     if not (ctx.valid and ctx.folded > 0 and ctx.pending_hidden is not None):
         return None
     offset = _activation_offset(cache)
@@ -819,9 +860,11 @@ def take_primed(
     return ctx.mtp_cache, ctx.folded + 1
 
 
-def prime_ctx_stats(model: Any) -> Optional[int]:
+def prime_ctx_stats(
+    model: Any, cache: Optional[List[Any]] = None
+) -> Optional[int]:
     """Folded pair count of a live context (introspection / tests)."""
-    ctx = _find_ctx(model)
+    ctx = _find_ctx(model, cache)
     return ctx.folded if ctx is not None and not ctx.window_exceeded else None
 
 
@@ -834,5 +877,6 @@ __all__ = [
     "maybe_capture",
     "take_primed",
     "drop_ctx",
+    "transfer_ctx",
     "prime_ctx_stats",
 ]
