@@ -64,6 +64,15 @@ def test_config_gate_accepts_validated_unsloth_qwen38_shape():
     assert bridge.is_supported_config(_config())
 
 
+def test_config_gate_rejects_qwen4_exp():
+    config = _config()
+    config["model_type"] = "qwen4_exp"
+    config["architectures"] = ["Qwen4ExpForConditionalGeneration"]
+    config["text_config"]["model_type"] = "qwen4_exp_text"
+
+    assert not bridge.is_supported_config(config)
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [
