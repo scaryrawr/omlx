@@ -1144,7 +1144,12 @@
         </div>
 
         <!-- Sidebar Footer -->
-        <div class="p-2 border-t border-line flex-shrink-0">
+        <div class="p-2 border-t border-line space-y-0.5 flex-shrink-0">
+            <a href="/admin/imagine"
+                class="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-fg-tertiary hover:bg-surface-muted rounded">
+                <i data-lucide="image" class="w-3 h-3"></i>
+                {{ t('navbar.tab.imagine') }}
+            </a>
             <button @click="showChatSettingsModal = true"
                 class="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-fg-tertiary hover:bg-surface-muted rounded">
                 <i data-lucide="settings" class="w-3 h-3"></i>
@@ -2647,7 +2652,8 @@
             },
 
             // VLM Detection State
-            modelTypeMap: {},            // { modelId: "llm"|"vlm"|"embedding"|"reranker" }
+            modelTypeMap: {},            // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
+            modelEngineTypeMap: {},      // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
             aliasToGateway: {},          // { aliasName: gatewayId } maps alias to directory name
 
             // Session Prompt
@@ -4009,12 +4015,26 @@
             if (!resp.ok) return;
             const data = await resp.json();
             const map = {};
+            const engineMap = {};
             const rtMap = {};
             for (const m of (data.models || [])) {
-                map[m.id] = m.model_type || 'llm';
-                rtMap[m.id] = Boolean(m.realtime_stt);
+                if (m.id) {
+                    map[m.id] = m.model_type || 'llm';
+                    engineMap[m.id] = m.engine_type || '';
+                    rtMap[m.id] = Boolean(m.realtime_stt);
+                }
+            }
+            for (const m of (data.models || [])) {
+                if (m.model_alias && map[m.model_alias] === undefined) {
+                    map[m.model_alias] = m.model_type || 'llm';
+                    engineMap[m.model_alias] = m.engine_type || '';
+                    rtMap[m.model_alias] = Boolean(m.realtime_stt);
+                } else if (m.model_alias) {
+                    console.warn(`Ignoring model alias '${m.model_alias}' because it conflicts with another model id`);
+                }
             }
             this.modelTypeMap = map;
+            this.modelEngineTypeMap = engineMap;
             this.realtimeSttMap = rtMap;
             this._mirrorAliasModelTypes();
         } catch (e) {
@@ -4027,6 +4047,10 @@
             const t = this.modelTypeMap[gatewayId];
             if (t && !this.modelTypeMap[alias]) {
                 this.modelTypeMap[alias] = t;
+            }
+            const e = this.modelEngineTypeMap[gatewayId];
+            if (e && !this.modelEngineTypeMap[alias]) {
+                this.modelEngineTypeMap[alias] = e;
             }
             if (this.realtimeSttMap[gatewayId] && !(alias in this.realtimeSttMap)) {
                 this.realtimeSttMap[alias] = true;
@@ -4808,6 +4832,7 @@
             const modelsData = await modelsResponse.json();
             const allModels = modelsData.data || [];
 
+            // Filter out audio/embedding/reranker/image — chat only works with LLM/VLM
             // Favorite gateway ids from the admin list; used to sort favorites first
             const favoriteIds = new Set(
                 (this._adminModelsList || []).filter(m => m.is_favorite).map(m => m.id)
@@ -4818,8 +4843,10 @@
             this.availableModels = this.dedupeAvailableModels(
                 allModels.filter(m => {
                     const gatewayId = this.aliasToGateway[m.id] || m.id;
-                    const t = (this.modelTypeMap[gatewayId] || '').toLowerCase();
-                    return t !== 'audio_tts' && t !== 'audio_sts' && t !== 'embedding' && t !== 'reranker';
+                    const t = (this.modelTypeMap[gatewayId] || this.modelTypeMap[m.id] || '').toLowerCase();
+                    const e = (this.modelEngineTypeMap[gatewayId] || this.modelEngineTypeMap[m.id] || '').toLowerCase();
+                    return t !== 'audio_tts' && t !== 'audio_sts' && t !== 'embedding'
+                        && t !== 'reranker' && t !== 'image' && e !== 'image';
                 }).map(m => ({
                     id: this.aliasToGateway[m.id] || m.id, // gateway id for API calls
                     name: m.id, // original name (alias or directory name) for display
@@ -4827,6 +4854,7 @@
                     is_favorite: favoriteIds.has(this.aliasToGateway[m.id] || m.id)
                 }))
             );
+
 
             // Get default model from health endpoint
             let defaultModel = null;
@@ -5157,9 +5185,34 @@
         if (session) session.systemPrompt = '';
     },
 
+    isAvailableModel(modelId) {
+        return this.isModelAvailableOnServer(modelId);
+    },
+
+    fallbackModel(defaultModel = null) {
+        const gatewayDefault = this.resolveGatewayModelId(defaultModel);
+        if (this.isAvailableModel(gatewayDefault)) {
+            return gatewayDefault;
+        }
+        return this.availableModels[0]?.id || null;
+    },
+
+    ensureValidCurrentModel(defaultModel = null) {
+        if (!this.isAvailableModel(this.currentModel)) {
+            this.currentModel = this.fallbackModel(defaultModel);
+        } else {
+            this.currentModel = this.resolveGatewayModelId(this.currentModel);
+        }
+    },
+
     async selectModel(modelId) {
-        const session = this.getChatSession(this.currentChatId, true);
         const gatewayId = this.resolveGatewayModelId(modelId);
+        if (!this.isAvailableModel(gatewayId)) {
+            this.ensureValidCurrentModel();
+            return;
+        }
+
+        const session = this.getChatSession(this.currentChatId, true);
         try {
             if (session?.model && session.model !== gatewayId) {
                 this.syncSessionModelSettingsFromUi(session);
