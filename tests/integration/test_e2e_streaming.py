@@ -195,6 +195,18 @@ class MockEnginePool:
     def get_status(self) -> Dict[str, Any]:
         return {"models": self._models}
 
+    def get_active_model_aliases(self, settings_manager) -> Dict[str, str]:
+        if settings_manager is None:
+            return {}
+        aliases: Dict[str, str] = {}
+        for m in self._models:
+            model_id = m["id"]
+            settings = settings_manager.get_settings(model_id)
+            alias = getattr(settings, "model_alias", None)
+            if alias:
+                aliases[model_id] = alias
+        return aliases
+
     async def get_engine(self, model_id: str, _lease: bool = False):
         return self._engine
 

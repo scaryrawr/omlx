@@ -121,6 +121,7 @@ def test_model_settings_feature_labels_use_i18n_keys():
     assert "{{ t('modal.model_settings.reasoning_parser') }}" in modal_html
     assert "{{ t('modal.model_settings.specprefill') }}" in modal_html
     assert "{{ t('modal.model_settings.dflash') }}" in modal_html
+    assert "{{ t('modal.model_settings.qwen_ane') }}" in modal_html
     assert "{{ t('status.active_models.dflash_label') }}" in status_html
 
     assert ">Reasoning Parser</label>" not in modal_html
@@ -136,7 +137,6 @@ def test_model_settings_feature_i18n_keys_exist_in_every_locale():
         "modal.model_settings.reasoning_parser",
         "modal.model_settings.specprefill",
         "modal.model_settings.dflash",
-        "status.active_models.dflash_label",
         "modal.model_settings.qwen_ane",
         "modal.model_settings.qwen_ane_hint",
         "modal.model_settings.qwen_ane_prompt_block",
@@ -148,6 +148,7 @@ def test_model_settings_feature_i18n_keys_exist_in_every_locale():
         "modal.model_settings.qwen_ane_gdn_hint",
         "modal.model_settings.qwen_ane_gdn_fraction",
         "modal.model_settings.qwen_ane_gdn_layers",
+        "status.active_models.dflash_label",
         "modal.model_settings.qwen_ane_tune",
         "modal.model_settings.qwen_ane_tune_hint",
         "modal.model_settings.qwen_ane_tune_start",
