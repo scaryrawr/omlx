@@ -11,8 +11,9 @@ import pytest
 pytest.importorskip("mlx.core")
 
 from omlx.engine import vlm as vlm_module
-from omlx.engine.vlm import VLMBatchedEngine
+from omlx.engine.vlm import VLMBatchedEngine, _force_qwen4_exp_sanitize_on_load
 from omlx.exceptions import InvalidRequestError
+from omlx.model_settings import ModelSettings
 from omlx.utils.model_loading import maybe_apply_pre_load_patches
 
 
@@ -118,7 +119,7 @@ async def test_only_qwen4_exp_loader_defers_parameter_eval_to_materialize(
         assert captured["lazy"] is expected_lazy
 
 
-def test_qwen4_exp_loader_enables_adaptive_depth_three_lightning_mtp(tmp_path):
+def test_qwen4_exp_loader_defaults_to_depth_three_without_sidecar_contract(tmp_path):
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
@@ -155,6 +156,125 @@ def test_qwen4_exp_loader_enables_adaptive_depth_three_lightning_mtp(tmp_path):
     )
     assert get_mtp_runtime().enabled is False
     assert is_mtp_active() is False
+
+
+def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen4_exp",
+                "text_config": {
+                    "model_type": "qwen4_exp_text",
+                    "mtp_num_hidden_layers": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    parent_weights = tmp_path / "model.safetensors"
+    parent_weights.touch()
+    mtp_dir = tmp_path / "mtp"
+    mtp_dir.mkdir()
+    (mtp_dir / "config.json").write_text(
+        json.dumps({"model_type": "qwen4_exp_mtp", "block_size": 2}),
+        encoding="utf-8",
+    )
+    mtp_weights = mtp_dir / "model.safetensors"
+    mtp_weights.touch()
+
+    import mlx_vlm.utils as vlm_utils
+
+    def fake_load_safetensors(path):
+        if str(path).endswith("/mtp/model.safetensors"):
+            return {"fc_embedding.weight": "mtp-weight"}
+        return {"language_model.lm_head.weight": "parent-weight"}
+
+    monkeypatch.setattr(vlm_utils, "_load_safetensors", fake_load_safetensors)
+    monkeypatch.setattr(
+        "omlx.utils.model_loading._checkpoint_weight_prefix",
+        lambda path, prefixes: (
+            "fc_embedding."
+            if path == mtp_dir and "fc_embedding." in prefixes
+            else None
+        ),
+    )
+    settings = SimpleNamespace(mtp_enabled=True, mtp_num_draft_tokens=None)
+
+    maybe_apply_pre_load_patches(str(tmp_path), settings, for_vlm=True)
+
+    from mlx_vlm.models.qwen4_exp.language import get_mtp_runtime
+
+    from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+    assert get_mtp_runtime().checkpoint_prefix == "mtp/"
+    assert get_mtp_depth() == 1
+
+    maybe_apply_pre_load_patches(
+        str(tmp_path),
+        ModelSettings(mtp_enabled=True, mtp_num_draft_tokens=3),
+        for_vlm=True,
+    )
+    assert get_mtp_depth() == 3
+
+    with _force_qwen4_exp_sanitize_on_load(tmp_path):
+        loaded = vlm_utils._load_safetensors(str(parent_weights))
+
+    assert loaded == {
+        "language_model.lm_head.weight": "parent-weight",
+        "mtp.fc_embedding.weight": "mtp-weight",
+    }
+
+
+@pytest.mark.parametrize(
+    ("sidecar_content", "warning"),
+    [
+        ("{", None),
+        (b"\xff", None),
+        ("[]", "must contain an object"),
+        (
+            json.dumps({"model_type": "qwen4_exp_mtp", "block_size": "2"}),
+            "invalid block_size",
+        ),
+    ],
+)
+def test_qwen4_exp_loader_safely_falls_back_for_invalid_sidecar_contract(
+    tmp_path, caplog, sidecar_content, warning
+):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen4_exp",
+                "text_config": {
+                    "model_type": "qwen4_exp_text",
+                    "mtp_num_hidden_layers": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"mtp.fc_hidden.weight": "model.safetensors"}}),
+        encoding="utf-8",
+    )
+    mtp_dir = tmp_path / "mtp"
+    mtp_dir.mkdir()
+    sidecar_config_path = mtp_dir / "config.json"
+    if isinstance(sidecar_content, bytes):
+        sidecar_config_path.write_bytes(sidecar_content)
+    else:
+        sidecar_config_path.write_text(sidecar_content, encoding="utf-8")
+
+    maybe_apply_pre_load_patches(
+        str(tmp_path),
+        ModelSettings(mtp_enabled=True),
+        for_vlm=True,
+    )
+
+    from omlx.patches.mlx_lm_mtp import get_mtp_depth
+
+    assert get_mtp_depth() == 3
+    if warning is not None:
+        assert warning in caplog.text
 
 
 def test_qwen4_exp_loader_uses_explicit_ple_ssd_offload_setting(tmp_path):
