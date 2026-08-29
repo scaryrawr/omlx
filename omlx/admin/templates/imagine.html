@@ -1,0 +1,957 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('imagine.title') }}{% endblock %}
+
+{% block head %}
+<style>
+    :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f8fafc;
+        --bg-tertiary: #f1f5f9;
+        --text-primary: #0f172a;
+        --text-secondary: #475569;
+        --text-tertiary: #64748b;
+        --text-muted: #94a3b8;
+        --border-faint: #e2e8f0;
+        --border-normal: #cbd5e1;
+        --btn-primary: #171717;
+        --btn-primary-hover: #27272a;
+        --btn-primary-text: #ffffff;
+        --text-danger: #ef4444;
+        --bg-danger-hover: rgba(239, 68, 68, 0.1);
+    }
+
+    [data-theme="dark"] {
+        --bg-primary: #1d1d20;
+        --bg-secondary: #252529;
+        --bg-tertiary: #2d2d32;
+        --text-primary: #efefef;
+        --text-secondary: #a1a1aa;
+        --text-tertiary: #71717a;
+        --text-muted: #52525b;
+        --border-faint: #3f3f46;
+        --border-normal: #52525b;
+        --btn-primary: #e5e5e5;
+        --btn-primary-hover: #d4d4d4;
+        --btn-primary-text: #18181b;
+        --text-danger: #f87171;
+        --bg-danger-hover: rgba(239, 68, 68, 0.2);
+    }
+
+    html,
+    body {
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+
+    .imagine-shell {
+        height: 100vh;
+        height: 100dvh;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+    }
+
+    .bg-surface { background: var(--bg-primary); }
+    .bg-surface-alt { background: var(--bg-secondary); }
+    .bg-surface-muted { background: var(--bg-tertiary); }
+    .text-fg { color: var(--text-primary); }
+    .text-fg-secondary { color: var(--text-secondary); }
+    .text-fg-tertiary { color: var(--text-tertiary); }
+    .border-line { border-color: var(--border-faint); }
+    .border-line-strong { border-color: var(--border-normal); }
+
+    .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: var(--border-normal);
+        border-radius: 3px;
+    }
+
+    .drop-zone.drag-over {
+        border-color: var(--btn-primary);
+        background: var(--bg-tertiary);
+    }
+
+    .api-key-modal-card {
+        max-width: 400px;
+        width: 90%;
+    }
+
+    .api-key-modal-overlay {
+        z-index: 1000;
+    }
+
+    .imagine-sidebar {
+        width: 300px;
+        min-width: 300px;
+    }
+
+    .imagine-brand-logo {
+        width: 30px;
+        height: 30px;
+    }
+
+    .imagine-empty-state {
+        height: calc(100dvh - 8rem);
+    }
+
+    .imagine-welcome-logo {
+        width: 60px;
+        height: 60px;
+    }
+
+    .imagine-edit-comparison {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    }
+
+    .imagine-result-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .imagine-edit-result-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    @media (min-width: 768px) {
+        .imagine-result-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (min-width: 1280px) {
+        .imagine-result-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .imagine-edit-result-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 1023px) {
+        .imagine-edit-comparison {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    .image-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        cursor: zoom-out;
+    }
+
+    .image-modal img {
+        max-width: 90%;
+        max-height: 90%;
+        object-fit: contain;
+        border-radius: 8px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    .image-modal-close {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        width: 40px;
+        height: 40px;
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        border-radius: 50%;
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<script>
+    (function () {
+        const theme = localStorage.getItem('omlx-chat-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+    })();
+</script>
+
+<div class="imagine-shell flex overflow-hidden" x-data="imagineApp()" x-init="init()" @paste.window="handlePaste($event)">
+    <div class="api-key-modal api-key-modal-overlay fixed inset-0 bg-black/50 flex items-center justify-center"
+        :class="{ 'hidden': apiKeySet }" x-cloak>
+        <div class="api-key-modal-card bg-surface rounded-2xl p-8 shadow-2xl border border-line">
+            <h2 class="text-xl font-bold mb-2">{{ t('login.login.label_api_key') }}</h2>
+            <p class="text-sm text-fg-tertiary mb-4">{{ t('imagine.api_key_prompt') }}</p>
+            <input type="password" x-model="apiKeyInput" @keydown.enter="saveApiKey"
+                placeholder="{{ t('imagine.api_key_placeholder') }}"
+                class="w-full px-4 py-3 border border-line rounded-xl mb-4 bg-surface text-fg">
+            <button @click="saveApiKey"
+                class="w-full px-6 py-3 rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                style="background: var(--btn-primary); color: var(--btn-primary-text);"
+                :disabled="!apiKeyInput.trim()">
+                {{ t('imagine.api_key_continue') }}
+            </button>
+        </div>
+    </div>
+
+    <aside class="imagine-sidebar h-full bg-surface border-r border-line flex flex-col">
+        <div class="p-4 border-b border-line flex-shrink-0">
+            <a href="/admin/dashboard" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+                <img x-show="activeTheme === 'light'" src="/admin/static/navbar-logo-light.svg" alt="oMLX"
+                    class="imagine-brand-logo">
+                <img x-show="activeTheme === 'dark'" src="/admin/static/navbar-logo-dark.svg" alt="oMLX"
+                    class="imagine-brand-logo" x-cloak>
+                <span class="font-semibold">{{ t('imagine.brand') }}</span>
+            </a>
+        </div>
+
+        <div class="p-3 border-b border-line flex gap-2">
+            <a href="/admin/chat"
+                class="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-fg-tertiary hover:bg-surface-muted">
+                <i data-lucide="message-circle" class="w-4 h-4"></i>
+                {{ t('imagine.nav.chat') }}
+            </a>
+            <a href="/admin/imagine"
+                class="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-surface-muted text-fg">
+                <i data-lucide="image" class="w-4 h-4"></i>
+                {{ t('imagine.nav.imagine') }}
+            </a>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-5">
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ t('imagine.mode.label') }}</label>
+                <div class="grid grid-cols-2 gap-2 p-1 bg-surface-alt rounded-xl">
+                    <button @click="setMode('generation')"
+                        class="px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                        :class="mode === 'generation' ? 'bg-surface text-fg shadow-sm' : 'text-fg-tertiary'">
+                        {{ t('imagine.mode.generate') }}
+                    </button>
+                    <button @click="setMode('edit')"
+                        class="px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+                        :class="mode === 'edit' ? 'bg-surface text-fg shadow-sm' : 'text-fg-tertiary'">
+                        {{ t('imagine.mode.edit') }}
+                    </button>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ t('imagine.select_model') }}</label>
+                <select x-model="currentModel"
+                    class="w-full px-3 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                    <option value="" x-text="mode === 'generation' ? window.t('imagine.no_models_generation') : window.t('imagine.no_models_edit')"
+                        x-show="modeModels().length === 0"></option>
+                    <template x-for="model in modeModels()" :key="model.id">
+                        <option :value="model.id" x-text="model.id"></option>
+                    </template>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium mb-2">{{ t('imagine.prompt_label') }}</label>
+                <textarea x-model="prompt" rows="7"
+                    placeholder="{{ t('imagine.prompt_placeholder') }}"
+                    class="w-full px-3 py-2 border border-line rounded-lg bg-surface text-fg text-sm resize-y"></textarea>
+            </div>
+
+            <div x-show="mode === 'edit'" x-cloak>
+                <label class="block text-sm font-medium mb-2">{{ t('imagine.upload_heading') }}</label>
+                <input type="file" accept="image/*" multiple x-ref="imageInput"
+                    @change="handleImageSelect($event)" class="hidden">
+                <div class="drop-zone border border-dashed border-line-strong rounded-xl p-4 text-center transition-colors"
+                    :class="{ 'drag-over': isDragOver }"
+                    @dragover.prevent="isDragOver = true"
+                    @dragleave.prevent="isDragOver = false"
+                    @drop.prevent="isDragOver = false; handleDrop($event)">
+                    <i data-lucide="upload" class="w-6 h-6 mx-auto mb-2 text-fg-tertiary"></i>
+                    <p class="text-sm text-fg-secondary mb-3">{{ t('imagine.upload_help') }}</p>
+                    <button @click="$refs.imageInput.click()"
+                        class="px-3 py-2 rounded-lg text-sm font-medium bg-surface-muted hover:bg-surface-alt">
+                        {{ t('imagine.upload_browse') }}
+                    </button>
+                </div>
+                <div x-show="uploadImages.length > 0" class="grid grid-cols-3 gap-2 mt-3" x-cloak>
+                    <template x-for="(img, idx) in uploadImages" :key="img.id">
+                        <div class="relative group">
+                            <img :src="img.preview" class="w-full aspect-square object-cover rounded-lg border border-line">
+                            <button @click="removeImage(idx)"
+                                class="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-surface border border-line-strong flex items-center justify-center opacity-0 group-hover:opacity-100"
+                                :title="window.t('imagine.remove_image')">
+                                <i data-lucide="x" class="w-3 h-3"></i>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <div class="border border-line rounded-xl overflow-hidden">
+                <button @click="advancedOpen = !advancedOpen"
+                    class="w-full flex items-center justify-between px-4 py-3 text-sm font-medium bg-surface-alt">
+                    <span>{{ t('imagine.advanced.title') }}</span>
+                    <i data-lucide="chevron-down" class="w-4 h-4 transition-transform"
+                        :class="{ 'rotate-180': advancedOpen }"></i>
+                </button>
+                <div x-show="advancedOpen" class="p-4 space-y-3" x-cloak>
+                    <div class="grid grid-cols-2 gap-3">
+                        <label class="block">
+                            <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.seed') }}</span>
+                            <input type="number" x-model="settings.seed"
+                                class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                        </label>
+                        <label class="block">
+                            <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.steps') }}</span>
+                            <input type="number" min="1" x-model="settings.steps"
+                                class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                        </label>
+                        <label class="block">
+                            <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.guidance') }}</span>
+                            <input type="number" step="0.1" x-model="settings.guidance"
+                                class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                        </label>
+                        <label class="block">
+                            <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.n') }}</span>
+                            <input type="number" min="1" max="4" x-model.number="settings.n"
+                                class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                        </label>
+                    </div>
+                    <label class="block">
+                        <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.size') }}</span>
+                        <select x-model="settings.size"
+                            class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                            <option value="auto">auto</option>
+                            <option value="512x512">512x512</option>
+                            <option value="768x768">768x768</option>
+                            <option value="1024x1024">1024x1024</option>
+                            <option value="1024x768">1024x768</option>
+                            <option value="768x1024">768x1024</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.output_format') }}</span>
+                        <select x-model="settings.output_format"
+                            class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm">
+                            <option value="png">png</option>
+                            <option value="jpeg">jpeg</option>
+                            <option value="webp">webp</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.negative_prompt') }}</span>
+                        <textarea rows="3" x-model="settings.negative_prompt"
+                            class="w-full px-2 py-2 border border-line rounded-lg bg-surface text-fg text-sm resize-y"></textarea>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="p-4 border-t border-line space-y-2 flex-shrink-0">
+            <button @click="submit()"
+                :disabled="!canSubmit() || isSubmitting"
+                class="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style="background: var(--btn-primary); color: var(--btn-primary-text);">
+                <i :data-lucide="isSubmitting ? 'loader-2' : 'sparkles'" class="w-4 h-4"
+                    :class="{ 'animate-spin': isSubmitting }"></i>
+                <span x-show="!isSubmitting && mode === 'generation'">{{ t('imagine.submit.generate') }}</span>
+                <span x-show="!isSubmitting && mode === 'edit'">{{ t('imagine.submit.edit') }}</span>
+                <span x-show="isSubmitting && mode === 'generation'">{{ t('imagine.submit.generating') }}</span>
+                <span x-show="isSubmitting && mode === 'edit'">{{ t('imagine.submit.editing') }}</span>
+            </button>
+            <a href="/admin/dashboard"
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-fg-tertiary hover:bg-surface-muted rounded-lg">
+                <i data-lucide="settings" class="w-4 h-4"></i>
+                {{ t('imagine.admin_settings') }}
+            </a>
+            <button @click="clearApiKey"
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-fg-tertiary hover:bg-surface-muted rounded-lg">
+                <i data-lucide="key" class="w-4 h-4"></i>
+                {{ t('imagine.change_api_key') }}
+            </button>
+        </div>
+    </aside>
+
+    <main class="flex-1 min-w-0 h-full flex flex-col bg-surface-alt">
+        <header class="h-14 px-6 border-b border-line bg-surface flex items-center justify-between flex-shrink-0">
+            <div>
+                <h1 class="font-semibold">{{ t('imagine.heading') }}</h1>
+                <p class="text-xs text-fg-tertiary">{{ t('imagine.subheading') }}</p>
+            </div>
+            <button @click="setTheme(theme === 'dark' ? 'light' : 'dark')"
+                class="p-2 rounded-lg hover:bg-surface-muted text-fg-tertiary">
+                <i data-lucide="sun-moon" class="w-5 h-5"></i>
+            </button>
+        </header>
+
+        <section class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6">
+            <div class="max-w-6xl mx-auto">
+                <div x-show="errorMessage" x-cloak
+                    class="mb-4 p-4 rounded-xl border text-sm"
+                    style="border-color: var(--text-danger); color: var(--text-danger); background: var(--bg-danger-hover);"
+                    x-text="errorMessage"></div>
+
+                <div x-show="results.length === 0 && !isSubmitting" x-cloak
+                    class="imagine-empty-state flex items-center justify-center">
+                    <div class="text-center max-w-lg">
+                        <div class="flex items-center justify-center gap-3 mb-4">
+                            <img x-show="activeTheme === 'light'" src="/admin/static/logo-light.svg" alt="oMLX"
+                                class="imagine-welcome-logo">
+                            <img x-show="activeTheme === 'dark'" src="/admin/static/logo-dark.svg" alt="oMLX"
+                                class="imagine-welcome-logo" x-cloak>
+                            <h2 class="text-2xl font-bold">{{ t('imagine.welcome_heading') }}</h2>
+                        </div>
+                        <p class="text-fg-tertiary mb-6">{{ t('imagine.welcome_description') }}</p>
+                        <div class="p-4 bg-surface rounded-xl text-sm text-fg-secondary border border-line">
+                            <i data-lucide="shield-check" class="w-4 h-4 inline mr-1"></i>
+                            {{ t('imagine.welcome_privacy') }}
+                        </div>
+                    </div>
+                </div>
+
+                <div x-show="isSubmitting && results.length === 0" x-cloak class="imagine-empty-state flex items-center justify-center">
+                    <div class="text-center">
+                        <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-fg-tertiary"></i>
+                        <p class="text-sm text-fg-secondary"
+                            x-text="mode === 'generation' ? window.t('imagine.submit.generating') : window.t('imagine.submit.editing')"></p>
+                    </div>
+                </div>
+
+                <div x-show="results.length > 0" x-cloak>
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h2 class="text-lg font-semibold">{{ t('imagine.results_heading') }}</h2>
+                            <p x-show="isSubmitting" x-cloak class="text-sm text-fg-tertiary flex items-center gap-2 mt-1">
+                                <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i>
+                                <span x-text="mode === 'generation' ? window.t('imagine.submit.generating') : window.t('imagine.submit.editing')"></span>
+                            </p>
+                        </div>
+                        <button @click="clearResults()"
+                            class="px-3 py-2 rounded-lg text-sm text-fg-tertiary hover:bg-surface">
+                            {{ t('imagine.clear_results') }}
+                        </button>
+                    </div>
+                    <div class="space-y-5">
+                        <template x-for="attempt in results" :key="attempt.id">
+                            <article class="bg-surface rounded-2xl border border-line overflow-hidden shadow-sm">
+                                <header class="p-4 border-b border-line">
+                                    <div class="flex flex-wrap items-center gap-2 text-xs text-fg-tertiary mb-2">
+                                        <span class="px-2 py-1 rounded-full bg-surface-muted text-fg-secondary"
+                                            x-text="attempt.mode === 'edit' ? window.t('imagine.mode.edit') : window.t('imagine.mode.generate')"></span>
+                                        <span x-text="attempt.createdAt"></span>
+                                        <span>&middot;</span>
+                                        <span>{{ t('imagine.timeline_model') }}</span>
+                                        <span class="text-fg-secondary" x-text="attempt.model"></span>
+                                    </div>
+                                    <p class="text-sm text-fg">
+                                        <span class="font-medium">{{ t('imagine.timeline_prompt') }}:</span>
+                                        <span x-text="attempt.prompt"></span>
+                                    </p>
+                                </header>
+                                <div class="p-4 grid grid-cols-1 gap-4"
+                                    :class="{ 'imagine-edit-comparison': attempt.mode === 'edit' }">
+                                    <section x-show="attempt.mode === 'edit'" x-cloak>
+                                        <h3 class="text-sm font-medium mb-2">{{ t('imagine.timeline_original') }}</h3>
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <template x-for="original in attempt.originals" :key="original.id">
+                                                <button @click="openImageModal(original.src)"
+                                                    class="block w-full bg-surface-muted rounded-xl overflow-hidden border border-line">
+                                                    <img :src="original.src" class="w-full aspect-square object-contain"
+                                                        :alt="window.t('imagine.original_image_alt')">
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </section>
+                                    <section>
+                                        <h3 class="text-sm font-medium mb-2"
+                                            x-text="attempt.mode === 'edit' ? window.t('imagine.timeline_edited') : window.t('imagine.timeline_generated')"></h3>
+                                        <div class="imagine-result-grid grid gap-4"
+                                            :class="{ 'imagine-edit-result-grid': attempt.mode === 'edit' }">
+                                            <template x-for="result in attempt.images" :key="result.id">
+                                                <article class="bg-surface-alt rounded-xl border border-line overflow-hidden">
+                                                    <button @click="openImageModal(result.src)" class="block w-full bg-surface-muted">
+                                                        <img :src="result.src" class="w-full aspect-square object-contain" :alt="window.t('imagine.result_image_alt')">
+                                                    </button>
+                                                    <div class="p-3 space-y-3">
+                                                        <p x-show="result.revised_prompt" class="text-xs text-fg-tertiary"
+                                                            x-text="result.revised_prompt"></p>
+                                                        <div class="flex items-center gap-2">
+                                                            <button @click="downloadResult(result)"
+                                                                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium bg-surface-muted hover:bg-surface">
+                                                                {{ t('imagine.result.download') }}
+                                                            </button>
+                                                            <button @click="copyDataUri(result)"
+                                                                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium bg-surface-muted hover:bg-surface">
+                                                                {{ t('imagine.result.copy') }}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </article>
+                                            </template>
+                                        </div>
+                                    </section>
+                                </div>
+                            </article>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div x-show="imageModal.show" x-cloak class="image-modal" @click="closeImageModal()"
+        @keydown.escape.window="closeImageModal()">
+        <button class="image-modal-close" @click="closeImageModal()">
+            <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+        <img :src="imageModal.src" @click.stop alt="{{ t('imagine.image_preview') }}" x-show="imageModal.src">
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function imagineApp() {
+        return {
+            apiKeySet: false,
+            apiKeyInput: '',
+            theme: localStorage.getItem('omlx-chat-theme') || 'auto',
+            activeTheme: 'light',
+            systemThemeListener: null,
+
+            mode: 'generation',
+            availableModels: [],
+            currentModel: '',
+            modelTypeMap: {},
+            modelEngineTypeMap: {},
+            modelTaskMap: {},
+
+            prompt: '',
+            settings: {
+                seed: '',
+                steps: '',
+                guidance: '',
+                size: 'auto',
+                n: 1,
+                output_format: 'png',
+                negative_prompt: ''
+            },
+            advancedOpen: false,
+            uploadImages: [],
+            isDragOver: false,
+            isSubmitting: false,
+            errorMessage: '',
+            results: [],
+            pendingOriginalPreviews: new Set(),
+            imageModal: { show: false, src: '' },
+
+            async init() {
+                const serverApiKey = {{ api_key | tojson }};
+                if (serverApiKey) {
+                    localStorage.setItem('omlx_chat_api_key', serverApiKey);
+                }
+
+                const storedKey = localStorage.getItem('omlx_chat_api_key');
+                if (storedKey) {
+                    this.apiKeySet = true;
+                    await this.loadModels();
+                }
+
+                this.applyTheme();
+            },
+
+            saveApiKey() {
+                if (!this.apiKeyInput.trim()) return;
+                localStorage.setItem('omlx_chat_api_key', this.apiKeyInput.trim());
+                this.apiKeySet = true;
+                this.apiKeyInput = '';
+                this.loadModels();
+            },
+
+            clearApiKey() {
+                if (!confirm(window.t('chat.confirm_change_api_key'))) return;
+                localStorage.removeItem('omlx_chat_api_key');
+                this.apiKeySet = false;
+                this.currentModel = '';
+                this.availableModels = [];
+                this.clearResults();
+            },
+
+            getApiKey() {
+                return localStorage.getItem('omlx_chat_api_key') || '';
+            },
+
+            setTheme(theme) {
+                this.theme = theme;
+                localStorage.setItem('omlx-chat-theme', theme);
+                this.applyTheme();
+            },
+
+            applyTheme() {
+                let effectiveTheme = this.theme;
+                if (this.theme === 'auto') {
+                    effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                    if (!this.systemThemeListener) {
+                        this.systemThemeListener = () => this.applyTheme();
+                        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', this.systemThemeListener);
+                    }
+                }
+                this.activeTheme = effectiveTheme;
+                document.documentElement.setAttribute('data-theme', effectiveTheme);
+            },
+
+            normalizeTasks(tasks) {
+                if (!Array.isArray(tasks)) return [];
+                return tasks.map(task => String(task).toLowerCase()).filter(Boolean);
+            },
+
+            extractTasks(model) {
+                const directTasks = this.normalizeTasks(model.tasks);
+                return directTasks.length > 0
+                    ? directTasks
+                    : this.normalizeTasks(model.image_metadata?.tasks);
+            },
+
+            mergeStatusMetadata(models) {
+                const typeMap = {};
+                const engineMap = {};
+                const taskMap = {};
+                for (const model of models) {
+                    if (!model.id) continue;
+                    typeMap[model.id] = model.model_type || 'llm';
+                    engineMap[model.id] = model.engine_type || '';
+                    taskMap[model.id] = this.extractTasks(model);
+                }
+                for (const model of models) {
+                    if (!model.model_alias || typeMap[model.model_alias] !== undefined) continue;
+                    typeMap[model.model_alias] = model.model_type || 'llm';
+                    engineMap[model.model_alias] = model.engine_type || '';
+                    taskMap[model.model_alias] = this.extractTasks(model);
+                }
+                this.modelTypeMap = typeMap;
+                this.modelEngineTypeMap = engineMap;
+                this.modelTaskMap = taskMap;
+            },
+
+            async loadModels() {
+                try {
+                    this.errorMessage = '';
+                    const [modelsResponse, statusResponse] = await Promise.all([
+                        fetch('/v1/models', {
+                            headers: { 'Authorization': `Bearer ${this.getApiKey()}` }
+                        }),
+                        fetch('/v1/models/status', {
+                            headers: { 'Authorization': `Bearer ${this.getApiKey()}` }
+                        })
+                    ]);
+
+                    if (!modelsResponse.ok) {
+                        if (modelsResponse.status === 401) {
+                            alert(window.t('imagine.error.incorrect_api_key'));
+                            localStorage.removeItem('omlx_chat_api_key');
+                            this.apiKeySet = false;
+                            return;
+                        }
+                        throw new Error(await modelsResponse.text() || 'Failed to load models');
+                    }
+
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        this.mergeStatusMetadata(statusData.models || []);
+                    }
+
+                    const modelsData = await modelsResponse.json();
+                    const allModels = modelsData.data || [];
+                    this.availableModels = allModels.filter(model => {
+                        const t = (this.modelTypeMap[model.id] || '').toLowerCase();
+                        const e = (this.modelEngineTypeMap[model.id] || '').toLowerCase();
+                        return t === 'image' || e === 'image';
+                    });
+                    this.ensureValidCurrentModel();
+                } catch (error) {
+                    console.error('Error loading image models:', error);
+                    this.errorMessage = this.formatError(error);
+                }
+            },
+
+            modeTask() {
+                return this.mode === 'edit' ? 'edit' : 'generation';
+            },
+
+            supportsTask(modelId, task) {
+                const tasks = this.modelTaskMap[modelId] || [];
+                return tasks.includes(task);
+            },
+
+            modeModels() {
+                const task = this.modeTask();
+                return this.availableModels.filter(model => this.supportsTask(model.id, task));
+            },
+
+            ensureValidCurrentModel() {
+                if (!this.modeModels().some(model => model.id === this.currentModel)) {
+                    this.currentModel = this.modeModels()[0]?.id || '';
+                }
+            },
+
+            setMode(mode) {
+                this.mode = mode;
+                this.errorMessage = '';
+                this.ensureValidCurrentModel();
+            },
+
+            canSubmit() {
+                if (!this.apiKeySet || !this.currentModel || !this.prompt.trim()) return false;
+                if (this.mode === 'edit' && this.uploadImages.length === 0) return false;
+                return true;
+            },
+
+            handleDrop(event) {
+                if (this.mode !== 'edit') return;
+                const files = event.dataTransfer?.files;
+                if (files) Array.from(files).forEach(file => this.loadImageFile(file));
+            },
+
+            handleImageSelect(event) {
+                const files = event.target.files;
+                if (!files) return;
+                Array.from(files).forEach(file => this.loadImageFile(file));
+                event.target.value = '';
+            },
+
+            handlePaste(event) {
+                if (this.mode !== 'edit') return;
+                const items = event.clipboardData?.items;
+                if (!items) return;
+                for (const item of items) {
+                    if (item.type.startsWith('image/')) {
+                        const file = item.getAsFile();
+                        if (file) {
+                            this.loadImageFile(file);
+                            event.preventDefault();
+                            break;
+                        }
+                    }
+                }
+            },
+
+            loadImageFile(file) {
+                if (!file.type.startsWith('image/')) {
+                    alert(window.t('imagine.error.invalid_image_type'));
+                    return;
+                }
+                const maxSize = 25 * 1024 * 1024;
+                if (file.size > maxSize) {
+                    alert(window.t('imagine.error.image_too_large'));
+                    return;
+                }
+                if (this.uploadImages.length >= 10) return;
+                this.uploadImages.push({
+                    id: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+                    file,
+                    preview: URL.createObjectURL(file)
+                });
+            },
+
+            removeImage(index) {
+                const [removed] = this.uploadImages.splice(index, 1);
+                if (removed?.preview && !this.previewShouldStayAlive(removed.preview)) {
+                    URL.revokeObjectURL(removed.preview);
+                }
+            },
+
+            previewShouldStayAlive(preview) {
+                return this.pendingOriginalPreviews.has(preview) || this.previewUsedInResults(preview);
+            },
+
+            previewUsedInResults(preview) {
+                return this.results.some(attempt =>
+                    (attempt.originals || []).some(original => original.src === preview)
+                );
+            },
+
+            clearResults() {
+                const activePreviews = new Set(this.uploadImages.map(image => image.preview));
+                const timelinePreviews = new Set();
+                for (const attempt of this.results) {
+                    for (const original of attempt.originals || []) {
+                        if (original.src?.startsWith('blob:')) {
+                            timelinePreviews.add(original.src);
+                        }
+                    }
+                }
+                this.results = [];
+                for (const preview of timelinePreviews) {
+                    if (!activePreviews.has(preview)) {
+                        URL.revokeObjectURL(preview);
+                    }
+                }
+            },
+
+            releasePendingOriginals(previews) {
+                const activePreviews = new Set(this.uploadImages.map(image => image.preview));
+                for (const preview of previews) {
+                    this.pendingOriginalPreviews.delete(preview);
+                    if (!activePreviews.has(preview) && !this.previewUsedInResults(preview)) {
+                        URL.revokeObjectURL(preview);
+                    }
+                }
+            },
+
+            commonPayload() {
+                const payload = {
+                    model: this.currentModel,
+                    prompt: this.prompt.trim(),
+                    response_format: 'b64_json',
+                    output_format: this.settings.output_format || 'png',
+                    n: Math.min(Math.max(Number(this.settings.n || 1), 1), 4)
+                };
+                if (this.settings.size) payload.size = this.settings.size;
+                const seed = Number.parseInt(this.settings.seed, 10);
+                const steps = Number.parseInt(this.settings.steps, 10);
+                const guidance = Number.parseFloat(this.settings.guidance);
+                if (Number.isFinite(seed)) payload.seed = seed;
+                if (Number.isFinite(steps)) payload.steps = steps;
+                if (Number.isFinite(guidance)) payload.guidance = guidance;
+                if (this.settings.negative_prompt.trim()) {
+                    payload.negative_prompt = this.settings.negative_prompt.trim();
+                }
+                return payload;
+            },
+
+            async submit() {
+                if (!this.canSubmit()) return;
+                const requestMode = this.mode;
+                const requestModel = this.currentModel;
+                const requestPrompt = this.prompt.trim();
+                const originalSnapshot = requestMode === 'edit'
+                    ? this.uploadImages.map((image, index) => ({
+                        id: image.id + '_' + index,
+                        src: image.preview,
+                        name: image.file?.name || ''
+                    }))
+                    : [];
+                const originalPreviews = originalSnapshot
+                    .map(original => original.src)
+                    .filter(src => src?.startsWith('blob:'));
+                originalPreviews.forEach(preview => this.pendingOriginalPreviews.add(preview));
+
+                this.isSubmitting = true;
+                this.errorMessage = '';
+                try {
+                    const response = requestMode === 'edit'
+                        ? await this.submitEdit()
+                        : await this.submitGeneration();
+                    const data = await this.parseImageResponse(response);
+                    const startedAt = Date.now();
+                    const images = (data.data || []).map((item, index) => {
+                        const format = item.output_format || this.settings.output_format || 'png';
+                        return {
+                            id: startedAt + '_' + index,
+                            b64: item.b64_json,
+                            src: `data:image/${format};base64,${item.b64_json}`,
+                            format,
+                            revised_prompt: item.revised_prompt || '',
+                            size: item.size || ''
+                        };
+                    });
+                    const attempt = {
+                        id: startedAt + '_' + requestMode,
+                        mode: requestMode,
+                        model: requestModel,
+                        prompt: requestPrompt,
+                        createdAt: new Date(startedAt).toLocaleString(),
+                        originals: originalSnapshot,
+                        images
+                    };
+                    this.results = [attempt, ...this.results];
+                } catch (error) {
+                    console.error('Image request failed:', error);
+                    this.errorMessage = this.formatError(error);
+                } finally {
+                    this.releasePendingOriginals(originalPreviews);
+                    this.isSubmitting = false;
+                }
+            },
+
+            async submitGeneration() {
+                return fetch('/v1/images/generations', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.getApiKey()}`
+                    },
+                    body: JSON.stringify(this.commonPayload())
+                });
+            },
+
+            async submitEdit() {
+                const form = new FormData();
+                const payload = this.commonPayload();
+                for (const [key, value] of Object.entries(payload)) {
+                    if (value !== undefined && value !== null && value !== '') {
+                        form.append(key, String(value));
+                    }
+                }
+                for (const image of this.uploadImages) {
+                    form.append('image', image.file, image.file.name);
+                }
+                return fetch('/v1/images/edits', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${this.getApiKey()}` },
+                    body: form
+                });
+            },
+
+            async parseImageResponse(response) {
+                if (response.ok) return response.json();
+                const text = await response.text();
+                try {
+                    const data = JSON.parse(text);
+                    const detail = data.detail ?? data;
+                    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+                } catch (error) {
+                    if (error instanceof SyntaxError) {
+                        throw new Error(text || `HTTP ${response.status}`);
+                    }
+                    throw error;
+                }
+            },
+
+            formatError(error) {
+                return error?.message || String(error);
+            },
+
+            openImageModal(src) {
+                if (!src) return;
+                this.imageModal = { show: true, src };
+            },
+
+            closeImageModal() {
+                this.imageModal = { show: false, src: '' };
+            },
+
+            downloadResult(result) {
+                const link = document.createElement('a');
+                link.href = result.src;
+                link.download = `omlx-image-${Date.now()}.${result.format === 'jpeg' ? 'jpg' : result.format}`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+            },
+
+            async copyDataUri(result) {
+                await navigator.clipboard.writeText(result.src);
+            }
+        };
+    }
+</script>
+{% endblock %}
