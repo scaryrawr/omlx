@@ -49,7 +49,7 @@ The patch is intentionally limited to ``mlx_lm.models.qwen3_5``; mlx-vlm's
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from ..dflash_lifecycle import get_dflash_guard_base, set_dflash_guard_base
 from . import prompt_priming
@@ -264,15 +264,23 @@ def _patch_gated_delta_net(q35: Any) -> None:
         lengths=None,
     ):
         B, S_chunk = qkv_chunk.shape[:2]
-        conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
-        n_keep = self.conv_kernel_size - 1
-        if lengths is not None:
-            ends = mx.clip(lengths, 0, S_chunk)
-            positions = (ends[:, None] + mx.arange(n_keep))[..., None]
-            new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
+        from ..qwen35_gdn_decode import try_fused_conv_silu
+
+        fused = try_fused_conv_silu(
+            self, conv_state, qkv_chunk, mask=ssm_mask, lengths=lengths
+        )
+        if fused is not None:
+            new_conv_state, conv_out = fused
         else:
-            new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
-        conv_out = nn.silu(self.conv1d(conv_in))
+            conv_in = mx.concatenate([conv_state, qkv_chunk], axis=1)
+            n_keep = self.conv_kernel_size - 1
+            if lengths is not None:
+                ends = mx.clip(lengths, 0, S_chunk)
+                positions = (ends[:, None] + mx.arange(n_keep))[..., None]
+                new_conv_state = mx.take_along_axis(conv_in, positions, axis=1)
+            else:
+                new_conv_state = mx.contiguous(conv_in[:, -n_keep:])
+            conv_out = nn.silu(self.conv1d(conv_in))
 
         q, k, v = [
             t.reshape(B, S_chunk, h, d)
@@ -303,8 +311,8 @@ def _patch_gated_delta_net(q35: Any) -> None:
     def __call__(
         self,
         inputs: Any,
-        mask: Optional[Any] = None,
-        cache: Optional[Any] = None,
+        mask: Any | None = None,
+        cache: Any | None = None,
         n_confirmed: int = 0,
     ):
         B, S, _ = inputs.shape
@@ -508,10 +516,6 @@ def _patch_text_model(q35: Any) -> None:
         )
         normed = self.model.norm(hidden)
         if not return_hidden and not n_confirmed and input_embeddings is None:
-            # Prompt-priming capture rides prefill/decode forwards; verify
-            # cycles (return_hidden) and confirmed-split forwards are the MTP
-            # cycle's own and must not double-fold head history. A capture
-            # failure must never break the forward itself.
             try:
                 prompt_priming.maybe_capture(self, inputs, normed, cache)
             except Exception:
@@ -631,8 +635,8 @@ def _patch_text_model(q35: Any) -> None:
         should_shift_norm_weights = has_unsanitized_conv1d
 
         # MTP-head norms can use a *different* convention than the backbone,
-        # and can even be MIXED within the head itself. Observed in JANG MXFP4
-        # Qwen3.6 bundles: ``mtp.norm`` is already in MLX's +1 convention
+        # and can even be MIXED within the head itself. Some converted Qwen3.6
+        # bundles have ``mtp.norm`` already in MLX's +1 convention
         # (mean ~= 1.27) while the per-layer head norms (input_layernorm /
         # post_attention_layernorm / pre_fc_norm_*) are still in raw-HF
         # convention (mean ~= 0). The backbone-only ``has_unsanitized_conv1d``
@@ -713,7 +717,7 @@ def _patch_text_model(q35: Any) -> None:
                         weights[k] = v + 1.0
                     # Pre-converted checkpoints: per-key decision — a head
                     # norm may still be raw-HF even when a sibling is
-                    # already +1 (JANG mixed bundles).
+                    # already +1 (mixed-convention bundles).
                     elif _is_oq_tracked_tensor(v):
                         weights[k] = _mark_mtp_norm_conditional_add(v)
                     elif _mtp_norm_is_raw_hf(v, should_shift_norm_weights):

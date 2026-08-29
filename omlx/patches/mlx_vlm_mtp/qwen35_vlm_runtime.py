@@ -270,8 +270,8 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
     original_call = cls.__call__
 
     def __init__(self, args, config=None):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
+        from . import is_mtp_attach_enabled
 
         if type(self) is not cls:
             # Subclasses (e.g. the qwen4_exp vendor LanguageModel, which
@@ -306,10 +306,6 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
 
             self._omlx_mtp_chain = True
             self._omlx_mtp_depth = get_mtp_depth()
-            # Prompt-priming capture runs inside the inner Qwen3_5Model
-            # forward, which has no reference back to this LanguageModel
-            # (the mtp module / make_mtp_cache live here). A weakref avoids
-            # a tracked module cycle in the nn.Module tree.
             self.model._omlx_mtp_prime_host = weakref.ref(self)
 
     def __call__(self, inputs, inputs_embeds=None, mask=None, cache=None, **kwargs):
@@ -338,6 +334,14 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
         # to avoid "got multiple values for keyword argument" when the caller
         # already passed capture_layer_ids.
         kwargs.pop("capture_layer_ids", None)
+        # Current mlx-vlm moved exact multi-token verification out of the
+        # ordinary model path into Qwen3_5ExactSpeculativeVerifier. Without
+        # this flag, verify windows mutate GDN caches without returning the
+        # rollback states, so rejected MTP drafts corrupt later output.
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+            original_call, "__globals__", {}
+        ):
+            kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
             self,
@@ -402,21 +406,9 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
 # Inner Qwen3_5Model — prompt-priming capture on prefill/decode forwards.
 # ---------------------------------------------------------------------------
 
+
 def _patch_inner_model_capture(q35_lang: Any) -> None:
-    """Wrap ``Qwen3_5Model.__call__`` to fold prompt chunks into the MTP head.
-
-    The inner model's return value is the trunk-normed hidden for every
-    position of the forward — exactly what the head history fold needs — and
-    scheduler prefill reaches it via the outer ``LanguageModel.__call__``
-    delegate, so this single wrap covers external prefill, chunked prefill
-    and the seam decode steps.
-
-    Skips: image/recursive calls (``inputs_embeds``), MTP verify and other
-    capture forwards (any of ``capture_layer_ids`` / ``hidden_sink`` /
-    ``gdn_sink``), unknown extra positional call shapes, and hosts without
-    an MTP head (weakref unset). All real gating lives in
-    ``prompt_priming.maybe_capture`` and fails safe to unprimed.
-    """
+    """Fold Qwen3.5/3.6 VLM prompt chunks into the native MTP head."""
     cls = q35_lang.Qwen3_5Model
     if getattr(cls, "_omlx_mtp_prime_capture_patched", False):
         return
@@ -426,9 +418,7 @@ def _patch_inner_model_capture(q35_lang: Any) -> None:
     def __call__(
         self, inputs, inputs_embeds=None, mask=None, cache=None, *args, **kwargs
     ):
-        out = original_call(
-            self, inputs, inputs_embeds, mask, cache, *args, **kwargs
-        )
+        out = original_call(self, inputs, inputs_embeds, mask, cache, *args, **kwargs)
         if (
             inputs_embeds is None
             and cache is not None

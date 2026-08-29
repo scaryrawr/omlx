@@ -140,6 +140,27 @@ def test_apply_xtc_advances_rng_state():
     assert pre != post, "apply_xtc did not advance RNG"
 
 
+def test_apply_xtc_handles_batched_logits():
+    """XTC should choose a threshold independently for each batch row."""
+    logits = mx.array(
+        [
+            [0.0, 2.0, 1.0, -1.0],
+            [3.0, 0.0, 2.0, -2.0],
+        ]
+    )
+    out = apply_xtc(
+        logits,
+        xtc_probability=1.0,
+        xtc_threshold=0.1,
+        xtc_special_tokens=[],
+    )
+    mx.eval(out)
+    out_np = np.asarray(out)
+
+    assert np.isfinite(out_np[0]).sum() < logits.shape[-1]
+    assert np.isfinite(out_np[1]).sum() < logits.shape[-1]
+
+
 def test_make_sampler_chain_advances_rng_state_each_call():
     """End-to-end: make_sampler with top_p must advance RNG on every call.
 

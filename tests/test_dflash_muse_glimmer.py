@@ -6,7 +6,7 @@ The heavy drafter/backend unit tests live in the dflash-mlx fork
 This file guards the oMLX-side integration surfaces:
 
 - cross-implementation drift between dflash-mlx's text-only mlx-lm module
-  and the vendored mlx-vlm port (the two must stay numerically identical
+  and the native mlx-vlm model (the two must stay numerically identical
   or DFlash verify logits diverge from serving logits),
 - independence from oMLX's DFlashDraftModelArgs.from_dict normalizer
   wrapper (issue #2317) — the muse drafter does its own root-key
@@ -59,7 +59,7 @@ def _fork_model():
     return model
 
 
-def _vendor_language_model():
+def _target_language_model():
     from omlx.patches.mlx_vlm_muse_glimmer_compat import (
         apply_mlx_vlm_muse_glimmer_compat_patch,
     )
@@ -75,40 +75,40 @@ def _vendor_language_model():
 
 
 class TestCrossImplementationParity:
-    """Fork text module vs vendored mlx-vlm port on identical weights."""
+    """Fork text module vs native mlx-vlm model on identical weights."""
 
-    def _sync_weights(self, fork_model, vendor_lm):
+    def _sync_weights(self, fork_model, target_lm):
         from mlx.utils import tree_flatten, tree_unflatten
 
-        vendor_weights = dict(tree_flatten(vendor_lm.parameters()))
-        # Vendor paths are model.<...>/lm_head.<...>; the fork uses the
+        target_weights = dict(tree_flatten(target_lm.parameters()))
+        # Target paths are model.<...>/lm_head.<...>; the fork uses the
         # same layout, so the mapping is the identity.
-        fork_model.update(tree_unflatten(list(vendor_weights.items())))
+        fork_model.update(tree_unflatten(list(target_weights.items())))
 
     def test_logits_match_bit_exact(self):
         fork_model = _fork_model()
-        vendor_lm = _vendor_language_model()
-        self._sync_weights(fork_model, vendor_lm)
+        target_lm = _target_language_model()
+        self._sync_weights(fork_model, target_lm)
 
         ids = mx.array([[(i * 7) % 60 for i in range(24)]])
         fork_logits = fork_model(ids)
-        vendor_logits = vendor_lm(ids).logits
-        mx.eval(fork_logits, vendor_logits)
-        assert bool(mx.array_equal(fork_logits, vendor_logits))
+        target_logits = target_lm(ids).logits
+        mx.eval(fork_logits, target_logits)
+        assert bool(mx.array_equal(fork_logits, target_logits))
 
     def test_cache_layout_matches(self):
         fork_model = _fork_model()
-        vendor_lm = _vendor_language_model()
+        target_lm = _target_language_model()
         fork_kinds = [type(c).__name__ for c in fork_model.make_cache()]
-        vendor_kinds = [type(c).__name__ for c in vendor_lm.make_cache()]
-        assert fork_kinds == vendor_kinds
+        target_kinds = [type(c).__name__ for c in target_lm.make_cache()]
+        assert fork_kinds == target_kinds
 
-    def test_backend_capture_matches_vendor_forward(self):
+    def test_backend_capture_matches_target_forward(self):
         from dflash_mlx.engine.target_muse_glimmer import MuseGlimmerTargetOps
 
         fork_model = _fork_model()
-        vendor_lm = _vendor_language_model()
-        self._sync_weights(fork_model, vendor_lm)
+        target_lm = _target_language_model()
+        self._sync_weights(fork_model, target_lm)
 
         ids = mx.array([[(i * 5) % 60 for i in range(16)]])
         ops = MuseGlimmerTargetOps()
@@ -118,9 +118,9 @@ class TestCrossImplementationParity:
             cache=ops.make_cache(fork_model, enable_speculative_linear_cache=False),
             capture_layer_ids={0},
         )
-        vendor_logits = vendor_lm(ids, cache=vendor_lm.make_cache()).logits
-        mx.eval(logits, vendor_logits)
-        assert bool(mx.allclose(logits, vendor_logits, atol=1e-5))
+        target_logits = target_lm(ids, cache=target_lm.make_cache()).logits
+        mx.eval(logits, target_logits)
+        assert bool(mx.allclose(logits, target_logits, atol=1e-5))
 
 
 class TestDraftConfig:
