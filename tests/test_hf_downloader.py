@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -906,6 +907,14 @@ class TestHFDownloader:
 class TestHFDownloaderRoutes:
     """Test admin API endpoints for the HF downloader."""
 
+    def _make_qwen_image_layout(self, model_dir: Path) -> None:
+        """Create a small LM Studio-style Qwen image directory."""
+        for component in ("text_encoder", "tokenizer", "transformer", "vae"):
+            (model_dir / component).mkdir(parents=True, exist_ok=True)
+        (model_dir / "tokenizer" / "tokenizer.json").write_text("{}")
+        for component in ("text_encoder", "transformer", "vae"):
+            (model_dir / component / "0.safetensors").write_bytes(b"x" * 8)
+
     @pytest.fixture
     def model_dir_with_models(self, tmp_path):
         """Create a model directory with some fake models."""
@@ -935,6 +944,14 @@ class TestHFDownloaderRoutes:
         (model_apple / "config.json").write_text('{"architectures": ["TestA"]}')
         (model_apple / "model.safetensors").write_bytes(b"a" * 256)
 
+        # LM Studio Qwen image model without config.json
+        self._make_qwen_image_layout(model_dir / "Qwen-Image-Edit-2511-6bit")
+
+        # Nested LM Studio Qwen image model without config.json
+        self._make_qwen_image_layout(
+            model_dir / "mlx-community" / "Qwen-Image-2512-4bit"
+        )
+
         # Directory without config.json (should be excluded)
         (model_dir / "not-a-model").mkdir()
 
@@ -947,7 +964,7 @@ class TestHFDownloaderRoutes:
     @pytest.mark.asyncio
     async def test_list_models(self, model_dir_with_models):
         """Test the list_hf_models endpoint logic."""
-        from omlx.admin.routes import list_hf_models, _get_global_settings
+        from omlx.admin.routes import list_hf_models
 
         nested_model = (
             model_dir_with_models / "deepsweet" / "Qwen3.6-27B-MLX-oQ5-FP16"
