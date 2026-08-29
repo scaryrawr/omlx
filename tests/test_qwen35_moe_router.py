@@ -13,10 +13,47 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from omlx.patches.qwen35_moe_router import fused_router_topk, router_eligible
+from omlx.patches.qwen35_moe_router import (
+    apply_qwen35_moe_router_patch,
+    fused_router_topk,
+    router_eligible,
+)
 
 K = 8
 NE = 256
+
+
+def test_current_vlm_moe_fallback_uses_signature_without_target_verify():
+    """mlx-vlm removed target_verify from its MoE block API in 0.6.16."""
+    from mlx_vlm.models.qwen3_5_moe.config import TextConfig
+    from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
+    config = TextConfig(
+        model_type="qwen3_5_moe_text",
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        linear_num_value_heads=1,
+        linear_num_key_heads=1,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_conv_kernel_dim=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=4,
+        moe_intermediate_size=4,
+        rms_norm_eps=1e-6,
+        vocab_size=16,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+    )
+    block = Qwen3_5MoeSparseMoeBlock(config)
+    assert apply_qwen35_moe_router_patch()
+
+    output = block(mx.zeros((1, 1, 8), dtype=mx.float32))
+    mx.eval(output)
+
+    assert output.shape == (1, 1, 8)
 
 
 def _composed(p):
