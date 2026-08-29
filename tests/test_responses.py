@@ -399,6 +399,60 @@ class TestConvertResponsesInput:
         assert content[1]["image_url"] == "https://example.com/img.png"
         assert content[1]["detail"] == "auto"  # default
 
+    def test_input_audio_preserved_as_content_list(self):
+        """Responses input_audio parts should be preserved for VLM processing."""
+        items = [
+            InputItem(
+                type="message",
+                role="user",
+                content=[
+                    {"type": "input_text", "text": "What is in this recording?"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "abc123", "format": "wav"},
+                    },
+                ],
+            )
+        ]
+
+        messages = convert_responses_input_to_messages(items)
+        content = messages[0]["content"]
+
+        assert isinstance(content, list)
+        assert content[1] == {
+            "type": "input_audio",
+            "input_audio": {"data": "abc123", "format": "wav"},
+        }
+
+    def test_input_file_preserved_as_file_part(self):
+        """Responses input_file maps to internal file part for preprocessing."""
+        items = [
+            InputItem(
+                type="message",
+                role="user",
+                content=[
+                    {"type": "input_text", "text": "Summarize this."},
+                    {
+                        "type": "input_file",
+                        "filename": "notes.txt",
+                        "file_data": "data:text/plain;base64,ZA==",
+                    },
+                ],
+            )
+        ]
+
+        messages = convert_responses_input_to_messages(items)
+        content = messages[0]["content"]
+
+        assert isinstance(content, list)
+        assert content[1] == {
+            "type": "file",
+            "file": {
+                "filename": "notes.txt",
+                "file_data": "data:text/plain;base64,ZA==",
+            },
+        }
+
     def test_text_only_content_parts_flattened(self):
         """Content with only text parts should still be flattened to string."""
         items = [
