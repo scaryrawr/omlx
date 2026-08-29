@@ -14,6 +14,7 @@ when memory limits are exceeded. It supports:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import gc
 import json
@@ -22,13 +23,14 @@ import os
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 if TYPE_CHECKING:
     from .cluster.deployment import ClusterDeployment
     from .cluster.registry import ClusterRegistry
+    from .engine.image import ImageEngine
     from .model_settings import ModelSettingsManager
 
 import mlx.core as mx
@@ -51,7 +53,15 @@ from .exceptions import (
     ModelUnavailableError,
     describe_ceiling_binding,
 )
-from .model_discovery import discover_models, format_size, is_realtime_stt_model
+from .model_discovery import (
+    IMAGE_MANIFEST_NAME,
+    EngineType,
+    ModelType,
+    discover_models,
+    format_size,
+    is_realtime_stt_model,
+    model_unavailable_reason,
+)
 from .model_settings import (
     ane_prefill_backend,
     ane_prefill_fraction,
@@ -59,6 +69,7 @@ from .model_settings import (
 )
 from .scheduler import SchedulerConfig
 from .utils.model_loading import dflash_batched_requested, dflash_batched_supported
+from .utils.optional_deps import MLX_VLM_MISSING_MESSAGE, is_mlx_vlm_available
 from .utils.proc_memory import get_phys_footprint
 
 logger = logging.getLogger(__name__)
@@ -185,25 +196,39 @@ def _qwen35_cpu_share_estimated_bytes(
     return int(extra * _CPU_SHARE_MATERIALIZATION_HEADROOM)
 
 
+class ProcessMemoryEnforcerLike(Protocol):
+    max_bytes: int
+
+    def _propagate_memory_limit(self) -> None: ...
+
+
+def _clear_mlx_cache_sync() -> None:
+    mx.synchronize()
+    mx.clear_cache()
+
+
+if TYPE_CHECKING:
+    EngineInstance: TypeAlias = (
+        BaseEngine
+        | EmbeddingEngine
+        | RerankerEngine
+        | STTEngine
+        | STSEngine
+        | TTSEngine
+        | ImageEngine
+    )
+else:
+    EngineInstance: TypeAlias = object
+
+
 @dataclass
 class EngineEntry:
     """Per-model state in the engine pool."""
 
     model_id: str  # Directory name (e.g., "llama-3b")
     model_path: str  # Full path to model directory
-    model_type: Literal[
-        "llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"
-    ]  # Model type
-    engine_type: Literal[
-        "batched",
-        "simple",
-        "embedding",
-        "reranker",
-        "vlm",
-        "audio_stt",
-        "audio_tts",
-        "audio_sts",
-    ]  # Engine type to use
+    model_type: ModelType  # Model type
+    engine_type: EngineType  # Engine type to use
     estimated_size: int  # Pre-calculated from safetensors (bytes)
     text_only_size: int = 0  # Language-only estimate for VLM checkpoints (0 = n/a)
     actual_size: int | None = None  # Observed process-memory delta after load settles
@@ -223,16 +248,11 @@ class EngineEntry:
     )
     source_type: str = "local"
     source_repo_id: str | None = None
+    capabilities: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
+    image_metadata: dict[str, object] | None = None
     is_helper: bool = False  # Speculative-decoding drafter (dFlash/Assistant/MTP)
-    engine: (
-        BaseEngine
-        | EmbeddingEngine
-        | RerankerEngine
-        | STTEngine
-        | STSEngine
-        | TTSEngine
-        | None
-    ) = None  # Loaded engine instance
+    engine: EngineInstance | None = None  # Loaded engine instance
     last_access: float = 0.0  # Timestamp for LRU (0 if never loaded)
     is_loading: bool = False  # Prevent concurrent loads
     loading_started_at: float | None = None  # Timestamp when current load started
@@ -286,15 +306,16 @@ class EnginePool:
         self._entries: dict[str, EngineEntry] = {}
         self._lock = asyncio.Lock()
         self._current_model_memory = 0
+        self._deferred_mlx_cleanup = False
         # Scanned model roots, kept for org-qualified display/upload names.
         self._model_dirs: list[Path] = []
         self._scheduler_config = scheduler_config or SchedulerConfig()
-        self._process_memory_enforcer: object | None = None  # Set by server
+        self._process_memory_enforcer: ProcessMemoryEnforcerLike | None = None  # Set by server
         self._get_final_ceiling: object | None = None  # Set by server
+        self._settings_manager: ModelSettingsManager | None = None  # Set by server
         self._get_admission_ceiling: object | None = None  # Set by server
         self._get_admission_soft_target: object | None = None  # Set by server
         self._get_residency_ceiling: object | None = None  # Set by server
-        self._settings_manager: object | None = None  # Set by server
         self._cluster_registry: ClusterRegistry | None = None  # Set by server
         self._suppress_ttl: bool = False  # Suppress TTL during benchmarks
         # Requests whose prefill already got a pooled-buffer reclaim pass.
@@ -1086,6 +1107,9 @@ class EnginePool:
                     model_context_length=getattr(info, "model_context_length", None),
                     source_type=getattr(info, "source_type", "local"),
                     source_repo_id=getattr(info, "source_repo_id", None),
+                    capabilities=list(getattr(info, "capabilities", [])),
+                    tasks=list(getattr(info, "tasks", [])),
+                    image_metadata=getattr(info, "image_metadata", None),
                     is_helper=getattr(info, "is_helper", False),
                     is_pinned=model_id in pinned_set,
                 )
@@ -1114,7 +1138,7 @@ class EnginePool:
 
         logger.info(f"Discovered {len(self._entries)} models")
 
-    _MODEL_TYPE_TO_ENGINE: dict[str, str] = {
+    _MODEL_TYPE_TO_ENGINE: dict[ModelType, EngineType] = {
         "llm": "batched",
         "vlm": "vlm",
         "embedding": "embedding",
@@ -1122,12 +1146,19 @@ class EnginePool:
         "audio_stt": "audio_stt",
         "audio_tts": "audio_tts",
         "audio_sts": "audio_sts",
+        "image": "image",
     }
 
     @staticmethod
     def _entry_is_diffusion_model(entry: EngineEntry) -> bool:
         model_type = (entry.config_model_type or "").lower().replace("-", "_")
         return model_type == "diffusion_gemma"
+
+    @staticmethod
+    def _raise_if_entry_unavailable(entry: EngineEntry) -> None:
+        reason = model_unavailable_reason(entry.config_model_type)
+        if reason is not None:
+            raise ModelUnavailableError(entry.model_id, reason)
 
     def apply_settings_overrides(
         self, settings_manager: ModelSettingsManager
@@ -1136,9 +1167,10 @@ class EnginePool:
         for model_id, entry in self._entries.items():
             settings = settings_manager.get_settings(model_id)
             if settings.model_type_override:
-                entry.model_type = settings.model_type_override
+                model_type_override = cast(ModelType, settings.model_type_override)
+                entry.model_type = model_type_override
                 entry.engine_type = self._MODEL_TYPE_TO_ENGINE.get(
-                    settings.model_type_override, "batched"
+                    model_type_override, "batched"
                 )
                 logger.info(
                     f"Applied model_type override for {model_id}: "
@@ -1358,7 +1390,16 @@ class EnginePool:
     ) -> None:
         """Drop stale unloaded entries whose backing model directory vanished."""
         model_path = Path(entry.model_path)
-        if model_path.exists() and (model_path / "config.json").exists():
+        if model_path.exists() and (
+            (model_path / "config.json").exists()
+            or (
+                entry.engine_type == "image"
+                and (
+                    (model_path / IMAGE_MANIFEST_NAME).exists()
+                    or entry.image_metadata is not None
+                )
+            )
+        ):
             return
 
         if entry.engine is None:
@@ -1409,7 +1450,39 @@ class EnginePool:
                 return mid
         return None
 
-    def resolve_model_id(self, model_id_or_alias: str, settings_manager) -> str:
+    def get_active_model_aliases(
+        self, settings_manager: ModelSettingsManager | None
+    ) -> dict[str, str]:
+        """Return aliases that can resolve unambiguously to discovered models."""
+        if settings_manager is None:
+            return {}
+
+        aliases_by_name: dict[str, list[str]] = {}
+        for model_id, settings in settings_manager.get_all_settings().items():
+            if model_id not in self._entries or not settings.model_alias:
+                continue
+            alias = settings.model_alias.strip()
+            if not alias:
+                continue
+            aliases_by_name.setdefault(alias, []).append(str(model_id))
+
+        active_aliases: dict[str, str] = {}
+        lower_entry_ids = {model_id.lower(): model_id for model_id in self._entries}
+        for alias, model_ids in aliases_by_name.items():
+            if len(model_ids) != 1:
+                continue
+            model_id = model_ids[0]
+            conflicting_entry = lower_entry_ids.get(alias.lower())
+            if conflicting_entry is not None and conflicting_entry != model_id:
+                continue
+            active_aliases[model_id] = alias
+        return active_aliases
+
+    def resolve_model_id(
+        self,
+        model_id_or_alias: str,
+        settings_manager: ModelSettingsManager | None,
+    ) -> str:
         """Resolve a model alias to its actual model_id (directory name).
 
         Tries exact match in _entries first, then case-insensitive match,
@@ -1425,6 +1498,8 @@ class EnginePool:
         ci_match = self._case_insensitive_entry_match(model_id_or_alias)
         if ci_match is not None:
             return ci_match
+
+        active_aliases = self.get_active_model_aliases(settings_manager)
 
         # Cluster deployment IDs are private runtime handles, but older Chat
         # sessions and clients may have persisted one before the public model
@@ -1442,19 +1517,20 @@ class EnginePool:
                     # return the caller's original value.
                     pass
 
-        all_settings = None
         if settings_manager is not None:
             # Exposed profiles resolve to the physical model they overlay
             # (handles provider prefixes internally).
-            if hasattr(settings_manager, "get_exposed_profile_source_model_id"):
-                profile_source = settings_manager.get_exposed_profile_source_model_id(
-                    model_id_or_alias
-                )
-                if profile_source is not None:
+            get_profile_source = getattr(
+                settings_manager,
+                "get_exposed_profile_source_model_id",
+                None,
+            )
+            if callable(get_profile_source):
+                profile_source = get_profile_source(model_id_or_alias)
+                if isinstance(profile_source, str) and profile_source:
                     return profile_source
-            all_settings = settings_manager.get_all_settings()
-            for mid, ms in all_settings.items():
-                if ms.model_alias and ms.model_alias == model_id_or_alias:
+            for mid, alias in active_aliases.items():
+                if alias == model_id_or_alias:
                     return mid
 
         # Strip provider prefix (e.g. "omlx/qwen3.5-35b" -> "qwen3.5-35b")
@@ -1465,9 +1541,9 @@ class EnginePool:
             ci_match = self._case_insensitive_entry_match(stripped)
             if ci_match is not None:
                 return ci_match
-            if all_settings is not None:
-                for mid, ms in all_settings.items():
-                    if ms.model_alias and ms.model_alias == stripped:
+            if settings_manager is not None:
+                for mid, alias in active_aliases.items():
+                    if alias == stripped:
                         return mid
 
         return model_id_or_alias
@@ -1789,14 +1865,7 @@ class EnginePool:
         force_lm: bool = False,
         _lease: bool = False,
         runtime_settings: object | None = None,
-    ) -> (
-        BaseEngine
-        | EmbeddingEngine
-        | RerankerEngine
-        | STTEngine
-        | STSEngine
-        | TTSEngine
-    ):
+    ) -> EngineInstance:
         """
         Get or load engine for the specified model.
 
@@ -1834,6 +1903,7 @@ class EnginePool:
             entry = self._entries.get(model_id)
             if not entry:
                 raise ModelNotFoundError(model_id, list(self._entries.keys()))
+            self._raise_if_entry_unavailable(entry)
             if entry.pending_unload_reason:
                 raise ModelBusyError(model_id, "start work while unload is pending")
             expected_signature = self._engine_runtime_signature(
@@ -1897,6 +1967,12 @@ class EnginePool:
 
             self._raise_if_model_path_missing_locked(model_id, entry)
             self._raise_if_load_failed(model_id, entry)
+
+            # mlx-vlm is required by oMLX, but keep this image admission check
+            # explicit so a damaged or incompatible core install fails before
+            # reserving memory or evicting another model.
+            if entry.engine_type == "image" and not is_mlx_vlm_available():
+                raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
 
             # Pre-load admission against the memory ceiling from the
             # process memory enforcer (min of static and dynamic). Try
@@ -2122,6 +2198,7 @@ class EnginePool:
             if e is not None and e.in_use > 0:
                 e.in_use -= 1
             await self._unload_pending_if_idle_locked(model_id)
+            await self._run_deferred_mlx_cleanup_if_idle()
 
     def _finish_lease_release_task(self, task: asyncio.Task[None]) -> None:
         self._lease_release_tasks.discard(task)
@@ -2634,6 +2711,25 @@ class EnginePool:
                 return True
         return False
 
+    async def _run_deferred_mlx_cleanup_if_idle(self) -> None:
+        """Run cleanup deferred by an unload once all leased work has drained."""
+        if not self._deferred_mlx_cleanup:
+            return
+        if any(
+            entry.is_loading
+            or entry.in_use > 0
+            or self._entry_has_active_requests(entry)
+            for entry in self._entries.values()
+            if entry.engine is not None or entry.is_loading
+        ):
+            return
+
+        gc.collect()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache_sync)
+        self._deferred_mlx_cleanup = False
+        self._wake_process_memory_enforcer()
+
     async def _unload_engine(self, model_id: str) -> None:
         if model_id in self._unloading_models:
             raise ModelBusyError(model_id, "unload while teardown is in progress")
@@ -2677,9 +2773,18 @@ class EnginePool:
         )
         pre_unload_active = 0 if distributed else mx.get_active_memory()
         pre_unload_footprint = 0 if distributed else get_phys_footprint()
+        concurrent_activity = (
+            False if distributed else self._other_entries_serving(model_id)
+        )
 
         try:
-            await entry.engine.stop()
+            concurrent_stop = getattr(
+                entry.engine, "stop_without_global_cleanup", None
+            )
+            if concurrent_activity and callable(concurrent_stop):
+                await concurrent_stop()
+            else:
+                await entry.engine.stop()
         except Exception as e:
             if distributed:
                 # The supervisor raises (DistributedTeardownError) when the
@@ -2743,16 +2848,13 @@ class EnginePool:
             self._wake_process_memory_enforcer()
             return
 
-        # Force garbage collection to release memory.
-        # Run mx.clear_cache on the global MLX executor to avoid concurrent
-        # Metal operations with running engines. See issue #85.
-        # Synchronize before clearing to prevent releasing Metal buffers
-        # still referenced by in-flight command buffers. See issue #300.
+        # Force garbage collection to release the target engine's references.
+        # A global synchronize/clear-cache must not be queued behind another
+        # active engine: doing so makes an otherwise idle model's unload wait
+        # for that inference to finish. Live memory remains visible to future
+        # admission checks if allocator cache is not immediately reclaimable.
         gc.collect()
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            get_mlx_executor(), lambda: (mx.synchronize(), mx.clear_cache())
-        )
 
         # RAM Engram tables share MLX buffers with CPU views, so their packed
         # bytes are included in both admission and Metal unload settlement.
@@ -2769,7 +2871,26 @@ class EnginePool:
         min_expected_freed = max(0, settle_size - settle_tolerance)
         settled = False
         settle_indeterminate = False
-        for _settle_round in range(10):
+        active_now = pre_unload_active
+        actual_freed = 0
+        concurrent_activity = self._other_entries_serving(model_id)
+        if concurrent_activity:
+            active_now = mx.get_active_memory()
+            actual_freed = pre_unload_active - active_now
+            settle_indeterminate = True
+            self._deferred_mlx_cleanup = True
+            logger.info(
+                f"Settle for '{model_id}' indeterminate under concurrent "
+                f"activity (freed={format_size(actual_freed)}, "
+                f"need>={format_size(min_expected_freed)}); skipping "
+                f"global MLX cleanup and settle wait"
+            )
+        else:
+            # Run mx.clear_cache on the global MLX executor only while the
+            # pool is otherwise idle. See issues #85 and #300.
+            await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache_sync)
+
+        for _settle_round in range(10 if not settle_indeterminate else 0):
             active_now = mx.get_active_memory()
             actual_freed = pre_unload_active - active_now
             # Metal can release arrays before macOS updates its footprint
@@ -2802,7 +2923,7 @@ class EnginePool:
                     f"Settle for '{model_id}' indeterminate under concurrent "
                     f"activity (freed={format_size(actual_freed)}, "
                     f"need>={format_size(min_expected_freed)}); skipping "
-                    f"settle wait"
+                    f"further global MLX cleanup and settle wait"
                 )
                 break
             logger.debug(
@@ -2814,7 +2935,7 @@ class EnginePool:
             await asyncio.sleep(0.5)
             gc.collect()
             await loop.run_in_executor(
-                get_mlx_executor(), lambda: (mx.synchronize(), mx.clear_cache())
+                get_mlx_executor(), _clear_mlx_cache_sync
             )
 
         # Release memory tracking AFTER barrier
@@ -2848,7 +2969,7 @@ class EnginePool:
                 gc.collect()
                 await loop.run_in_executor(
                     get_mlx_executor(),
-                    lambda: (mx.synchronize(), mx.clear_cache()),
+                    _clear_mlx_cache_sync,
                 )
                 await asyncio.sleep(1.0)
             active_after = mx.get_active_memory()
@@ -2946,6 +3067,7 @@ class EnginePool:
             ModelLoadingError: If model is already being loaded
         """
         entry = self._entries[model_id]
+        self._raise_if_entry_unavailable(entry)
         if entry.is_loading:
             raise ModelLoadingError(model_id)
 
@@ -3167,6 +3289,26 @@ class EnginePool:
                         model_name=entry.model_path,
                         config_model_type=entry.config_model_type,
                     )
+                elif effective_type == "image":
+                    if not is_mlx_vlm_available():
+                        raise ModelLoadingError(model_id, MLX_VLM_MISSING_MESSAGE)
+                    try:
+                        from .engine.image import ImageEngine
+                    except ImportError as exc:
+                        raise ModelLoadingError(
+                            model_id, MLX_VLM_MISSING_MESSAGE
+                        ) from exc
+
+                    engine = ImageEngine(
+                        model_name=entry.model_path,
+                        model_id=model_id,
+                        model_path=entry.model_path,
+                        config_model_type=entry.config_model_type,
+                        image_metadata=entry.image_metadata or {},
+                        capabilities=list(entry.capabilities),
+                        tasks=list(entry.tasks),
+                        model_settings=model_settings,
+                    )
                 else:
                     engine = BatchedEngine(
                         model_name=entry.model_path,
@@ -3192,15 +3334,13 @@ class EnginePool:
                         f"DFlash start failed for {model_id}: {start_error}. "
                         f"Falling back to {effective_type} engine."
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     if effective_type == "vlm":
@@ -3239,15 +3379,13 @@ class EnginePool:
                         f"(force_lm=True), falling back to VLM engine: "
                         f"{start_error}"
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     engine = VLMBatchedEngine(
@@ -3275,15 +3413,13 @@ class EnginePool:
                         f"VLM loading failed for {model_id}, "
                         f"falling back to LLM: {start_error}"
                     )
-                    try:
+                    with contextlib.suppress(Exception):
                         await engine.stop()
-                    except Exception:
-                        pass
                     gc.collect()
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
                         get_mlx_executor(),
-                        lambda: (mx.synchronize(), mx.clear_cache()),
+                        _clear_mlx_cache_sync,
                     )
 
                     engine = BatchedEngine(
@@ -3306,6 +3442,22 @@ class EnginePool:
                     logger.info(
                         f"Successfully loaded {model_id} as LLM (fallback from VLM)"
                     )
+                elif entry.engine_type == "image" and isinstance(start_error, ImportError):
+                    # ImageEngine imports mlx-vlm lazily during model load.
+                    # If the core package went missing after admission, surface
+                    # the centralized dependency error instead of raw import.
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(
+                        model_id, MLX_VLM_MISSING_MESSAGE
+                    ) from start_error
+                elif entry.engine_type == "image" and isinstance(start_error, ValueError):
+                    # ImageEngine validates the manifest before loading model
+                    # weights. Surface unsupported families and stale
+                    # quantize settings as ordinary model-load failures.
+                    with contextlib.suppress(Exception):
+                        await engine.stop()
+                    raise ModelLoadingError(model_id, str(start_error)) from start_error
                 else:
                     raise
 
@@ -3320,7 +3472,7 @@ class EnginePool:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
                     get_mlx_executor(),
-                    lambda: (mx.synchronize(), mx.clear_cache()),
+                    _clear_mlx_cache_sync,
                 )
                 raise ModelLoadingError(
                     model_id,
@@ -3457,7 +3609,7 @@ class EnginePool:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 get_mlx_executor(),
-                lambda: (mx.synchronize(), mx.clear_cache()),
+                _clear_mlx_cache_sync,
             )
 
             post_load_memory = max(mx.get_active_memory(), get_phys_footprint())
@@ -3629,6 +3781,9 @@ class EnginePool:
                     "engine_type": e.engine_type,
                     "model_type": e.model_type,
                     "config_model_type": e.config_model_type,
+                    "unavailable_reason": model_unavailable_reason(
+                        e.config_model_type
+                    ),
                     "realtime_stt": is_realtime_stt_model(
                         e.model_type, e.config_model_type
                     ),
@@ -3638,6 +3793,9 @@ class EnginePool:
                     "preserve_thinking_default": e.preserve_thinking_default,
                     "source_type": e.source_type,
                     "source_repo_id": e.source_repo_id,
+                    "capabilities": e.capabilities,
+                    "tasks": e.tasks,
+                    "image_metadata": e.image_metadata,
                     "last_access": e.last_access if e.last_access > 0 else None,
                 }
             )
