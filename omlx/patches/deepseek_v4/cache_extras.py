@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E741, I001, N803, N806, SIM300, UP006, UP035
 """PoolingCache + BatchPoolingCache from mlx-lm PR 1192.
 
 These two cache classes are copied 1:1 from

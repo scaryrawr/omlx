@@ -60,8 +60,8 @@ def apply() -> bool:
         should_shift_norm_weights = has_unsanitized_conv1d
 
         # MTP-head norms can use a *different* convention than the backbone,
-        # and can even be MIXED within the head itself (e.g. JANG MXFP4
-        # Qwen3.6 bundles ship ``mtp.norm`` already in MLX's +1 convention
+        # and can even be MIXED within the head itself. Some converted Qwen3.6
+        # bundles ship ``mtp.norm`` already in MLX's +1 convention
         # while the per-layer head norms remain raw-HF, mean ~= 0). The
         # backbone-only conv1d signal never shifts the head norms in that
         # case, so every head RMSNorm multiplies by ~0 and MTP draft
@@ -142,8 +142,8 @@ def apply() -> bool:
                         # ``+ 1.0`` also records an unconditional "add"
                         # transform on oQ _TrackedTensor.
                         value = value + 1.0
-                    # Pre-converted checkpoints: per-key decision (JANG
-                    # mixed-convention bundles).
+                    # Pre-converted checkpoints: per-key decision for
+                    # mixed-convention bundles.
                     elif _is_oq_tracked_tensor(value):
                         value = _mark_mtp_norm_conditional_add(value)
                     elif _mtp_norm_is_raw_hf(value, should_shift_norm_weights):

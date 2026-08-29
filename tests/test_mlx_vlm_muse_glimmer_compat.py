@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Muse Glimmer mlx-vlm compatibility patch tests.
 
-Covers the vendor install/discovery surface (inkling test pattern), the
+Covers native model discovery, the
 model behaviors oMLX depends on (mixed sliding/full cache, NoPE layers,
 logit tail, vision-cache encode_image contract), the PR #1839 quantized
 embedding-norm preservation, and the real checkpoint's chat template
@@ -83,7 +83,7 @@ def _tiny_config():
     )
 
 
-def test_vendor_module_resolves(applied):
+def test_native_module_resolves(applied):
     import importlib
 
     import mlx_vlm.utils as vlm_utils
@@ -91,6 +91,7 @@ def test_vendor_module_resolves(applied):
     module = importlib.import_module("mlx_vlm.models.muse_glimmer")
     assert hasattr(module, "Model")
     assert hasattr(module, "LanguageModel")
+    assert "omlx/patches" not in str(module.__file__)
 
     result = vlm_utils.get_model_and_args({"model_type": "muse_glimmer"})
     assert result[0] is module
@@ -130,12 +131,11 @@ def test_other_models_untouched(applied):
 
 def test_image_processor_patch_layout_and_grid(applied):
     import numpy as np
-    from PIL import Image
-
     from mlx_vlm.models.muse_glimmer.processing_muse_glimmer import (
         MuseGlimmerImageProcessor,
         smart_resize,
     )
+    from PIL import Image
 
     assert smart_resize(28, 56, patch_size=28, max_tokens=4096) == (28, 56)
     processor = MuseGlimmerImageProcessor(
@@ -277,9 +277,8 @@ def test_centered_rms_norm_preserves_transformers_fp32_order(applied):
 
 def test_quantization_preserves_embedding_norm(applied):
     import mlx.nn as nn
-
-    from mlx_vlm.models.muse_glimmer.language import TextModel
     from mlx_vlm.models.muse_glimmer.config import TextConfig
+    from mlx_vlm.models.muse_glimmer.language import TextModel
 
     # Upstream design (mlx-vlm #1848): embed_tokens is a plain nn.Embedding
     # and embed_norm is a separate weightless module, so quantizing the

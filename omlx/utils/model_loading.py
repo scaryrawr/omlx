@@ -40,6 +40,7 @@ _REMOTE_CODE_METADATA_PATTERNS = [
 def _mlx_lm_load_accepts_trust_remote_code() -> bool:
     try:
         import inspect
+
         from mlx_lm import load as _lm_load
         return "trust_remote_code" in inspect.signature(_lm_load).parameters
     except Exception:
@@ -459,6 +460,13 @@ def maybe_apply_pre_load_patches(
 
     apply_arrays_cache_extract_guard()
 
+    # Model-independent: mlx-lm hybrid caches must combine left- and
+    # right-padding constraints, and filtering an empty BatchKVCache must not
+    # move its logical offset below zero.
+    from ..patches.hybrid_batch_cache import apply_hybrid_batch_cache_fixes
+
+    apply_hybrid_batch_cache_fixes()
+
     config_path = Path(model_name) / "config.json"
     if not config_path.exists():
         return
@@ -598,17 +606,6 @@ def maybe_apply_pre_load_patches(
                 model_name,
             )
 
-    if for_vlm and model_type == "unlimited-ocr":
-        from ..patches.mlx_vlm_unlimited_ocr_compat import (
-            apply_mlx_vlm_unlimited_ocr_compat_patch,
-        )
-
-        if apply_mlx_vlm_unlimited_ocr_compat_patch():
-            logger.info(
-                "Unlimited-OCR mlx-vlm compatibility patch applied for %s",
-                model_name,
-            )
-
     if for_vlm and model_type in ("inkling", "inkling_mm_model"):
         from ..patches.mlx_vlm_inkling_compat import (
             apply_mlx_vlm_inkling_compat_patch,
@@ -666,10 +663,11 @@ def maybe_apply_pre_load_patches(
             if model_settings is not None
             else None
         )
-        # Qwen4-Exp uses the same adaptive draft-depth controller as the
-        # general Lightning MTP path.  A single MTP hidden layer can be
-        # chained autoregressively, so default to the validated max depth 3.
-        set_mtp_depth(int(depth) if depth else 3)
+        if depth is not None:
+            set_mtp_depth(depth)
+        else:
+            sidecar_depth = _qwen4_mtp_sidecar_draft_depth(model_name)
+            set_mtp_depth(sidecar_depth if sidecar_depth is not None else 3)
         if mtp_active and not apply_mlx_lm_mtp_patch():
             logger.warning(
                 "Qwen4-Exp Lightning MTP dispatch patch failed for %s; "
@@ -708,16 +706,31 @@ def maybe_apply_pre_load_patches(
     # corrupts the output (garbage tokens). PR 990's sanitize gates the
     # shift on "unsanitized conv1d" instead.
     #
-    # Whether the model actually attaches an MTP head — and therefore
-    # whether BatchGenerator runs the MTP draft+verify cycle — is gated
-    # by a process-wide flag set just before mlx_lm.load() runs. With
-    # mtp_enabled=False the patch is still active so sanitize behaves
-    # correctly, but Model.__init__ skips ``self.mtp = MTPModule(args)``;
-    # the resulting model is indistinguishable from a stock model that
-    # never had MTP heads.
+    # On the mlx-lm text path, whether the model attaches an MTP head — and
+    # therefore whether BatchGenerator can run draft+verify — is gated by a
+    # process-wide flag set just before load. The mlx-vlm path below separates
+    # head attachment (needed for strict weight binding) from decode activation.
     if _is_mtp_compatible(config, model_type):
-        mtp_enabled = bool(
+        mtp_requested = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
+        )
+        has_mtp_weights = (
+            _checkpoint_has_mtp_weights(model_name) if for_vlm else None
+        )
+        # A VLM config can retain mtp_num_hidden_layers after conversion
+        # stripped the actual head tensors. Keep the construction-time decode
+        # flag off unless both the user toggle and persisted native head agree;
+        # the independent attach flag below still binds real heads when decode
+        # is disabled so strict mlx-vlm loading remains lossless.
+        mtp_enabled = (
+            _native_vlm_mtp_eligible(
+                config,
+                model_type,
+                model_settings,
+                has_mtp_weights=bool(has_mtp_weights),
+            )
+            if for_vlm
+            else mtp_requested
         )
         from ..patches.mlx_lm_mtp import (
             apply_mlx_lm_mtp_patch,
@@ -735,8 +748,11 @@ def maybe_apply_pre_load_patches(
             # (M >= 3), whose numerics can diverge from the unrouted path at
             # bf16 tail-ULP level.
             depth = getattr(model_settings, "mtp_num_draft_tokens", None)
-            if depth:
+            if depth is not None:
                 set_mtp_depth(int(depth))
+            elif model_type.startswith(("qwen3_5", "qwen3_6")):
+                sidecar_depth = _qwen35_mtp_sidecar_draft_depth(model_name)
+                set_mtp_depth(sidecar_depth if sidecar_depth is not None else 3)
             elif model_type.startswith("nemotron_h"):
                 # The stock nemotron_h head is depth-1 trained; the adaptive
                 # controller's exploration costs ~10% throughput vs fixed
@@ -769,10 +785,16 @@ def maybe_apply_pre_load_patches(
                     backend,
                     model_type,
                 )
+            elif for_vlm and mtp_requested and not has_mtp_weights:
+                logger.warning(
+                    "Native VLM MTP requested for %s but no persisted MTP "
+                    "weights were found; standard decode remains active",
+                    model_name,
+                )
             else:
                 logger.debug(
                     "Native MTP patch applied for %s for sanitize correctness "
-                    "(model has MTP heads but mtp_enabled=False; head not attached)",
+                    "(model has MTP heads but native decode is disabled)",
                     model_name,
                 )
 
@@ -813,8 +835,7 @@ def maybe_apply_pre_load_patches(
                 # and silently downgrade the engine to LLM, dropping
                 # vision. Scan the index for actual mtp.* keys and skip
                 # attachment when they're absent.
-                has_mtp_weights = _checkpoint_has_mtp_weights(model_name)
-                set_mtp_attach_enabled(has_mtp_weights)
+                set_mtp_attach_enabled(bool(has_mtp_weights))
 
                 # Sanitize-preservation patch runs unconditionally: the
                 # stock mlx-vlm Model.sanitize strips every ``mtp.*`` key,
@@ -1066,8 +1087,114 @@ def _checkpoint_weight_prefix(
 
 
 def _checkpoint_qwen4_mtp_weight_prefix(model_path: str | Path) -> str | None:
-    """Return the embedded MTP prefix supported by the Qwen4 runtime."""
-    return _checkpoint_weight_prefix(model_path, _MTP_WEIGHT_PREFIXES)
+    """Return the Qwen4 MTP checkpoint layout supported by the runtime."""
+    embedded_prefix = _checkpoint_weight_prefix(model_path, _MTP_WEIGHT_PREFIXES)
+    if embedded_prefix is not None:
+        return embedded_prefix
+
+    sidecar_path = _qwen4_mtp_sidecar_path(model_path)
+    if sidecar_path is None:
+        return None
+    sidecar_prefix = _checkpoint_weight_prefix(
+        sidecar_path,
+        ("fc_embedding.", "fc_hidden.", "layers."),
+    )
+    return "mtp/" if sidecar_prefix is not None else None
+
+
+def _qwen4_mtp_sidecar_config(
+    model_path: str | Path,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return the validated standalone Qwen4 Lightning MTP sidecar config."""
+    return _qwen_mtp_sidecar_config(
+        model_path,
+        family="Qwen4",
+        expected_model_type="qwen4_exp_mtp",
+    )
+
+
+def _qwen_mtp_sidecar_config(
+    model_path: str | Path,
+    *,
+    family: str,
+    expected_model_type: str,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return a validated standalone Qwen MTP sidecar config."""
+    model_path = Path(model_path)
+    sidecar_path = model_path / "mtp"
+    config_path = sidecar_path / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        logger.debug(
+            "Failed to read %s MTP sidecar config %s: %s",
+            family,
+            config_path,
+            e,
+        )
+        return None
+    if not isinstance(config, dict):
+        logger.warning(
+            "%s MTP sidecar config %s must contain an object",
+            family,
+            config_path,
+        )
+        return None
+    if config.get("model_type") != expected_model_type:
+        return None
+    return sidecar_path, config
+
+
+def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
+    """Resolve a standalone Qwen4 Lightning MTP checkpoint directory."""
+    sidecar = _qwen4_mtp_sidecar_config(model_path)
+    return sidecar[0] if sidecar is not None else None
+
+
+def _qwen4_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
+    """Map a Qwen4 MTP sidecar's verify block size to native draft depth."""
+    sidecar = _qwen4_mtp_sidecar_config(model_path)
+    return _qwen_mtp_sidecar_draft_depth(sidecar, family="Qwen4")
+
+
+def _qwen35_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
+    """Map a Qwen3.5/3.6 MTP sidecar block size to native draft depth."""
+    sidecar = _qwen_mtp_sidecar_config(
+        model_path,
+        family="Qwen3",
+        expected_model_type="qwen3_5_mtp",
+    )
+    return _qwen_mtp_sidecar_draft_depth(sidecar, family="Qwen3")
+
+
+def _qwen_mtp_sidecar_draft_depth(
+    sidecar: tuple[Path, dict[str, Any]] | None,
+    *,
+    family: str,
+) -> int | None:
+    """Map a Qwen sidecar's verify block size to native draft depth."""
+    if sidecar is None:
+        return None
+
+    sidecar_path, config = sidecar
+    config_path = sidecar_path / "config.json"
+    block_size = config.get("block_size")
+    if (
+        isinstance(block_size, bool)
+        or not isinstance(block_size, int)
+        or block_size < 2
+    ):
+        logger.warning(
+            "%s MTP sidecar config %s has invalid block_size=%r; "
+            "using the native default draft depth",
+            family,
+            config_path,
+            block_size,
+        )
+        return None
+    return block_size - 1
 
 
 def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
@@ -1090,8 +1217,31 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
     False when neither resolves — callers treat that as "no MTP weights"
     (the conservative choice: skip MTPModule attachment).
     """
+    if _checkpoint_qwen4_mtp_weight_prefix(model_path) is not None:
+        return True
     prefixes = _MTP_WEIGHT_PREFIXES + _nextn_weight_prefixes(model_path)
     return _checkpoint_weight_prefix(model_path, prefixes) is not None
+
+
+def _native_vlm_mtp_eligible(
+    config: dict,
+    model_type: str | None,
+    model_settings: Any | None,
+    *,
+    has_mtp_weights: bool,
+) -> bool:
+    """True iff a VLM load may enable native-head MTP decode.
+
+    Head attachment is intentionally a separate decision: mlx-vlm must bind
+    persisted ``mtp.*`` tensors even when decode is disabled. This predicate
+    controls only BatchGenerator draft+verify activation.
+    """
+    return bool(
+        model_settings is not None
+        and getattr(model_settings, "mtp_enabled", False)
+        and has_mtp_weights
+        and _is_mtp_compatible(config, model_type)
+    )
 
 
 def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:

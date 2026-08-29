@@ -20,10 +20,8 @@ Activation gate: caller (utils/model_loading.py) checks
 heads + a supported ``model_type`` before invoking ``apply_mlx_lm_mtp_patch``.
 The patches are idempotent.
 
-Concurrency model: the BatchGenerator patch uses the singleton MTP path for
-one active sequence, and a row-wise MTP controller for multi-sequence batches
-only when every row is at the same target cache position. Late-join or otherwise
-unaligned batches fall through to standard continuous batching.
+Concurrency model: the BatchGenerator patch uses MTP only for one active
+sequence. Multi-sequence batches use standard continuous batching.
 """
 
 from __future__ import annotations
