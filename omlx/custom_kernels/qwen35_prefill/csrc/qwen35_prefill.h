@@ -90,6 +90,20 @@ mx::array qwen35_q8_affine_qmm_t(
     int group_size = 64,
     mx::StreamOrDevice s = {});
 
+mx::array qwen35_mxfp4_qmm_t(
+    const mx::array& x,
+    const mx::array& weight,
+    const mx::array& scales,
+    int variant = 8,
+    mx::StreamOrDevice s = {});
+
+mx::array qwen35_mxfp8_qmm_t(
+    const mx::array& x,
+    const mx::array& weight,
+    const mx::array& scales,
+    int variant = 8,
+    mx::StreamOrDevice s = {});
+
 mx::array qwen35_moe_weighted_sum(
     const mx::array& x_sorted,
     const mx::array& inv_order,
