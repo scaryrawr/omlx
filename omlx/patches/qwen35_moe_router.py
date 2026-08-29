@@ -224,17 +224,50 @@ def apply_qwen35_moe_router_patch() -> bool:
     vcls = getattr(vlm_moe, "Qwen3_5MoeSparseMoeBlock", None) if vlm_moe else None
     if vcls is not None and not getattr(vcls, "_omlx_router_fused", False):
         vlm_orig = vcls.__call__
+        target_linear = getattr(vlm_moe, "_target_verify_linear", None)
+        target_switch = getattr(vlm_moe, "_target_verify_switch_glu", None)
+        legacy_verify = callable(target_linear) and callable(target_switch)
 
-        def vlm_patched_call(self, x):
-            if not router_eligible(x, self.num_experts):
+        def vlm_patched_call(self, x, target_verify=False):
+            def fallback():
+                if legacy_verify:
+                    return vlm_orig(self, x, target_verify=target_verify)
                 return vlm_orig(self, x)
-            gates = mx.softmax(self.gate(x), axis=-1, precise=True)
-            inds, scores = fused_router_topk(gates, self.top_k)
-            y = self.switch_mlp(x, inds)
-            y = (y * scores[..., None]).sum(axis=-2)
-            shared_y = self.shared_expert(x)
-            shared_y = mx.sigmoid(self.shared_expert_gate(x)) * shared_y
-            return y + shared_y
+            if not router_eligible(x, self.num_experts):
+                return fallback()
+            try:
+                gates = (
+                    target_linear(self.gate, x, target_verify)
+                    if legacy_verify
+                    else self.gate(x)
+                )
+                gates = mx.softmax(gates, axis=-1, precise=True)
+                inds, scores = fused_router_topk(gates, self.top_k)
+
+                y = (
+                    target_switch(self.switch_mlp, x, inds, target_verify)
+                    if legacy_verify
+                    else self.switch_mlp(x, inds)
+                )
+                y = (y * scores[..., None]).sum(axis=-2)
+
+                shared_y = (
+                    self.shared_expert(x, target_verify)
+                    if legacy_verify
+                    else self.shared_expert(x)
+                )
+                shared_gate = (
+                    target_linear(self.shared_expert_gate, x, target_verify)
+                    if legacy_verify
+                    else self.shared_expert_gate(x)
+                )
+                return y + mx.sigmoid(shared_gate) * shared_y
+            except Exception:
+                logger.warning(
+                    "fused MoE router (vlm) failed; composed fallback",
+                    exc_info=True,
+                )
+                return fallback()
 
         vcls.__call__ = vlm_patched_call
         vcls._omlx_router_fused = True
