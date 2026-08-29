@@ -661,10 +661,11 @@ def maybe_apply_pre_load_patches(
             if model_settings is not None
             else None
         )
-        # Qwen4-Exp uses the same adaptive draft-depth controller as the
-        # general Lightning MTP path.  A single MTP hidden layer can be
-        # chained autoregressively, so default to the validated max depth 3.
-        set_mtp_depth(int(depth) if depth else 3)
+        if depth is not None:
+            set_mtp_depth(depth)
+        else:
+            sidecar_depth = _qwen4_mtp_sidecar_draft_depth(model_name)
+            set_mtp_depth(sidecar_depth if sidecar_depth is not None else 3)
         if mtp_active and not apply_mlx_lm_mtp_patch():
             logger.warning(
                 "Qwen4-Exp Lightning MTP dispatch patch failed for %s; "
@@ -1096,8 +1097,10 @@ def _checkpoint_qwen4_mtp_weight_prefix(model_path: str | Path) -> str | None:
     return "mtp/" if sidecar_prefix is not None else None
 
 
-def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
-    """Resolve a standalone Qwen4 Lightning MTP checkpoint directory."""
+def _qwen4_mtp_sidecar_config(
+    model_path: str | Path,
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return the validated standalone Qwen4 Lightning MTP sidecar config."""
     model_path = Path(model_path)
     sidecar_path = model_path / "mtp"
     config_path = sidecar_path / "config.json"
@@ -1105,12 +1108,46 @@ def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
         return None
     try:
         config = json.loads(config_path.read_text())
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         logger.debug("Failed to read Qwen4 MTP sidecar config %s: %s", config_path, e)
+        return None
+    if not isinstance(config, dict):
+        logger.warning(
+            "Qwen4 MTP sidecar config %s must contain an object", config_path
+        )
         return None
     if config.get("model_type") != "qwen4_exp_mtp":
         return None
-    return sidecar_path
+    return sidecar_path, config
+
+
+def _qwen4_mtp_sidecar_path(model_path: str | Path) -> Path | None:
+    """Resolve a standalone Qwen4 Lightning MTP checkpoint directory."""
+    sidecar = _qwen4_mtp_sidecar_config(model_path)
+    return sidecar[0] if sidecar is not None else None
+
+
+def _qwen4_mtp_sidecar_draft_depth(model_path: str | Path) -> int | None:
+    """Map a Qwen4 MTP sidecar's verify block size to native draft depth."""
+    sidecar = _qwen4_mtp_sidecar_config(model_path)
+    if sidecar is None:
+        return None
+
+    sidecar_path, config = sidecar
+    block_size = config.get("block_size")
+    if (
+        isinstance(block_size, bool)
+        or not isinstance(block_size, int)
+        or not 2 <= block_size <= 9
+    ):
+        logger.warning(
+            "Qwen4 MTP sidecar config %s has invalid block_size=%r; "
+            "using the native default draft depth",
+            sidecar_path / "config.json",
+            block_size,
+        )
+        return None
+    return block_size - 1
 
 
 def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:

@@ -303,7 +303,8 @@ class ModelSettings:
     # Mutually exclusive with dflash.
     mtp_enabled: bool = False
     # Maximum chained MTP draft tokens per verify cycle (speculative depth).
-    # None = model-specific default (3 for DeepSeek-V4 and Qwen3.5/3.6).
+    # None = model-specific default (Qwen4-Exp uses its MTP sidecar contract;
+    # 3 for DeepSeek-V4 and Qwen3.5/3.6).
     # An adaptive controller picks 1..max per sequence from rolling
     # acceptance/latency estimates; set to 1 for a fixed depth-1 cycle.
     mtp_num_draft_tokens: int | None = None
