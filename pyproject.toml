@@ -25,17 +25,17 @@ authors = [
 ]
 keywords = ["llm", "mlx", "apple-silicon", "vllm", "inference", "transformers"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "Operating System :: MacOS",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 dependencies = [
@@ -44,23 +44,17 @@ dependencies = [
     # binaries are ABI-coupled to this exact mlx version — bumping the pin
     # requires rebuilding them (OMLX_WITH_CUSTOM_KERNEL=1 setup.py build_ext).
     "mlx==0.32.2",
-    # mlx-lm from commit (ab1806e, v0.31.3) - transformers 5.13+
-    # NewlineTokenizer registration compatibility, DeepSeek/GLM DSA indexer
-    # RoPE fix, trust_remote_code load gate, transformers 5.7.0
-    # compatibility, and prior BatchGenerator/cache fixes.
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    # mlx-lm from the latest upstream commit (e5baded), including the
+    # batched XTC threshold fix and the current sampling defaults.
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
     # regex for mlx-lm's Gemma 4 tool parser (uses recursive patterns)
     "regex",
-    # mlx-embeddings from latest commit (32981fa)
-    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206",
-    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required
-    # Keep <5.13 until the broader dependency set gets a dedicated resolver
-    # smoke test with transformers 5.13+. The mlx-lm pin above includes the
-    # known NewlineTokenizer registration fix. Floor 5.12.1: AutoTokenizer's
-    # fix_mistral_regex backend gate (used by get_tokenizer_config for
-    # mistral-common models) first shipped in 5.12.1 — on older 5.x the kwarg
-    # is silently swallowed and Tekken prompts stay corrupted.
-    "transformers>=5.12.1,<5.13",
+    # mlx-embeddings from latest scaryrawr commit (71329b8)
+    "mlx-embeddings @ git+https://github.com/scaryrawr/mlx-embeddings@71329b8a18f02273279ca766afb66ed0665a97f9",
+    # mlx-vlm custom processors bypass HF AutoProcessor, so torch is not required.
+    # Current mlx-vlm requires Transformers 5.14+ for its native text-model
+    # loaders and attention-mask handling.
+    "transformers>=5.14.0",
     # transformers 5.x's tokenization_mistral_common module imports
     # ReasoningEffort from mistral_common (added in 1.10). The audio extras
     # transitively pull mistral-common via mlx-audio[stt], which historically
@@ -82,7 +76,7 @@ dependencies = [
     "pyyaml>=6.0",
     "itsdangerous>=2.0",
     "jinja2>=3.0",
-    # mlx-lm 0.31.3 imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
+    # mlx-lm imports rich from mlx_lm.cli_ui for chat/lora entrypoints.
     "rich>=13.0.0",
     "sentencepiece",
     "tiktoken",
@@ -117,9 +111,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from commit 78b96eb. MiniMax M3 support is vendored under
-    # omlx.patches.mlx_vlm_minimax_m3_compat because upstream removed it.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@78b96eb5462141447b9a6b4943ef553891da56dd",
+    # mlx-vlm after v0.6.17 (dda2e04), including Qwen3.8-Flash-Next
+    # continuous batching, MTP, FP8 conversion, and APC disk-cache support.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@dda2e04660eca41cc168670eee971c5bb1a15e5c",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.7 (c55324c) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
@@ -145,6 +139,8 @@ grammar = [
     "xgrammar==0.2.3",
     "apache-tvm-ffi==0.1.11",
 ]
+# Kept as a no-op compatibility extra. mlx-vlm image support is part of core.
+image = []
 mcp = [
     "mcp>=2.0.0,<3",
 ]
@@ -152,11 +148,12 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from commit (5175326) with tts/stt/sts extras
-    # tts extra: misaki, num2words, spacy, phonemizer-fork, espeakng-loader, sentencepiece
-    # stt extra: tiktoken, mistral-common[audio]
-    # sts extra: tts deps + stt deps + webrtcvad
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@51753266e0a4f766fd5e6fbc46652224efc23981",
+    # mlx-audio from latest upstream main commit (d28d68c6) with Fun-ASR
+    # context support, batched logits processing, and tts/stt/sts extras.
+    # tts extra: mistral-common[audio], sentencepiece
+    # stt extra: sentencepiece
+    # sts extra: sentencepiece, webrtcvad, setuptools<81
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@d28d68c6ac4e28f7d2d66007f640b06cf3fd8ceb",
     # WebSocket protocol impl for uvicorn (realtime STT endpoint). Pure
     # python; uvicorn's ws="auto" picks it up when installed.
     "wsproto==1.2.0",
@@ -174,28 +171,31 @@ paroquant = [
 # version-free. End-users don't `pip install omlx[bundle]`; this is for
 # the macOS .app build pipeline.
 #
-# mlx-audio[tts,stt,sts]'s 12 transitive deps appear explicitly because
+# mlx-audio and app-bundled audio runtime deps appear explicitly because
 # venvstacks 0.7.0's internal `uv pip compile` runs with --no-config and
-# doesn't propagate pyproject.toml's `tool.uv.override-dependencies`,
-# so it can't resolve mlx-audio's `mlx-lm==0.31.1` pin against our
-# git-pinned mlx-lm (v0.31.3). build.py installs mlx-audio + paroquant
-# separately via --no-deps post-resolution.
+# doesn't propagate pyproject.toml's `tool.uv.override-dependencies`.
+# build.py installs mlx-audio + paroquant separately via --no-deps
+# post-resolution so the framework layer keeps oMLX's git-pinned engines.
 bundle = [
     "mcp>=2.0.0,<3",
     "modelscope>=1.10.0",
-    # mlx-audio[tts,stt,sts] transitives:
+    # mlx-audio core deps needed when packaging installs the git wheel --no-deps.
+    "huggingface-hub>=1.0",
+    "tqdm>=4.67.1",
+    # Audio runtime deps bundled for TTS/STT/STS support:
     "scipy>=1.11.0",
     "librosa>=0.10.0",
-    "miniaudio>=1.59",
+    "miniaudio>=1.61",
     "numba>=0.59.0",
     "pyloudnorm>=0.1.0",
-    "sounddevice>=0.4.6",
+    "sounddevice>=0.5.3",
     "misaki>=0.9.4",
     "num2words>=0.5.14",
     "spacy>=3.8.4",
     "phonemizer-fork>=3.3.2",
     "espeakng-loader>=0.2.4",
     "webrtcvad>=2.0.10",
+    "setuptools<81",
     # [audio] extra on top of pyproject's plain mistral-common>=1.10
     "mistral-common[audio]>=1.10",
     # realtime STT WebSocket endpoint
@@ -246,7 +246,7 @@ Repository = "https://github.com/jundot/omlx"
 omlx = "omlx.cli:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "omlx._version.__version__"}
+version = { attr = "omlx._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -267,11 +267,15 @@ include = ["omlx*"]
 "omlx.custom_kernels.qwen35_prefill" = ["*.metallib", "*.dylib", "*.so"]
 
 [tool.uv]
-# mlx and mlx-lm are git-pinned; override transitive pins
-# (e.g. mlx-audio -> mlx-lm==0.31.1) so the resolver accepts them.
+# mlx and mlx-lm are git-pinned; keep optional transitive dependencies on
+# the same engine stack when resolving extras.
 override-dependencies = [
     "mlx==0.32.2",
-    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@ab1806e8f5d6aa035973af194a1b9198ab4754dc",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
+    # mlx-audio's current metadata still caps Transformers below 5.13, but
+    # current mlx-vlm requires 5.14+; its runtime paths are compatible with
+    # the newer tokenizer APIs used by the shared stack.
+    "transformers>=5.14.0",
 ]
 
 [tool.black]
@@ -280,11 +284,11 @@ target-version = ["py310", "py311", "py312", "py313"]
 
 [tool.ruff]
 line-length = 88
+extend-exclude = ["omlx/patches/*/vendor"]
+
+[tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501", "B905"]
-# Vendored upstream files (mlx-vlm copies under patches) keep their
-# original formatting for pin-bump diffability.
-extend-exclude = ["omlx/patches/*/vendor"]
 
 [tool.mypy]
 python_version = "3.10"
