@@ -1,6 +1,7 @@
 """Tests for per-engine thread isolation (issue #1248)."""
 
 import concurrent.futures
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -249,6 +250,40 @@ class TestPerEngineExecutor:
             assert engine.scheduler._stream is engine._mlx_stream
 
             engine.close()
+
+    def test_engine_stream_created_on_executor_thread(self):
+        """The per-engine MLX stream must be owned by the worker thread.
+
+        MLX thread-local streams created on the caller thread cannot be used
+        from scheduler.step() on the engine executor thread.
+        """
+        mock_model = MagicMock()
+        mock_model.model_type = "test"
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.eos_token_id = 0
+        main_thread_id = threading.get_ident()
+        stream = object()
+        created_on: list[tuple[int, str]] = []
+
+        def create_stream():
+            created_on.append((threading.get_ident(), threading.current_thread().name))
+            return stream
+
+        with patch("omlx.engine_core.get_registry") as mock_registry, patch(
+            "omlx.engine_core._create_mlx_thread_stream", side_effect=create_stream
+        ):
+            mock_registry.return_value.acquire.return_value = True
+
+            engine = EngineCore(mock_model, mock_tokenizer)
+            try:
+                assert engine._mlx_stream is stream
+                assert engine.scheduler._stream is stream
+                assert created_on
+                thread_id, thread_name = created_on[0]
+                assert thread_id != main_thread_id
+                assert thread_name.startswith("mlx-engine-")
+            finally:
+                engine.close()
 
     def test_close_clears_compile_cache_then_shuts_down(self):
         """Normal path (compile-cache clear available): close() clears the

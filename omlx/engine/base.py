@@ -9,8 +9,9 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any
 
 import mlx.core as mx
 
@@ -163,15 +164,15 @@ class GenerationOutput:
     """
 
     text: str
-    tokens: List[int] = field(default_factory=list)
+    tokens: list[int] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    finish_reason: Optional[str] = "stop"
+    finish_reason: str | None = "stop"
     # For streaming
     new_text: str = ""
     finished: bool = True
     # For tool calling (Harmony and other models)
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
     # Prefix cache stats
     cached_tokens: int = 0
     # Optional engine-native throughput stats. Diffusion models report
@@ -183,12 +184,12 @@ class GenerationOutput:
     diffusion_work_tokens: int = 0
     diffusion_canvas_tps: float = 0.0
     diffusion_work_tps: float = 0.0
-    generated_at: Optional[float] = None
-    generated_until: Optional[float] = None
-    first_token_at: Optional[float] = None
+    generated_at: float | None = None
+    generated_until: float | None = None
+    first_token_at: float | None = None
     # Internal scheduler trace populated only by local benchmark requests.
-    benchmark_prefill_chunks: List[int] = field(default_factory=list)
-    benchmark_requested_steps: List[int] = field(default_factory=list)
+    benchmark_prefill_chunks: list[int] = field(default_factory=list)
+    benchmark_requested_steps: list[int] = field(default_factory=list)
     benchmark_boundary_enabled: bool = False
     benchmark_cache_block_size: int = 0
 
@@ -234,7 +235,7 @@ class BaseEngine(ABC):
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
-        stop: Optional[List[str]] = None,
+        stop: list[str] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """
@@ -266,7 +267,7 @@ class BaseEngine(ABC):
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
-        stop: Optional[List[str]] = None,
+        stop: list[str] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """
@@ -290,7 +291,7 @@ class BaseEngine(ABC):
     @abstractmethod
     async def chat(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -298,7 +299,7 @@ class BaseEngine(ABC):
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
-        tools: Optional[List[dict]] = None,
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """
@@ -322,7 +323,7 @@ class BaseEngine(ABC):
     @abstractmethod
     async def stream_chat(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -330,7 +331,7 @@ class BaseEngine(ABC):
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
-        tools: Optional[List[dict]] = None,
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """
@@ -353,7 +354,7 @@ class BaseEngine(ABC):
 
     @property
     @abstractmethod
-    def model_type(self) -> Optional[str]:
+    def model_type(self) -> str | None:
         """Get the model type from config.json (e.g., 'gpt_oss', 'llama', 'qwen2').
 
         This can be used to apply model-specific processing.
@@ -392,7 +393,7 @@ class BaseEngine(ABC):
         return False
 
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics.
 
         Returns:
@@ -401,7 +402,7 @@ class BaseEngine(ABC):
         pass
 
     @abstractmethod
-    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+    def get_cache_stats(self) -> dict[str, Any] | None:
         """Get cache statistics.
 
         Returns:
@@ -412,8 +413,8 @@ class BaseEngine(ABC):
     async def preflight_chat(
         self,
         messages: list,
-        tools: Optional[list] = None,
-        request_id: Optional[str] = None,
+        tools: list | None = None,
+        request_id: str | None = None,
         **kwargs,
     ) -> None:
         """Optional prefill-memory preflight check for chat requests.
@@ -429,7 +430,7 @@ class BaseEngine(ABC):
     async def preflight_completion(
         self,
         prompt: str,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
         **kwargs,
     ) -> None:
         """Optional prefill-memory preflight check for completion requests.
@@ -452,7 +453,7 @@ class ActivityTrackingMixin:
         super().__init__()
         self._active_count = 0
         self._active_lock = threading.Lock()
-        self._activities: Dict[str, Dict[str, Any]] = {}
+        self._activities: dict[str, dict[str, Any]] = {}
 
     def has_active_requests(self) -> bool:
         """Check if the engine has active in-flight requests."""
@@ -482,8 +483,8 @@ class ActivityTrackingMixin:
     }
 
     def _sanitize_activity_metadata(
-        self, metadata: Dict[str, Any] | None
-    ) -> Dict[str, Any]:
+        self, metadata: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Drop reserved activity keys from caller-provided metadata.
 
         Timing keys are owned by the tracker: _begin_activity sets them and
@@ -502,7 +503,7 @@ class ActivityTrackingMixin:
         kind: str,
         detail: str | None = None,
         total_items: int | None = None,
-        metadata: Dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Track a non-streaming operation for admin visibility."""
         activity_id = str(uuid.uuid4())
@@ -558,7 +559,7 @@ class ActivityTrackingMixin:
             lambda: (mx.synchronize(), mx.clear_cache()),
         )
 
-    def get_activity_snapshot(self) -> Dict[str, Any]:
+    def get_activity_snapshot(self) -> dict[str, Any]:
         """Return active non-streaming operations for admin display."""
         now = time.monotonic()
         with self._active_lock:
@@ -606,7 +607,7 @@ class BaseNonStreamingEngine(ActivityTrackingMixin, ABC):
         pass
 
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics.
 
         Returns:
