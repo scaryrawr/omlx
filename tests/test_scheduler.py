@@ -920,6 +920,39 @@ class TestSchedulerAddRequest:
         scheduler._prepare_prefix_cache_for_request(request)
         scheduler.block_aware_cache.fetch_cache.assert_called_once()
 
+    def test_relevant_store_does_not_time_out_after_four_seconds(
+        self, mock_model, mock_tokenizer
+    ):
+        """Long sequential turns must not stack full GPU KV caches.
+
+        The old four-second freshness timeout admitted the next turn while
+        the prior cache was still being serialized, retaining one full cache
+        per turn until the store-cache gate filled.
+        """
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler.block_aware_cache = MagicMock()
+        prompt = list(range(9001))
+
+        future = MagicMock()
+        future.done.return_value = False
+        scheduler._inflight_store_futures["req-prev"] = future
+        scheduler._inflight_store_info["req-prev"] = (
+            scheduler_module._InflightStoreInfo(tokens=list(range(9000)))
+        )
+        request = Request(
+            request_id="req-next",
+            prompt="test",
+            sampling_params=SamplingParams(),
+            prompt_token_ids=prompt,
+            num_prompt_tokens=len(prompt),
+        )
+
+        with patch.object(scheduler_module.time, "monotonic", return_value=10.0):
+            assert scheduler._should_defer_for_cache_freshness(request) is True
+        with patch.object(scheduler_module.time, "monotonic", return_value=15.0):
+            assert scheduler._should_defer_for_cache_freshness(request) is True
+        assert request.request_id in scheduler._cache_freshness_waits
+
     def test_admission_defers_for_ratio_relevant_inflight_store(
         self, mock_model, mock_tokenizer
     ):
@@ -1823,7 +1856,7 @@ class TestPrefillAbortInterrupt:
         scheduler.running["req-prefill"] = request
         scheduler.requests["req-prefill"] = request
 
-        output = scheduler.step()
+        scheduler.step()
 
         # batch_generator should be reset
         assert scheduler.batch_generator is None
@@ -2390,6 +2423,15 @@ class TestSchedulerStopTokens:
 
         # MockTokenizer has eos_token_id = 2
         assert mock_tokenizer.eos_token_id in stop_tokens
+
+    def test_deepseek_v4_includes_required_eos_tokens(self, mock_model, mock_tokenizer):
+        """DeepSeek-V4 requires EOS IDs that upstream configs may omit."""
+        mock_model.config.model_type = "deepseek_v4"
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+
+        stop_tokens = scheduler._get_stop_tokens()
+
+        assert {1, 128803, 128804}.issubset(stop_tokens)
 
     def test_includes_eot_token_id(self, mock_model, mock_tokenizer):
         """Test _get_stop_tokens() includes end-of-turn token when available."""
@@ -5902,6 +5944,36 @@ class TestOutputParserSmoke:
 
             return parse_tool_call(text, tools)
 
+    def test_cumulative_token_ids_are_only_materialized_on_finish(self, mock_model):
+        tokenizer = self._GemmaTokenizer({11: "hello", 12: " world"})
+        scheduler = Scheduler(model=mock_model, tokenizer=tokenizer)
+        request = Request(
+            request_id="token-snapshot-req",
+            prompt="prompt",
+            sampling_params=SamplingParams(max_tokens=2),
+            prompt_token_ids=[1],
+            num_prompt_tokens=1,
+            status=RequestStatus.RUNNING,
+            batch_uid=99,
+        )
+        scheduler.running[request.request_id] = request
+        scheduler.requests[request.request_id] = request
+        scheduler.uid_to_request_id[99] = request.request_id
+        scheduler.request_id_to_uid[request.request_id] = 99
+
+        responses = [
+            type("Resp", (), {"uid": 99, "token": 11, "finish_reason": None})(),
+            type("Resp", (), {"uid": 99, "token": 12, "finish_reason": "length"})(),
+        ]
+
+        outputs, finished_ids = scheduler._process_batch_responses(responses)
+
+        assert finished_ids == {"token-snapshot-req"}
+        assert outputs[0].new_token_ids == [11]
+        assert outputs[0].output_token_ids == []
+        assert outputs[-1].new_token_ids == [12]
+        assert outputs[-1].output_token_ids == [11, 12]
+
     def test_gemma4_session_selected_and_markers_hidden(self, mock_model):
         mock_model.config.model_type = "gemma4"
         tokenizer = self._GemmaTokenizer(
@@ -6251,17 +6323,15 @@ class TestVLMPositionStateClearing:
 
         model.clear_vlm_position_state.assert_not_called()
 
-    def test_schedule_waiting_uses_first_captured_rope_delta(self, mock_tokenizer):
-        """Per-request capture must tolerate a stale multi-row delta array."""
+    def test_schedule_waiting_captures_first_batched_rope_delta(self, mock_tokenizer):
+        """A single request keeps its first row from batched VLM rope deltas."""
         model = self._make_vlm_model()
         scheduler = Scheduler(model=model, tokenizer=mock_tokenizer)
-
-        mock_bg = MagicMock()
-        mock_bg.insert = MagicMock(return_value=[42])
-        scheduler.batch_generator = mock_bg
+        scheduler.batch_generator = MagicMock()
+        scheduler.batch_generator.insert.return_value = [42]
 
         request = Request(
-            request_id="vlm-multi-rope-delta",
+            request_id="vlm-batched-rope-001",
             prompt="describe this image",
             sampling_params=SamplingParams(max_tokens=50),
         )
@@ -6269,15 +6339,37 @@ class TestVLMPositionStateClearing:
         request.num_prompt_tokens = 5
         request.vlm_inputs_embeds = mx.zeros((1, 5, 64))
         request.vlm_extra_kwargs = {
-            "_captured_rope_deltas": mx.array([[-42.0], [-7.0]])
+            "_captured_rope_deltas": mx.array([[-42], [-7]])
         }
-
         scheduler.waiting.append(request)
         scheduler.requests[request.request_id] = request
 
         scheduler._schedule_waiting()
 
         assert request.rope_deltas == -42.0
+
+    def test_schedule_waiting_treats_empty_rope_deltas_as_zero(self, mock_tokenizer):
+        """An empty optional RoPE delta means no decode position adjustment."""
+        model = self._make_vlm_model()
+        scheduler = Scheduler(model=model, tokenizer=mock_tokenizer)
+        scheduler.batch_generator = MagicMock()
+        scheduler.batch_generator.insert.return_value = [42]
+
+        request = Request(
+            request_id="vlm-empty-rope-001",
+            prompt="describe this image",
+            sampling_params=SamplingParams(max_tokens=50),
+        )
+        request.prompt_token_ids = [1, 2, 3, 4, 5]
+        request.num_prompt_tokens = 5
+        request.vlm_inputs_embeds = mx.zeros((1, 5, 64))
+        request.vlm_extra_kwargs = {"_captured_rope_deltas": mx.array([])}
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+
+        scheduler._schedule_waiting()
+
+        assert request.rope_deltas == 0.0
 
     def test_schedule_waiting_clears_text_only_position_state(self, mock_tokenizer):
         """Text-only request in _schedule_waiting should clear position state.
@@ -6543,7 +6635,7 @@ class TestBuildStateMachineStopStrings:
     """Tests for _build_state_machine stop-string tokenization.
 
     The scheduler must convert SamplingParams.stop (a list of strings)
-    into token-sequence transitions on the per-request state machine,
+    into token-sequence matches on the per-request stop matcher,
     so mlx-lm's BatchGenerator can halt on user-supplied stop sequences.
     """
 
@@ -6560,9 +6652,9 @@ class TestBuildStateMachineStopStrings:
     def test_no_stop_string_only_eos_transitions(self, mock_model, mock_tokenizer):
         scheduler = self._make_scheduler(mock_model, mock_tokenizer)
         sm = scheduler._build_state_machine(self._request_with_stop([]))
-        # SequenceStateMachine has internal _states dict; non-empty implies
+        # StopSequenceMatcher has an internal trie; non-empty implies
         # at least the EOS transitions are present.
-        assert sm._states
+        assert sm._trie
 
     def test_stop_string_added_as_token_sequence(self, mock_model, mock_tokenizer):
         scheduler = self._make_scheduler(mock_model, mock_tokenizer)
@@ -6573,7 +6665,7 @@ class TestBuildStateMachineStopStrings:
         sm = scheduler._build_state_machine(self._request_with_stop(["delta"]))
         # Walk the trie following expected_seq; the terminal node must
         # have a __match__ entry, meaning the sequence is registered.
-        node = sm._states["normal"][0]
+        node = sm._trie
         for tok in expected_seq:
             assert tok in node, f"token {tok} missing from trie"
             node = node[tok]
@@ -6585,7 +6677,7 @@ class TestBuildStateMachineStopStrings:
         # should be tokenized.
         sm = scheduler._build_state_machine(self._request_with_stop(["", "real", 123]))
         real_seq = mock_tokenizer.encode("real", add_special_tokens=False)
-        node = sm._states["normal"][0]
+        node = sm._trie
         for tok in real_seq:
             assert tok in node
             node = node[tok]
@@ -6596,7 +6688,7 @@ class TestBuildStateMachineStopStrings:
         sm = scheduler._build_state_machine(self._request_with_stop(["foo", "bar"]))
         for stop_str in ("foo", "bar"):
             seq = mock_tokenizer.encode(stop_str, add_special_tokens=False)
-            node = sm._states["normal"][0]
+            node = sm._trie
             for tok in seq:
                 assert tok in node
                 node = node[tok]
@@ -6734,7 +6826,6 @@ class TestStopStringOutputBuffer:
             self._response(
                 stop_tokens[-1],
                 finish_reason="stop",
-                match_sequence=stop_tokens,
             ),
         ]
 

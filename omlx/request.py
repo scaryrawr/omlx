@@ -10,7 +10,7 @@ request management system, simplified for MLX backend.
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from .cache.paged_cache import BlockTable
@@ -38,7 +38,7 @@ class RequestStatus(enum.IntEnum):
         return status > RequestStatus.PREEMPTED
 
     @staticmethod
-    def get_finish_reason(status: "RequestStatus") -> Optional[str]:
+    def get_finish_reason(status: "RequestStatus") -> str | None:
         """Get the finish reason string for a finished status."""
         if status == RequestStatus.FINISHED_STOPPED:
             return "stop"
@@ -67,22 +67,22 @@ class SamplingParams:
     repetition_context_size: Optional[int] = None
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
-    stop: Optional[List[str]] = None
-    stop_token_ids: Optional[List[int]] = None
+    stop: list[str] | None = None
+    stop_token_ids: list[int] | None = None
 
     # Logprobs settings (memory optimization: disabled by default)
     logprobs: bool = False  # Whether to return logprobs
-    top_logprobs: Optional[int] = None  # Number of top logprobs (1-20)
+    top_logprobs: int | None = None  # Number of top logprobs (1-20)
 
     # Thinking budget (None = unlimited thinking)
-    thinking_budget: Optional[int] = None
+    thinking_budget: int | None = None
 
     # Compiled grammar for constrained decoding (xgrammar CompiledGrammar).
     # Typed as Any to avoid a hard dependency on xgrammar at import time.
     compiled_grammar: Any = None
 
     # Seed for reproducible generation (best-effort, per OpenAI spec)
-    seed: Optional[int] = None
+    seed: int | None = None
 
     def __post_init__(self):
         if self.stop is None:
@@ -112,30 +112,30 @@ class Request:
     """
 
     request_id: str
-    prompt: Union[str, List[int]]
+    prompt: str | list[int]
     sampling_params: SamplingParams
     arrival_time: float = field(default_factory=time.monotonic)
     priority: int = 0  # Lower is higher priority
 
     # Set after tokenization
-    prompt_token_ids: Optional[List[int]] = None
+    prompt_token_ids: list[int] | None = None
     num_prompt_tokens: int = 0
 
     # Generation state
     status: RequestStatus = RequestStatus.WAITING
     num_computed_tokens: int = 0
-    output_token_ids: List[int] = field(default_factory=list)
+    output_token_ids: list[int] = field(default_factory=list)
     output_text: str = ""
-    generation_started_at: Optional[float] = None
-    last_activity_at: Optional[float] = None
+    generation_started_at: float | None = None
+    last_activity_at: float | None = None
 
     # For BatchGenerator integration
-    batch_uid: Optional[int] = None  # UID assigned by BatchGenerator
+    batch_uid: int | None = None  # UID assigned by BatchGenerator
 
     # Prefix cache fields
-    prompt_cache: Optional[List[Any]] = None  # Cached KV state from prefix cache
+    prompt_cache: list[Any] | None = None  # Cached KV state from prefix cache
     cached_tokens: int = 0  # Number of tokens retrieved from cache
-    remaining_tokens: Optional[List[int]] = None  # Tokens still needing processing
+    remaining_tokens: list[int] | None = None  # Tokens still needing processing
 
     # Paged cache fields (for BlockAwarePrefixCache)
     block_table: Optional["BlockTable"] = None  # Block table for paged cache
@@ -153,38 +153,38 @@ class Request:
     # only for benchmark_trace requests so the benchmark summary can distinguish
     # a requested scheduler step from the model calls actually delivered after
     # cache-boundary and memory clamps.
-    benchmark_prefill_chunks: List[int] = field(default_factory=list)
-    benchmark_requested_steps: List[int] = field(default_factory=list)
+    benchmark_prefill_chunks: list[int] = field(default_factory=list)
+    benchmark_requested_steps: list[int] = field(default_factory=list)
     benchmark_boundary_enabled: bool = False
     benchmark_cache_block_size: int = 0
 
     # Multimodal content (images, video)
-    images: Optional[List[Any]] = None
-    videos: Optional[List[Any]] = None
+    images: list[Any] | None = None
+    videos: list[Any] | None = None
 
     # VLM (Vision-Language Model) fields
-    vlm_inputs_embeds: Optional[Any] = (
+    vlm_inputs_embeds: Any | None = (
         None  # Pre-computed vision+text embeddings (mx.array)
     )
-    vlm_extra_kwargs: Optional[Dict[str, Any]] = (
+    vlm_extra_kwargs: dict[str, Any] | None = (
         None  # Model-specific kwargs (e.g., position_ids)
     )
-    vlm_image_hash: Optional[str] = None  # SHA256 hash of images for prefix cache
+    vlm_image_hash: str | None = None  # SHA256 hash of images for prefix cache
     vlm_cache_key_start: int = 0  # Token index where image-specific cache keying starts
-    vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = (
+    vlm_cache_key_ranges: list[tuple[int, str]] | None = (
         None  # [(token_start, cumulative_image_hash)]
     )
     rope_deltas: float = 0.0  # Per-request mRoPE position delta (set after VLM prefill)
 
     @property
-    def vlm_extra_keys_for_cache(self) -> Optional[Tuple[str, ...]]:
+    def vlm_extra_keys_for_cache(self) -> tuple[str, ...] | None:
         """Whole-request image hash wrapped as extra_keys tuple."""
         if self.vlm_image_hash:
             return (self.vlm_image_hash,)
         return None
 
     @property
-    def vlm_extra_key_token_start_for_cache(self) -> Optional[int]:
+    def vlm_extra_key_token_start_for_cache(self) -> int | None:
         """Token index where image-specific cache keying begins."""
         if self.vlm_image_hash:
             return self.vlm_cache_key_start
@@ -193,7 +193,7 @@ class Request:
     @property
     def vlm_extra_key_ranges_for_cache(
         self,
-    ) -> Optional[List[Tuple[int, Tuple[str, ...]]]]:
+    ) -> list[tuple[int, tuple[str, ...]]] | None:
         """Segmented VLM cache key ranges for per-image-turn keying."""
         if not self.vlm_cache_key_ranges:
             return None
@@ -202,7 +202,7 @@ class Request:
         ]
 
     # Metadata
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
 
     # Reasoning model support (for models with <think> tags)
     needs_think_prefix: bool = False  # True if prompt ends with <think> token
@@ -212,7 +212,7 @@ class Request:
     is_harmony_model: bool = False  # True if model uses Harmony format
 
     # SpecPrefill (sparse prefill for MoE models)
-    specprefill_indices: Optional[Any] = None  # mx.array of selected token indices
+    specprefill_indices: Any | None = None  # mx.array of selected token indices
     specprefill_total_tokens: int = 0  # Original total token count (M)
     specprefill_position_offset: int = 0  # RoPE offset = M - N
     specprefill_system_end: int = 0  # Token index where system prompt ends
@@ -249,7 +249,7 @@ class Request:
         """Check if request has finished."""
         return RequestStatus.is_finished(self.status)
 
-    def get_finish_reason(self) -> Optional[str]:
+    def get_finish_reason(self) -> str | None:
         """Get the finish reason if finished."""
         if self.finish_reason:
             return self.finish_reason
@@ -260,7 +260,7 @@ class Request:
         self.output_token_ids.append(token_id)
         self.num_computed_tokens += 1
 
-    def set_finished(self, status: RequestStatus, reason: Optional[str] = None) -> None:
+    def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
         """Mark the request as finished."""
         self.status = status
         self.finish_reason = reason or RequestStatus.get_finish_reason(status)
@@ -290,45 +290,45 @@ class RequestOutput:
 
     request_id: str
     # New tokens generated in this step
-    new_token_ids: List[int] = field(default_factory=list)
+    new_token_ids: list[int] = field(default_factory=list)
     new_text: str = ""
-    # Cumulative output
-    output_token_ids: List[int] = field(default_factory=list)
+    # Cumulative output, materialized on the terminal output.
+    output_token_ids: list[int] = field(default_factory=list)
     output_text: str = ""
     # Status
     finished: bool = False
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     # Timing
     prompt_tokens: int = 0
     completion_tokens: int = 0
     # Internal producer-side timestamp for the first generated token included in
     # this output. Consumers may receive aggregated chunks later than the token
     # was actually produced, so benchmark code must not rely only on receive time.
-    generated_at: Optional[float] = None
+    generated_at: float | None = None
     # Internal producer-side timestamp for the latest generated token included
     # in this output. This lets aggregated chunks preserve the decode interval.
-    generated_until: Optional[float] = None
+    generated_until: float | None = None
     # Timestamp of the very first generated token for this request (perf_counter).
     # Set by non-streaming generate() to allow TTFT / prefill-duration estimation.
-    first_token_at: Optional[float] = None
+    first_token_at: float | None = None
 
     # Tool calls (for Harmony and other models with tool calling support)
-    tool_calls: Optional[List[Dict[str, str]]] = None
+    tool_calls: list[dict[str, str]] | None = None
     # Prefix cache stats
     cached_tokens: int = 0
     # Error message (set when engine encounters an unrecoverable error)
-    error: Optional[str] = None
+    error: str | None = None
     # Structured internal error classification for API-layer mapping.
-    error_code: Optional[str] = None
-    error_metadata: Optional[Dict[str, Any]] = None
+    error_code: str | None = None
+    error_metadata: dict[str, Any] | None = None
     # Internal benchmark instrumentation copied from the originating request.
-    benchmark_prefill_chunks: List[int] = field(default_factory=list)
-    benchmark_requested_steps: List[int] = field(default_factory=list)
+    benchmark_prefill_chunks: list[int] = field(default_factory=list)
+    benchmark_requested_steps: list[int] = field(default_factory=list)
     benchmark_boundary_enabled: bool = False
     benchmark_cache_block_size: int = 0
 
     @property
-    def usage(self) -> Dict[str, int]:
+    def usage(self) -> dict[str, int]:
         """Return usage statistics compatible with OpenAI API."""
         return {
             "prompt_tokens": self.prompt_tokens,
