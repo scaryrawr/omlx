@@ -450,6 +450,37 @@ def test_qwen4_singleton_cache_extend_promotes_to_batch():
     assert mx.array_equal(restored.index_keys, rows[1].index_keys).item()
 
 
+def test_qwen4_batch_cache_extend_promotes_appended_singleton():
+    from mlx_vlm.models.qwen4_exp.language import BatchQSAKVCache, QSAKVCache
+
+    import omlx.scheduler  # noqa: F401  (installs BatchGenerator cache patches)
+
+    rows = []
+    for length in (3, 1):
+        cache = QSAKVCache()
+        cache.update_and_fetch(
+            mx.ones((1, 2, length, 4)) * length,
+            mx.ones((1, 2, length, 4)) * (length + 1),
+        )
+        cache.update_indexer(
+            mx.arange(length * 4).reshape(1, length, 4),
+            mx.arange(length, dtype=mx.int32)[None],
+        )
+        rows.append(cache)
+
+    generate = importlib.import_module("mlx_lm.generate")
+
+    extended = generate._extend_cache([rows[0].to_batch([0])], [rows[1]])
+
+    assert isinstance(extended[0], BatchQSAKVCache)
+    assert extended[0].offset.tolist() == [3, 1]
+    assert extended[0].left_padding.tolist() == [0, 2]
+    restored = extended[0].extract(1)
+    mx.eval(*restored.state)
+    assert restored.offset == 1
+    assert mx.array_equal(restored.index_keys, rows[1].index_keys).item()
+
+
 def test_qwen4_fp8_ple_dequantizes_only_selected_rows():
     _tiny_config()
     from mlx_vlm.models.qwen4_exp.language import ShardedEmbedding
