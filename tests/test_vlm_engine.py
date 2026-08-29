@@ -411,9 +411,7 @@ class TestVLMDiffusionLane:
             "arguments": "{}",
         }
 
-        engine = _make_loaded_engine(
-            model_type="diffusion_gemma", tokenizer=tokenizer
-        )
+        engine = _make_loaded_engine(model_type="diffusion_gemma", tokenizer=tokenizer)
         engine._diffusion_family = "block"
 
         assert engine.supports_tool_calling is True
@@ -430,6 +428,49 @@ class TestVLMDiffusionLane:
         engine = _make_loaded_engine(model_type="diffusion_gemma")
         engine._diffusion_family = "block"
         assert engine.supports_tool_calling is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
+    )
+    async def test_diffusion_preflight_rejects_audio_without_name_error(self):
+        from omlx.exceptions import InvalidRequestError
+
+        engine = _make_loaded_engine(model_type="diffusion_gemma")
+        engine._diffusion_family = "block"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "input_audio", "input_audio": {"data": "not-base64"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="Audio input"):
+            await engine.preflight_chat(messages)
+
+    @pytest.mark.skipif(
+        not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
+    )
+    def test_process_diffusion_chat_rejects_audio_without_name_error(self):
+        from omlx.exceptions import InvalidRequestError
+
+        engine = _make_loaded_engine(model_type="diffusion_gemma")
+        engine._diffusion_family = "block"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "input_audio", "input_audio": {"data": "not-base64"}},
+                ],
+            }
+        ]
+        with pytest.raises(InvalidRequestError, match="Audio input"):
+            engine._process_diffusion_chat_messages(messages, tools=None, kwargs={})
+            engine._process_diffusion_chat_messages(messages, tools=None, kwargs={})
 
     @pytest.mark.skipif(
         not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
@@ -1117,11 +1158,11 @@ class TestApplyOcrPrompt:
 class TestProcessChatMessages:
     """Tests for VLMBatchedEngine._process_chat_messages()."""
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_text_only_uses_vlm_prepare_path(self, mock_extract):
         """Text-only turns on a VLM model still use _prepare_vision_inputs()."""
         text_msgs = [{"role": "user", "content": "Hello"}]
-        mock_extract.return_value = (text_msgs, [], [])
+        mock_extract.return_value = (text_msgs, [], [], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -1149,16 +1190,17 @@ class TestProcessChatMessages:
             text_msgs,
             [],
             audio=None,
+            videos=None,
             chat_template_kwargs=None,
             tools=None,
             is_partial=None,
         )
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_text_only_passes_tools_to_prepare_vision(self, mock_extract):
         """Text-only + tools still convert and pass tools through VLM path."""
         text_msgs = [{"role": "user", "content": "Hello"}]
-        mock_extract.return_value = (text_msgs, [], [])
+        mock_extract.return_value = (text_msgs, [], [], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -1176,14 +1218,14 @@ class TestProcessChatMessages:
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] == [{"converted": True}]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_calls_prepare_vision(self, mock_extract):
         """Messages with images → _prepare_vision_inputs() called."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -1220,14 +1262,14 @@ class TestProcessChatMessages:
         assert image_cache_key_start == 12
         assert image_cache_key_ranges == [(12, "hash123")]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_passes_tools(self, mock_extract):
         """Image + tools → tools converted and passed to _prepare_vision_inputs()."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -1249,14 +1291,14 @@ class TestProcessChatMessages:
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] == [{"converted": True}]
 
-    @patch("omlx.engine.vlm.extract_images_from_messages")
+    @patch("omlx.engine.vlm.extract_media_from_messages")
     def test_image_path_without_tools(self, mock_extract):
         """Image + tools=None → _prepare_vision_inputs(tools=None)."""
         from PIL import Image
 
         mock_image = Image.new("RGB", (4, 4), "red")
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [mock_image], [])
+        mock_extract.return_value = (text_msgs, [mock_image], [], [])
 
         engine = _make_loaded_engine()
         engine._apply_ocr_prompt = MagicMock(return_value=text_msgs)
@@ -1269,6 +1311,81 @@ class TestProcessChatMessages:
 
         call_kwargs = engine._prepare_vision_inputs.call_args[1]
         assert call_kwargs["tools"] is None
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_video_path_adds_media_cache_key(self, mock_extract):
+        """Video requests use a media-specific prefix-cache key."""
+        text_msgs = [{"role": "user", "content": "Describe"}]
+        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(
+            return_value=([1, 2, 3], None, None, None, 0, [])
+        )
+
+        result = engine._process_chat_messages(
+            [{"role": "user", "content": "Describe"}],
+            tools=None,
+            kwargs={},
+        )
+
+        _, _, _, image_hash, image_cache_key_start, image_cache_key_ranges = result
+        assert image_hash is not None
+        assert image_hash.startswith("av:")
+        assert image_cache_key_start == 0
+        assert image_cache_key_ranges == []
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_audio_video_preserve_explicit_turn_association(self, mock_extract):
+        """Audio/video-only requests keep structured turns for media placement."""
+        text_msgs = [{"role": "user", "content": "First\nSecond"}]
+        original_messages = [
+            {"role": "user", "content": "First"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Second"},
+                    {
+                        "type": "input_video",
+                        "input_video": {"url": "/tmp/clip.mp4"},
+                    },
+                ],
+            },
+        ]
+        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(
+            return_value=([1, 2, 3], None, None, None, 0, [])
+        )
+
+        engine._process_chat_messages(original_messages, tools=None, kwargs={})
+
+        assert engine._prepare_vision_inputs.call_args.args[0] is original_messages
+
+    @patch("omlx.engine.vlm.extract_media_from_messages")
+    def test_video_temp_paths_cleaned_when_prepare_raises(self, mock_extract):
+        """Decoded video temp paths are cleaned if VLM formatting/prep fails."""
+        temp_video = MagicMock()
+        mock_extract.return_value = (
+            [{"role": "user", "content": "Describe"}],
+            [],
+            [],
+            [temp_video],
+        )
+
+        engine = _make_loaded_engine()
+        engine._prepare_vision_inputs = MagicMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            engine._process_chat_messages(
+                [{"role": "user", "content": "Describe"}],
+                tools=None,
+                kwargs={},
+            )
+
+        temp_video.cleanup.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # TestPrepareVisionInputs
@@ -1467,6 +1584,27 @@ class TestPrepareVisionInputs:
 
         call_kwargs = mock_prepare.call_args[1]
         assert call_kwargs.get("audio") is None
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+    @patch("mlx_vlm.utils.prepare_inputs")
+    @patch("mlx_vlm.prompt_utils.apply_chat_template")
+    def test_video_passed_to_prepare_inputs(self, mock_vlm_act, mock_prepare):
+        """When video is provided, it is passed as videos= to prepare_inputs."""
+        engine = self._setup_engine_for_vision(model_type="qwen2_5_vl")
+
+        mock_vlm_act.return_value = [{"role": "user", "content": "formatted"}]
+        mock_prepare.return_value = {
+            "input_ids": mx.array([[1, 2, 3]]),
+            "pixel_values": None,
+        }
+
+        messages = [{"role": "user", "content": "Describe this clip"}]
+        videos = ["/tmp/clip.mp4"]
+
+        engine._prepare_vision_inputs(messages, [], videos=videos)
+
+        call_kwargs = mock_prepare.call_args[1]
+        assert call_kwargs.get("videos") == videos
 
 
 class TestFormatMessagesForVLMTemplate:
@@ -1851,6 +1989,33 @@ class TestFormatMessagesForVLMTemplate:
         assert "audio" in types
         # Image range should be recorded
         assert len(image_ranges) == 1
+
+    def test_format_messages_with_video_parts(self):
+        """Video-bearing messages receive video content entries."""
+        engine = _make_loaded_engine(model_type="qwen2_5_vl")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_video", "input_video": {"url": "/tmp/clip.mp4"}},
+                    {"type": "text", "text": "Describe this clip"},
+                ],
+            },
+        ]
+
+        formatted, image_ranges = engine._format_messages_for_vlm_template(
+            messages,
+            num_images=0,
+            num_audios=0,
+            num_videos=1,
+            videos=["/tmp/clip.mp4"],
+        )
+
+        content = formatted[0]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "video"
+        assert content[0]["video"] == "/tmp/clip.mp4"
+        assert image_ranges == []
 
     def test_text_only_messages_with_zero_audio(self):
         """Text-only messages with num_audios=0 should produce string content."""
@@ -2403,20 +2568,24 @@ class TestSmartResizeTokens:
     @pytest.mark.parametrize(
         "w,h,expected",
         [
-            (512, 512, 256),     # exact multiple of patch*merge (32)
-            (336, 336, 100),     # 336 -> 336 grid 21x21 -> 441//4... rounds via factor
-            (510, 680, 336),     # non-multiple, rounded to nearest factor
-            (100, 100, 64),      # below min_pixels -> upscaled to min
+            (512, 512, 256),  # exact multiple of patch*merge (32)
+            (336, 336, 100),  # 336 -> 336 grid 21x21 -> 441//4... rounds via factor
+            (510, 680, 336),  # non-multiple, rounded to nearest factor
+            (100, 100, 64),  # below min_pixels -> upscaled to min
             (4000, 3000, 11750),  # above max_pixels -> downscaled to cap
-            (2791, 16, 106),     # thin image: branch on raw rounded dims
+            (2791, 16, 106),  # thin image: branch on raw rounded dims
         ],
     )
     def test_matches_known_grid(self, w, h, expected):
         from omlx.engine.vlm import _smart_resize_tokens
 
         got = _smart_resize_tokens(
-            h, w, _QWEN_IP.patch_size, _QWEN_IP.merge_size,
-            _QWEN_IP.min_pixels, _QWEN_IP.max_pixels,
+            h,
+            w,
+            _QWEN_IP.patch_size,
+            _QWEN_IP.merge_size,
+            _QWEN_IP.min_pixels,
+            _QWEN_IP.max_pixels,
         )
         assert got == expected
 
@@ -2437,8 +2606,7 @@ class TestReadImageDims:
     def test_http_url_returns_none(self):
         from omlx.engine.vlm import _read_image_dims
 
-        part = {"type": "image_url",
-                "image_url": {"url": "https://example.com/x.jpg"}}
+        part = {"type": "image_url", "image_url": {"url": "https://example.com/x.jpg"}}
         assert _read_image_dims(part) is None
 
     def test_local_path_returns_none_without_opening(self):
@@ -2452,8 +2620,10 @@ class TestReadImageDims:
     def test_garbage_returns_none(self):
         from omlx.engine.vlm import _read_image_dims
 
-        part = {"type": "image_url",
-                "image_url": {"url": "data:image/png;base64,not-base64!!"}}
+        part = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,not-base64!!"},
+        }
         assert _read_image_dims(part) is None
 
 
@@ -2482,11 +2652,18 @@ class TestCountImageTokensReal:
     def test_falls_back_to_upper_bound_for_unreadable(self):
         from omlx.engine.vlm import _count_image_tokens_real
 
-        messages = [{"role": "user", "content": [
-            {"type": "image_url",
-             "image_url": {"url": "https://example.com/x.jpg"}},
-            {"type": "text", "text": "hi"},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/x.jpg"},
+                    },
+                    {"type": "text", "text": "hi"},
+                ],
+            }
+        ]
         total = _count_image_tokens_real(messages, _QWEN_PROC, upper_bound=16384)
         assert total == 16384
 
@@ -2495,8 +2672,7 @@ class TestCountImageTokensReal:
 
         # Processor missing patch/merge/min/max -> never under-count.
         messages = [{"role": "user", "content": [_image_part(512, 512)]}]
-        total = _count_image_tokens_real(messages, SimpleNamespace(),
-                                         upper_bound=16384)
+        total = _count_image_tokens_real(messages, SimpleNamespace(), upper_bound=16384)
         assert total == 16384
 
     def test_no_images_returns_zero(self):
