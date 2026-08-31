@@ -177,6 +177,13 @@ class ThinkingConfig(BaseModel):
     budget_tokens: int | None = None
 
 
+class OutputConfig(BaseModel):
+    """Anthropic output controls."""
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    format: dict[str, Any] | None = None
+
+
 # =============================================================================
 # Request
 # =============================================================================
@@ -198,6 +205,7 @@ class MessagesRequest(BaseModel):
     tools: list[AnthropicTool] | None = None
     tool_choice: ToolChoice | dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
+    output_config: OutputConfig | None = None
     # Chat template kwargs (e.g. enable_thinking, reasoning_effort)
     chat_template_kwargs: dict[str, Any] | None = None
 
@@ -216,6 +224,7 @@ class TokenCountRequest(BaseModel):
     tools: list[AnthropicTool] | None = None
     tool_choice: ToolChoice | dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
+    output_config: OutputConfig | None = None
 
 
 class TokenCountResponse(BaseModel):
