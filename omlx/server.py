@@ -5712,7 +5712,14 @@ async def create_anthropic_message(
             max_tool_result_tokens = ms.max_tool_result_tokens
         merged_ct_kwargs = merge_chat_template_request_kwargs(
             ms,
-            request.chat_template_kwargs,
+            merge_reasoning_effort_chat_template_kwargs(
+                request.chat_template_kwargs,
+                (
+                    request.output_config.effort
+                    if request.output_config is not None
+                    else None
+                ),
+            ),
         )
         forced_keys = forced_ct_keys(ms)
 
@@ -6084,40 +6091,38 @@ async def count_anthropic_tokens(
             tools=request.tools,
             tool_choice=request.tool_choice,
             thinking=request.thinking,
+            output_config=request.output_config,
         )
         messages = convert_anthropic_to_internal(temp_request)
 
         # Convert tools if present
         internal_tools = convert_anthropic_tools_to_internal(request.tools)
 
-        # Apply chat template to get prompt
-        tokenizer = engine.tokenizer
-        template_kwargs = {
-            "tokenize": False,
-            "add_generation_prompt": True,
-        }
-        if internal_tools:
-            template_kwargs["tools"] = internal_tools
+        ms = get_model_settings_for_request(request.model)
+        merged_ct_kwargs = merge_chat_template_request_kwargs(
+            ms,
+            merge_reasoning_effort_chat_template_kwargs(
+                None,
+                (
+                    request.output_config.effort
+                    if request.output_config is not None
+                    else None
+                ),
+            ),
+        )
+        forced_keys = forced_ct_keys(ms)
+        if request.thinking and "enable_thinking" not in forced_keys:
+            if request.thinking.type in ("enabled", "adaptive"):
+                merged_ct_kwargs["enable_thinking"] = True
+            elif request.thinking.type == "disabled":
+                merged_ct_kwargs["enable_thinking"] = False
 
-        try:
-            prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-        except Exception as e:
-            logger.warning(
-                f"Failed to apply chat template: {e}, using simple concatenation"
-            )
-            # Fallback: simple concatenation
-            prompt = "\n".join(
-                f"{msg.get('role', 'user')}: {msg.get('content', '')}"
-                for msg in messages
-            )
-
-        # Tokenize to count tokens
-        if isinstance(prompt, str):
-            token_ids = tokenizer.encode(prompt)
-        else:
-            token_ids = prompt  # Already tokenized
-
-        input_tokens = len(token_ids)
+        input_tokens = engine.count_chat_tokens(
+            messages,
+            internal_tools,
+            chat_template_kwargs=merged_ct_kwargs or None,
+            is_partial=False,
+        )
         logger.debug(f"Token count: {input_tokens} tokens for {len(messages)} messages")
 
         return TokenCountResponse(input_tokens=input_tokens)
