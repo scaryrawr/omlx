@@ -6,7 +6,7 @@ Tests the request and response models for Anthropic Messages API,
 including content blocks, tools, and streaming events.
 """
 
-import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -26,10 +26,11 @@ from omlx.api.anthropic_models import (
     ErrorEvent,
     InputJsonDelta,
     MessageDeltaEvent,
-    MessageStartEvent,
-    MessageStopEvent,
     MessagesRequest,
     MessagesResponse,
+    MessageStartEvent,
+    MessageStopEvent,
+    OutputConfig,
     PingEvent,
     SystemContent,
     TextDelta,
@@ -431,6 +432,16 @@ class TestThinkingConfig:
         assert config.type == "enabled"
 
 
+class TestOutputConfig:
+    """Tests for Anthropic output controls."""
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+    def test_effort_levels(self, effort):
+        config = OutputConfig(effort=effort)
+
+        assert config.effort == effort
+
+
 class TestMessagesRequest:
     """Tests for MessagesRequest model."""
 
@@ -505,6 +516,7 @@ class TestMessagesRequest:
             tools=[AnthropicTool(name="test", input_schema={})],
             tool_choice=ToolChoice(type="auto"),
             thinking=ThinkingConfig(budget_tokens=5000),
+            output_config=OutputConfig(effort="medium"),
         )
 
         assert req.model == "claude-3-opus"
@@ -515,6 +527,7 @@ class TestMessagesRequest:
         assert req.top_p == 0.9
         assert req.top_k == 40
         assert req.metadata == {"user_id": "123"}
+        assert req.output_config.effort == "medium"
 
     def test_request_max_tokens_required(self):
         """Test that max_tokens is required."""
@@ -552,6 +565,15 @@ class TestTokenCounting:
         )
 
         assert req.model == "claude-3-sonnet"
+
+    def test_token_count_request_accepts_output_effort(self):
+        req = TokenCountRequest(
+            model="Qwen3.8-Flash-Next",
+            messages=[AnthropicMessage(role="user", content="Hello")],
+            output_config=OutputConfig(effort="low"),
+        )
+
+        assert req.output_config.effort == "low"
 
     def test_token_count_response(self):
         """Test creating token count response."""
