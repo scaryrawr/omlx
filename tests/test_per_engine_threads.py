@@ -269,8 +269,13 @@ class TestPerEngineExecutor:
             created_on.append((threading.get_ident(), threading.current_thread().name))
             return stream
 
-        with patch("omlx.engine_core.get_registry") as mock_registry, patch(
-            "omlx.engine_core._create_mlx_thread_stream", side_effect=create_stream
+        with (
+            patch("omlx.engine_core.get_registry") as mock_registry,
+            patch(
+                "omlx.engine_core._create_mlx_thread_stream",
+                side_effect=create_stream,
+            ),
+            patch("omlx.engine_core._final_engine_thread_reclaim"),
         ):
             mock_registry.return_value.acquire.return_value = True
 
