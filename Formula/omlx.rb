@@ -29,7 +29,7 @@ class Omlx < Formula
   # pulling omlx's optional extras into the core install step.
   resource "mlx-audio" do
     url "https://github.com/Blaizzy/mlx-audio.git",
-      revision: "d28d68c6ac4e28f7d2d66007f640b06cf3fd8ceb"
+      revision: "6b54ec6ecd99d0ad77dfa33dd129707e31bf051c"
   end
 
   # Kokoro's English G2P path uses misaki + spaCy. Bundle the spaCy
@@ -112,7 +112,6 @@ class Omlx < Formula
 
     # Install mlx-audio support into the same virtualenv.
     resource("mlx-audio").stage do
-      inreplace "pyproject.toml", '"mlx-lm==0.31.1"', '"mlx-lm>=0.31.1"'
       system(*pip_install, ".[all]")
     end
 
