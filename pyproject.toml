@@ -111,9 +111,9 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm after v0.6.17 (dda2e04), including Qwen3.8-Flash-Next
-    # continuous batching, MTP, FP8 conversion, and APC disk-cache support.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@dda2e04660eca41cc168670eee971c5bb1a15e5c",
+    # mlx-vlm v0.7.0rc0 main (4dd264c), including Qwen3.8 external PLE
+    # storage, adaptive MTP, redesigned APC, and current MLX 0.32.2 fixes.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4dd264cadde06b325b76243b58ac47c9fe0fe597",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.7 (c55324c) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
@@ -148,12 +148,11 @@ modelscope = [
     "modelscope>=1.10.0",
 ]
 audio = [
-    # mlx-audio from latest upstream main commit (d28d68c6) with Fun-ASR
-    # context support, batched logits processing, and tts/stt/sts extras.
+    # mlx-audio v0.5.1 main (6b54ec6), satisfying mlx-vlm's 0.4.8 floor.
     # tts extra: mistral-common[audio], sentencepiece
     # stt extra: sentencepiece
     # sts extra: sentencepiece, webrtcvad, setuptools<81
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@d28d68c6ac4e28f7d2d66007f640b06cf3fd8ceb",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@6b54ec6ecd99d0ad77dfa33dd129707e31bf051c",
     # WebSocket protocol impl for uvicorn (realtime STT endpoint). Pure
     # python; uvicorn's ws="auto" picks it up when installed.
     "wsproto==1.2.0",
@@ -272,9 +271,7 @@ include = ["omlx*"]
 override-dependencies = [
     "mlx==0.32.2",
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@e5baded8c1d286754edb479ffbde4655a68e2758",
-    # mlx-audio's current metadata still caps Transformers below 5.13, but
-    # current mlx-vlm requires 5.14+; its runtime paths are compatible with
-    # the newer tokenizer APIs used by the shared stack.
+    # Keep the shared engine stack on mlx-vlm/mlx-audio's current floor.
     "transformers>=5.14.0",
 ]
 
