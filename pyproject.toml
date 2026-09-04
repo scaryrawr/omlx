@@ -111,9 +111,7 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm v0.7.0rc0 main (4dd264c), including Qwen3.8 external PLE
-    # storage, adaptive MTP, redesigned APC, and current MLX 0.32.2 fixes.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4dd264cadde06b325b76243b58ac47c9fe0fe597",
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@d68a25e71e842e8924a54bb3d84d3a3b4d4a2ee1",
     "Pillow>=9.0.0",
     # dflash-mlx v0.1.10+omlx.7 (c55324c) - jundot fork of bstnxbt 0.1.10 (9ca0028).
     # Carries the trimmed-sidecar prefix cache fix (repeat-prompt L1 hits never
