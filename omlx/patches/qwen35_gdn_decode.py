@@ -203,33 +203,6 @@ def _patch_lm() -> bool:
     return True
 
 
-def _vlm_gdn_projection(q35: Any, linear: Any, inputs, target_verify):
-    """Project one VLM GDN tensor with an optional legacy verify helper."""
-    target_helper = getattr(q35, "_target_verify_linear", None)
-    if callable(target_helper):
-        return target_helper(linear, inputs, target_verify)
-    return linear(inputs)
-
-
-def _vlm_gdn_projections(q35: Any, linears: tuple[Any, ...], inputs, target_verify):
-    """Project VLM GDN inputs across old and current mlx-vlm helper APIs.
-
-    Older mlx-vlm revisions exposed ``_target_verify_linears``. Current
-    revisions replaced it with a decode-only fused helper; ordinary linear
-    calls remain the correctness fallback for target verification.
-    """
-    target_helper = getattr(q35, "_target_verify_linears", None)
-    if callable(target_helper):
-        return target_helper(linears, inputs, target_verify)
-
-    decode_helper = getattr(q35, "_decode_quantized_linears_fused", None)
-    if callable(decode_helper) and not target_verify:
-        projected = decode_helper(linears, inputs)
-        if projected is not None:
-            return projected
-    return tuple(linear(inputs) for linear in linears)
-
-
 def _patch_vlm() -> bool:
     global _VLM_PATCHED
     if _VLM_PATCHED:
@@ -245,23 +218,12 @@ def _patch_vlm() -> bool:
         return True
     original = cls.__call__
 
-    def call(
-        self,
-        inputs,
-        mask=None,
-        cache=None,
-        gdn_sink=None,
-        target_verify=False,
-    ):
+    def call(self, inputs, mask=None, cache=None):
         batch, seq_len, _ = inputs.shape
-        target_verify = target_verify or gdn_sink is not None
-        mixed_qkv, z, b, a = _vlm_gdn_projections(
-            q35,
-            (self.in_proj_qkv, self.in_proj_z, self.in_proj_b, self.in_proj_a),
-            inputs,
-            target_verify,
-        )
-        z = z.reshape(batch, seq_len, -1, self.head_v_dim)
+        mixed_qkv = self.in_proj_qkv(inputs)
+        z = self.in_proj_z(inputs).reshape(batch, seq_len, -1, self.head_v_dim)
+        b = self.in_proj_b(inputs)
+        a = self.in_proj_a(inputs)
         if cache is not None and cache[0] is not None:
             conv_state = cache[0]
             if conv_state.shape[0] != batch:
@@ -276,20 +238,16 @@ def _patch_vlm() -> bool:
             )
 
         lengths = getattr(cache, "lengths", None) if cache is not None else None
-        fused = None
-        if not target_verify:
-            fused = try_fused_conv_silu(
-                self, conv_state, mixed_qkv, mask=mask, lengths=lengths
-            )
+        if mask is not None and mask.shape[0] != batch:
+            mask = None
+        fused = try_fused_conv_silu(
+            self, conv_state, mixed_qkv, mask=mask, lengths=lengths
+        )
         if fused is not None:
             new_conv_state, conv_out = fused
-            conv_input = None
         else:
             if mask is not None:
-                if mask.shape[0] != batch:
-                    mask = None
-                else:
-                    mixed_qkv = mx.where(mask[..., None], mixed_qkv, 0)
+                mixed_qkv = mx.where(mask[..., None], mixed_qkv, 0)
             conv_input = mx.concatenate([conv_state, mixed_qkv], axis=1)
             n_keep = self.conv_kernel_size - 1
             if lengths is not None:
@@ -298,9 +256,7 @@ def _patch_vlm() -> bool:
                 new_conv_state = mx.take_along_axis(conv_input, positions, axis=1)
             else:
                 new_conv_state = mx.contiguous(conv_input[:, -n_keep:, :])
-            if gdn_sink is not None:
-                conv_out = nn.silu(self._causal_conv1d_verify(conv_input, seq_len))
-            elif (
+            if (
                 seq_len == 1
                 and conv_input.shape[1] == self.conv_kernel_size
                 and self.conv1d.weight.dtype in (mx.bfloat16, mx.float16)
@@ -320,54 +276,19 @@ def _patch_vlm() -> bool:
         state = cache[1] if cache else None
         if state is not None and state.shape[0] != batch:
             state = None
-        inv_scale = k.shape[-1] ** -0.5
-        q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
-        k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
-        initial_state = state
-        if gdn_sink is not None:
-            out, state, intermediate_states = q35._gated_delta_update_verify_decode(
-                q,
-                k,
-                v,
-                a,
-                b,
-                self.A_log,
-                self.dt_bias,
-                state,
-                mask,
-                use_kernel=not self.training,
-            )
-        else:
-            out, state = q35.gated_delta_update(
-                q,
-                k,
-                v,
-                a,
-                b,
-                self.A_log,
-                self.dt_bias,
-                state,
-                mask,
-                use_kernel=not self.training,
-            )
-            intermediate_states = None
-        if gdn_sink is not None:
-            gdn_sink.append(
-                (
-                    q,
-                    k,
-                    v,
-                    a,
-                    b,
-                    self.A_log,
-                    self.dt_bias,
-                    initial_state,
-                    mask,
-                    conv_input,
-                    self.conv_kernel_size,
-                    intermediate_states,
-                )
-            )
+        q, k = self._normalize_qk(q, k)
+        out, state = q35.gated_delta_update(
+            q,
+            k,
+            v,
+            a,
+            b,
+            self.A_log,
+            self.dt_bias,
+            state,
+            mask,
+            use_kernel=not self.training,
+        )
         if cache is not None:
             cache[0] = new_conv_state
             cache[1] = state
@@ -376,12 +297,7 @@ def _patch_vlm() -> bool:
                 q35._qwen3_5_advance_left_padding_info(cache, seq_len)
                 q35._qwen3_5_advance_lengths_info(cache, seq_len)
         out = self.norm(out, z)
-        return _vlm_gdn_projection(
-            q35,
-            self.out_proj,
-            out.reshape(batch, seq_len, -1),
-            target_verify,
-        )
+        return self.out_proj(out.reshape(batch, seq_len, -1))
 
     call._omlx_fused_decode_conv = True
     call._omlx_original = original
