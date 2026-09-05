@@ -183,6 +183,44 @@ class TestVLMStreamingCleanup:
         assert outputs[0].generated_at == 10.0
         assert outputs[0].generated_until == 12.0
 
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_MLX, reason="mlx is required")
+    @pytest.mark.parametrize("streaming", [False, True])
+    async def test_generation_preserves_terminal_token_ids(self, streaming):
+        token_ids = [10, 11, 12]
+        terminal = SimpleNamespace(
+            output_text="done",
+            output_token_ids=token_ids,
+            new_text="done",
+            prompt_tokens=1,
+            completion_tokens=3,
+            finished=True,
+            finish_reason="length",
+            tool_calls=None,
+            cached_tokens=0,
+            first_token_at=None,
+        )
+
+        class TokenCore(FakeStreamingCore):
+            async def stream_outputs(self, request_id):
+                async for partial in super().stream_outputs(request_id):
+                    partial.output_token_ids = []
+                    yield partial
+                yield terminal
+
+        core = TokenCore()
+        core.generate = AsyncMock(return_value=terminal)
+        engine = _make_loaded_engine(model_type="test-vlm")
+        engine._engine = core
+        if streaming:
+            outputs = [output async for output in engine.stream_generate("hello")]
+            assert outputs[0].tokens == []
+            result = outputs[-1]
+        else:
+            result = await engine.generate("hello")
+        assert result.tokens == token_ids
+        assert result.tokens is not token_ids
+
 
 class TestVLMToolForwarding:
     """Tool schemas must reach scheduler requests on both chat paths."""
