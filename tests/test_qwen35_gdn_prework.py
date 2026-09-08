@@ -161,6 +161,14 @@ class _Qwen4Cache:
         return self.values[index]
 
 
+def _current_verifier():
+    from mlx_vlm.models.qwen3_5.speculative_verifier import (
+        Qwen3_5BatchInvariantForward,
+    )
+
+    return Qwen3_5BatchInvariantForward()
+
+
 def test_qwen4_decode_dynamic_gate_is_strictly_b1_t1_nonverify(monkeypatch):
     monkeypatch.setattr(prework_mod, "_qwen4_decode_static_eligible", lambda _: True)
     cache = _Qwen4Cache(
@@ -262,8 +270,7 @@ def test_verify_prework_gate_excludes_qwen4_and_masks(monkeypatch):
 
 
 def test_current_verifier_hook_defaults_on_and_can_be_disabled(monkeypatch):
-    q35 = pytest.importorskip("mlx_vlm.models.qwen3_5.language")
-    verifier = q35.LanguageModel.__call__.__globals__["_EXACT_SPECULATIVE_VERIFIER"]
+    verifier = _current_verifier()
     verifier_class = type(verifier)
     original = verifier_class._gated_delta
 
@@ -360,8 +367,7 @@ def _dense_gdn_layer(value_heads):
 def test_current_verifier_eligible_block_and_rollback_tuple_are_exact(
     monkeypatch, value_heads, length, has_state
 ):
-    q35 = pytest.importorskip("mlx_vlm.models.qwen3_5.language")
-    verifier = q35.LanguageModel.__call__.__globals__["_EXACT_SPECULATIVE_VERIFIER"]
+    verifier = _current_verifier()
     verifier_class = type(verifier)
     original = verifier_class._gated_delta
     mx.random.seed(31)
