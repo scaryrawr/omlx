@@ -240,6 +240,61 @@ def test_legacy_ling_fp8_metadata_gets_only_explicit_expert_fp4_overrides(tmp_pa
     ] == {"group_size": 32, "bits": 8, "mode": "mxfp8"}
 
 
+def test_ling_vlm_sanitize_converts_fp8_and_mxfp4_sidecars():
+    from mlx_vlm.models import bailing_moe_v3_vl
+
+    config = _tiny_config(layer_plan=("kda", "kda", "mla"))
+    language = bailing_moe_v3_vl.LanguageModel(config.text_config, config)
+    fp8_weight = "model.layers.0.attention.q_proj.weight"
+    expert_weight = "model.layers.2.mlp.experts"
+    raw_weights = {
+        f"language_model.{fp8_weight}": mx.full((128, 128), 0x38, dtype=mx.uint8),
+        f"language_model.{fp8_weight}_scale_inv": mx.ones(
+            (1, 1), dtype=mx.float32
+        ),
+    }
+    for expert in range(config.text_config.num_experts):
+        key = f"{expert_weight}.{expert}.gate_proj.weight"
+        raw_weights[f"language_model.{key}"] = mx.zeros((1, 32), dtype=mx.int8)
+        raw_weights[f"language_model.{key}_scale_inv"] = mx.full(
+            (1, 2), 127, dtype=mx.uint8
+        )
+
+    converted = language.sanitize(raw_weights)
+    mxfp4_weight = "model.layers.2.mlp.switch_mlp.gate_proj.weight"
+
+    assert f"language_model.{fp8_weight}_scale_inv" not in converted
+    assert f"language_model.{mxfp4_weight}_scale_inv" not in converted
+    assert converted[f"language_model.{fp8_weight}"].dtype == mx.uint32
+    assert f"language_model.{fp8_weight[:-len('weight')]}scales" in converted
+    assert f"language_model.{fp8_weight[:-len('weight')]}biases" in converted
+    assert converted[f"language_model.{mxfp4_weight}"].dtype == mx.uint32
+    assert f"language_model.{mxfp4_weight[:-len('weight')]}scales" in converted
+
+
+def test_ling_fp8_and_mxfp4_sidecars_are_converted_for_strict_loading():
+    from omlx.patches.bailing_hybrid.fp8 import convert_ling_fp8_weights
+
+    fp8_weight = "model.layers.0.attention.q_proj.weight"
+    mxfp4_weight = "model.layers.2.mlp.switch_mlp.gate_proj.weight"
+    converted = convert_ling_fp8_weights(
+        {
+            fp8_weight: mx.full((128, 128), 0x38, dtype=mx.uint8),
+            f"{fp8_weight}_scale_inv": mx.ones((1, 1), dtype=mx.float32),
+            mxfp4_weight: mx.zeros((1, 32), dtype=mx.int8),
+            f"{mxfp4_weight}_scale_inv": mx.full((1, 2), 127, dtype=mx.uint8),
+        }
+    )
+
+    assert f"{fp8_weight}_scale_inv" not in converted
+    assert f"{mxfp4_weight}_scale_inv" not in converted
+    assert converted[fp8_weight].dtype == mx.uint32
+    assert f"{fp8_weight[:-len('weight')]}scales" in converted
+    assert f"{fp8_weight[:-len('weight')]}biases" in converted
+    assert converted[mxfp4_weight].dtype == mx.uint32
+    assert f"{mxfp4_weight[:-len('weight')]}scales" in converted
+
+
 def test_tiny_hybrid_kda_mla_forward_and_cache_schedule():
     from mlx_vlm.models import bailing_moe_v3_vl
 

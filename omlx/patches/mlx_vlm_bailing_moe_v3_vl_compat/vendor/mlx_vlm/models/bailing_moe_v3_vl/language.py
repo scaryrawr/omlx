@@ -4,6 +4,8 @@ from functools import partial
 import mlx.core as mx
 from mlx import nn
 
+from omlx.patches.bailing_hybrid.fp8 import convert_ling_fp8_weights
+
 from ..bailing_moe.language import aggregate_expert_outputs, group_expert_select
 from ..base import create_attention_mask, create_ssm_mask, scaled_dot_product_attention
 from ..cache import ArraysCache, BatchKVCache, KVCache
@@ -510,7 +512,8 @@ class LanguageModel(Qwen3VLLanguageModel):
             if layer_index >= self.args.first_k_dense_replace:
                 expert_re = re.compile(
                     rf"^{re.escape(base)}\.mlp\.experts\.(\d+)\."
-                    r"(gate_proj|up_proj|down_proj)\.(weight|scales|biases)$"
+                    r"(gate_proj|up_proj|down_proj)"
+                    r"\.(weight|scales|biases|weight_scale_inv)$"
                 )
                 grouped = {}
                 for key in list(local):
@@ -624,6 +627,7 @@ class LanguageModel(Qwen3VLLanguageModel):
                     local[f"{attention}.embed_q.weight"] = embed_q
                     local[f"{attention}.unembed_out.weight"] = unembed_out
 
+        local = convert_ling_fp8_weights(local)
         other.update({f"{prefix}{key}": value for key, value in local.items()})
         return other
 
