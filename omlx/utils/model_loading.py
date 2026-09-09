@@ -617,6 +617,17 @@ def maybe_apply_pre_load_patches(
                 model_name,
             )
 
+    if for_vlm and model_type == "bailing_moe_v3_vl":
+        from ..patches.mlx_vlm_bailing_moe_v3_vl_compat import (
+            apply_mlx_vlm_bailing_moe_v3_vl_compat_patch,
+        )
+
+        if apply_mlx_vlm_bailing_moe_v3_vl_compat_patch():
+            logger.info(
+                "Ling 3.0 Flash VL mlx-vlm compatibility patch applied for %s",
+                model_name,
+            )
+
     if for_vlm and model_type == "muse_glimmer":
         from ..patches.mlx_vlm_muse_glimmer_compat import (
             apply_mlx_vlm_muse_glimmer_compat_patch,

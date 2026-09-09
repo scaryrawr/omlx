@@ -3967,6 +3967,12 @@ def _build_model_sanitizer(
                     )
 
                     apply_mlx_vlm_inkling_compat_patch()
+                if model_type == "bailing_moe_v3_vl":
+                    from omlx.patches.mlx_vlm_bailing_moe_v3_vl_compat import (
+                        apply_mlx_vlm_bailing_moe_v3_vl_compat_patch,
+                    )
+
+                    apply_mlx_vlm_bailing_moe_v3_vl_compat_patch()
                 if model_type == "muse_glimmer":
                     from omlx.patches.mlx_vlm_muse_glimmer_compat import (
                         apply_mlx_vlm_muse_glimmer_compat_patch,
