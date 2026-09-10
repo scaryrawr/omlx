@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from unittest.mock import patch
 
 import pytest
@@ -238,6 +239,101 @@ def test_legacy_ling_fp8_metadata_gets_only_explicit_expert_fp4_overrides(tmp_pa
     assert config["quantization"][
         "language_model.model.layers.3.attention.dense"
     ] == {"group_size": 32, "bits": 8, "mode": "mxfp8"}
+
+
+def test_ling_vlm_sanitize_converts_fp8_and_mxfp4_sidecars():
+    from mlx_vlm.models import bailing_moe_v3_vl
+
+    config = _tiny_config(layer_plan=("kda", "kda", "mla"))
+    language = bailing_moe_v3_vl.LanguageModel(config.text_config, config)
+    fp8_weight = "model.layers.0.attention.q_proj.weight"
+    expert_weight = "model.layers.2.mlp.experts"
+    raw_weights = {
+        f"language_model.{fp8_weight}": mx.full((128, 128), 0x38, dtype=mx.uint8),
+        f"language_model.{fp8_weight}_scale_inv": mx.ones(
+            (1, 1), dtype=mx.float32
+        ),
+    }
+    for expert in range(config.text_config.num_experts):
+        key = f"{expert_weight}.{expert}.gate_proj.weight"
+        raw_weights[f"language_model.{key}"] = mx.zeros((1, 32), dtype=mx.int8)
+        raw_weights[f"language_model.{key}_scale_inv"] = mx.full(
+            (1, 2), 127, dtype=mx.uint8
+        )
+
+    converted = language.sanitize(raw_weights)
+    mxfp4_weight = "model.layers.2.mlp.switch_mlp.gate_proj.weight"
+
+    assert f"language_model.{fp8_weight}_scale_inv" not in converted
+    assert f"language_model.{mxfp4_weight}_scale_inv" not in converted
+    assert converted[f"language_model.{fp8_weight}"].dtype == mx.uint32
+    assert f"language_model.{fp8_weight[:-len('weight')]}scales" in converted
+    assert f"language_model.{fp8_weight[:-len('weight')]}biases" in converted
+    assert converted[f"language_model.{mxfp4_weight}"].dtype == mx.uint32
+    assert f"language_model.{mxfp4_weight[:-len('weight')]}scales" in converted
+
+
+def test_ling_fp8_and_mxfp4_checkpoint_loads_strictly(tmp_path):
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+    from mlx_vlm.models import bailing_moe_v3_vl
+    from mlx_vlm.utils import load_model
+
+    config = _tiny_config(layer_plan=("kda", "kda", "mla"))
+    text = config.text_config
+    text.hidden_size = 128
+    text.intermediate_size = 128
+    text.num_attention_heads = 2
+    text.num_key_value_heads = 2
+    text.head_dim = 64
+    text.moe_intermediate_size = 64
+    text.moe_shared_expert_intermediate_size = 64
+    source = bailing_moe_v3_vl.Model(config)
+    weights = dict(tree_flatten(source.parameters()))
+
+    fp8_weight = "language_model.model.layers.0.attention.q_proj.weight"
+    weights[fp8_weight] = mx.to_fp8(weights[fp8_weight].astype(mx.float32))
+    weights[f"{fp8_weight}_scale_inv"] = mx.ones((1, 1), dtype=mx.float32)
+
+    expert_base = "language_model.model.layers.2.mlp"
+    for projection in ("gate_proj", "up_proj", "down_proj"):
+        runtime_key = f"{expert_base}.switch_mlp.{projection}.weight"
+        expert_weights = weights.pop(runtime_key)
+        for expert, expert_weight in enumerate(expert_weights):
+            packed, scales = mx.quantize(
+                expert_weight,
+                group_size=32,
+                bits=4,
+                mode="mxfp4",
+            )
+            checkpoint_key = f"{expert_base}.experts.{expert}.{projection}.weight"
+            weights[checkpoint_key] = packed.view(mx.int8)
+            weights[f"{checkpoint_key}_scale_inv"] = scales
+
+    serialized_config = asdict(config)
+    serialized_config.pop("quantization", None)
+    serialized_config["quantization_config"] = {
+        "quant_method": "fp8",
+        "fmt": "e4m3",
+        "weight_block_size": [128, 128],
+        "routed_experts_quant_method": "mxfp4",
+        "routed_experts_group_size": 32,
+    }
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    (tmp_path / "config.json").write_text(json.dumps(serialized_config))
+
+    loaded = load_model(tmp_path, strict=True)
+
+    assert isinstance(
+        loaded.language_model.model.layers[0].attention.q_proj,
+        nn.QuantizedLinear,
+    )
+    for projection in ("gate_proj", "up_proj", "down_proj"):
+        module = getattr(
+            loaded.language_model.model.layers[2].mlp.switch_mlp,
+            projection,
+        )
+        assert module.mode == "mxfp4"
 
 
 def test_tiny_hybrid_kda_mla_forward_and_cache_schedule():

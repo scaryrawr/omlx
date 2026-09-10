@@ -59,6 +59,7 @@ For manual server smoke tests, remember `omlx serve` persists non-default CLI fl
 - For VLM speculative decoding, keep standalone MTP drafter artifacts such as `gemma4_assistant`, `gemma4_unified_assistant`, and `qwen3_5_mtp` out of normal model discovery; they are loaded through parent VLM drafter paths and are not chat-capable models.
 - In SpecPrefill chunk selection, reduce chunk scores in one MLX operation and transfer the score vector once; per-chunk `.item()` calls serialize GPU work. Preserve deterministic Python tie ordering.
 - For model-family patches under `omlx/patches/`, keep changes narrow and covered by focused regression tests. These files mirror upstream behavior and can be brittle across dependency updates.
+- When a model-family patch changes checkpoint sanitization or quantization metadata, test a complete tiny synthetic checkpoint through the real loader with `strict=True`; helper-only conversion tests do not catch config normalization, module replacement, or unexpected/missing binding keys.
 - When changing cache, scheduler, streaming, adapters, or tool-call behavior, add focused tests for token accounting, finish reasons, cancellation/disconnect behavior, cache reuse/regression paths, and protocol output shape.
 - Keep streaming `RequestOutput.output_token_ids` empty until the terminal output to avoid quadratic cumulative-list copies; streaming consumers should use `new_token_ids`, while terminal and non-streaming consumers receive the complete token sequence.
 

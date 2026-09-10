@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional, Tuple, Union
 import mlx.core as mx
 import mlx.nn as nn
 
+from omlx.patches.bailing_hybrid.fp8 import convert_ling_fp8_weights
+
 from .activations import swiglu
 from .base import (
     BaseModelArgs,
@@ -795,97 +797,11 @@ class Model(nn.Module):
                 weights[f"{prefix}.attention.embed_q.weight"] = wk
                 weights[f"{prefix}.attention.unembed_out.weight"] = wv
 
-        return self._convert_fp8_block_weights(weights)
+        return convert_ling_fp8_weights(weights, self.args.quantization_config)
 
     def _convert_fp8_block_weights(self, weights):
-        """Convert Ling's published FP8 and MXFP4 tensor layouts for MLX.
-
-        Published FP8 checkpoints use a float32 ``weight_scale_inv`` grid,
-        normally with 128x128 blocks. Metal cannot multiply that layout
-        directly. Converting one stacked tensor at a time keeps peak memory
-        bounded while preserving the checkpoint's compact runtime footprint.
-
-        The mixed FP4 checkpoint stores routed experts as two packed E2M1
-        values per int8 byte with one E8M0 scale per 32 logical values. That is
-        MLX's native MXFP4 layout, so only reinterpret the packed bytes and
-        rename the scale sidecar instead of dequantizing the experts.
-        """
-        quantization_config = self.args.quantization_config or {}
-        block_size = quantization_config.get("weight_block_size", (128, 128))
-        if not isinstance(block_size, (list, tuple)) or len(block_size) != 2:
-            block_size = (128, 128)
-        block_rows, block_cols = (int(block_size[0]), int(block_size[1]))
-
-        scale_keys = [key for key in weights if key.endswith(".weight_scale_inv")]
-        for scale_key in scale_keys:
-            weight_key = scale_key[: -len("_scale_inv")]
-            if weight_key not in weights:
-                continue
-
-            source_weight = weights[weight_key]
-            is_routed_mxfp4 = (
-                quantization_config.get("routed_experts_quant_method") == "mxfp4"
-                and ".mlp.switch_mlp." in weight_key
-                and source_weight.dtype == mx.int8
-            )
-            if is_routed_mxfp4:
-                scale = weights.pop(scale_key)
-                packed = weights.pop(weight_key).view(mx.uint32)
-                base = weight_key[: -len("weight")]
-                weights[weight_key] = packed
-                weights[f"{base}scales"] = scale
-                mx.eval(packed, scale)
-                continue
-
-            if source_weight.dtype != mx.uint8:
-                continue
-
-            scale = weights.pop(scale_key)
-            if scale.dtype == mx.uint8:
-                scale = mx.power(
-                    mx.array(2.0, dtype=mx.float32),
-                    scale.astype(mx.float32) - 127.0,
-                )
-            else:
-                scale = scale.astype(mx.float32)
-            weight = mx.from_fp8(weights.pop(weight_key), dtype=mx.float32)
-            out_dim, in_dim = weight.shape[-2:]
-            target_out = scale.shape[-2] * block_rows
-            target_in = scale.shape[-1] * block_cols
-            if target_out < out_dim or target_in < in_dim:
-                raise ValueError(
-                    f"Invalid FP8 block scale for {weight_key}: weight "
-                    f"{weight.shape}, scale {scale.shape}, block {block_size}"
-                )
-
-            pad_out = target_out - out_dim
-            pad_in = target_in - in_dim
-            if pad_out or pad_in:
-                padding = [(0, 0)] * (weight.ndim - 2)
-                padding.extend(((0, pad_out), (0, pad_in)))
-                weight = mx.pad(weight, padding)
-
-            lead = weight.shape[:-2]
-            weight = weight.reshape(
-                *lead,
-                scale.shape[-2],
-                block_rows,
-                scale.shape[-1],
-                block_cols,
-            )
-            weight = weight * scale[..., :, None, :, None]
-            weight = weight.reshape(*lead, target_out, target_in)
-            weight = weight[..., :out_dim, :in_dim].astype(mx.bfloat16)
-
-            quantized, scales, biases = mx.quantize(weight, group_size=64, bits=8)
-            weights[weight_key] = quantized
-            base = weight_key[: -len("weight")]
-            weights[f"{base}scales"] = scales
-            weights[f"{base}biases"] = biases
-            mx.eval(quantized, scales, biases)
-            mx.clear_cache()
-
-        return weights
+        """Backward-compatible wrapper for Ling's shared FP8 conversion."""
+        return convert_ling_fp8_weights(weights, self.args.quantization_config)
 
     @property
     def quant_predicate(self):
