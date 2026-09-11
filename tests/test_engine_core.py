@@ -1373,6 +1373,18 @@ class TestGlobalMLXExecutor:
         executor2 = get_mlx_executor()
         assert executor1 is executor2
 
+    def test_global_executor_does_not_rebind_mlx_lm_generation_stream(self):
+        """Initializing cleanup/load work must not leak its worker stream."""
+        import importlib
+
+        from omlx.engine_core import get_mlx_executor
+
+        generate = importlib.import_module("mlx_lm.generate")
+        original = generate.generation_stream
+        get_mlx_executor().submit(lambda: None).result()
+
+        assert generate.generation_stream is original
+
     def test_engines_have_per_engine_executors(self, mock_model, mock_tokenizer):
         """Each EngineCore must have its own executor (#1248)."""
         with patch("omlx.engine_core.get_registry") as mock_registry:

@@ -34,6 +34,7 @@ from ..qwen3_5.language import (
 )
 from ..qwen3_5.speculative_verifier import Qwen3_5ExactSpeculativeVerifier
 from ..qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+from . import hc_fused
 from .cache import ArraysCache, BatchKVCache, KVCache, QuantizedKVCache, dynamic_roll
 from .config import ModelConfig, TextConfig
 from .qsa_fast import (
@@ -41,7 +42,6 @@ from .qsa_fast import (
     contiguous_causal_gathered_qsa_decode,
     pool_completed_index_keys,
 )
-from . import hc_fused
 
 logger = logging.getLogger(__name__)
 
@@ -2410,12 +2410,19 @@ class DiskBackedShardedEmbedding(nn.Module):
         touched = [int(index) for index in np.unique(shard)]
         specs = [self._shard_specs[index] for index in touched]
         bits, group_size = specs[0][3], specs[0][4]
-        families = [0] if bits is None else [0, 1, 2]
+        families = [
+            family for family, key in enumerate(specs[0][:3]) if key is not None
+        ]
+        family_layout = tuple(key is None for key in specs[0][:3])
         dtypes = {
             family: self._tensor_readers[specs[0][family]].tensor_dtype(specs[0][family])
             for family in families
         }
-        if any(spec[3:] != (bits, group_size) for spec in specs) or any(
+        if any(
+            spec[3:] != (bits, group_size)
+            or tuple(key is None for key in spec[:3]) != family_layout
+            for spec in specs
+        ) or any(
             self._tensor_readers[spec[family]].tensor_dtype(spec[family]) != dtypes[family]
             for spec in specs
             for family in families
@@ -2493,13 +2500,14 @@ class DiskBackedShardedEmbedding(nn.Module):
         self.last_uploads = len(arrays)
         values = arrays[0]
         if bits is not None:
+            biases = arrays[2] if len(arrays) == 3 else None
             values = mx.dequantize(
                 values,
                 arrays[1],
-                arrays[2],
+                biases,
                 group_size=group_size,
                 bits=bits,
-                mode="affine",
+                mode="affine" if biases is not None else "mxfp4",
             )
         values = values.astype(mx.bfloat16) * self.weight_scale
         return values.reshape(*shape, self.dims)

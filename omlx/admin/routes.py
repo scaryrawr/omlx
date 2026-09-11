@@ -41,8 +41,8 @@ from ..model_settings import (
     MAX_LIGHTNING_MTP_DRAFT_TOKENS,
     ane_prefill_backend,
     ane_prefill_fraction,
-    validate_ane_prefill,
     merge_chat_template_kwargs,
+    validate_ane_prefill,
 )
 from ..settings import BURST_DECODE_MODES, SubKeyEntry, burst_decode_env
 from ..utils.release_check import normalize_update_channel, select_latest_release

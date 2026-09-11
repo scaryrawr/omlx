@@ -1598,13 +1598,16 @@ def test_disk_backed_mxfp4_ple_supports_scale_only_shards(tmp_path):
         dims=160,
         num_shards=2,
     )
-    values = embedding(mx.array([[1, 6]], dtype=mx.int32))
+    indices = mx.array([[1, 6]], dtype=mx.int32)
+    embedding.prefetch(indices)
+    values = embedding(indices)
     mx.eval(values)
     expected = mx.stack([expected_rows[0][1], expected_rows[1][2]])[None]
 
     assert mx.allclose(values, expected, atol=2e-2, rtol=2e-2).item()
     assert embedding.last_touched_shards == (0, 1)
     assert embedding.rows_read == 2
+    assert embedding.last_prefetch_hit is True
     assert embedding._shard_specs[0][2:] == (None, 4, 32)
     embedding.close()
 
@@ -1957,6 +1960,30 @@ def test_prompt_loop_without_a_prefetch_hook_is_unchanged():
             forwards.append(tokens.shape[1])
 
     PromptProcessingBatch(Model(), uids=[0], caches=[[]], prefill_step_size=3).prompt([list(range(7))])
+    assert forwards == [3, 3, 1]
+
+
+def test_prompt_loop_ignores_adapter_noop_prefetch_hook():
+    compat.apply_mlx_vlm_qwen4_exp_compat_patch()
+    from mlx_lm.generate import PromptProcessingBatch
+
+    forwards = []
+
+    class LanguageModel:
+        pass
+
+    class Adapter:
+        _language_model = LanguageModel()
+
+        def __call__(self, tokens, cache=None):
+            forwards.append(tokens.shape[1])
+
+        def prefetch_ple(self, next_ids, current_ids):
+            raise AssertionError("adapter no-op hook must not enable the Qwen4 loop")
+
+    PromptProcessingBatch(
+        Adapter(), uids=[0], caches=[[]], prefill_step_size=3
+    ).prompt([list(range(7))])
     assert forwards == [3, 3, 1]
 
 
