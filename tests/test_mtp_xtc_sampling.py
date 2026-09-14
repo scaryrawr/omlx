@@ -16,7 +16,6 @@ from omlx.utils.sampling import make_sampler
 @pytest.fixture
 def scheduler_probe(monkeypatch):
     mtp.apply()
-    monkeypatch.setenv("OMLX_MTP_ROWWISE_BATCH", "1")
     model = Model(
         ModelArgs(
             model_type="llama",
@@ -43,14 +42,12 @@ def scheduler_probe(monkeypatch):
     scheduler.batch_generator = None
     observed = []
     original = mtp._is_mtp_eligible
-    original_batch = mtp._is_mtp_batch_eligible
 
     def observe(batch):
-        observed.append((list(batch.uids), original(batch), original_batch(batch)))
+        observed.append((list(batch.uids), original(batch)))
         return False
 
     monkeypatch.setattr(mtp, "_is_mtp_eligible", observe)
-    monkeypatch.setattr(mtp, "_is_mtp_batch_eligible", lambda batch: False)
     try:
         yield scheduler, observed
     finally:
@@ -93,8 +90,8 @@ def test_reused_generator_follows_request_sampler(scheduler_probe, first, second
         else:
             pytest.fail("request did not finish")
         assert observed
-        assert all(rows == [uid] for rows, _, _ in observed)
-        assert all(single == (probability == 0.0) for _, single, _ in observed)
+        assert all(rows == [uid] for rows, _ in observed)
+        assert all(single == (probability == 0.0) for _, single in observed)
 
 
 @pytest.mark.parametrize("xtc_first", [False, True])
@@ -115,13 +112,13 @@ def test_late_join_mixed_batch_and_filter(scheduler_probe, xtc_first):
     batch = generator._generation_batch
     assert batch.uids == [first, second]
     generator.next()
-    assert observed[-1] == ([first, second], False, False)
+    assert observed[-1] == ([first, second], False)
     assert "XTC" in mtp._ineligibility_reason(batch)
     # Removing the XTC row must not leave a sticky generator-wide veto.
     remaining = second if xtc_first else first
     batch.filter([batch.uids.index(remaining)])
     generator.next()
-    assert observed[-1] == ([remaining], True, False)
+    assert observed[-1] == ([remaining], True)
 
 
 def test_greedy_ignores_xtc(scheduler_probe):
@@ -131,7 +128,7 @@ def test_greedy_ignores_xtc(scheduler_probe):
         scheduler.batch_generator.next()
         if observed:
             break
-    assert observed[-1] == ([uid], True, False)
+    assert observed[-1] == ([uid], True)
 
 
 @pytest.mark.parametrize("override", [None, 0.0, 1.0])
