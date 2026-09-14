@@ -1297,7 +1297,7 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
     is_target_shard = _model_shard_matcher(model_dir)
     mtp_sidecar = None
     mtp_loaded = False
-    if model_type == QWEN4_EXP_MODEL_TYPE:
+    if model_type == "qwen4_exp" and (model_dir / "mtp" / "config.json").is_file():
         from ..utils.model_loading import _qwen4_mtp_sidecar_path
 
         candidate_sidecar = _qwen4_mtp_sidecar_path(model_dir)
@@ -2766,12 +2766,11 @@ class VLMBatchedEngine(BaseEngine):
             false_attrs=("_grammar_compiler_init_attempted",),
         )
 
-        if engine:
-            if hasattr(engine, "engine") and engine.engine is not None:
-                try:
-                    cancelled = await _close_engine_core(engine.engine)
-                except Exception as e:
-                    logger.warning(f"Error closing engine: {e}")
+        if engine and hasattr(engine, "engine") and engine.engine is not None:
+            try:
+                cancelled = await _close_engine_core(engine.engine)
+            except Exception as e:
+                logger.warning(f"Error closing engine: {e}")
         self._diffusion_cancel_events = set()
         self._diffusion_active_requests = 0
         self._loaded = False

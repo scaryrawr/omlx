@@ -166,18 +166,19 @@ from .api.responses_utils import (
 )
 from .api.thinking import ThinkingParser, extract_thinking, prompt_opens_thinking
 from .api.tool_calling import (
-    ToolCallStreamSegment,
     ToolCallStreamFilter,
+    ToolCallStreamSegment,
     build_json_system_prompt,
     convert_tools_for_template,
     enrich_tool_params_for_gemma4,
     extract_tool_calls_with_thinking,
-    parse_tool_calls,
     parse_json_output,
+    parse_tool_calls,
     restore_gemma4_param_names,
     sanitize_tool_call_markup,
 )
 from .api.utils import (
+    cache_reasoning_output,
     clean_special_tokens,
     detect_and_strip_partial,
     extract_multimodal_content,
@@ -185,7 +186,6 @@ from .api.utils import (
     has_nonleading_system_message,
     merge_reasoning_effort_chat_template_kwargs,
     prepare_system_messages_for_template,
-    cache_reasoning_output,
     uses_native_reasoning_content,
 )
 from .engine import BaseEngine, VLMBatchedEngine

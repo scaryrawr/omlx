@@ -332,6 +332,7 @@ class EnginePool:
         self._unloading_models: set[str] = set()
         self._failed_load_reclaim_tasks: set[asyncio.Task[None]] = set()
         self._failed_load_reclaim_task: asyncio.Task[None] | None = None
+        self._engine_unload_tasks: dict[str, asyncio.Task[None]] = {}
         self._shutting_down = False
         self.configure_hot_cache_budget()
 
@@ -2674,23 +2675,48 @@ class EnginePool:
         self._deferred_mlx_cleanup = False
         self._wake_process_memory_enforcer()
 
+    def _finish_engine_unload_task(
+        self,
+        model_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        if self._engine_unload_tasks.get(model_id) is task:
+            self._engine_unload_tasks.pop(model_id, None)
+        self._unloading_models.discard(model_id)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.error("Engine unload task was cancelled for '%s'", model_id)
+        except Exception:
+            logger.exception("Engine unload task failed for '%s'", model_id)
+
+    async def _drain_engine_unload_tasks(self) -> None:
+        while self._engine_unload_tasks:
+            tasks = tuple(self._engine_unload_tasks.values())
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _unload_engine(self, model_id: str) -> None:
         if model_id in self._unloading_models:
             raise ModelBusyError(model_id, "unload while teardown is in progress")
         self._unloading_models.add(model_id)
         task = asyncio.create_task(self._stop_and_unload_engine(model_id))
-        cancelled = False
+        self._engine_unload_tasks[model_id] = task
+        task.add_done_callback(
+            lambda completed, mid=model_id: self._finish_engine_unload_task(
+                mid, completed
+            )
+        )
         try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
             while not task.done():
                 try:
                     await asyncio.shield(task)
                 except asyncio.CancelledError:
-                    cancelled = True
-            task.result()
-        finally:
-            self._unloading_models.discard(model_id)
-        if cancelled:
-            raise asyncio.CancelledError
+                    continue
+                except Exception:
+                    break
+            raise
 
     async def _stop_and_unload_engine(self, model_id: str) -> None:
         """
@@ -3596,6 +3622,7 @@ class EnginePool:
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         await self._drain_lease_release_tasks()
+        await self._drain_engine_unload_tasks()
         async with self._lock:
             for model_id in list(self._entries.keys()):
                 entry = self._entries.get(model_id)
