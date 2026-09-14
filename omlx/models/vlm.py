@@ -19,8 +19,8 @@ Architecture:
     chunk size requested by BatchGenerator.
 """
 
-import os
 import logging
+import os
 from typing import Any
 
 import mlx.core as mx
