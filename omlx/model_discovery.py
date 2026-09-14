@@ -108,6 +108,7 @@ VLM_MODEL_TYPES = {
     "youtu_vl",
     "inkling",
     "inkling_mm_model",  # config model_type of Inkling Small checkpoints
+    "bailing_moe_v3_vl",
     "muse_glimmer",
     "glm5_next",
 }
@@ -205,6 +206,7 @@ VLM_ARCHITECTURES = {
     "Florence2ForConditionalGeneration",
     "UnlimitedOCRForCausalLM",  # baidu/Unlimited-OCR
     "InklingForConditionalGeneration",  # thinkingmachines/Inkling-Small
+    "BailingMoeV3VLForConditionalGeneration",  # Ling 3.0 Flash VL
     "MuseGlimmerForConditionalGeneration",  # meta-models/Muse-Glimmer-30B
     "Glm5NextForConditionalGeneration",  # zai-org/GLM-5.3-Flash
 }
