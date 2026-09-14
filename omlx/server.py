@@ -181,6 +181,7 @@ from .api.tool_calling import (
     sanitize_tool_call_markup,
 )
 from .api.utils import (
+    cache_reasoning_output,
     clean_special_tokens,
     detect_and_strip_partial,
     extract_multimodal_content,
@@ -188,7 +189,6 @@ from .api.utils import (
     has_nonleading_system_message,
     merge_reasoning_effort_chat_template_kwargs,
     prepare_system_messages_for_template,
-    cache_reasoning_output,
     uses_native_reasoning_content,
 )
 from .engine import BaseEngine, VLMBatchedEngine
