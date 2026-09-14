@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,19 @@ MINIMAX_M3_VL_MODEL_TYPE = "minimax_m3_vl"
 MINIMAX_M3_MODEL_TYPES = {"minimax_m3", MINIMAX_M3_VL_MODEL_TYPE}
 
 DIFFUSION_PREFILL_STEP_SIZE = 2048
+
+
+def _warmup_bailing_moe_v3_vl(model: Any, token_id: int = 0) -> bool:
+    """Compile Ling VL's KDA prefill and decode graphs before serving."""
+    if getattr(model, "model_type", None) != "bailing_moe_v3_vl":
+        return False
+
+    cache = model.make_cache()
+    prefill = model(mx.full((1, 8), token_id, dtype=mx.int32), cache=cache)
+    mx.eval(prefill)
+    decode = model(mx.array([[token_id]], dtype=mx.int32), cache=cache)
+    mx.eval(decode)
+    return True
 
 
 def _report_native_vlm_mtp_readiness(
@@ -2331,6 +2345,19 @@ class VLMBatchedEngine(BaseEngine):
         # mlx-vlm models now handle per-sequence mx.array offsets natively
         # and batched decode is fixed, so no separate mlx-lm decode model needed.
         self._adapter = VLMModelAdapter(self._vlm_model)
+
+        warmup_started = time.perf_counter()
+        warmed_up = await loop.run_in_executor(
+            get_mlx_executor(),
+            _warmup_bailing_moe_v3_vl,
+            self._adapter,
+            getattr(self._tokenizer, "bos_token_id", None) or 0,
+        )
+        if warmed_up:
+            logger.info(
+                "Ling VL inference warmup completed in %.2fs",
+                time.perf_counter() - warmup_started,
+            )
 
         # Native-head MTP uses this same adapter and mlx-lm BatchGenerator;
         # it is distinct from the external ``vlm_mtp`` assistant drafter.

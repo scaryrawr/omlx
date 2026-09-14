@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -348,6 +349,37 @@ def test_tiny_hybrid_kda_mla_forward_and_cache_schedule():
     assert config.text_config.layer_plan == ("kda", "mla")
     assert [type(item).__name__ for item in cache] == ["ArraysCache", "KVCache"]
     assert logits.shape == (1, 2, 64)
+
+
+def test_ling_vl_warmup_compiles_prefill_and_decode_paths():
+    from omlx.engine.vlm import _warmup_bailing_moe_v3_vl
+
+    class FakeAdapter:
+        model_type = "bailing_moe_v3_vl"
+
+        def __init__(self):
+            self.calls = []
+            self.cache = object()
+
+        def make_cache(self):
+            return self.cache
+
+        def __call__(self, tokens, cache):
+            self.calls.append((tokens.shape, cache))
+            return mx.zeros((*tokens.shape, 4))
+
+    adapter = FakeAdapter()
+
+    assert _warmup_bailing_moe_v3_vl(adapter, token_id=7) is True
+    assert adapter.calls == [((1, 8), adapter.cache), ((1, 1), adapter.cache)]
+
+
+def test_ling_vl_warmup_skips_other_model_types():
+    from omlx.engine.vlm import _warmup_bailing_moe_v3_vl
+
+    model = SimpleNamespace(model_type="qwen3_5")
+
+    assert _warmup_bailing_moe_v3_vl(model) is False
 
 
 @pytest.mark.parametrize(
