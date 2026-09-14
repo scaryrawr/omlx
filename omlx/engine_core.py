@@ -89,35 +89,20 @@ def _final_global_mlx_thread_reclaim() -> None:
 
 
 def _init_mlx_thread() -> None:
-    """Replace generation_stream with a thread-local stream on the executor thread.
+    """Give the global executor its own default stream without leaking it.
 
-    mlx-lm's module-level ``generation_stream`` is created at import time in
-    whichever thread imported it first (the main thread at server startup).
-    Arrays produced inside ``with mx.stream(generation_stream):`` blocks carry
-    that stream reference.  If the stream was created on the main thread,
-    subsequent ``.item()`` / ``mx.synchronize()`` calls from the executor
-    thread fail with "There is no Stream(gpu, 0) in current thread".
-
-    Fix: create a thread-local stream HERE and replace the module-level
-    ``generation_stream`` in mlx_lm.generate and omlx.scheduler.
+    Generation schedulers pass their per-engine stream directly to
+    ``BatchGenerator``. Rebinding mlx-lm's module-level fallback here would
+    expose this worker-owned stream to unrelated main-thread generators after
+    the executor is initialized.
     """
-    import sys
-
     import mlx.core as mx
 
     stream = mx.new_stream(mx.default_device())
     if hasattr(mx, "set_default_stream"):
         mx.set_default_stream(stream)
 
-    gen_mod = sys.modules.get("mlx_lm.generate")
-    if gen_mod is not None:
-        gen_mod.generation_stream = stream
-
-    sched_mod = sys.modules.get("omlx.scheduler")
-    if sched_mod is not None:
-        sched_mod.generation_stream = stream
-
-    logger.info(f"MLX executor thread initialized: generation_stream = {stream}")
+    logger.info("MLX global executor thread initialized: stream = %s", stream)
 
 
 def _create_mlx_thread_stream() -> Any:

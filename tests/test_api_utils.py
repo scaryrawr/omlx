@@ -58,7 +58,6 @@ from omlx.api.utils import (
     prepare_system_messages_for_template,
     uses_native_reasoning_content,
 )
-from omlx.exceptions import InvalidRequestError
 from omlx.model_settings import ModelSettings
 
 

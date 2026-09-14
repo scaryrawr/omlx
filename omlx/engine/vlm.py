@@ -47,9 +47,9 @@ from ..api.utils import (
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError, ModelUnavailableError
 from ..model_discovery import model_unavailable_reason
+from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..models.vlm import VLMModelAdapter
 from ..patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
-from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
 from ..utils.generation_config import load_generation_config_token_ids
 from ..utils.image import (
@@ -1287,6 +1287,7 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
 
     import mlx_vlm.utils as _vu
     import safetensors
+
     from ..patches.mlx_vlm_qwen4_exp_compat.ple_load_resources import ple_load_resources
 
     original_safe_open = safetensors.safe_open
@@ -1295,7 +1296,7 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
     is_target_shard = _model_shard_matcher(model_dir)
     mtp_sidecar = None
     mtp_loaded = False
-    if model_type == QWEN4_EXP_MODEL_TYPE:
+    if model_type == "qwen4_exp" and (model_dir / "mtp" / "config.json").is_file():
         from ..utils.model_loading import _qwen4_mtp_sidecar_path
 
         candidate_sidecar = _qwen4_mtp_sidecar_path(model_dir)
