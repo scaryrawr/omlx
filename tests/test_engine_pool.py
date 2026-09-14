@@ -3681,7 +3681,7 @@ class TestMemorySettleBarrier:
             await allow_failure.wait()
             raise RuntimeError("teardown failed")
 
-        pool._unload_engine_impl = failing_unload
+        pool._stop_and_unload_engine = failing_unload
         caller = asyncio.create_task(pool._unload_engine("model-a"))
         await unload_started.wait()
 
@@ -3691,7 +3691,7 @@ class TestMemorySettleBarrier:
             await caller
         await asyncio.sleep(0)
         assert pool._engine_unload_tasks == {}
-        assert pool._engine_unload_tasks == {}
+        assert pool._unloading_models == set()
 
     @pytest.mark.asyncio
     async def test_settle_takes_multiple_rounds(self, pool_with_loaded_model):
