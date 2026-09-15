@@ -19,6 +19,28 @@ def _native_available() -> bool:
     )
 
 
+def test_qwen4_sparse_gqa_benchmark_reference_uses_current_gather_path():
+    from benchmarks.bench_qwen4_qsa_sparse_gqa import _portable
+
+    queries = mx.zeros((1, 24, 1, 256), dtype=mx.float32)
+    keys = mx.zeros((1, 2, 2, 256), dtype=mx.float32)
+    values = mx.stack(
+        (
+            mx.stack((mx.full((256,), 2.0), mx.full((256,), 4.0))),
+            mx.stack((mx.full((256,), 6.0), mx.full((256,), 10.0))),
+        )
+    )[None]
+    selected = mx.array([[[0, 1]]], dtype=mx.int32)
+    selected_valid = mx.ones(selected.shape, dtype=mx.bool_)
+
+    output = _portable(queries, keys, values, selected, selected_valid)
+    mx.eval(output)
+
+    assert output.shape == (1, 1, 24, 256)
+    assert mx.array_equal(output[0, 0, :12], mx.full((12, 256), 3.0)).item()
+    assert mx.array_equal(output[0, 0, 12:], mx.full((12, 256), 8.0)).item()
+
+
 def test_qwen4_sparse_gqa_symbol_is_part_of_extension_abi():
     assert "qwen4_qsa_sparse_gqa_attention" in fast.NATIVE_SYMBOLS
 
