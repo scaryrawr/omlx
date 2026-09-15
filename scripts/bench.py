@@ -56,9 +56,19 @@ class NativeMTPMode(StrEnum):
     BOTH = "both"
 
 
+PLEStorage = Literal["resident", "ssd"]
+
+
+class Qwen4PLEMode(StrEnum):
+    RESIDENT = "resident"
+    SSD = "ssd"
+    BOTH = "both"
+
+
 @dataclass(frozen=True)
 class BenchmarkVariant:
-    name: Literal["native-mtp=off", "native-mtp=on"]
+    native_mtp_enabled: bool
+    ple_storage: PLEStorage | None
     model_settings: ModelSettings
 
 
@@ -119,6 +129,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=NativeMTPMode.OFF,
         help="Native MTP variant(s): off (default), on, or both.",
     )
+    p.add_argument(
+        "--qwen4-ple",
+        type=Qwen4PLEMode,
+        choices=tuple(Qwen4PLEMode),
+        default=None,
+        help="Qwen4 PLE storage variant(s): resident, ssd, or both.",
+    )
     return p
 
 
@@ -160,51 +177,72 @@ def _short_name(path: str) -> str:
     return name
 
 
-def _native_mtp_variants(mode: NativeMTPMode) -> tuple[BenchmarkVariant, ...]:
-    if mode is NativeMTPMode.ON:
-        return (
-            BenchmarkVariant(
-                name="native-mtp=on",
-                model_settings=ModelSettings(mtp_enabled=True),
+def _benchmark_variants(
+    native_mtp_mode: NativeMTPMode,
+    qwen4_ple_mode: Qwen4PLEMode | None,
+) -> tuple[BenchmarkVariant, ...]:
+    native_mtp_values = (
+        (False, True)
+        if native_mtp_mode is NativeMTPMode.BOTH
+        else (native_mtp_mode is NativeMTPMode.ON,)
+    )
+    ple_values: tuple[PLEStorage | None, ...]
+    if qwen4_ple_mode is Qwen4PLEMode.BOTH:
+        ple_values = ("resident", "ssd")
+    elif qwen4_ple_mode is None:
+        ple_values = (None,)
+    elif qwen4_ple_mode is Qwen4PLEMode.RESIDENT:
+        ple_values = ("resident",)
+    else:
+        ple_values = ("ssd",)
+
+    return tuple(
+        BenchmarkVariant(
+            native_mtp_enabled=native_mtp_enabled,
+            ple_storage=ple_storage,
+            model_settings=ModelSettings(
+                mtp_enabled=native_mtp_enabled,
+                qwen4_ple_ssd_offload=ple_storage == "ssd",
             ),
         )
-    off = BenchmarkVariant(
-        name="native-mtp=off",
-        model_settings=ModelSettings(mtp_enabled=False),
-    )
-    if mode is NativeMTPMode.OFF:
-        return (off,)
-    return (
-        off,
-        BenchmarkVariant(
-            name="native-mtp=on",
-            model_settings=ModelSettings(mtp_enabled=True),
-        ),
+        for native_mtp_enabled in native_mtp_values
+        for ple_storage in ple_values
     )
 
 
 def _expand_cases(
-    model_paths: Sequence[str], mode: NativeMTPMode
+    model_paths: Sequence[str],
+    native_mtp_mode: NativeMTPMode,
+    qwen4_ple_mode: Qwen4PLEMode | None = None,
 ) -> list[BenchmarkCase]:
     return [
         BenchmarkCase(model_path, variant)
         for model_path in model_paths
-        for variant in _native_mtp_variants(mode)
+        for variant in _benchmark_variants(native_mtp_mode, qwen4_ple_mode)
     ]
 
 
 def _allocate_labels(
     cases: Sequence[BenchmarkCase], *, include_variant: bool
 ) -> list[str]:
-    bases = [
-        (
-            f"{'baseline' if case.variant.name == 'native-mtp=off' else 'native-mtp'} "
-            f"{_short_name(case.model_path)}"
-            if include_variant
-            else _short_name(case.model_path)
-        )
-        for case in cases
-    ]
+    bases = []
+    for case in cases:
+        parts = []
+        if include_variant:
+            if case.variant.ple_storage is None:
+                parts.append(
+                    "native-mtp"
+                    if case.variant.native_mtp_enabled
+                    else "baseline"
+                )
+            else:
+                native_mtp = "on" if case.variant.native_mtp_enabled else "off"
+                parts.append(f"native-mtp={native_mtp}")
+        if case.variant.ple_storage is not None:
+            parts.append(f"ple={case.variant.ple_storage}")
+        parts.append(_short_name(case.model_path))
+        bases.append(" ".join(parts))
+
     totals: dict[str, int] = defaultdict(int)
     for base in bases:
         totals[base] += 1
@@ -435,7 +473,7 @@ def _print_batch_comparison(
 async def _run(args: argparse.Namespace) -> None:
     model_paths = [str(Path(m).expanduser().resolve()) for m in args.models]
     pp_lengths = sorted(set(args.pp))
-    cases = _expand_cases(model_paths, args.native_mtp)
+    cases = _expand_cases(model_paths, args.native_mtp, args.qwen4_ple)
     labels = _allocate_labels(
         cases,
         include_variant=args.native_mtp is not NativeMTPMode.OFF,

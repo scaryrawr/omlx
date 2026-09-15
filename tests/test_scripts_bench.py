@@ -23,11 +23,12 @@ def bench_module():
         sys.modules.pop(spec.name, None)
 
 
-def test_parser_defaults_to_native_mtp_off(bench_module):
+def test_parser_preserves_legacy_defaults(bench_module):
     args = bench_module._parse_args(["model-a"])
 
     assert args.models == ["model-a"]
     assert args.native_mtp is bench_module.NativeMTPMode.OFF
+    assert args.qwen4_ple is None
     assert args.pp == [1024, 4096, 8192]
     assert args.gen == 128
     assert args.batch == []
@@ -38,22 +39,43 @@ def test_parser_defaults_to_native_mtp_off(bench_module):
     ) == ["model-a"]
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("resident", "RESIDENT"),
+        ("ssd", "SSD"),
+        ("both", "BOTH"),
+    ],
+)
+def test_parser_accepts_qwen4_ple_modes(bench_module, value, expected):
+    args = bench_module._parse_args(["model-a", "--qwen4-ple", value])
+
+    assert args.qwen4_ple is getattr(bench_module.Qwen4PLEMode, expected)
+
+
 def test_parser_rejects_invalid_native_mtp_mode(bench_module):
     with pytest.raises(SystemExit, match="2"):
         bench_module._parse_args(["model-a", "--native-mtp", "enabled"])
 
 
-def test_case_expansion_is_model_major_and_configures_native_mtp(bench_module):
+def test_legacy_case_expansion_and_labels_are_unchanged(bench_module):
     cases = bench_module._expand_cases(
         ["model-a", "model-b"],
         bench_module.NativeMTPMode.BOTH,
     )
 
-    assert [(case.model_path, case.variant.name) for case in cases] == [
-        ("model-a", "native-mtp=off"),
-        ("model-a", "native-mtp=on"),
-        ("model-b", "native-mtp=off"),
-        ("model-b", "native-mtp=on"),
+    assert [
+        (
+            case.model_path,
+            case.variant.native_mtp_enabled,
+            case.variant.ple_storage,
+        )
+        for case in cases
+    ] == [
+        ("model-a", False, None),
+        ("model-a", True, None),
+        ("model-b", False, None),
+        ("model-b", True, None),
     ]
     assert [case.variant.model_settings.mtp_enabled for case in cases] == [
         False,
@@ -64,6 +86,12 @@ def test_case_expansion_is_model_major_and_configures_native_mtp(bench_module):
     assert [
         case.variant.model_settings.vlm_mtp_enabled for case in cases
     ] == [False, False, False, False]
+    assert [case.variant.model_settings for case in cases] == [
+        bench_module.ModelSettings(mtp_enabled=False),
+        bench_module.ModelSettings(mtp_enabled=True),
+        bench_module.ModelSettings(mtp_enabled=False),
+        bench_module.ModelSettings(mtp_enabled=True),
+    ]
     assert bench_module._allocate_labels(cases[:2], include_variant=True) == [
         "baseline model-a",
         "native-mtp model-a",
@@ -73,6 +101,61 @@ def test_case_expansion_is_model_major_and_configures_native_mtp(bench_module):
     )
     assert len(on_cases) == 1
     assert on_cases[0].variant.model_settings.mtp_enabled is True
+
+
+def test_ple_both_expands_resident_before_ssd_with_native_mtp_off(
+    bench_module,
+):
+    cases = bench_module._expand_cases(
+        ["model-a"],
+        bench_module.NativeMTPMode.OFF,
+        bench_module.Qwen4PLEMode.BOTH,
+    )
+
+    assert [
+        (
+            case.variant.native_mtp_enabled,
+            case.variant.ple_storage,
+            case.variant.model_settings.mtp_enabled,
+            case.variant.model_settings.qwen4_ple_ssd_offload,
+        )
+        for case in cases
+    ] == [
+        (False, "resident", False, False),
+        (False, "ssd", False, True),
+    ]
+    assert bench_module._allocate_labels(
+        cases, include_variant=False
+    ) == ["ple=resident model-a", "ple=ssd model-a"]
+
+
+def test_native_mtp_and_ple_both_expand_in_cartesian_order(bench_module):
+    cases = bench_module._expand_cases(
+        ["model-a"],
+        bench_module.NativeMTPMode.BOTH,
+        bench_module.Qwen4PLEMode.BOTH,
+    )
+
+    assert [
+        (
+            case.variant.native_mtp_enabled,
+            case.variant.ple_storage,
+            case.variant.model_settings.mtp_enabled,
+            case.variant.model_settings.qwen4_ple_ssd_offload,
+        )
+        for case in cases
+    ] == [
+        (False, "resident", False, False),
+        (False, "ssd", False, True),
+        (True, "resident", True, False),
+        (True, "ssd", True, True),
+    ]
+    assert bench_module._allocate_labels(cases, include_variant=True) == [
+        "native-mtp=off ple=resident model-a",
+        "native-mtp=off ple=ssd model-a",
+        "native-mtp=on ple=resident model-a",
+        "native-mtp=on ple=ssd model-a",
+    ]
 
 
 def test_bench_model_passes_case_settings_and_stops_engine(
@@ -126,7 +209,9 @@ def test_bench_model_passes_case_settings_and_stops_engine(
     monkeypatch.setitem(sys.modules, "omlx.admin.benchmark", benchmark)
     monkeypatch.setitem(sys.modules, "omlx.engine.vlm", engine_module)
     case = bench_module._expand_cases(
-        ["model-a"], bench_module.NativeMTPMode.ON
+        ["model-a"],
+        bench_module.NativeMTPMode.ON,
+        bench_module.Qwen4PLEMode.SSD,
     )[0]
 
     with pytest.raises(RuntimeError, match="test failure"):
