@@ -15,7 +15,6 @@ import numpy as np
 from omlx.custom_kernels.glm_moe_dsa import fast
 from omlx.patches import mlx_vlm_qwen4_exp_compat as compat
 
-
 compat.apply_mlx_vlm_qwen4_exp_compat_patch()
 from mlx_vlm.models.qwen4_exp import qsa_fast  # noqa: E402
 
@@ -34,12 +33,8 @@ def _time(call, repetitions: int):
 
 def _portable(queries, keys, values, selected, selected_valid):
     query_tokens = queries.shape[2]
-    selected_keys = qsa_fast._batch_gather_tokens(
-        keys.transpose(0, 2, 1, 3), selected
-    ).transpose(0, 1, 3, 2, 4)
-    selected_values = qsa_fast._batch_gather_tokens(
-        values.transpose(0, 2, 1, 3), selected
-    ).transpose(0, 1, 3, 2, 4)
+    selected_keys = qsa_fast._gather_kv_rows(keys, selected)
+    selected_values = qsa_fast._gather_kv_rows(values, selected)
     grouped_queries = queries.transpose(0, 2, 1, 3).reshape(
         1, query_tokens, 2, 12, 256
     )
