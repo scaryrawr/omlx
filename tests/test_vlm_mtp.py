@@ -982,6 +982,8 @@ class TestCallBackbone:
 
         result = _call_backbone(model, inputs, cache, n_confirmed=1)
 
-        assert result == (logits, hidden, rollback_state)
+        assert result[0] is logits
+        assert result[1] is hidden
+        assert result[2] is rollback_state
         model.speculative_verify_logits.assert_called_once()
         model.assert_not_called()

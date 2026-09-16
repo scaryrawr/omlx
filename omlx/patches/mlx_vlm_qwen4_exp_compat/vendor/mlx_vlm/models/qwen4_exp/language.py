@@ -3288,8 +3288,10 @@ class Qwen4ExpMTPModule(nn.Module):
 
 
 class LanguageModel(Qwen3_5LanguageModel):
-    _omlx_mtp_multi_request = True
-    _omlx_mtp_batch_rollback = True
+    # The current mlx-vlm batch verifier bypasses Qwen4's QSA/PLE contracts.
+    # Keep concurrent requests on standard batching until that verifier is Qwen4-aware.
+    _omlx_mtp_multi_request = False
+    _omlx_mtp_batch_rollback = False
 
     def __init__(self, args: TextConfig, config: ModelConfig = None):
         nn.Module.__init__(self)

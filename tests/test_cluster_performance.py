@@ -315,7 +315,31 @@ class _WorkerGroup:
         return 2
 
 
-def test_sampling_rank_optimization_is_capability_gated_and_restored():
+def _make_pipeline_source_inspectable(monkeypatch):
+    from omlx.cluster import runtime_optimizations
+
+    source = """
+def __call__(self, value, cache=None):
+    pipeline_rank = self.pipeline_rank
+    pipeline_size = self.pipeline_size
+    if pipeline_rank != 0:
+        value = mx.distributed.send(value, pipeline_rank - 1)
+    if pipeline_size > 1:
+        value = mx.distributed.all_gather(value)
+    return value
+"""
+    original = runtime_optimizations.inspect.getsource
+
+    def getsource(value):
+        if value is _ValidatedPipeline.__call__:
+            return source
+        return original(value)
+
+    monkeypatch.setattr(runtime_optimizations.inspect, "getsource", getsource)
+
+
+def test_sampling_rank_optimization_is_capability_gated_and_restored(monkeypatch):
+    _make_pipeline_source_inspectable(monkeypatch)
     settings = replace(
         execution_profile("balanced"),
         sampling_rank_only=True,
@@ -354,6 +378,7 @@ def test_sampling_rank_optimization_is_capability_gated_and_restored():
 def test_worker_rank_skips_vocab_projection_when_adapter_declares_contract(
     monkeypatch,
 ):
+    _make_pipeline_source_inspectable(monkeypatch)
     class Cache:
         state = mx.array([0])
 
@@ -448,6 +473,7 @@ def test_pipeline_prefill_schedule_has_equal_fill_and_drain_timeline():
 
 
 def test_staggered_prompt_queues_and_flushes_every_real_chunk(monkeypatch):
+    _make_pipeline_source_inspectable(monkeypatch)
     sends = []
     gathers = []
     async_values = []

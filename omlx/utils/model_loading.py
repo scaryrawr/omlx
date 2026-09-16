@@ -716,9 +716,9 @@ def maybe_apply_pre_load_patches(
         mtp_requested = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
         )
-        has_mtp_weights = _checkpoint_has_mtp_weights(model_name)
-        mtp_active = mtp_requested and has_mtp_weights
-        if mtp_requested and not has_mtp_weights:
+        mtp_checkpoint_prefix = _checkpoint_qwen4_mtp_weight_prefix(model_name)
+        mtp_active = mtp_requested and mtp_checkpoint_prefix is not None
+        if mtp_requested and mtp_checkpoint_prefix is None:
             logger.warning(
                 "Qwen4-Exp Lightning MTP was requested for %s, but no embedded "
                 "MTP tensors were found",
