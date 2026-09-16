@@ -547,21 +547,13 @@ class TestCaptureSkips:
             getattr(c, "_omlx_mtp_prime_ctx", None) is None for c in cache
         )
 
-    def test_interleaved_requests_keep_separate_contexts(self, model):
-        """Each outer cache list retains its own prompt-priming timeline."""
+    def test_latest_prefill_owns_the_model_context(self, model):
         cache_a = _make_cache(model)
         _chunked_prefill(model, cache_a, _tokens(10, seed=23), [10])
-        assert prompt_priming.prime_ctx_stats(model, cache_a) == 9
+        assert prompt_priming.prime_ctx_stats(model) == 9
         cache_b = _make_cache(model)
         _chunked_prefill(model, cache_b, _tokens(6, seed=24), [6])
-        assert prompt_priming.prime_ctx_stats(model, cache_a) == 9
-        assert prompt_priming.prime_ctx_stats(model, cache_b) == 5
-
-        main_a = _tokens(1, seed=25)
-        model(main_a[None, :], cache=cache_a, return_hidden=True)
-        primed_a = prompt_priming.take_primed(model, cache_a, main_a)
-        assert primed_a is not None
-        assert primed_a[1] == 10
+        assert prompt_priming.prime_ctx_stats(model) == 5
 
         main_b = _tokens(1, seed=26)
         model(main_b[None, :], cache=cache_b, return_hidden=True)
@@ -679,11 +671,11 @@ class TestBatchGeneratorCacheOwnership:
             uids=[0],
             caches=[source_cache],
         )
-        assert prompt_priming.prime_ctx_stats(model, donor.prompt_cache) == 5
+        assert prompt_priming.prime_ctx_stats(model) == 5
 
         target = PromptProcessingBatch.empty(model, lambda x: mx.argmax(x, axis=-1))
         target.extend(donor)
-        assert prompt_priming.prime_ctx_stats(model, target.prompt_cache) == 5
+        assert prompt_priming.prime_ctx_stats(model) == 5
 
 
 class TestHookFallthrough:

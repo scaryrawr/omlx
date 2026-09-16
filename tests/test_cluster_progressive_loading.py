@@ -192,7 +192,9 @@ def test_qwen_next_moe_inplace_shards_are_wrapped_with_an_all_sum(monkeypatch):
     assert all_sums == [(7, group)]
 
 
-def test_native_tensor_strategy_materializes_and_shards_one_layer_at_a_time():
+def test_native_tensor_strategy_materializes_and_shards_one_layer_at_a_time(
+    monkeypatch,
+):
     mx = _FakeMX()
     calls = []
     progress = []
@@ -218,6 +220,14 @@ def test_native_tensor_strategy_materializes_and_shards_one_layer_at_a_time():
                 calls.append(layer.name)
 
     model = Model()
+    monkeypatch.setattr(
+        "omlx.cluster.tensor_strategies.inspect.getsource",
+        lambda _shard: """
+def shard(self, group):
+    for layer in self.model.layers:
+        layer.shard(group)
+""",
+    )
     strategy = apply_tensor_strategy(
         model,
         SimpleNamespace(),
@@ -232,7 +242,7 @@ def test_native_tensor_strategy_materializes_and_shards_one_layer_at_a_time():
     assert sum(event[0] == "clear" for event in mx.events) == 3
 
 
-def test_native_tensor_strategy_skips_read_only_forwarding_layer_property():
+def test_native_tensor_strategy_skips_read_only_forwarding_layer_property(monkeypatch):
     """Qwen3.5 exposes Model.layers as a property over model.layers."""
 
     mx = _FakeMX()
@@ -261,6 +271,14 @@ def test_native_tensor_strategy_skips_read_only_forwarding_layer_property():
                 calls.append(layer.name)
 
     model = Model()
+    monkeypatch.setattr(
+        "omlx.cluster.tensor_strategies.inspect.getsource",
+        lambda _shard: """
+def shard(self, group):
+    for layer in self.layers:
+        layer.shard(group)
+""",
+    )
     strategy = apply_tensor_strategy(
         model,
         SimpleNamespace(),
@@ -272,7 +290,9 @@ def test_native_tensor_strategy_skips_read_only_forwarding_layer_property():
     assert [layer.name for layer in model.layers] == ["zero", "one"]
 
 
-def test_native_tensor_strategy_refuses_fixed_weight_mutation_outside_layer_loop():
+def test_native_tensor_strategy_refuses_fixed_weight_mutation_outside_layer_loop(
+    monkeypatch,
+):
     mx = _FakeMX()
 
     class Layer:
@@ -292,6 +312,15 @@ def test_native_tensor_strategy_refuses_fixed_weight_mutation_outside_layer_loop
                 pass
 
     model = Model()
+    monkeypatch.setattr(
+        "omlx.cluster.tensor_strategies.inspect.getsource",
+        lambda _shard: """
+def shard(self, group):
+    self.output = "sharded"
+    for layer in self.layers:
+        layer.shard(group)
+""",
+    )
 
     try:
         apply_tensor_strategy(
