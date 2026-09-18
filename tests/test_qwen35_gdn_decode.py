@@ -91,6 +91,7 @@ def _qwen4_config():
 def _assert_vlm_gdn_call_matches_upstream(
     monkeypatch, family, shape, use_mask, conv_kernel_size
 ):
+    from mlx_vlm.models.cache import ArraysCache
     from mlx_vlm.models.qwen3_5 import language as q35
 
     import omlx.patches.qwen35_gdn_decode as patch
@@ -129,11 +130,11 @@ def _assert_vlm_gdn_call_matches_upstream(
             dtype=mx.bool_,
         )
 
-    reference_cache = [None, None]
-    patched_cache = [None, None]
+    reference_cache = ArraysCache(2)
+    patched_cache = ArraysCache(2)
     expected = upstream_call(module, inputs, mask=mask, cache=reference_cache)
     actual = module(inputs, mask=mask, cache=patched_cache)
-    mx.eval(expected, actual, *reference_cache, *patched_cache)
+    mx.eval(expected, actual, *reference_cache.state, *patched_cache.state)
 
     assert mx.array_equal(actual, expected).item()
     assert mx.array_equal(patched_cache[0], reference_cache[0]).item()
@@ -142,7 +143,7 @@ def _assert_vlm_gdn_call_matches_upstream(
     next_inputs = mx.random.normal((shape[0], 1, shape[-1])).astype(mx.bfloat16)
     expected = upstream_call(module, next_inputs, cache=reference_cache)
     actual = module(next_inputs, cache=patched_cache)
-    mx.eval(expected, actual, *reference_cache, *patched_cache)
+    mx.eval(expected, actual, *reference_cache.state, *patched_cache.state)
 
     assert mx.array_equal(actual, expected).item()
     assert mx.array_equal(patched_cache[0], reference_cache[0]).item()

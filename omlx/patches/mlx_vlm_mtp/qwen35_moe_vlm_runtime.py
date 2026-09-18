@@ -294,7 +294,6 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
             mask,
             cache,
             capture_layer_ids=[last_layer_idx],
-            speculative_verify=True,
             **kwargs,
         )
         from mlx_vlm.models.base import LanguageModelOutput

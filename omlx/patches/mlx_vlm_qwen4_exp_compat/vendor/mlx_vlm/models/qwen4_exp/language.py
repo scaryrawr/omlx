@@ -3288,10 +3288,8 @@ class Qwen4ExpMTPModule(nn.Module):
 
 
 class LanguageModel(Qwen3_5LanguageModel):
-    # The current mlx-vlm batch verifier bypasses Qwen4's QSA/PLE contracts.
-    # Keep concurrent requests on standard batching until that verifier is Qwen4-aware.
-    _omlx_mtp_multi_request = False
-    _omlx_mtp_batch_rollback = False
+    _omlx_mtp_multi_request = True
+    _omlx_mtp_batch_rollback = True
 
     def __init__(self, args: TextConfig, config: ModelConfig = None):
         nn.Module.__init__(self)
@@ -3345,6 +3343,46 @@ class LanguageModel(Qwen3_5LanguageModel):
         except BaseException:
             if transaction is not None:
                 transaction.abort()
+            raise
+
+    def speculative_verify_logits(self, inputs: mx.array, cache, sampler):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+                sampler(output.logits),
+            )
+        except BaseException:
+            transaction.abort()
+            raise
+
+    def speculative_verify_hidden(self, inputs: mx.array, cache):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+                skip_logits=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+            )
+        except BaseException:
+            transaction.abort()
             raise
 
     def prefetch_ple(self, next_ids: mx.array, current_ids: mx.array) -> None:

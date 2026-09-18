@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx_lm.generate import GenerationBatch, StopSequenceMatcher
+from mlx_lm.generate import GenerationBatch, StopSequences
 from mlx_lm.models.cache import ArraysCache
 
 
@@ -53,7 +53,7 @@ def test_generation_batch_keeps_gdn_state_compact_between_decode_steps(
         samplers=[None, None, None],
         fallback_sampler=lambda logits: mx.argmax(logits, axis=-1),
         logits_processors=[[], [], []],
-        stop_matchers=[StopSequenceMatcher() for _ in range(3)],
+        stop_sequences=[StopSequences() for _ in range(3)],
         max_tokens=[8, 8, 8],
     )
 
