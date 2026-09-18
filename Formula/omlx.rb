@@ -29,7 +29,7 @@ class Omlx < Formula
   # pulling omlx's optional extras into the core install step.
   resource "mlx-audio" do
     url "https://github.com/Blaizzy/mlx-audio.git",
-      revision: "6b54ec6ecd99d0ad77dfa33dd129707e31bf051c"
+      revision: "49596ac8b69b9ed377db311a73df838795f38a3d"
   end
 
   # Kokoro's English G2P path uses misaki + spaCy. Bundle the spaCy
