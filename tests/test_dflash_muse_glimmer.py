@@ -51,6 +51,11 @@ _TINY_TEXT_KWARGS = dict(
 
 
 def _fork_model():
+    from omlx.patches.mlx_vlm_muse_glimmer_compat import (
+        apply_mlx_vlm_muse_glimmer_compat_patch,
+    )
+
+    apply_mlx_vlm_muse_glimmer_compat_patch()
     from dflash_mlx.models.muse_glimmer import Model, ModelArgs
 
     mx.random.seed(0)

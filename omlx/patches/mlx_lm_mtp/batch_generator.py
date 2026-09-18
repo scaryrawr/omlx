@@ -499,6 +499,11 @@ def _mtp_common_eligible(gen_batch: Any) -> bool:
     uids = getattr(gen_batch, "uids", None)
     if uids is None or len(uids) == 0:
         return False
+    native_mtp_allowed = getattr(
+        gen_batch.model, "native_mtp_allowed_for_uids", None
+    )
+    if callable(native_mtp_allowed) and not native_mtp_allowed(list(uids)):
+        return False
     if _has_grammar_processors(gen_batch):
         return False
     # XTC changes the target distribution but is absent from acceptance math.
@@ -1764,7 +1769,21 @@ def _call_backbone_impl(
     _set_verify_qmm_armed(not dspark_verify)
     _set_dspark_target_verify(model, dspark_verify)
     try:
-        result = model(inputs, **kwargs)
+        exact_verify = getattr(model, "speculative_verify_logits", None)
+        language_model = getattr(model, "_language_model", None)
+        if language_model is not None and not callable(
+            getattr(language_model, "speculative_verify_logits", None)
+        ):
+            exact_verify = None
+        if n_confirmed and callable(exact_verify):
+            hidden, _, rollback_state, logits = exact_verify(
+                inputs,
+                cache,
+                lambda value: value,
+            )
+            result = logits, hidden, rollback_state
+        else:
+            result = model(inputs, **kwargs)
     finally:
         if dspark_verify:
             _set_dspark_target_verify(model, False)

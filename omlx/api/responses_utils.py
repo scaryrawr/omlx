@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from .media_inputs import responses_input_file_to_file_part
 from .responses_models import (
@@ -458,12 +458,12 @@ def _namespace_wire_name(namespace: str, name: str, taken: set) -> str:
 
 
 def _convert_function_tool(
-    tool: ResponsesTool, name: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+    tool: ResponsesTool, name: str | None = None
+) -> dict[str, Any] | None:
     """Convert one flat function tool, or None if it is not one."""
     if tool.type != "function" or not tool.name:
         return None
-    func_def: Dict[str, Any] = {"name": name or tool.name}
+    func_def: dict[str, Any] = {"name": name or tool.name}
     if tool.description:
         func_def["description"] = tool.description
     if tool.parameters:
@@ -474,9 +474,9 @@ def _convert_function_tool(
 
 
 def convert_responses_tools(
-    tools: Optional[List[ResponsesTool]],
-    aliases: Optional[Dict[str, Tuple[str, str]]] = None,
-) -> Optional[List[Dict[str, Any]]]:
+    tools: list[ResponsesTool] | None,
+    aliases: dict[str, tuple[str, str]] | None = None,
+) -> list[dict[str, Any]] | None:
     """Convert Responses API flat tool format to Chat Completions nested format.
 
     Responses: {"type": "function", "name": "fn", "parameters": {...}}
@@ -521,8 +521,8 @@ def convert_responses_tools(
 
 def split_namespace_tool_name(
     name: str,
-    aliases: Optional[Dict[str, Tuple[str, str]]] = None,
-) -> Tuple[Optional[str], str]:
+    aliases: dict[str, tuple[str, str]] | None = None,
+) -> tuple[str | None, str]:
     """Restore ``(namespace, name)`` for a call made by wire name.
 
     Flat tools are unaffected: they return ``(None, name)``.
@@ -535,8 +535,8 @@ def split_namespace_tool_name(
 
 
 def apply_namespace_tool_aliases(
-    messages: List[Dict[str, Any]],
-    aliases: Dict[str, Tuple[str, str]],
+    messages: list[dict[str, Any]],
+    aliases: dict[str, tuple[str, str]],
 ) -> None:
     """Map preserved history identities to the current request's tool names."""
     wire_names = {identity: wire for wire, identity in aliases.items()}
@@ -577,7 +577,7 @@ def build_function_call_output_item(
     call_id: str,
     item_id: str | None = None,
     status: str = "completed",
-    namespace: Optional[str] = None,
+    namespace: str | None = None,
 ) -> OutputItem:
     """Build a function_call-type OutputItem."""
     return OutputItem(

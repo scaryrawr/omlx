@@ -597,6 +597,13 @@ def _register_uid_rows(model, uids, samplers, lps_rows) -> None:
             _uid_row_registry.popitem(last=False)
 
 
+def _record_native_mtp_request_eligibility(model, uid: int, request) -> None:
+    """Tell an optional VLM adapter whether this UID used embeddings prefill."""
+    setter = getattr(model, "set_native_mtp_request_eligible", None)
+    if callable(setter):
+        setter(uid, getattr(request, "vlm_inputs_embeds", None) is None)
+
+
 def _unregister_uid_row(model, uid) -> None:
     """Drop a finished request's row so heavy processors are not pinned
     until FIFO eviction; the bounded size stays as the backstop."""
@@ -6013,6 +6020,7 @@ class Scheduler:
             uid = uids[0]
             _mtp_priming.bind_uid(self.model, request.request_id, uid)
             self._dflash_bind_uid(request.request_id, uid)
+            _record_native_mtp_request_eligibility(self.model, uid, request)
             self.request_id_to_uid[request.request_id] = uid
             self.uid_to_request_id[uid] = request.request_id
             now = time.monotonic()
@@ -11662,6 +11670,7 @@ class Scheduler:
                 uid = uids[0]
                 _mtp_priming.bind_uid(self.model, request.request_id, uid)
                 self._dflash_bind_uid(request.request_id, uid)
+                _record_native_mtp_request_eligibility(self.model, uid, request)
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id
                 now = time.monotonic()
