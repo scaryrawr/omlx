@@ -399,6 +399,10 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
         # both of which the MTP cycle needs. Caller layers (block drafters)
         # are merged with the head's last layer into one capture request.
         requested = list(kwargs.pop("capture_layer_ids", None) or [])
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+            original_call, "__globals__", {}
+        ):
+            kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
             self,
@@ -407,7 +411,6 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
             mask,
             cache,
             capture_layer_ids=sorted({*requested, last_layer_idx}),
-            speculative_verify=True,
             **kwargs,
         )
         from mlx_vlm.models.base import LanguageModelOutput
