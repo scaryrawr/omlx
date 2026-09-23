@@ -282,15 +282,15 @@ def _extract_multimodal_content_list(content: list) -> list:
                 input_video = item.get("input_video") or item.get("video")
                 if input_video is None and item_type == "video":
                     input_video = item
-                if isinstance(input_video, dict):
+                if isinstance(input_video, dict) or (
+                    isinstance(input_video, str) and input_video.strip()
+                ):
                     parts.append(
                         {
                             "type": "input_video",
                             "input_video": input_video,
                         }
                     )
-                elif isinstance(input_video, str) and input_video.strip():
-                    parts.append({"type": "input_video", "input_video": input_video})
     return parts
 
 
