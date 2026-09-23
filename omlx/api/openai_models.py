@@ -64,6 +64,12 @@ class InputVideo(BaseModel):
         return value
 
 
+class InputVideoURL(ImageURL):
+    """MiMo video URL alias, retaining the optional format hint."""
+
+    format: str | None = None
+
+
 class FileContent(BaseModel):
     """File input for attachment preprocessing.
 
@@ -97,7 +103,7 @@ class ContentPart(BaseModel):
     image_url: ImageURL | None = None
     video_url: ImageURL | None = None
     input_audio: InputAudio | None = None
-    input_video: InputVideo | None = None
+    input_video: InputVideo | InputVideoURL | None = None
     file: FileContent | None = None
 
 

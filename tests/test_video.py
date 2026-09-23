@@ -21,6 +21,16 @@ def test_content_part_preserves_video_url():
     assert part.video_url.url.startswith("data:video/mp4")
 
 
+def test_content_part_preserves_mimo_input_video_url_alias():
+    part = ContentPart(
+        type="input_video",
+        input_video={"url": "data:video/mp4;base64,AAAA"},
+    )
+
+    assert part.input_video is not None
+    assert part.input_video.url == "data:video/mp4;base64,AAAA"
+
+
 def test_video_parts_expand_to_images_in_original_order(monkeypatch):
     first = Image.new("RGB", (2, 2), "red")
     second = Image.new("RGB", (2, 2), "blue")
