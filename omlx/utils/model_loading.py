@@ -887,7 +887,10 @@ def maybe_apply_pre_load_patches(
                 set_mtp_depth(int(depth))
             elif model_type.startswith(("qwen3_5", "qwen3_6")):
                 sidecar_depth = _qwen35_mtp_sidecar_draft_depth(model_name)
-                set_mtp_depth(sidecar_depth if sidecar_depth is not None else 3)
+                set_mtp_depth(
+                    sidecar_depth if sidecar_depth is not None
+                    else 4 if model_type == "qwen3_5" and _nax_available() else 3
+                )
             elif model_type.startswith("nemotron_h"):
                 # The stock nemotron_h head is depth-1 trained; the adaptive
                 # controller's exploration costs ~10% throughput vs fixed
@@ -907,10 +910,6 @@ def maybe_apply_pre_load_patches(
                 set_mtp_depth(
                     int(mtp_cfg.get("num_nextn_predict_layers", 0) or 0) or 3
                 )
-            elif model_type == "qwen3_5" and _nax_available():
-                # The M5 packed verify kernels keep a 5-row verify close to
-                # a 4-row one on dense Qwen, so depth 4 pays there.
-                set_mtp_depth(4)
             else:
                 set_mtp_depth(3)
             if mtp_enabled:

@@ -451,10 +451,10 @@ class ModelSettings:
     # None = model-specific default (including the Qwen MTP sidecar contract);
     # Qwen 27B keeps an adaptive ceiling of at least 4.
     # An adaptive controller picks 1..max per sequence.
-    mtp_adaptive_max_depth: Optional[int] = None
+    mtp_adaptive_max_depth: int | None = None
     # Draft exactly this many tokens every cycle, with no adaptive controller.
     # Takes precedence over mtp_adaptive_max_depth; None = adaptive.
-    mtp_fixed_depth: Optional[int] = None
+    mtp_fixed_depth: int | None = None
 
     # VLM MTP speculative decoding via external MTP drafter (mlx-vlm f96138e+).
     # Supported drafter types: gemma4_assistant (for Gemma 4 VLMs), qwen3_5_mtp

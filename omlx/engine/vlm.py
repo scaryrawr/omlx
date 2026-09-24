@@ -4782,6 +4782,15 @@ class VLMBatchedEngine(BaseEngine):
             media_messages = expand_video_parts(messages)
         try:
             text_messages, images, _, videos = extract_media_from_messages(media_messages)
+            if (
+                images
+                and model_type in {"gemma4", "gemma4_unified"}
+                and self._vlm_model.config.vision_config is None
+            ):
+                raise InvalidRequestError(
+                    "This text-only Gemma 4 model does not support image input.",
+                    field="messages",
+                )
             prompt = self._apply_chat_template(
                 text_messages,
                 template_tools,
@@ -4795,6 +4804,8 @@ class VLMBatchedEngine(BaseEngine):
             # the real chat path surface the same error through the existing
             # handler chain.
             num_tokens = len(self._tokenizer.encode(prompt))
+        except InvalidRequestError:
+            raise
         except Exception as e:
             logger.warning(
                 "VLMBatchedEngine.preflight_chat: tokenizer.encode raised "
@@ -4805,15 +4816,6 @@ class VLMBatchedEngine(BaseEngine):
             return
         finally:
             cleanup_temporary_media(locals().get("videos", []))
-        if (
-            images
-            and model_type in {"gemma4", "gemma4_unified"}
-            and self._vlm_model.config.vision_config is None
-        ):
-            raise InvalidRequestError(
-                "This text-only Gemma 4 model does not support image input.",
-                field="messages",
-            )
         # Count images from the ORIGINAL messages (the stripped
         # ``text_messages`` no longer has the image content-parts).
         # Use the decoded dimensions, including resizing and EXIF orientation,
