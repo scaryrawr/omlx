@@ -10,7 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from omlx.patches.mlx_vlm_image_compat import apply_mlx_vlm_image_compat_patch
+from omlx.patches.mlx_vlm_image_compat import (
+    _resolve_generation_request,
+    apply_mlx_vlm_image_compat_patch,
+)
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +57,38 @@ def test_ernie_image_uses_native_mlx_vlm_package(image_apis):
     import mlx_vlm.models.ernie_image as ernie_image
 
     assert "omlx/patches" not in str(ernie_image.__file__)
+
+
+def test_ming_image_registers_generation_only_and_uses_native_package(image_apis):
+    image, edit_image = image_apis
+    from mlx_vlm.models.ming_image.model import MingImageGenerationModel
+
+    assert "omlx/patches" not in str(
+        importlib.import_module("mlx_vlm.models.ming_image").__file__
+    )
+    assert (
+        image.image_generation_model_class("ming-image-0.1-design")
+        is MingImageGenerationModel
+    )
+    assert edit_image.image_edit_model_class("ming-image-0.1-design") is None
+
+    ming = object.__new__(MingImageGenerationModel)
+    ming.pipeline = SimpleNamespace(
+        config=SimpleNamespace(default_steps=12, default_guidance=1.0)
+    )
+    assert ming.default_steps == 12
+    assert ming.default_guidance == 1.0
+    assert ming.default_width == 1024
+    assert ming.default_height == 1024
+
+    request = image.ImageGenerationRequest(prompt="a poster")
+    resolved = _resolve_generation_request(image, ming, request)
+    assert (resolved.width, resolved.height, resolved.steps, resolved.guidance) == (
+        1024,
+        1024,
+        12,
+        1.0,
+    )
 
 
 def test_unlimited_ocr_uses_native_mlx_vlm_support():

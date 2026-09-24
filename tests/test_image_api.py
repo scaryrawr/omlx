@@ -158,6 +158,28 @@ def test_generation_returns_b64_json_and_increments_seed(image_client, monkeypat
         assert ignored_field not in engine.generate_calls[0]
 
 
+def test_generation_preserves_ming_rgba_png(image_client, monkeypatch):
+    engine = _install_pool(monkeypatch, ["generation"])
+
+    async def generate(prompt, **kwargs):
+        return SimpleNamespace(
+            image=Image.new("RGBA", (2, 2), color=(0, 255, 0, 128)),
+            metadata={},
+        )
+
+    monkeypatch.setattr(engine, "generate", generate)
+    response = image_client.post(
+        "/v1/images/generations",
+        json={"model": "alias", "prompt": "transparent green square"},
+    )
+
+    assert response.status_code == 200
+    image_bytes = base64.b64decode(response.json()["data"][0]["b64_json"])
+    with Image.open(BytesIO(image_bytes)) as image:
+        assert image.mode == "RGBA"
+        assert image.getpixel((0, 0)) == (0, 255, 0, 128)
+
+
 def test_generation_rejects_url_response_format_before_engine_pool(
     image_client, monkeypatch
 ):

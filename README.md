@@ -331,7 +331,7 @@ Models are auto-detected by type. You can also download models directly from the
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
-| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
 
 ### Image Model Manifests
 
@@ -364,7 +364,12 @@ checkpoint's native weight format directly.
 Supported `base_model` aliases include FLUX.2 Klein 4B/9B/base/KV variants
 (generation and multi-image edit), Mage-Flow base/aligned/turbo and their edit
 variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
-Ideogram 4 FP8, and Bonsai Ternary. Z-Image and ERNIE-Image edit modes require
+Ming-Image 0.1 Design (generation only), Ideogram 4 FP8, and Bonsai Ternary.
+The original `Ming-Image-0.1-Design` and quantized variants (such as
+`Ming-Image-0.1-Design-mxfp8`) are discovered without a manifest when placed
+under the model directory. Defaults are 1024×1024, 12 steps, and guidance 1.0;
+the output PNG retains its alpha channel. Z-Image
+and ERNIE-Image edit modes require
 exactly one source image; masks are not supported by the current mlx-vlm image
 families.
 
