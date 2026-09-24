@@ -201,6 +201,19 @@ def _patch_upstream_family_defaults() -> None:
             lambda self: self.pipeline.variant.default_guidance,
         )
 
+    ming_image = importlib.import_module("mlx_vlm.models.ming_image.model")
+    ming_generation = ming_image.MingImageGenerationModel
+    _install_default_property(
+        ming_generation, "default_steps", lambda self: self.pipeline.config.default_steps
+    )
+    _install_default_property(
+        ming_generation,
+        "default_guidance",
+        lambda self: self.pipeline.config.default_guidance,
+    )
+    _install_default_property(ming_generation, "default_width", lambda self: 1024)
+    _install_default_property(ming_generation, "default_height", lambda self: 1024)
+
     z_image = importlib.import_module("mlx_vlm.models.z_image.model")
     generation = z_image.ZImageGenerationModel
     _install_default_property(
