@@ -158,6 +158,7 @@ async def test_stop_can_defer_global_mlx_cleanup(fake_mlx_vlm):
         ("mage-flow-turbo", 4, 1.0),
         ("z-image-turbo", 9, 0.0),
         ("ernie-image-turbo", 8, 1.0),
+        ("ming-image-0.1-design", 12, 1.0),
     ],
 )
 async def test_generation_uses_family_defaults(
@@ -359,6 +360,7 @@ async def test_model_path_override_is_a_distinct_loaded_variant(
         ("ideogram4", "ideogram-ai/ideogram-4-fp8"),
         ("z-image", "Tongyi-MAI/Z-Image"),
         ("z-image-turbo", "Tongyi-MAI/Z-Image-Turbo"),
+        ("ming-image-0.1-design", "inclusionAI/Ming-Image-0.1-Design"),
     ],
 )
 async def test_direct_engine_uses_loader_reference_without_a_local_model_path(

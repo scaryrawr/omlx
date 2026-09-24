@@ -79,6 +79,7 @@ def test_mage_flow_aliases_expose_expected_tasks_and_defaults(
         ("FLUX.2-klein-base-9B", "flux2-klein-base-9b", ("generation", "edit")),
         ("Z-Image-Turbo", "z-image-turbo", ("generation", "edit")),
         ("ERNIE-Image", "ernie-image", ("generation", "edit")),
+        ("Ming-Image-0.1-Design-mxfp8", "ming-image-0-1-design", ("generation",)),
         ("ideogram-4-fp8", "ideogram-4-fp8", ("generation",)),
         ("bonsai-image-ternary-4B-mlx-2bit", "ternary", ("generation",)),
     ],
@@ -112,6 +113,35 @@ def test_local_mage_edit_layout_is_discovered_as_mlx_vlm_image(tmp_path):
     assert manifest.backend == "mlx-vlm"
     assert manifest.base_model == "mage-flow-edit-turbo"
     assert manifest.tasks == ["edit"]
+    assert manifest.metadata["model_path"] == "."
+    assert detect_model_type(model_dir) == "image"
+
+
+@pytest.mark.parametrize(
+    ("folder", "weight_file"),
+    [
+        ("Ming-Image-0.1-Design", "diffusion_pytorch_model.safetensors"),
+        ("Ming-Image-0.1-Design-mxfp8", "model.safetensors"),
+    ],
+)
+def test_local_ming_layout_is_discovered_as_generation_only(
+    tmp_path, folder, weight_file
+):
+    model_dir = tmp_path / folder
+    tokenizer_dir = model_dir / "mllm"
+    tokenizer_dir.mkdir(parents=True)
+    (tokenizer_dir / "tokenizer.json").write_text("{}")
+    for component in ("transformer", "vae"):
+        component_dir = model_dir / component
+        component_dir.mkdir()
+        (component_dir / weight_file).write_bytes(b"weights")
+
+    manifest = _load_image_manifest(model_dir)
+
+    assert manifest is not None
+    assert manifest.backend == "mlx-vlm"
+    assert manifest.base_model == "ming-image-0-1-design"
+    assert manifest.tasks == ["generation"]
     assert manifest.metadata["model_path"] == "."
     assert detect_model_type(model_dir) == "image"
 

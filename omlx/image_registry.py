@@ -166,6 +166,16 @@ IMAGE_MODEL_SPECS: tuple[ImageModelSpec, ...] = (
         allows_multiple_edit_images=True,
     ),
     ImageModelSpec(
+        base_model="ming-image-0-1-design",
+        tasks=("generation",),
+        estimated_size=28 * 1024**3,
+        discovery_aliases=_aliases(
+            "ming-image-0.1-design",
+            "ming-image",
+            "inclusionAI/Ming-Image-0.1-Design",
+        ),
+    ),
+    ImageModelSpec(
         base_model="z-image",
         tasks=("generation", "edit"),
         estimated_size=12 * 1024**3,
@@ -248,6 +258,7 @@ IMAGE_ENGINE_ALIASES = _build_aliases()
 _SPEC_BY_BASE_MODEL = {spec.base_model: spec for spec in IMAGE_MODEL_SPECS}
 _RUNTIME_MODEL_REFERENCES = {
     "ideogram-4-fp8": "ideogram-ai/ideogram-4-fp8",
+    "ming-image-0-1-design": "inclusionAI/Ming-Image-0.1-Design",
     "z-image": "Tongyi-MAI/Z-Image",
     "z-image-turbo": "Tongyi-MAI/Z-Image-Turbo",
 }
@@ -304,6 +315,7 @@ IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
     "mage-flow-edit-base": {"default_steps": 30, "default_guidance": 5.0},
     "mage-flow-edit": {"default_steps": 30, "default_guidance": 5.0},
     "mage-flow-edit-turbo": {"default_steps": 4, "default_guidance": 1.0},
+    "ming-image-0-1-design": {"default_steps": 12, "default_guidance": 1.0},
     "z-image": {
         "default_steps": 50,
         "default_guidance": 4.0,
