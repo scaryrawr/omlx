@@ -1960,6 +1960,7 @@ def _register_model(
             )
             return
 
+        _config: dict = {}
         image_manifest = _load_image_manifest(model_dir)
         if image_manifest is not None:
             model_type: ModelType = "image"
@@ -1983,10 +1984,12 @@ def _register_model(
             is_helper = False
             try:
                 with open(payload_dir / "config.json") as f:
-                    _config = json.load(f)
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    _config = loaded
                 config_model_type = _config.get("model_type", "")
                 is_helper = is_helper_model_config(_config)
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
             thinking_default = detect_thinking_default(payload_dir)
@@ -2016,23 +2019,6 @@ def _register_model(
             estimate_text_only_model_size(model_dir) if model_type == "vlm" else 0
         )
 
-        # Read raw config model_type for sub-type detection (e.g., OCR models)
-        # and flag speculative-decoding drafters (dFlash/Assistant/MTP).
-        config_model_type = ""
-        is_helper = False
-        # The routing below reads this even when config.json does not parse.
-        _config: dict = {}
-        try:
-            import json
-            with open(model_dir / "config.json") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                _config = loaded
-            config_model_type = _config.get("model_type", "")
-            is_helper = is_helper_model_config(_config)
-        except Exception:
-            pass
-
         # Keep text-only capability metadata when selecting the VLM MTP engine.
         if model_type == "llm" and _gemma4_text_only_wants_vlm_engine(_config):
             engine_type = "vlm"
@@ -2051,10 +2037,6 @@ def _register_model(
                 "on the LLM engine, which carries less overhead",
                 model_id,
             )
-
-        thinking_default = detect_thinking_default(model_dir)
-        preserve_thinking_default = detect_preserve_thinking(model_dir)
-        model_context_length = _read_model_context_length(model_dir)
 
         models[model_id] = DiscoveredModel(
             model_id=model_id,
