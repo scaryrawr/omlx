@@ -87,6 +87,7 @@ class TestExtractGemma4Messages:
                         "type": "input_video",
                         "input_video": {
                             "url": "/tmp/clip.mp4",
+                            "detail": "auto",
                             "format": "mp4",
                         },
                     },

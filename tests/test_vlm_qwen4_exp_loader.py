@@ -198,7 +198,7 @@ def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch
             else None
         ),
     )
-    settings = SimpleNamespace(mtp_enabled=True, mtp_num_draft_tokens=None)
+    settings = SimpleNamespace(mtp_enabled=True, mtp_adaptive_max_depth=None)
 
     maybe_apply_pre_load_patches(str(tmp_path), settings, for_vlm=True)
 
@@ -211,7 +211,7 @@ def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch
 
     maybe_apply_pre_load_patches(
         str(tmp_path),
-        ModelSettings(mtp_enabled=True, mtp_num_draft_tokens=3),
+        ModelSettings(mtp_enabled=True, mtp_adaptive_max_depth=3),
         for_vlm=True,
     )
     assert get_mtp_depth() == 3

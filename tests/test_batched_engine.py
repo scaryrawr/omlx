@@ -15,7 +15,7 @@ Note: mlx_lm.load() is mocked to avoid loading real models.
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
