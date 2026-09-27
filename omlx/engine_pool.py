@@ -55,9 +55,9 @@ from .exceptions import (
 )
 from .model_discovery import (
     IMAGE_MANIFEST_NAME,
+    VLM_NATIVE_TEXT_MODEL_TYPES,
     EngineType,
     ModelType,
-    VLM_NATIVE_TEXT_MODEL_TYPES,
     discover_models,
     format_size,
     is_realtime_stt_model,
