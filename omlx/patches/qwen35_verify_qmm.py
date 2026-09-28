@@ -1583,6 +1583,8 @@ def _patch_verify_layer_flush() -> None:
     import mlx.core as mx
 
     def _model(self, model, *args, **kwargs):
+        if not _is_armed():
+            return original_model(self, model, *args, **kwargs)
         layers = model.layers
         _ROUTE_ARMED.next_norm = {
             id(layer): nxt.input_layernorm for layer, nxt in zip(layers, layers[1:])
