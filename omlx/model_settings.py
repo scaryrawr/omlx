@@ -1785,7 +1785,7 @@ def forced_ct_keys(settings: "ModelSettings | None") -> set[str]:
     """Chat-template keys a request is not allowed to override."""
     if settings is None:
         return set()
-    return set(settings.forced_ct_kwargs or [])
+    return set(getattr(settings, "forced_ct_kwargs", None) or [])
 
 
 def merge_chat_template_request_kwargs(
@@ -1803,14 +1803,17 @@ def merge_chat_template_request_kwargs(
     forced_keys = forced_ct_keys(settings)
 
     if settings is not None:
-        if settings.chat_template_kwargs:
-            merged.update(settings.chat_template_kwargs)
+        chat_template_kwargs = getattr(settings, "chat_template_kwargs", None)
+        if chat_template_kwargs:
+            merged.update(chat_template_kwargs)
         # Dedicated toggles take precedence over chat_template_kwargs.
-        if settings.enable_thinking is not None:
-            merged["enable_thinking"] = settings.enable_thinking
+        enable_thinking = getattr(settings, "enable_thinking", None)
+        if enable_thinking is not None:
+            merged["enable_thinking"] = enable_thinking
         # preserve_thinking: keep <think> blocks in historical turns (Qwen 3.6+)
-        if settings.preserve_thinking is not None:
-            merged["preserve_thinking"] = settings.preserve_thinking
+        preserve_thinking = getattr(settings, "preserve_thinking", None)
+        if preserve_thinking is not None:
+            merged["preserve_thinking"] = preserve_thinking
 
     if request_ct_kwargs:
         for key, value in request_ct_kwargs.items():
