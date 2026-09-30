@@ -3228,20 +3228,37 @@ async def _preprocess_markitdown_files_for_llm(
 async def _preprocess_response_files_for_llm(
     messages: list[dict],
 ) -> list[dict]:
-    pydantic_messages = [Message.model_validate(msg) for msg in messages]
+    """Convert attachments without round-tripping Responses history through Message."""
     try:
-        pydantic_messages = normalize_media_file_parts_in_messages(pydantic_messages)
+        messages = normalize_media_file_parts_in_messages(messages)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if not request_has_file_parts(pydantic_messages):
-        return normalize_chat_messages_for_response_store(
-            [msg.model_dump(exclude_none=True) for msg in pydantic_messages]
+    document_indices = {
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message.get("content"), list)
+        and any(
+            isinstance(part, dict) and part.get("type") == "file"
+            for part in message["content"]
         )
+    }
+    if not document_indices:
+        return messages
 
+    # MarkItDown needs roles for historical-file handling, but not tool calls
+    # or other conversation metadata. Only document-bearing content crosses
+    # this adapter; ordinary Codex text/tool requests never construct Message.
+    attachment_messages = [
+        Message(
+            role=message.get("role", "user"),
+            content=message.get("content") if index in document_indices else None,
+        )
+        for index, message in enumerate(messages)
+    ]
     try:
         processed = await preprocess_markitdown_file_parts_async(
-            pydantic_messages,
+            attachment_messages,
             global_settings=_server_state.global_settings,
             engine_pool=_server_state.engine_pool,
             settings_manager=_server_state.settings_manager,
@@ -3253,9 +3270,25 @@ async def _preprocess_response_files_for_llm(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return normalize_chat_messages_for_response_store(
-        [msg.model_dump(exclude_none=True) for msg in processed]
-    )
+
+    result = list(messages)
+    for index in document_indices:
+        # Conversion replaces each file with one text part. Preserve all other
+        # original parts and message fields, including protocol extensions.
+        result[index] = {
+            **messages[index],
+            "content": [
+                (
+                    converted.model_dump(exclude_none=True)
+                    if isinstance(original, dict) and original.get("type") == "file"
+                    else original
+                )
+                for original, converted in zip(
+                    messages[index]["content"], processed[index].content, strict=True
+                )
+            ],
+        }
+    return result
 
 
 def _build_markitdown_chat_response(

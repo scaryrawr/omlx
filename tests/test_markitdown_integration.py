@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import logging
 import sys
@@ -756,6 +757,130 @@ def test_responses_preprocessing_preserves_tool_argument_objects(
     assert "cmd=pwd;" in rendered
     if with_file:
         assert "Converted document" in str(processed[-1]["content"])
+
+
+def test_responses_without_files_bypass_message_validation():
+    messages = [
+        {
+            "role": "assistant",
+            "channel": "commentary",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "exec_command",
+                        "namespace": "functions",
+                        "arguments": {"cmd": "pwd"},
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "/tmp"},
+    ]
+    original = copy.deepcopy(messages)
+    with patch.object(server_module, "Message") as message_type:
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+        message_type.model_validate.assert_not_called()
+        message_type.assert_not_called()
+    assert processed is messages
+    assert messages == original
+
+
+@pytest.mark.parametrize("with_document", [False, True])
+@pytest.mark.parametrize("media_kind,extension", [("audio", "wav"), ("video", "mp4")])
+def test_responses_attachments_preserve_unrelated_history_and_content(
+    monkeypatch, with_document, media_kind, extension
+):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown", lambda *a, **k: "Document"
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "channel": "commentary",
+            "partial": True,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "exec_command",
+                        "namespace": "functions",
+                        "arguments": {"cmd": "pwd"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "metadata": {"keep": True},
+            "content": [
+                _file_part(f"clip.{extension}", mime_type=f"{media_kind}/{extension}"),
+                {"type": "text", "text": "Describe it.", "metadata": {"keep": True}},
+            ],
+        },
+    ]
+    if with_document:
+        messages[-1]["content"].append(_file_part())
+    original = copy.deepcopy(messages)
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+    assert messages == original
+    assert processed[0] is messages[0]
+    assert processed[1]["metadata"] == original[1]["metadata"]
+    assert processed[1]["content"][0]["type"] == f"input_{media_kind}"
+    assert processed[1]["content"][1] is messages[1]["content"][1]
+    if with_document:
+        assert processed[1]["content"][2]["type"] == "text"
+        assert "Document" in processed[1]["content"][2]["text"]
+
+
+def test_responses_historical_documents_keep_latest_user_position(monkeypatch):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown",
+        lambda *a, **k: pytest.fail("Historical placeholder must not be converted"),
+    )
+    messages = [
+        {"role": "user", "content": [_file_part(data="")]},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": "Continue."},
+    ]
+    # _file_part fills empty data by default; simulate a persisted placeholder.
+    messages[0]["content"][0]["file"]["file_data"] = ""
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+    assert "Attached file unavailable" in processed[0]["content"][0]["text"]
+    assert processed[1] is messages[1]
+    assert processed[2] is messages[2]
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_responses_document_processing_keeps_request_limits(monkeypatch, disabled):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown", lambda *a, **k: "Document"
+    )
+    messages = [
+        {"role": "user", "content": [_file_part()]},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": [_file_part()]},
+    ]
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    state.global_settings.integrations.markitdown_max_files_per_request = 1
+    state.global_settings.integrations.markitdown_enabled = not disabled
+    with (
+        patch("omlx.server._server_state", state),
+        pytest.raises(HTTPException) as error,
+    ):
+        asyncio.run(server_module._preprocess_response_files_for_llm(messages))
+    assert error.value.status_code == 400
+    assert ("disabled" if disabled else "Too many attached files") in error.value.detail
 
 
 def test_responses_file_url_is_rejected_without_downloading():
