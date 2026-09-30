@@ -172,11 +172,19 @@ def _consolidate_system_messages(
 def _normalize_previous_messages(
     previous_messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Drop default-only fields that should not replay as chat message content."""
+    """Restore template-ready history without mutating caller-owned messages."""
     normalized = copy.deepcopy(previous_messages)
     for msg in normalized:
         if msg.get("partial") is False:
             msg.pop("partial", None)
+        # Message validation for attachment preprocessing serializes arguments
+        # to OpenAI wire-format JSON strings. Native tool templates (e.g. Qwen)
+        # iterate arguments|items and need the parsed object on replay, both
+        # for the current turn and for previously persisted response state.
+        for call in msg.get("tool_calls") or []:
+            function = call.get("function", {})
+            if "arguments" in function:
+                function["arguments"] = _try_parse_json(function["arguments"])
     return normalized
 
 

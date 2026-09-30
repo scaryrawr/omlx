@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for OpenAI Responses API models and utilities."""
 
+import copy
 import json
 
 import pytest
@@ -27,6 +28,7 @@ from omlx.api.responses_utils import (
     convert_responses_tools,
     convert_stored_response_to_messages,
     format_sse_event,
+    normalize_chat_messages_for_response_store,
     normalize_response_output_to_messages,
     split_namespace_tool_name,
 )
@@ -609,6 +611,60 @@ class TestConvertResponsesInput:
 
 
 IMAGE_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
+class TestResponseHistoryNormalization:
+    @pytest.mark.parametrize("serialized", [False, True])
+    def test_tool_argument_objects_survive_store_and_replay(self, serialized):
+        arguments = {"cmd": "pwd", "options": {"login": False}}
+        messages = [
+            {
+                "role": "assistant",
+                "reasoning_content": "Inspect first.",
+                "partial": False,
+                "tool_calls": [
+                    {
+                        "id": "call_shell",
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "namespace": "functions",
+                            "arguments": (
+                                json.dumps(arguments) if serialized else arguments
+                            ),
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_shell", "content": "/tmp"},
+        ]
+        original = copy.deepcopy(messages)
+        normalized = normalize_chat_messages_for_response_store(messages)
+        replayed = convert_responses_input_to_messages(None, previous_messages=messages)
+        assert normalized == replayed
+        assert normalized[0]["tool_calls"][0]["function"]["arguments"] == arguments
+        assert normalized[0]["tool_calls"][0]["function"]["namespace"] == "functions"
+        assert normalized[0]["reasoning_content"] == "Inspect first."
+        assert "partial" not in normalized[0]
+        assert normalized[1] == original[1]
+        assert messages == original
+        normalized[0]["tool_calls"][0]["function"]["arguments"]["cmd"] = "changed"
+        assert messages == original
+
+    def test_normalization_does_not_replace_malformed_arguments(self):
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"function": {"name": "exec_command", "arguments": "{bad json"}}
+                ],
+            }
+        ]
+        assert normalize_chat_messages_for_response_store(messages) == messages
+
+    def test_null_tool_calls_are_preserved(self):
+        messages = [{"role": "assistant", "content": "Done", "tool_calls": None}]
+        assert normalize_chat_messages_for_response_store(messages) == messages
 
 
 class TestFunctionCallOutputMultimodal:
