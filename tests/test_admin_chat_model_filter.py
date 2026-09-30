@@ -146,6 +146,47 @@ async def test_models_status_exposes_model_alias_metadata():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("settings", "discovered_default", "expected"),
+    [
+        (ModelSettings(enable_thinking=False), True, False),
+        (ModelSettings(enable_thinking=True), False, True),
+        (ModelSettings(chat_template_kwargs={"enable_thinking": True}), False, True),
+        (
+            ModelSettings(
+                enable_thinking=False, chat_template_kwargs={"enable_thinking": True}
+            ),
+            True,
+            False,
+        ),
+        (ModelSettings(), True, True),
+        (ModelSettings(), None, None),
+        (None, False, False),
+    ],
+)
+async def test_models_status_exposes_effective_thinking(
+    settings, discovered_default, expected
+):
+    from omlx.server import ServerState, list_models_status
+
+    state = ServerState()
+    state.engine_pool = MagicMock()
+    state.engine_pool.get_status.return_value = {
+        "models": [
+            {"id": "model", "model_type": "llm", "thinking_default": discovered_default}
+        ]
+    }
+    state.engine_pool.get_active_model_aliases.return_value = {}
+    if settings is not None:
+        state.settings_manager = MagicMock()
+        state.settings_manager.get_settings_for_request.return_value = settings
+        state.settings_manager.get_settings.return_value = settings
+    with patch("omlx.server._server_state", state):
+        status = await list_models_status()
+    assert status["models"][0]["enable_thinking"] is expected
+
+
+@pytest.mark.asyncio
 async def test_models_endpoints_omit_inactive_colliding_aliases():
     """Inactive aliases should not create duplicate /v1/models display IDs."""
     from omlx.server import ServerState, list_models, list_models_status

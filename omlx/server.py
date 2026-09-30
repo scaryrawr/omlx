@@ -3524,6 +3524,10 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
         m["max_context_window"] = get_max_context_window(model_id)
         source_model_id = m.get("source_model_id") or model_id
 
+        # Let clients advertise thinking per model/profile instead of guessing
+        # from a served alias. Explicit template settings win over discovery.
+        m["enable_thinking"] = m.get("thinking_default")
+
         # Resolve effective max_tokens: model setting > global default
         max_tokens = _server_state.sampling.max_tokens
         if _server_state.settings_manager:
@@ -3539,6 +3543,9 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
                 m["model_alias"] = active_aliases[model_id]
             else:
                 m.pop("model_alias", None)
+            m["enable_thinking"] = merge_chat_template_request_kwargs(ms).get(
+                "enable_thinking", m["enable_thinking"]
+            )
             base_ms = sm.get_settings(source_model_id)
             m["is_favorite"] = base_ms is not None and base_ms.is_favorite
             m["is_hidden"] = base_ms is not None and base_ms.is_hidden
