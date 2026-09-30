@@ -1631,7 +1631,7 @@ _CACHED_INPUT_FAST_PREPARE_MODEL_TYPES = _QWEN_VISION_MODELS - {
 }
 
 
-def _grid_row(image_grid_thw: Any, i: int) -> Optional[List[int]]:
+def _grid_row(image_grid_thw: Any, i: int) -> list[int] | None:
     """Row ``i`` of an ``image_grid_thw`` tensor as ``[t, h, w]``, or None."""
     try:
         row = [int(v) for v in image_grid_thw[i]]
@@ -3637,10 +3637,10 @@ class VLMBatchedEngine(BaseEngine):
         self,
         pixel_values: Any,
         extra_model_inputs: dict,
-        cached_per_image: List[Any],
-        per_hashes: List[str],
-        image_token_count: Optional[int],
-    ) -> Optional[mx.array]:
+        cached_per_image: list[Any],
+        per_hashes: list[str],
+        image_token_count: int | None,
+    ) -> mx.array | None:
         """Encode only uncached images and combine with cached ones in order.
 
         Qwen-style towers attend within each image, so a subset encodes
@@ -3727,8 +3727,8 @@ class VLMBatchedEngine(BaseEngine):
     def _try_build_cached_vision_inputs(
         self,
         prompt: str,
-        images: List[Any],
-    ) -> Optional[Dict[str, Any]]:
+        images: list[Any],
+    ) -> dict[str, Any] | None:
         """Build ``prepare_inputs``-style inputs, preprocessing only cache misses.
 
         Splits the prompt on the vision marker, tokenizes the text chunks, and
@@ -3774,8 +3774,8 @@ class VLMBatchedEngine(BaseEngine):
                 return None
 
             per_hashes = compute_per_image_hashes(images)
-            feats: List[Optional[mx.array]] = []
-            grids: List[Optional[List[int]]] = []
+            feats: list[mx.array | None] = []
+            grids: list[list[int] | None] = []
             for h in per_hashes:
                 feat = self._vision_cache.get(h, self._model_name)
                 grid = self._vision_cache.get_grid(h, self._model_name)
@@ -3834,7 +3834,7 @@ class VLMBatchedEngine(BaseEngine):
                         grid=miss_grids[k],
                     )
 
-            token_ids: List[int] = []
+            token_ids: list[int] = []
             chunks = prompt.split(marker)
             for k, chunk in enumerate(chunks):
                 if chunk:
