@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import sys
 import types
@@ -693,6 +694,68 @@ def test_preprocess_file_parts_rejects_when_disabled():
             [Message(role="user", content=[_file_part()])],
             global_settings=settings,
         )
+
+
+@pytest.mark.parametrize("with_file", [False, True])
+def test_responses_preprocessing_preserves_tool_argument_objects(
+    monkeypatch, with_file
+):
+    """Codex tool history must still render after Message validation/file conversion."""
+    from jinja2 import Environment
+
+    from omlx.api.responses_models import ResponsesRequest
+    from omlx.api.responses_utils import convert_responses_input_to_messages
+
+    arguments = {"cmd": "pwd", "options": {"login": False}, "paths": ["a", "b"]}
+    request = ResponsesRequest(
+        model="test-model",
+        input=[
+            {"role": "user", "content": "Inspect the workspace."},
+            {
+                "type": "function_call",
+                "call_id": "call_shell",
+                "name": "exec_command",
+                "arguments": json.dumps(arguments),
+            },
+            {"type": "function_call_output", "call_id": "call_shell", "output": "/tmp"},
+            {"role": "user", "content": "Continue."},
+        ],
+    )
+    messages = convert_responses_input_to_messages(request.input)
+    if with_file:
+        messages[-1]["content"] = [_file_part(), {"type": "text", "text": "Continue."}]
+        monkeypatch.setattr(
+            "omlx.api.markitdown.convert_file_to_markdown",
+            lambda *args, **kwargs: "Converted document",
+        )
+    state = ServerState()
+    state.engine_pool = _EmptyPool()
+    state.global_settings = GlobalSettings()
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+
+    call = processed[1]["tool_calls"][0]
+    assert call["function"]["arguments"] == arguments
+    assert call["id"] == "call_shell"
+    assert processed[2] == {
+        "role": "tool",
+        "tool_call_id": "call_shell",
+        "content": "/tmp",
+    }
+    assert all("partial" not in message for message in processed)
+    # Qwen's native tool template uses this filter, which raises on JSON strings.
+    rendered = (
+        Environment()
+        .from_string(
+            "{% for name, value in arguments|items %}{{ name }}={{ value }};{% endfor %}"
+        )
+        .render(arguments=call["function"]["arguments"])
+    )
+    assert "cmd=pwd;" in rendered
+    if with_file:
+        assert "Converted document" in str(processed[-1]["content"])
 
 
 def test_responses_file_url_is_rejected_without_downloading():
