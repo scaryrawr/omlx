@@ -472,6 +472,23 @@ def _extract_media(
     return text_messages, images, audio
 
 
+def compute_audio_video_hash(audio: list[Any], videos: list[Any]) -> str | None:
+    """Hash inline audio and video without changing audio buffer positions."""
+    if not audio and not videos:
+        return None
+    hasher = hashlib.sha256()
+    for label, items in (("audio", audio), ("video", videos)):
+        for item in items:
+            hasher.update(label.encode())
+            if isinstance(item, io.BytesIO):
+                hasher.update(item.getvalue())
+            elif isinstance(item, (bytes, bytearray, memoryview)):
+                hasher.update(bytes(item))
+            else:
+                hasher.update(str(item).encode())
+    return hasher.hexdigest()
+
+
 def compute_image_hash(images: List[Image.Image]) -> Optional[str]:
     """
     Compute a SHA256 hash from a list of images for prefix cache deduplication.

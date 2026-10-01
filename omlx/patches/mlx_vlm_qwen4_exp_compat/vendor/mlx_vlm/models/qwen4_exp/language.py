@@ -4224,6 +4224,46 @@ class LanguageModel(Qwen3_5LanguageModel):
             if step is not None:
                 _MTP_ONE_ROW_STEP.reset(step)
 
+    def speculative_verify_logits(self, inputs: mx.array, cache, sampler):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+                sampler(output.logits),
+            )
+        except BaseException:
+            transaction.abort()
+            raise
+
+    def speculative_verify_hidden(self, inputs: mx.array, cache):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+                skip_logits=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+            )
+        except BaseException:
+            transaction.abort()
+            raise
+
     def ple_gathers_ahead(self) -> bool:
         """True when an SSD-backed PLE table gathers rows one prefill chunk ahead."""
         for layer in self.model.layers:
