@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for OpenAI Responses API models and utilities."""
 
+import copy
 import json
 
 import pytest
@@ -27,6 +28,7 @@ from omlx.api.responses_utils import (
     convert_responses_tools,
     convert_stored_response_to_messages,
     format_sse_event,
+    normalize_chat_messages_for_response_store,
     normalize_response_output_to_messages,
     split_namespace_tool_name,
 )
@@ -415,6 +417,60 @@ class TestConvertResponsesInput:
         messages = convert_responses_input_to_messages(items)
         assert messages[0]["content"] == "Reply OK."
 
+    def test_input_audio_preserved_as_content_list(self):
+        """Responses input_audio parts should be preserved for VLM processing."""
+        items = [
+            InputItem(
+                type="message",
+                role="user",
+                content=[
+                    {"type": "input_text", "text": "What is in this recording?"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "abc123", "format": "wav"},
+                    },
+                ],
+            )
+        ]
+
+        messages = convert_responses_input_to_messages(items)
+        content = messages[0]["content"]
+
+        assert isinstance(content, list)
+        assert content[1] == {
+            "type": "input_audio",
+            "input_audio": {"data": "abc123", "format": "wav"},
+        }
+
+    def test_input_file_preserved_as_file_part(self):
+        """Responses input_file maps to internal file part for preprocessing."""
+        items = [
+            InputItem(
+                type="message",
+                role="user",
+                content=[
+                    {"type": "input_text", "text": "Summarize this."},
+                    {
+                        "type": "input_file",
+                        "filename": "notes.txt",
+                        "file_data": "data:text/plain;base64,ZA==",
+                    },
+                ],
+            )
+        ]
+
+        messages = convert_responses_input_to_messages(items)
+        content = messages[0]["content"]
+
+        assert isinstance(content, list)
+        assert content[1] == {
+            "type": "file",
+            "file": {
+                "filename": "notes.txt",
+                "file_data": "data:text/plain;base64,ZA==",
+            },
+        }
+
     def test_text_only_content_parts_flattened(self):
         """Content with only text parts should still be flattened to string."""
         items = [
@@ -555,6 +611,60 @@ class TestConvertResponsesInput:
 
 
 IMAGE_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
+class TestResponseHistoryNormalization:
+    @pytest.mark.parametrize("serialized", [False, True])
+    def test_tool_argument_objects_survive_store_and_replay(self, serialized):
+        arguments = {"cmd": "pwd", "options": {"login": False}}
+        messages = [
+            {
+                "role": "assistant",
+                "reasoning_content": "Inspect first.",
+                "partial": False,
+                "tool_calls": [
+                    {
+                        "id": "call_shell",
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "namespace": "functions",
+                            "arguments": (
+                                json.dumps(arguments) if serialized else arguments
+                            ),
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_shell", "content": "/tmp"},
+        ]
+        original = copy.deepcopy(messages)
+        normalized = normalize_chat_messages_for_response_store(messages)
+        replayed = convert_responses_input_to_messages(None, previous_messages=messages)
+        assert normalized == replayed
+        assert normalized[0]["tool_calls"][0]["function"]["arguments"] == arguments
+        assert normalized[0]["tool_calls"][0]["function"]["namespace"] == "functions"
+        assert normalized[0]["reasoning_content"] == "Inspect first."
+        assert "partial" not in normalized[0]
+        assert normalized[1] == original[1]
+        assert messages == original
+        normalized[0]["tool_calls"][0]["function"]["arguments"]["cmd"] = "changed"
+        assert messages == original
+
+    def test_normalization_does_not_replace_malformed_arguments(self):
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"function": {"name": "exec_command", "arguments": "{bad json"}}
+                ],
+            }
+        ]
+        assert normalize_chat_messages_for_response_store(messages) == messages
+
+    def test_null_tool_calls_are_preserved(self):
+        messages = [{"role": "assistant", "content": "Done", "tool_calls": None}]
+        assert normalize_chat_messages_for_response_store(messages) == messages
 
 
 class TestFunctionCallOutputMultimodal:
