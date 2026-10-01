@@ -29,6 +29,7 @@ def apply_mlx_vlm_inkling_compat_patch() -> bool:
     try:
         _install_vendor_namespace()
         _import_vendor_modules()
+        _patch_route_kernel()
 
         import mlx_vlm.prompt_utils as prompt_utils
         import mlx_vlm.utils as vlm_utils
@@ -71,6 +72,26 @@ def _import_vendor_modules() -> None:
     importlib.import_module("mlx_vlm.models.activations")
     importlib.import_module("mlx_vlm.models.mlp")
     importlib.import_module(f"mlx_vlm.models.{_MODULE_NAME}")
+
+
+def _patch_route_kernel() -> None:
+    import mlx.core as mx
+
+    language = importlib.import_module(f"mlx_vlm.models.{_MODULE_NAME}.language")
+    source = language._ROUTE_SRC
+    old = "const device T* lg = logits + (size_t)n * (R + SH);"
+    if old not in source:
+        return
+    # MLX places small inputs in Metal's constant address space.
+    language._ROUTE_SRC = source.replace(
+        old, "auto lg = logits + (size_t)n * (R + SH);"
+    )
+    language._route_kernel = mx.fast.metal_kernel(
+        name="omlx_inkling_moe_route",
+        input_names=["logits", "corr", "wscale"],
+        output_names=["idx", "wk", "gamma"],
+        source=language._ROUTE_SRC,
+    )
 
 
 def _patch_model_remapping(vlm_utils: Any) -> None:

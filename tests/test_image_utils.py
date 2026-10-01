@@ -13,7 +13,7 @@ from PIL import Image
 
 from omlx.exceptions import InvalidRequestError
 from omlx.utils.image import (
-    cleanup_temporary_media,
+    compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
     extract_images_from_messages,
@@ -448,8 +448,8 @@ class TestExtractImagesFromMessages:
         # Text content should be preserved
         assert "Describe this image and audio" in text_msgs[0]["content"]
 
-    def test_input_video_data_uri_extracts_temp_path(self):
-        """Video data URIs are decoded to temporary paths for mlx-vlm load_video."""
+    def test_input_video_data_uri_is_preserved(self):
+        """Inline video stays in memory until model-specific preprocessing."""
         video_b64 = base64.b64encode(b"fake mp4 bytes").decode("ascii")
         messages = [
             {
@@ -469,16 +469,21 @@ class TestExtractImagesFromMessages:
         ]
 
         text_msgs, images, audio, videos = extract_media_from_messages(messages)
-        try:
-            assert len(images) == 0
-            assert len(audio) == 0
-            assert len(videos) == 1
-            assert str(videos[0]).endswith(".mp4")
-            with open(videos[0], "rb") as f:
-                assert f.read() == b"fake mp4 bytes"
-            assert text_msgs[0]["content"] == "Describe this clip"
-        finally:
-            cleanup_temporary_media(videos)
+        assert images == []
+        assert audio == []
+        assert videos == [f"data:video/mp4;base64,{video_b64}"]
+        assert text_msgs[0]["content"] == "Describe this clip"
+
+    def test_input_video_base64_data_is_normalized(self):
+        messages = [{
+            "role": "user",
+            "content": [{
+                "type": "input_video",
+                "input_video": {"data": "cmVjb3JkaW5n", "format": "mp4"},
+            }],
+        }]
+        _, _, _, videos = extract_media_from_messages(messages)
+        assert videos == ["data:video/mp4;base64,cmVjb3JkaW5n"]
 
     def test_input_video_url_is_rejected(self):
         """Video inputs must be inline rather than server-fetched."""
@@ -551,8 +556,8 @@ class TestExtractImagesFromMessages:
         with pytest.raises(InvalidRequestError, match="base64"):
             extract_media_from_messages(messages)
 
-    def test_input_video_empty_string_ignored(self):
-        """Empty string-form video parts are ignored instead of forwarded."""
+    def test_input_video_empty_string_rejected(self):
+        """Empty video parts fail explicitly instead of silently disappearing."""
         messages = [
             {
                 "role": "user",
@@ -565,12 +570,11 @@ class TestExtractImagesFromMessages:
             }
         ]
 
-        _, _, _, videos = extract_media_from_messages(messages)
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
 
-        assert videos == []
 
-
-def test_compat_image_extraction_ignores_video():
+def test_compat_image_extraction_rejects_video():
     messages = [
         {
             "role": "user",
@@ -587,10 +591,8 @@ def test_compat_image_extraction_ignores_video():
         }
     ]
 
-    text_messages, images, audio = extract_images_from_messages(messages)
-    assert text_messages == [{"role": "user", "content": "Describe"}]
-    assert images == []
-    assert audio == []
+    with pytest.raises(InvalidRequestError, match="Video input is not supported"):
+        extract_images_from_messages(messages)
 
 
 def test_extract_media_keeps_video_uris_in_order():
@@ -620,6 +622,16 @@ def test_extract_media_rejects_video_part_without_url():
 
     with pytest.raises(InvalidRequestError, match="missing video_url"):
         extract_media_from_messages(messages)
+
+
+def test_audio_cache_hash_preserves_buffer_position():
+    recording = io.BytesIO(b"recording")
+    recording.seek(3)
+    digest = compute_audio_video_hash([recording], [])
+    assert recording.tell() == 3
+    assert digest == compute_audio_video_hash([io.BytesIO(b"recording")], [])
+    assert digest != compute_audio_video_hash([io.BytesIO(b"different")], [])
+    assert compute_audio_video_hash([], []) is None
 
 
 # =============================================================================
