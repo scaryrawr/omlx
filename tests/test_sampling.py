@@ -143,6 +143,14 @@ def test_apply_top_k_keeps_only_k_tokens():
     assert all(np.isinf(out_np[0, i]) and out_np[0, i] < 0 for i in (0, 1, 2))
 
 
+def test_apply_min_p_keeps_required_tokens_in_batched_input():
+    """The scalar keep value must be accepted by current MLX put_along_axis."""
+    logits = mx.array([[10.0, 0.0, 0.0, 0.0], [0.0, 3.0, 2.0, 1.0]])
+    out = apply_min_p(logits, min_p=0.9, min_tokens_to_keep=4)
+    mx.eval(out)
+    assert np.isfinite(np.asarray(out)).sum(axis=-1).tolist() == [4, 4]
+
+
 def test_apply_min_p_masks_below_threshold():
     """apply_min_p should mask tokens below max(p) * min_p."""
     # Logits engineered so top token has prob ~ 0.99, others negligible
@@ -166,6 +174,27 @@ def test_apply_xtc_advances_rng_state():
     mx.eval(out)
     post = _capture_rng()
     assert pre != post, "apply_xtc did not advance RNG"
+
+
+def test_apply_xtc_handles_batched_logits():
+    """XTC should choose a threshold independently for each batch row."""
+    logits = mx.array(
+        [
+            [0.0, 2.0, 1.0, -1.0],
+            [3.0, 0.0, 2.0, -2.0],
+        ]
+    )
+    out = apply_xtc(
+        logits,
+        xtc_probability=1.0,
+        xtc_threshold=0.1,
+        xtc_special_tokens=[],
+    )
+    mx.eval(out)
+    out_np = np.asarray(out)
+
+    assert np.isfinite(out_np[0]).sum() < logits.shape[-1]
+    assert np.isfinite(out_np[1]).sum() < logits.shape[-1]
 
 
 def test_make_sampler_chain_advances_rng_state_each_call():

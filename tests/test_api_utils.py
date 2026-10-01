@@ -683,7 +683,7 @@ class TestUsesNativeReasoningContent:
 
 
 class TestExtractMultimodalVideoContent:
-    def test_extract_multimodal_preserves_input_video(self):
+    def test_extract_multimodal_normalizes_video_url_alias(self):
         messages = [
             Message(
                 role="user",
@@ -703,8 +703,10 @@ class TestExtractMultimodalVideoContent:
         result = extract_multimodal_content(messages)
 
         assert isinstance(result[0]["content"], list)
-        assert result[0]["content"][1]["type"] == "input_video"
-        assert result[0]["content"][1]["input_video"]["format"] == "mp4"
+        assert result[0]["content"][1] == {
+            "type": "video_url",
+            "video_url": {"url": "https://example.com/clip.mp4"},
+        }
 
     def test_audio_file_part_normalizes_to_input_audio(self):
         messages = [
@@ -3204,7 +3206,7 @@ class TestExtractMultimodalContent:
                 {"type": "input_video", "input_video": "/tmp/clip.mp4"},
             ]
         )
-        assert parts == [{"type": "input_video", "input_video": "/tmp/clip.mp4"}]
+        assert parts == [{"type": "video_url", "video_url": {"url": "/tmp/clip.mp4"}}]
 
     def test_input_audio_pass_through(self):
         """input_audio parts survive multimodal content extraction."""

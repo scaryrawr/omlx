@@ -19,7 +19,7 @@ Usage:
 """
 
 from collections.abc import Callable
-from typing import Any, Optional, Union
+from typing import Any
 
 # Direction of the memory_guard_tier knob. Spelled out everywhere a message
 # names the tier: the admin popup lists Safe first, so "lower the tier" reads
@@ -48,7 +48,7 @@ def describe_ceiling_binding(
     tier: str,
     current: int,
     fmt: Callable[[int], str],
-    tail: Optional[Union[str, list[str]]] = None,
+    tail: str | list[str] | None = None,
     metal_cap_raw: int = 0,
 ) -> tuple[str, str]:
     """Name the binding component ceiling and the remedy that actually moves it.
@@ -132,7 +132,7 @@ class OMLXError(Exception):
     for easy catching of all oMLX-related errors.
     """
 
-    def __init__(self, message: str, details: Optional[dict] = None):
+    def __init__(self, message: str, details: dict | None = None):
         super().__init__(message)
         self.message = message
         self.details = details or {}
@@ -170,9 +170,9 @@ class CacheCorruptionError(CacheError):
     def __init__(
         self,
         message: str,
-        request_id: Optional[str] = None,
-        block_id: Optional[int] = None,
-        details: Optional[dict] = None,
+        request_id: str | None = None,
+        block_id: int | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.request_id = request_id
@@ -190,8 +190,8 @@ class CacheMissError(CacheError):
     def __init__(
         self,
         message: str,
-        key: Optional[Any] = None,
-        details: Optional[dict] = None,
+        key: Any | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.key = key
@@ -218,9 +218,9 @@ class CacheStorageError(CacheError):
     def __init__(
         self,
         message: str,
-        path: Optional[str] = None,
-        operation: Optional[str] = None,
-        details: Optional[dict] = None,
+        path: str | None = None,
+        operation: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.path = path
@@ -249,8 +249,8 @@ class RequestError(SchedulerError):
     def __init__(
         self,
         message: str,
-        request_id: Optional[str] = None,
-        details: Optional[dict] = None,
+        request_id: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.request_id = request_id
@@ -296,7 +296,7 @@ class SchedulerQueueFullError(SchedulerError):
         self,
         current_depth: int,
         max_depth: int,
-        details: Optional[dict] = None,
+        details: dict | None = None,
     ):
         super().__init__(
             f"Scheduler waiting queue full: {current_depth} >= {max_depth}",
@@ -328,8 +328,8 @@ class ModelLoadError(ModelError):
     def __init__(
         self,
         message: str,
-        model_name: Optional[str] = None,
-        details: Optional[dict] = None,
+        model_name: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.model_name = model_name
@@ -369,8 +369,8 @@ class InvalidRequestError(APIError):
     def __init__(
         self,
         message: str,
-        field: Optional[str] = None,
-        details: Optional[dict] = None,
+        field: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.field = field
@@ -404,8 +404,8 @@ class ConfigurationError(OMLXError):
     def __init__(
         self,
         message: str,
-        config_key: Optional[str] = None,
-        details: Optional[dict] = None,
+        config_key: str | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.config_key = config_key
@@ -433,9 +433,9 @@ class OutOfMemoryError(OMLXMemoryError):
     def __init__(
         self,
         message: str,
-        requested_bytes: Optional[int] = None,
-        available_bytes: Optional[int] = None,
-        details: Optional[dict] = None,
+        requested_bytes: int | None = None,
+        available_bytes: int | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.requested_bytes = requested_bytes
@@ -460,10 +460,10 @@ class PrefillMemoryExceededError(OMLXMemoryError):
     def __init__(
         self,
         message: str,
-        request_id: Optional[str] = None,
-        estimated_bytes: Optional[int] = None,
-        limit_bytes: Optional[int] = None,
-        details: Optional[dict] = None,
+        request_id: str | None = None,
+        estimated_bytes: int | None = None,
+        limit_bytes: int | None = None,
+        details: dict | None = None,
     ):
         super().__init__(message, details)
         self.request_id = request_id
@@ -517,8 +517,8 @@ class ModelTooLargeError(EnginePoolError):
         model_size: int,
         ceiling: int,
         *,
-        binding: Optional[str] = None,
-        advice: Optional[str] = None,
+        binding: str | None = None,
+        advice: str | None = None,
     ):
         self.model_id = model_id
         self.model_size = model_size
