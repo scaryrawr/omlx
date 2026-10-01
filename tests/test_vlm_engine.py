@@ -1346,7 +1346,6 @@ class TestProcessChatMessages:
             text_msgs,
             [],
             audio=None,
-            videos=None,
             chat_template_kwargs=None,
             tools=None,
             is_partial=None,
@@ -1525,10 +1524,10 @@ class TestProcessChatMessages:
         assert call_kwargs["tools"] is None
 
     @patch("omlx.engine.vlm.extract_media_from_messages")
-    def test_video_path_adds_media_cache_key(self, mock_extract):
-        """Video requests use a media-specific prefix-cache key."""
+    def test_audio_path_adds_media_cache_key(self, mock_extract):
+        """Audio requests use a media-specific prefix-cache key."""
         text_msgs = [{"role": "user", "content": "Describe"}]
-        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+        mock_extract.return_value = (text_msgs, [], [b"recording"], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -1548,8 +1547,8 @@ class TestProcessChatMessages:
         assert image_cache_key_ranges == []
 
     @patch("omlx.engine.vlm.extract_media_from_messages")
-    def test_audio_video_preserve_explicit_turn_association(self, mock_extract):
-        """Audio/video-only requests keep structured turns for media placement."""
+    def test_audio_preserves_explicit_turn_association(self, mock_extract):
+        """Audio-only requests keep structured turns for media placement."""
         text_msgs = [{"role": "user", "content": "First\nSecond"}]
         original_messages = [
             {"role": "user", "content": "First"},
@@ -1558,13 +1557,13 @@ class TestProcessChatMessages:
                 "content": [
                     {"type": "text", "text": "Second"},
                     {
-                        "type": "input_video",
-                        "input_video": {"url": "/tmp/clip.mp4"},
+                        "type": "input_audio",
+                        "input_audio": {"data": "cmVjb3JkaW5n", "format": "wav"},
                     },
                 ],
             },
         ]
-        mock_extract.return_value = (text_msgs, [], [], ["/tmp/clip.mp4"])
+        mock_extract.return_value = (text_msgs, [], [b"recording"], [])
 
         engine = _make_loaded_engine()
         engine._prepare_vision_inputs = MagicMock(
@@ -1576,17 +1575,25 @@ class TestProcessChatMessages:
         assert engine._prepare_vision_inputs.call_args.args[0] is original_messages
 
     @patch("omlx.engine.vlm.extract_media_from_messages")
-    def test_video_temp_paths_cleaned_when_prepare_raises(self, mock_extract):
-        """Decoded video temp paths are cleaned if VLM formatting/prep fails."""
-        temp_video = MagicMock()
+    @patch("omlx.engine.vlm.native_video_token_count")
+    @patch("omlx.engine.vlm.probe_video")
+    @patch("omlx.engine.vlm.write_video_data_uri")
+    def test_video_temp_paths_cleaned_when_prepare_raises(
+        self, mock_write, mock_probe, mock_count, mock_extract, tmp_path
+    ):
+        """Decoded native-video files are cleaned if preprocessing fails."""
+        temp_video = tmp_path / "clip.mp4"
+        temp_video.write_bytes(b"recording")
+        mock_write.return_value = (temp_video, "digest")
         mock_extract.return_value = (
             [{"role": "user", "content": "Describe"}],
             [],
             [],
-            [temp_video],
+            ["data:video/mp4;base64,cmVjb3JkaW5n"],
         )
 
         engine = _make_loaded_engine()
+        engine._native_video = True
         engine._prepare_vision_inputs = MagicMock(side_effect=RuntimeError("boom"))
 
         with pytest.raises(RuntimeError, match="boom"):
@@ -1596,7 +1603,7 @@ class TestProcessChatMessages:
                 kwargs={},
             )
 
-        temp_video.cleanup.assert_called_once()
+        assert not temp_video.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2557,7 +2564,7 @@ class TestFormatMessagesForVLMTemplate:
 
     def test_format_messages_with_video_parts(self):
         """Video-bearing messages receive video content entries."""
-        engine = _make_loaded_engine(model_type="qwen2_5_vl")
+        engine = _make_loaded_engine(model_type="qwen3_5")
         messages = [
             {
                 "role": "user",
@@ -2573,13 +2580,12 @@ class TestFormatMessagesForVLMTemplate:
             num_images=0,
             num_audios=0,
             num_videos=1,
-            videos=["/tmp/clip.mp4"],
         )
 
         content = formatted[0]["content"]
         assert isinstance(content, list)
         assert content[0]["type"] == "video"
-        assert content[0]["video"] == "/tmp/clip.mp4"
+        assert "video" not in content[0]
         assert image_ranges == []
 
     def test_text_only_messages_with_zero_audio(self):
