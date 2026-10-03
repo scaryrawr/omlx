@@ -284,10 +284,11 @@ models that oMLX can load on demand, and records each model's context window and
 text/image input support. Embedding, reranking, audio, and image-generation models
 are excluded when their type is available from the model status endpoint. If
 status is unavailable, the public model listing supplies context limits and input
-support defaults to text-only. Models whose chat templates explicitly declare
-reasoning effort levels expose those levels in Codex. The catalog uses `medium`
-when available, otherwise the declared default or first supported level.
-Thinking models without declared levels retain the existing high-effort default.
+support defaults to text-only. Codex exposes only declared chat-template reasoning
+effort levels that it supports. Unsupported values are omitted. Models with
+thinking disabled expose no levels. The default is `medium` when supported,
+otherwise a supported declared default or the first supported level. Thinking
+models without supported declared levels retain the `high`-only fallback.
 
 Requires a Codex version supporting
 [`model_catalog_json`](https://developers.openai.com/codex/config-reference/#model_catalog_json).
