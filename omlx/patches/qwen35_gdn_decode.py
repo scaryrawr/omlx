@@ -219,6 +219,8 @@ def _patch_vlm() -> bool:
     original = cls.__call__
 
     def call(self, inputs, mask=None, cache=None):
+        if cache is not None and cache.is_speculating:
+            return original(self, inputs, mask=mask, cache=cache)
         batch, seq_len, _ = inputs.shape
         mixed_qkv = self.in_proj_qkv(inputs)
         z = self.in_proj_z(inputs).reshape(batch, seq_len, -1, self.head_v_dim)
@@ -294,7 +296,6 @@ def _patch_vlm() -> bool:
             cache[1] = state
             if hasattr(cache, "advance"):
                 cache.advance(seq_len)
-                q35._qwen3_5_advance_left_padding_info(cache, seq_len)
                 q35._qwen3_5_advance_lengths_info(cache, seq_len)
         out = self.norm(out, z)
         return self.out_proj(out.reshape(batch, seq_len, -1))

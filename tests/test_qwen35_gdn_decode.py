@@ -89,7 +89,12 @@ def _qwen4_config():
 
 
 def _assert_vlm_gdn_call_matches_upstream(
-    monkeypatch, family, shape, use_mask, conv_kernel_size
+    monkeypatch,
+    family,
+    shape,
+    use_mask,
+    conv_kernel_size,
+    cache_metadata=None,
 ):
     from mlx_vlm.models.cache import ArraysCache
     from mlx_vlm.models.qwen3_5 import language as q35
@@ -132,6 +137,10 @@ def _assert_vlm_gdn_call_matches_upstream(
 
     reference_cache = ArraysCache(2)
     patched_cache = ArraysCache(2)
+    if cache_metadata is not None:
+        setattr(reference_cache, cache_metadata, mx.array([1, 2]))
+        setattr(patched_cache, cache_metadata, mx.array([1, 2]))
+        mask = reference_cache.make_mask(shape[1])
     expected = upstream_call(module, inputs, mask=mask, cache=reference_cache)
     actual = module(inputs, mask=mask, cache=patched_cache)
     mx.eval(expected, actual, *reference_cache.state, *patched_cache.state)
@@ -139,6 +148,11 @@ def _assert_vlm_gdn_call_matches_upstream(
     assert mx.array_equal(actual, expected).item()
     assert mx.array_equal(patched_cache[0], reference_cache[0]).item()
     assert mx.array_equal(patched_cache[1], reference_cache[1]).item()
+    if cache_metadata is not None:
+        assert getattr(patched_cache, cache_metadata).tolist() == [
+            1 - shape[1],
+            2 - shape[1],
+        ]
 
     next_inputs = mx.random.normal((shape[0], 1, shape[-1])).astype(mx.bfloat16)
     expected = upstream_call(module, next_inputs, cache=reference_cache)
@@ -148,6 +162,11 @@ def _assert_vlm_gdn_call_matches_upstream(
     assert mx.array_equal(actual, expected).item()
     assert mx.array_equal(patched_cache[0], reference_cache[0]).item()
     assert mx.array_equal(patched_cache[1], reference_cache[1]).item()
+    if cache_metadata is not None:
+        assert getattr(patched_cache, cache_metadata).tolist() == [
+            -shape[1],
+            1 - shape[1],
+        ]
 
 
 @pytest.mark.parametrize("family", ["qwen3_5", "qwen4_exp"])
@@ -166,6 +185,45 @@ def test_vlm_gdn_call_matches_current_upstream(
     _assert_vlm_gdn_call_matches_upstream(
         monkeypatch, family, shape, use_mask, conv_kernel_size
     )
+
+
+@pytest.mark.parametrize("cache_metadata", ["left_padding", "lengths"])
+def test_vlm_gdn_advances_ragged_cache_metadata(monkeypatch, cache_metadata):
+    _assert_vlm_gdn_call_matches_upstream(
+        monkeypatch, "qwen3_5", (2, 3, 32), True, 4, cache_metadata
+    )
+
+
+@pytest.mark.parametrize("length", [1, 3])
+def test_vlm_gdn_preserves_speculative_cache_rollback(monkeypatch, length):
+    from mlx_vlm.models.cache import ArraysCache
+    from mlx_vlm.models.qwen3_5 import language as q35
+    from mlx_vlm.speculative.cache_state import start_speculative_cache
+
+    import omlx.patches.qwen35_gdn_decode as patch
+
+    cls = q35.Qwen3_5GatedDeltaNet
+    original = getattr(cls.__call__, "_omlx_original", cls.__call__)
+    monkeypatch.setattr(cls, "__call__", original)
+    monkeypatch.setattr(patch, "_VLM_PATCHED", False)
+    assert patch._patch_vlm()
+    module = cls(_qwen35_config())
+    module.set_dtype(mx.bfloat16)
+    reference_cache, patched_cache = ArraysCache(2), ArraysCache(2)
+    reference = start_speculative_cache([reference_cache], length)
+    patched = start_speculative_cache([patched_cache], length)
+    inputs = mx.random.normal((1, length, 32)).astype(mx.bfloat16)
+    expected = original(module, inputs, cache=reference_cache)
+    actual = module(inputs, cache=patched_cache)
+    mx.eval(actual, expected)
+    assert mx.array_equal(actual, expected).item()
+    reference.commit([length - 1])
+    patched.commit([length - 1])
+    for actual_state, expected_state in zip(patched_cache.state, reference_cache.state):
+        if expected_state is None:
+            assert actual_state is None
+        else:
+            assert mx.array_equal(actual_state, expected_state).item()
 
 
 def test_patch_installs_for_lm_and_vlm():
