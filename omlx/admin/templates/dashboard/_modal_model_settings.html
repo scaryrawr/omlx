@@ -801,14 +801,36 @@
                                     </div>
                                     <div x-show="modelSettings.mtp_enabled" x-transition
                                          class="flex items-center justify-between gap-3 pt-1">
+                                        <span class="text-sm font-medium text-neutral-700">{{ t('modal.model_settings.mtp_depth_mode') }}</span>
+                                        <select x-model="modelSettings.mtp_depth_mode"
+                                                class="w-48 flex-shrink-0 px-3 py-2 border border-neutral-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black">
+                                            <option value="adaptive">{{ t('modal.model_settings.mtp_mode_adaptive') }}</option>
+                                            <option value="fixed">{{ t('modal.model_settings.mtp_mode_fixed') }}</option>
+                                        </select>
+                                    </div>
+                                    <div x-show="modelSettings.mtp_enabled && modelSettings.mtp_depth_mode === 'adaptive'" x-transition
+                                         class="flex items-center justify-between gap-3 pt-1">
                                         <div class="min-w-0">
                                             <span class="text-sm font-medium text-neutral-700">{{ t('modal.model_settings.mtp_depth') }}</span>
                                             <p class="text-xs text-neutral-500 mt-0.5">{{ t('modal.model_settings.mtp_depth_hint') }}</p>
                                         </div>
                                         <select x-model="modelSettings.mtp_adaptive_max_depth"
                                                 class="w-48 flex-shrink-0 px-3 py-2 border border-neutral-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black">
-                                            <option value="3">{{ t('modal.model_settings.mtp_depth_adaptive') }}</option>
-                                            {% for depth in range(4, 7) %}
+                                            <option value="">{{ t('modal.model_settings.mtp_depth_adaptive') }}</option>
+                                            {% for depth in range(1, 9) %}
+                                            <option value="{{ depth }}">{{ t('modal.model_settings.mtp_depth_option').replace('{n}', depth|string) }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div x-show="modelSettings.mtp_enabled && modelSettings.mtp_depth_mode === 'fixed'" x-transition
+                                         class="flex items-center justify-between gap-3 pt-1">
+                                        <div class="min-w-0">
+                                            <span class="text-sm font-medium text-neutral-700">{{ t('modal.model_settings.mtp_fixed_depth') }}</span>
+                                            <p class="text-xs text-neutral-500 mt-0.5">{{ t('modal.model_settings.mtp_fixed_depth_hint') }}</p>
+                                        </div>
+                                        <select x-model="modelSettings.mtp_fixed_depth"
+                                                class="w-48 flex-shrink-0 px-3 py-2 border border-neutral-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black">
+                                            {% for depth in range(1, 9) %}
                                             <option value="{{ depth }}">{{ t('modal.model_settings.mtp_depth_option').replace('{n}', depth|string) }}</option>
                                             {% endfor %}
                                         </select>

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin model-settings UI gates."""
 
 import json
@@ -58,6 +59,132 @@ def test_vlm_mtp_still_conflicts_with_turboquant():
     )
 
     assert "modelSettings.turboquant_kv_enabled" in vlm_mtp
+
+
+def test_lightning_mtp_depth_modes_cover_supported_values_and_locales():
+    html = _model_settings_template()
+    section = _section(
+        html,
+        "<!-- Lightning MTP (built-in MTP head speculative decoding) -->",
+        "<!-- DFlash -->",
+    )
+    assert 'x-model="modelSettings.mtp_depth_mode"' in section
+    assert 'x-model="modelSettings.mtp_fixed_depth"' in section
+    assert "modelSettings.mtp_depth_mode === 'adaptive'" in section
+    assert "modelSettings.mtp_depth_mode === 'fixed'" in section
+    assert '<option value="">{{ t(\'modal.model_settings.mtp_depth_adaptive\') }}</option>' in section
+    assert section.count("{% for depth in range(1, 9) %}") == 2
+
+    keys = {
+        "modal.model_settings.mtp_depth_mode",
+        "modal.model_settings.mtp_mode_adaptive",
+        "modal.model_settings.mtp_mode_fixed",
+        "modal.model_settings.mtp_fixed_depth",
+        "modal.model_settings.mtp_fixed_depth_hint",
+    }
+    root = Path(__file__).resolve().parents[1]
+    for locale in (root / "omlx/admin/i18n").glob("*.json"):
+        catalog = json.loads(locale.read_text())
+        assert keys <= catalog.keys(), locale.name
+
+
+def test_lightning_mtp_depth_roundtrip():
+    """Exercise real modal state and Save without contacting a running server."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for dashboard behavior tests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('omlx/admin/static/js/dashboard.js', 'utf8');
+function setup(settings) {
+    const requests = [];
+    const context = {
+        localStorage: {getItem: () => null},
+        window: {t: key => key}, navigator: {language: 'en'}, document: {},
+        alert: message => { throw new Error(message); },
+        console,
+        fetch: async (url, options) => {
+            requests.push({url, payload: JSON.parse(options.body)});
+            return {ok: true, json: async () => ({requires_reload: false})};
+        },
+    };
+    const state = vm.runInNewContext(source + '\n dashboard;', context)();
+    state.selectedModel = {id: 'flash', config_model_type: 'qwen4_exp'};
+    state.models = [state.selectedModel];
+    state.loadModels = async () => {};
+    state.modelSettings = state.buildModelSettingsState(state.selectedModel, settings);
+    return {state, requests};
+}
+async function save(state, requests) {
+    const before = requests.length;
+    await state.saveModelSettings();
+    assert.equal(requests.length, before + 1);
+    return requests.at(-1).payload;
+}
+(async () => {
+    const {state, requests} = setup({
+        mtp_enabled: true, mtp_fixed_depth: 1, mtp_adaptive_max_depth: null,
+    });
+    assert.equal(state.modelSettings.mtp_depth_mode, 'fixed');
+    assert.equal(state.modelSettings.mtp_fixed_depth, '1');
+    assert.equal(state.modelSettings.mtp_adaptive_max_depth, '');
+    state.modelSettings.temperature = 0.4;
+    let payload = await save(state, requests);
+    assert.equal(payload.temperature, 0.4);
+    assert.equal(payload.mtp_fixed_depth, 1);
+    assert.equal(payload.mtp_adaptive_max_depth, null);
+    state.modelSettings = state.buildModelSettingsState(state.selectedModel, payload);
+    assert.equal(state.modelSettings.mtp_depth_mode, 'fixed');
+    assert.equal(state.modelSettings.mtp_fixed_depth, '1');
+
+    state.modelSettings.mtp_enabled = false;
+    payload = await save(state, requests);
+    assert.equal(payload.mtp_enabled, false);
+    assert.equal(payload.mtp_fixed_depth, 1);
+    state.modelSettings.mtp_enabled = true;
+    state.modelSettings.mtp_depth_mode = 'adaptive';
+    payload = await save(state, requests);
+    assert.equal(payload.mtp_fixed_depth, null);
+    assert.equal(payload.mtp_adaptive_max_depth, null);
+    state.modelSettings.mtp_adaptive_max_depth = '3';
+    payload = await save(state, requests);
+    assert.equal(payload.mtp_adaptive_max_depth, 3);
+    state.modelSettings.mtp_depth_mode = 'fixed';
+    state.modelSettings.mtp_fixed_depth = '2';
+    payload = await save(state, requests);
+    assert.equal(payload.mtp_fixed_depth, 2);
+    assert.equal(payload.mtp_adaptive_max_depth, 3);
+
+    for (const depth of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        for (const mode of ['adaptive', 'fixed']) {
+            const settings = {
+                mtp_enabled: true,
+                mtp_adaptive_max_depth: depth,
+                mtp_fixed_depth: mode === 'fixed' ? depth : null,
+            };
+            const trial = setup(settings);
+            assert.equal(trial.state.modelSettings.mtp_depth_mode, mode);
+            const saved = await save(trial.state, trial.requests);
+            assert.equal(saved.mtp_adaptive_max_depth, depth);
+            assert.equal(saved.mtp_fixed_depth, settings.mtp_fixed_depth);
+        }
+    }
+    const absent = setup({mtp_enabled: true});
+    payload = await save(absent.state, absent.requests);
+    assert.equal(payload.mtp_adaptive_max_depth, null);
+    assert.equal(payload.mtp_fixed_depth, null);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_reasoning_effort_has_presets_and_custom_input():
