@@ -12,6 +12,7 @@ from mlx_lm.models.qwen3_next import (
     Qwen3NextSparseMoeBlock,
 )
 from mlx_vlm.models.qwen3_5.language import Qwen3_5MLP
+from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
 
 from omlx.patches.qwen35_compiled_mlp import (
     CompiledMLPBlock,
@@ -35,7 +36,8 @@ def _dense_mlp(cls=Qwen3NextMLP):
     return mlp
 
 
-def _moe_block():
+def _moe_block(cls=Qwen3NextSparseMoeBlock, *, seed=51, weight_dtype=mx.float32):
+    mx.random.seed(seed)
     args = ModelArgs(
         model_type="qwen3_next",
         hidden_size=64,
@@ -61,8 +63,10 @@ def _moe_block():
         max_position_embeddings=2048,
         head_dim=16,
     )
-    block = Qwen3NextSparseMoeBlock(args)
+    block = cls(args)
     block.eval()
+    if weight_dtype != mx.float32:
+        block.set_dtype(weight_dtype)
     nn.quantize(block.switch_mlp, group_size=64, bits=4)
     nn.quantize(block.shared_expert, group_size=64, bits=4)
     mx.eval(block.parameters())
@@ -107,17 +111,39 @@ def test_compiled_quantized_dense_output_is_bit_exact(batch, seq):
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
-def test_compiled_quantized_moe_output_is_bit_exact():
-    inner = _moe_block()
+@pytest.mark.parametrize("cls", [Qwen3NextSparseMoeBlock, Qwen3_5MoeSparseMoeBlock])
+@pytest.mark.parametrize("seq", [1, 2, 3, 4])
+@pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
+@pytest.mark.parametrize("weight_dtype", [mx.float32, mx.float16, mx.bfloat16])
+@pytest.mark.parametrize("seed", [31, 51])
+def test_compiled_quantized_moe_output_is_bit_exact(
+    cls, seq, dtype, weight_dtype, seed
+):
+    inner = _moe_block(cls, seed=seed, weight_dtype=weight_dtype)
     host = _Host(inner)
-    x = mx.random.normal((1, 3, 64)).astype(mx.float16)
+    x = mx.random.normal((1, seq, 64)).astype(dtype)
     expected = inner(x)
+    mx.eval(expected)
     assert CompiledMLPBlocks.install(host, enabled=True) == 1
 
     actual = host.mlp(x)
     mx.eval(expected, actual)
 
     assert mx.array_equal(actual, expected).item()
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+@pytest.mark.parametrize("cls", [Qwen3NextSparseMoeBlock, Qwen3_5MoeSparseMoeBlock])
+def test_sparse_orchestration_stays_native_with_compiled_shared_expert(cls):
+    inner = _moe_block(cls)
+    host = _Host(inner)
+    assert CompiledMLPBlocks.install(host, enabled=False) == 0
+    shared = inner.shared_expert
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+    assert host.mlp is inner
+    assert isinstance(inner.shared_expert, CompiledMLPBlock)
+    assert inner.shared_expert.inner is shared
+    assert CompiledMLPBlocks.install(host, enabled=True) == 0
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
@@ -170,5 +196,34 @@ def test_exact_verifier_unwraps_compiled_vlm_block(monkeypatch):
     monkeypatch.setattr(host.mlp, "dispatch_compiled", fail_compiled_dispatch)
     actual = verifier._feed_forward(host.mlp, x)
     mx.eval(expected, actual)
+
+    assert mx.array_equal(actual, expected).item()
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+def test_exact_verifier_unwraps_nested_shared_expert(monkeypatch):
+    from mlx_vlm.models.qwen3_5 import language as q35
+
+    verifier = q35.LanguageModel.__call__.__globals__.get(
+        "_EXACT_SPECULATIVE_VERIFIER"
+    )
+    if verifier is None:
+        pytest.skip("mlx-vlm exact verifier not available")
+
+    inner = _moe_block(Qwen3_5MoeSparseMoeBlock)
+    host = _Host(inner)
+    x = mx.random.normal((1, 3, 64)).astype(mx.float16)
+    expected = verifier._feed_forward(inner, x)
+    mx.eval(expected)
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+
+    def fail_compiled_dispatch(_value):
+        raise AssertionError("exact verification must bypass nested shared dispatch")
+
+    monkeypatch.setattr(
+        host.mlp.shared_expert, "dispatch_compiled", fail_compiled_dispatch
+    )
+    actual = verifier._feed_forward(host.mlp, x)
+    mx.eval(actual)
 
     assert mx.array_equal(actual, expected).item()
