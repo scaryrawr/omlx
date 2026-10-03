@@ -401,6 +401,42 @@ class TestLaunchCommandFunction:
         with patch("requests.post") as post:
             yield post
 
+    @pytest.fixture
+    def codex_launch_environment(self):
+        integration = MagicMock()
+        integration.display_name = "Codex"
+        integration.is_installed.return_value = True
+        health = MagicMock()
+        health.json.return_value = {"default_model": None}
+        status = MagicMock()
+        status.ok = True
+        status.json.return_value = {"models": []}
+        models = MagicMock()
+        models.json.return_value = {"data": []}
+        settings = SimpleNamespace(
+            server=SimpleNamespace(host="127.0.0.1", port=8000),
+            auth=SimpleNamespace(api_key=""),
+            integrations=SimpleNamespace(codex_model=None),
+            claude_code=None,
+        )
+        args = argparse.Namespace(
+            tool="codex", host=None, port=None, api_key=None, model=None
+        )
+        with (
+            patch("requests.get", side_effect=[health, status, models]) as get,
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            yield SimpleNamespace(
+                integration=integration,
+                health=health,
+                status=status,
+                models=models,
+                settings=settings,
+                args=args,
+                get=get,
+            )
+
     @pytest.mark.parametrize("tool", ["codex", "codex_app"])
     @pytest.mark.parametrize(
         ("requested_model", "saved_model", "default_model", "expected_model"),
@@ -427,17 +463,18 @@ class TestLaunchCommandFunction:
         default_model,
         expected_model,
         mock_model_load,
+        codex_launch_environment,
     ):
         from omlx.cli import launch_command
 
-        integration = MagicMock()
-        integration.display_name = "Codex"
-        integration.is_installed.return_value = True
-        health_response = MagicMock()
-        health_response.json.return_value = {"default_model": default_model}
-        status_response = MagicMock()
-        status_response.ok = True
-        status_response.json.return_value = {
+        env = codex_launch_environment
+        integration = env.integration
+        env.args.tool = tool
+        env.args.model = requested_model
+        env.settings.auth.api_key = "saved-key"
+        env.settings.integrations.codex_model = saved_model
+        env.health.json.return_value = {"default_model": default_model}
+        env.status.json.return_value = {
             "models": [
                 {
                     "id": "raw-vision-id",
@@ -462,8 +499,7 @@ class TestLaunchCommandFunction:
                 {"id": "image-model", "model_type": "llm", "engine_type": "image"},
             ]
         }
-        models_response = MagicMock()
-        models_response.json.return_value = {
+        env.models.json.return_value = {
             "data": [
                 {"id": "vision-alias"},
                 {"id": "text-model"},
@@ -473,37 +509,16 @@ class TestLaunchCommandFunction:
             ]
         }
         if default_model in ("raw-vision-id", "vision-alias"):
-            models_response.json.return_value["data"][:2] = [
+            env.models.json.return_value["data"][:2] = [
                 {"id": "text-model"},
                 {"id": "vision-alias"},
             ]
-        settings = SimpleNamespace(
-            server=SimpleNamespace(host="127.0.0.1", port=8000),
-            auth=SimpleNamespace(api_key="saved-key"),
-            integrations=SimpleNamespace(codex_model=saved_model),
-            claude_code=None,
-        )
-        args = argparse.Namespace(
-            tool=tool,
-            host=None,
-            port=None,
-            api_key=None,
-            model=requested_model,
-        )
-        with (
-            patch(
-                "requests.get",
-                side_effect=[health_response, status_response, models_response],
-            ) as get,
-            patch("omlx.integrations.get_integration", return_value=integration),
-            patch("omlx.settings.GlobalSettings.load", return_value=settings),
-        ):
-            if expected_model is None:
-                with pytest.raises(SystemExit) as exc:
-                    launch_command(args)
-                assert exc.value.code == 1
-            else:
-                launch_command(args, extra_args=["--example-flag"])
+        if expected_model is None:
+            with pytest.raises(SystemExit) as exc:
+                launch_command(env.args)
+            assert exc.value.code == 1
+        else:
+            launch_command(env.args, extra_args=["--example-flag"])
 
         integration.select_model.assert_not_called()
         if expected_model is None:
@@ -529,7 +544,9 @@ class TestLaunchCommandFunction:
             assert context.reasoning_effort_default == "xhigh"
         assert catalog["text-model"].context_window == 8192
         assert catalog["text-model"].reasoning is False
-        assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer saved-key"}
+        assert env.get.call_args.kwargs["headers"] == {
+            "Authorization": "Bearer saved-key"
+        }
         if expected_model == "vision-alias":
             mock_model_load.assert_called_once_with(
                 "http://127.0.0.1:8000/v1/models/raw-vision-id/load",
@@ -543,19 +560,19 @@ class TestLaunchCommandFunction:
     @pytest.mark.parametrize("tool", ["codex", "codex_app"])
     @pytest.mark.parametrize("load_failure", [None, "http", "timeout"])
     def test_codex_warms_selected_profile_before_launch(
-        self, tool, load_failure, mock_model_load, capsys
+        self, tool, load_failure, mock_model_load, capsys, codex_launch_environment
     ):
         import requests
 
         from omlx.cli import launch_command
 
-        integration = MagicMock()
-        integration.display_name = "Codex"
-        integration.is_installed.return_value = True
-        health_response = MagicMock()
-        health_response.json.return_value = {"default_model": "first"}
-        status_response = MagicMock()
-        status_response.json.return_value = {
+        env = codex_launch_environment
+        integration = env.integration
+        env.args.tool = tool
+        env.args.model = "coding-profile"
+        env.settings.auth.api_key = "key"
+        env.health.json.return_value = {"default_model": "first"}
+        env.status.json.return_value = {
             "models": [
                 {
                     "id": "coding-profile",
@@ -565,13 +582,7 @@ class TestLaunchCommandFunction:
                 }
             ]
         }
-        models_response = MagicMock()
-        models_response.json.return_value = {"data": [{"id": "coding-profile"}]}
-        settings = SimpleNamespace(
-            server=SimpleNamespace(host="127.0.0.1", port=8000),
-            auth=SimpleNamespace(api_key="key"),
-            claude_code=None,
-        )
+        env.models.json.return_value = {"data": [{"id": "coding-profile"}]}
         if load_failure == "http":
             mock_model_load.return_value.raise_for_status.side_effect = (
                 requests.HTTPError("warm-up rejected")
@@ -581,18 +592,7 @@ class TestLaunchCommandFunction:
         integration.launch.side_effect = (
             lambda context: mock_model_load.assert_called_once()
         )
-        args = argparse.Namespace(
-            tool=tool, host=None, port=None, api_key=None, model="coding-profile"
-        )
-        with (
-            patch(
-                "requests.get",
-                side_effect=[health_response, status_response, models_response],
-            ),
-            patch("omlx.integrations.get_integration", return_value=integration),
-            patch("omlx.settings.GlobalSettings.load", return_value=settings),
-        ):
-            launch_command(args)
+        launch_command(env.args)
 
         mock_model_load.assert_called_once_with(
             "http://127.0.0.1:8000/v1/models/raw-model/load",
@@ -606,105 +606,55 @@ class TestLaunchCommandFunction:
         )
 
     @pytest.mark.parametrize("tool", ["codex", "codex_app"])
-    def test_codex_model_listing_failure_keeps_explicit_model(self, tool, capsys):
+    def test_codex_model_listing_failure_keeps_explicit_model(
+        self, tool, capsys, codex_launch_environment
+    ):
         import requests
 
         from omlx.cli import launch_command
 
-        integration = MagicMock()
-        integration.display_name = "Codex"
-        integration.is_installed.return_value = True
-        health_response = MagicMock()
-        status_response = MagicMock()
-        status_response.ok = False
-        settings = SimpleNamespace(
-            server=SimpleNamespace(host="127.0.0.1", port=8000),
-            auth=SimpleNamespace(api_key=""),
-            claude_code=None,
-        )
-        args = argparse.Namespace(
-            tool=tool, host=None, port=None, api_key=None, model="explicit"
-        )
-        with (
-            patch(
-                "requests.get",
-                side_effect=[
-                    health_response,
-                    status_response,
-                    requests.ConnectionError("offline"),
-                ],
-            ),
-            patch("omlx.integrations.get_integration", return_value=integration),
-            patch("omlx.settings.GlobalSettings.load", return_value=settings),
-        ):
-            launch_command(args)
+        env = codex_launch_environment
+        integration = env.integration
+        env.args.tool = tool
+        env.args.model = "explicit"
+        env.status.ok = False
+        env.get.side_effect = [
+            env.health,
+            env.status,
+            requests.ConnectionError("offline"),
+        ]
+        launch_command(env.args)
         context = integration.launch.call_args.args[0]
         assert context.model == "explicit"
         assert context.models == ()
         integration.select_model.assert_not_called()
         assert "Only the requested model" in capsys.readouterr().out
 
-    def test_codex_uses_public_context_limit_when_status_unavailable(self):
+    def test_codex_uses_public_context_limit_when_status_unavailable(
+        self, codex_launch_environment
+    ):
         from omlx.cli import launch_command
 
-        integration = MagicMock()
-        integration.is_installed.return_value = True
-        health_response = MagicMock()
-        status_response = MagicMock()
-        status_response.ok = False
-        models_response = MagicMock()
-        models_response.json.return_value = {
+        env = codex_launch_environment
+        integration = env.integration
+        env.status.ok = False
+        env.models.json.return_value = {
             "data": [{"id": "model", "max_model_len": 16384}]
         }
-        settings = SimpleNamespace(
-            server=SimpleNamespace(host="127.0.0.1", port=8000),
-            auth=SimpleNamespace(api_key=""),
-            integrations=SimpleNamespace(codex_model=None),
-            claude_code=None,
-        )
-        args = argparse.Namespace(
-            tool="codex", host=None, port=None, api_key=None, model=None
-        )
-        with (
-            patch(
-                "requests.get",
-                side_effect=[health_response, status_response, models_response],
-            ),
-            patch("omlx.integrations.get_integration", return_value=integration),
-            patch("omlx.settings.GlobalSettings.load", return_value=settings),
-        ):
-            launch_command(args)
+        launch_command(env.args)
         assert integration.launch.call_args.args[0].models[0].context_window == 16384
         integration.select_model.assert_not_called()
 
     @pytest.mark.parametrize("tool", ["codex", "codex_app"])
-    def test_codex_without_chat_models_exits(self, tool):
+    def test_codex_without_chat_models_exits(self, tool, codex_launch_environment):
         from omlx.cli import launch_command
 
-        integration = MagicMock()
-        health_response = MagicMock()
-        status_response = MagicMock()
-        status_response.ok = False
-        models_response = MagicMock()
-        models_response.json.return_value = {"data": []}
-        settings = SimpleNamespace(
-            server=SimpleNamespace(host="127.0.0.1", port=8000),
-            auth=SimpleNamespace(api_key=""),
-            claude_code=None,
-        )
-        args = argparse.Namespace(
-            tool=tool, host=None, port=None, api_key=None, model=None
-        )
-        with (
-            patch(
-                "requests.get",
-                side_effect=[health_response, status_response, models_response],
-            ),
-            patch("omlx.integrations.get_integration", return_value=integration),
-            patch("omlx.settings.GlobalSettings.load", return_value=settings),
-            pytest.raises(SystemExit) as exc,
-        ):
-            launch_command(args)
+        env = codex_launch_environment
+        integration = env.integration
+        env.args.tool = tool
+        env.status.ok = False
+        with pytest.raises(SystemExit) as exc:
+            launch_command(env.args)
         assert exc.value.code == 1
         integration.launch.assert_not_called()
         integration.select_model.assert_not_called()
