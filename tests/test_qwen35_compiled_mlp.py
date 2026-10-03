@@ -147,6 +147,24 @@ def test_sparse_orchestration_stays_native_with_compiled_shared_expert(cls):
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+def test_shared_compilation_uses_final_load_time_weights():
+    inner = _moe_block()
+    shared = inner.shared_expert
+    shared.down_proj.scales = shared.down_proj.scales * 0.5
+    mx.eval(shared.parameters())
+    x = mx.random.normal((1, 3, 64)).astype(mx.float16)
+    expected = inner(x)
+    mx.eval(expected)
+    host = _Host(inner)
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+
+    actual = host.mlp(x)
+    mx.eval(actual)
+
+    assert mx.array_equal(actual, expected).item()
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
 def test_batched_decode_prefill_and_target_verify_stay_eager(monkeypatch):
     inner = _dense_mlp(Qwen3_5MLP)
     host = _Host(inner)
@@ -204,9 +222,7 @@ def test_exact_verifier_unwraps_compiled_vlm_block(monkeypatch):
 def test_exact_verifier_unwraps_nested_shared_expert(monkeypatch):
     from mlx_vlm.models.qwen3_5 import language as q35
 
-    verifier = q35.LanguageModel.__call__.__globals__.get(
-        "_EXACT_SPECULATIVE_VERIFIER"
-    )
+    verifier = q35.LanguageModel.__call__.__globals__.get("_EXACT_SPECULATIVE_VERIFIER")
     if verifier is None:
         pytest.skip("mlx-vlm exact verifier not available")
 
