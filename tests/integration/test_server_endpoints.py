@@ -853,21 +853,19 @@ class TestModelsStatusEndpoint:
 
     def test_models_status_includes_model_alias(self, client):
         """Model aliases should be available to clients that join status metadata."""
+        from omlx.model_settings import ModelSettings
         from omlx.server import _server_state
 
-        class Settings:
-            model_alias = "gpt-4o"
-            max_context_window = 32768
-            max_tokens = 8192
-            is_favorite = False
-            is_hidden = False
+        settings = ModelSettings(
+            model_alias="gpt-4o", max_context_window=32768, max_tokens=8192
+        )
 
         class SettingsManager:
             def get_settings(self, model_id):
-                return Settings()
+                return settings
 
             def get_settings_for_request(self, model_id, resolved_model_id=None):
-                return Settings()
+                return settings
 
         original_settings_manager = _server_state.settings_manager
         try:
