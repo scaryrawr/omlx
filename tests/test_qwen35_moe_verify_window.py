@@ -212,6 +212,23 @@ def test_four_bit_window_rows_equal_one_token_decode(engaged):
             _check(block, _inputs(rows, step), engaged)
 
 
+def test_compiled_shared_expert_preserves_exact_verify_window(engaged):
+    from omlx.patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+    block = _block(19, bits=4)
+    x = _inputs(3, 0)
+    expected = _verify(block, x, window=False)
+    model = nn.Module()
+    model["mlp"] = block
+    assert CompiledMLPBlocks.install(model, enabled=True) == 1
+
+    actual = _verify(model["mlp"], x, window=True)
+
+    assert _same_bits(actual, expected)
+    for rows in (1, 2, 3, 4, 8):
+        _check(block, _inputs(rows, 1), engaged)
+
+
 def test_router_ties_and_high_experts(engaged):
     """Exactly tied and one-ulp-apart router probabilities must select the
     same experts in the same order as the one-token router; experts at the

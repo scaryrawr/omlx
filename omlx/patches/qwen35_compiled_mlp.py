@@ -52,10 +52,8 @@ class CompiledMLPBlocks:
                 )
         return {
             Qwen3NextMLP: CompiledMLPBlock,
-            Qwen3NextSparseMoeBlock: CompiledMLPBlock,
             Qwen3_5MLP: CompiledTargetVerifyMLPBlock,
             Qwen3_5MoeMLP: CompiledTargetVerifyMLPBlock,
-            Qwen3_5MoeSparseMoeBlock: CompiledTargetVerifyMLPBlock,
         }
 
     @classmethod

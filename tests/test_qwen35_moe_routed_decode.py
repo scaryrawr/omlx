@@ -146,6 +146,28 @@ def test_bf16_shared_expert_stays_composed_and_bit_identical(experts):
     assert routed._PROVEN and not routed._DISABLED
 
 
+def test_compiled_shared_expert_preserves_folded_decode(monkeypatch):
+    from omlx.patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+    block = _block(1024, 320, bits=4)
+    x = mx.random.normal((1, 1, 1024)).astype(mx.bfloat16)
+    expected, _ = _pair(block, x)
+    assert routed.routed_decode_plan(block, x).fold
+    model = nn.Module()
+    model["mlp"] = block
+    assert CompiledMLPBlocks.install(model, enabled=True) == 1
+
+    calls = []
+    fused = routed.routed_decode
+    monkeypatch.setattr(routed, "routed_decode", lambda *a: calls.append(1) or fused(*a))
+    actual = model["mlp"](x)
+    mx.eval(actual)
+
+    assert _same_bits(actual, expected)
+    assert calls == [1]
+    assert routed.routed_decode_plan(block, x).fold
+
+
 @pytest.mark.parametrize("bits", [4, 5])
 def test_fp32_kernels_match_mlx_mat_vecs(bits):
     """BF16 outputs hide one-ulp FP32 differences, so run both launches in

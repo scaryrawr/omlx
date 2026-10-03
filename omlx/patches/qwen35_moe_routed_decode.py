@@ -635,7 +635,11 @@ def _shared_formats(block, hidden: int):
     expert and gate, or None."""
     from mlx_vlm.models.qwen3_5.language import Qwen3_5MLP
 
+    from .qwen35_compiled_mlp import CompiledMLPBlock
+
     shared, gate = block.get("shared_expert"), block.get("shared_expert_gate")
+    if isinstance(shared, CompiledMLPBlock):
+        shared = shared.inner
     if type(shared) is not Qwen3_5MLP:
         return None
     layers = (shared.get("gate_proj"), shared.get("up_proj"), shared.get("down_proj"), gate)
