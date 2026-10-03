@@ -63,6 +63,39 @@ def test_vendor_module_resolves(applied):
     assert arch is module
 
 
+@pytest.mark.parametrize("tokens", [1, 4])
+def test_route_kernel_accepts_constant_address_space(applied, monkeypatch, tokens):
+    import importlib
+
+    from omlx.patches.mlx_vlm_inkling_compat import _patch_route_kernel
+
+    language = importlib.import_module("mlx_vlm.models.inkling.language")
+    source = language._ROUTE_SRC
+    declaration = "const device T* lg = logits + (size_t)n * (R + SH);"
+    if declaration not in source:
+        source = source.replace(
+            "float ws = wscale[0];", declaration + "\n    float ws = wscale[0];"
+        )
+    monkeypatch.setattr(language, "_ROUTE_SRC", source)
+    monkeypatch.setattr(language, "_route_kernel", language._route_kernel)
+    _patch_route_kernel()
+    logits = mx.broadcast_to(mx.array([[1.0, 2.0, 3.0, 4.0, 0.0]]), (tokens, 5))
+    indices, weights, shared = language._route_kernel(
+        inputs=[logits, mx.zeros((4,)), mx.array([1.0])],
+        template=[("T", mx.float32), ("N", tokens), ("R", 4), ("SH", 1), ("K", 2), ("I", 16)],
+        grid=(32, tokens, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(tokens, 2), (tokens, 2), (tokens, 16)],
+        output_dtypes=[mx.uint32, mx.float32, mx.float32],
+    )
+    mx.eval(indices, weights, shared)
+    assert indices.tolist() == [[3, 2]] * tokens
+    selected = mx.sigmoid(mx.array([4.0, 3.0, 0.0]))
+    expected = selected / mx.sum(selected)
+    assert mx.allclose(weights, mx.broadcast_to(expected[:2], (tokens, 2))).item()
+    assert mx.allclose(shared, mx.full((tokens, 16), expected[2])).item()
+
+
 def _get_model_and_args(vlm_utils, model_type):
     config = {"model_type": model_type}
     result = vlm_utils.get_model_and_args(config)

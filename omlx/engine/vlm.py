@@ -37,7 +37,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mlx.core as mx
 
@@ -60,7 +60,6 @@ from ..utils.image import (
     compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
-    extract_images_from_messages,
     extract_media_from_messages,
 )
 from ..utils.video import (
@@ -4084,7 +4083,7 @@ class VLMBatchedEngine(BaseEngine):
 
     def _image_token_count(
         self, input_ids: Any, token_id_attr: str = "image_token_id"
-    ) -> Optional[int]:
+    ) -> int | None:
         config = getattr(self._vlm_model, "config", None)
         image_token_id = getattr(config, token_id_attr, None)
         if image_token_id is None:
@@ -4173,13 +4172,13 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         videos: list[str] | None = None,
         video_hashes: list[str] | None = None,
-    ) -> Tuple[
-        List[int],
-        Optional[mx.array],
-        Optional[Dict[str, Any]],
-        Optional[str],
+    ) -> tuple[
+        list[int],
+        mx.array | None,
+        dict[str, Any] | None,
+        str | None,
         int,
-        List[Tuple[int, str]],
+        list[tuple[int, str]],
     ]:
         """
         Run the full VLM preprocessing pipeline:
@@ -4402,7 +4401,7 @@ class VLMBatchedEngine(BaseEngine):
 
         token_ids = input_ids[0].tolist() if input_ids.ndim > 1 else input_ids.tolist()
         image_cache_key_start = 0
-        image_cache_key_ranges: list[Tuple[int, str]] = []
+        image_cache_key_ranges: list[tuple[int, str]] = []
         if image_message_ranges:
             try:
                 image_starts = None
@@ -5312,10 +5311,13 @@ class VLMBatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
         if self.is_diffusion_model:
-            _, _, audio = extract_images_from_messages(messages)
+            has_audio = any(
+                self._count_content_parts(msg.get("content"), {"input_audio"})
+                for msg in messages
+            )
             self._validate_diffusion_request(
                 tools=tools,
-                audio=audio if audio else None,
+                audio=[None] if has_audio else None,
                 stop=kwargs.get("stop"),
                 kwargs=kwargs,
             )
@@ -5593,13 +5595,14 @@ class VLMBatchedEngine(BaseEngine):
         model_type = self.model_type or _read_config_model_type(self._model_name)
         if model_type in {"mimo_v2", "mimo_v2_flash"}:
             media_messages = expand_video_parts(messages)
-        if not getattr(self, "_native_video", False):
-            text_messages, images, audio = extract_images_from_messages(media_messages)
-            return media_messages, text_messages, images, audio, []
-
         text_messages, images, audio, videos = extract_media_from_messages(
             media_messages
         )
+        if videos and not getattr(self, "_native_video", False):
+            raise InvalidRequestError(
+                "Video input is not supported by this model.",
+                field="messages",
+            )
         # mlx-vlm's Qwen3-VL embedding path takes the grid of one modality per
         # call, so a request that mixes them would silently lose one.
         if videos and (images or audio):
@@ -5615,8 +5618,8 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         tools: list[dict] | None,
         kwargs: dict,
-    ) -> Tuple[
-        str | list[int], Any, dict | None, str | None, int, List[Tuple[int, str]]
+    ) -> tuple[
+        str | list[int], Any, dict | None, str | None, int, list[tuple[int, str]]
     ]:
         """
         Process chat messages, extracting images and preparing VLM inputs.
@@ -5627,8 +5630,6 @@ class VLMBatchedEngine(BaseEngine):
         media_messages, text_messages, images, audio, videos = (
             self._extract_request_media(messages)
         )
-        model_type = self.model_type or _read_config_model_type(self._model_name)
-
         ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         partial = kwargs.pop("is_partial", None)
 
@@ -5684,7 +5685,9 @@ class VLMBatchedEngine(BaseEngine):
 
         audio_hash = compute_audio_video_hash(audio, [])
         if audio_hash is not None:
-            image_hash = f"av:{audio_hash}:{image_hash}" if image_hash else f"av:{audio_hash}"
+            image_hash = (
+                f"av:{audio_hash}:{image_hash}" if image_hash else f"av:{audio_hash}"
+            )
             image_cache_key_start = 0
             image_cache_key_ranges = []
 

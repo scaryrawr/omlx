@@ -84,11 +84,9 @@ class TestExtractGemma4Messages:
                 "content": [
                     {"type": "text", "text": "Describe this clip"},
                     {
-                        "type": "input_video",
-                        "input_video": {
+                        "type": "video_url",
+                        "video_url": {
                             "url": "/tmp/clip.mp4",
-                            "detail": "auto",
-                            "format": "mp4",
                         },
                     },
                 ],
