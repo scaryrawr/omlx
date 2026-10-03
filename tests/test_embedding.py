@@ -1307,7 +1307,7 @@ class TestNativeEmbeddingLoading:
                 abs(hash(token)) % (self.vocab_size - 3) + 3 for token in text.split()
             ]
             if add_special_tokens:
-                return [101, *tokens, 102]
+                return [1, *tokens, 2]
             return tokens
 
         def __call__(

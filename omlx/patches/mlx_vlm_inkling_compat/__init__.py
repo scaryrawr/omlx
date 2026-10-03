@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,15 @@ def _append_package_path(package: Any, path: Path) -> None:
 
 
 def _import_vendor_modules() -> None:
+    import mlx_vlm.models
+
+    module_prefix = f"mlx_vlm.models.{_MODULE_NAME}"
+    for module_name in tuple(sys.modules):
+        if module_name == module_prefix or module_name.startswith(f"{module_prefix}."):
+            del sys.modules[module_name]
+    if hasattr(mlx_vlm.models, _MODULE_NAME):
+        delattr(mlx_vlm.models, _MODULE_NAME)
+    importlib.invalidate_caches()
     importlib.import_module("mlx_vlm.models.activations")
     importlib.import_module("mlx_vlm.models.mlp")
     importlib.import_module(f"mlx_vlm.models.{_MODULE_NAME}")

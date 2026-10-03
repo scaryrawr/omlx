@@ -10,6 +10,8 @@ batched right-padded prefill parity that the vendored conv_mask wiring
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -61,6 +63,38 @@ def test_vendor_module_resolves(applied):
     arch, model_type = _get_model_and_args(vlm_utils, "inkling_mm_model")
     assert model_type == "inkling"
     assert arch is module
+
+
+def test_vendor_registration_replaces_preimported_native_module():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib
+from pathlib import Path
+
+native = importlib.import_module("mlx_vlm.models.inkling")
+from omlx.patches.mlx_vlm_inkling_compat import (
+    _VENDOR_MLX_VLM,
+    apply_mlx_vlm_inkling_compat_patch,
+)
+
+assert apply_mlx_vlm_inkling_compat_patch()
+vendor = importlib.import_module("mlx_vlm.models.inkling")
+assert vendor is not native
+assert Path(vendor.__file__).is_relative_to(_VENDOR_MLX_VLM)
+config = importlib.import_module("mlx_vlm.models.inkling.config")
+assert callable(config.build_qkvr_fusion_policy)
+assert not apply_mlx_vlm_inkling_compat_patch()
+assert importlib.import_module("mlx_vlm.models.inkling") is vendor
+""",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("tokens", [1, 4])
