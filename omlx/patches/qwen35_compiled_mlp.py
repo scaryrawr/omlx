@@ -25,7 +25,7 @@ class CompiledMLPBlocks:
         return os.environ.get("OMLX_QWEN35_COMPILED_MLP", "1") != "0"
 
     @classmethod
-    def _target_policies(cls) -> dict[type, type[CompiledMLPBlock]]:
+    def _target_policies(cls) -> dict[type, type[CompiledMLPBlock] | None]:
         from mlx_lm.models.qwen3_next import (
             Qwen3NextMLP,
             Qwen3NextSparseMoeBlock,
@@ -52,10 +52,12 @@ class CompiledMLPBlocks:
                 )
         return {
             Qwen3NextMLP: CompiledMLPBlock,
-            Qwen3NextSparseMoeBlock: CompiledMLPBlock,
+            # Whole-MoE compilation is not bit-exact on every Metal GPU.
+            # Keep these blocks and their nested shared experts eager.
+            Qwen3NextSparseMoeBlock: None,
             Qwen3_5MLP: CompiledTargetVerifyMLPBlock,
             Qwen3_5MoeMLP: CompiledTargetVerifyMLPBlock,
-            Qwen3_5MoeSparseMoeBlock: CompiledTargetVerifyMLPBlock,
+            Qwen3_5MoeSparseMoeBlock: None,
         }
 
     @classmethod
@@ -93,10 +95,11 @@ class CompiledMLPBlocks:
                 if other != name
             )
         ]
-        replacements = [
-            (name, policies[type(candidates[name])](candidates[name]))
-            for name in sorted(outermost)
-        ]
+        replacements = []
+        for name in sorted(outermost):
+            wrapper = policies[type(candidates[name])]
+            if wrapper is not None:
+                replacements.append((name, wrapper(candidates[name])))
         if replacements:
             if any(
                 isinstance(replacement, CompiledTargetVerifyMLPBlock)
