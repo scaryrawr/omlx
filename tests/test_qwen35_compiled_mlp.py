@@ -82,6 +82,8 @@ def test_install_is_explicitly_gated_and_idempotent(monkeypatch):
     assert isinstance(wrapper, CompiledMLPBlock)
     assert CompiledMLPBlocks.install(host, enabled=True) == 0
     assert host.mlp is wrapper
+    assert CompiledMLPBlocks.install(wrapper, enabled=True) == 0
+    assert not isinstance(wrapper.inner, CompiledMLPBlock)
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
@@ -111,9 +113,13 @@ def test_compiled_quantized_dense_output_is_bit_exact(batch, seq):
 @pytest.mark.parametrize("cls", [Qwen3NextSparseMoeBlock, Qwen3_5MoeSparseMoeBlock])
 @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
 @pytest.mark.parametrize("batch,seq", [(1, 1), (1, 3), (4, 1), (1, 5)])
-def test_quantized_moe_stays_eager_and_bit_exact(cls, dtype, batch, seq, monkeypatch):
+@pytest.mark.parametrize("direct", [False, True])
+def test_quantized_moe_stays_eager_and_bit_exact(
+    cls, dtype, batch, seq, direct, monkeypatch
+):
     inner = _moe_block(cls)
     host = _Host(inner)
+    model = inner if direct else host
     shared_expert = inner.shared_expert
     x = mx.random.normal((batch, seq, 64)).astype(dtype)
     expected = inner(x)
@@ -123,10 +129,10 @@ def test_quantized_moe_stays_eager_and_bit_exact(cls, dtype, batch, seq, monkeyp
         raise AssertionError("sparse MoE blocks and their children must stay eager")
 
     monkeypatch.setattr(mx, "compile", fail_compile)
-    assert CompiledMLPBlocks.install(host, enabled=True) == 0
+    assert CompiledMLPBlocks.install(model, enabled=True) == 0
     assert host.mlp is inner
     assert host.mlp.shared_expert is shared_expert
-    assert CompiledMLPBlocks.install(host, enabled=True) == 0
+    assert CompiledMLPBlocks.install(model, enabled=True) == 0
 
     actual = host.mlp(x)
     mx.eval(actual)

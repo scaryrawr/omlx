@@ -76,7 +76,7 @@ class CompiledMLPBlocks:
 
         policies = cls._target_policies()
         wrapper_prefixes = [
-            name + "."
+            name + "." if name else ""
             for name, module in model.named_modules()
             if isinstance(module, CompiledMLPBlock)
         ]
@@ -90,7 +90,7 @@ class CompiledMLPBlocks:
             name
             for name in candidates
             if not any(
-                name.startswith(other + ".")
+                (not other or name.startswith(other + "."))
                 for other in candidates
                 if other != name
             )
