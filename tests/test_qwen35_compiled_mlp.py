@@ -12,6 +12,7 @@ from mlx_lm.models.qwen3_next import (
     Qwen3NextSparseMoeBlock,
 )
 from mlx_vlm.models.qwen3_5.language import Qwen3_5MLP
+from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
 
 from omlx.patches.qwen35_compiled_mlp import (
     CompiledMLPBlock,
@@ -35,7 +36,8 @@ def _dense_mlp(cls=Qwen3NextMLP):
     return mlp
 
 
-def _moe_block():
+def _moe_block(cls=Qwen3NextSparseMoeBlock):
+    mx.random.seed(31)
     args = ModelArgs(
         model_type="qwen3_next",
         hidden_size=64,
@@ -61,7 +63,7 @@ def _moe_block():
         max_position_embeddings=2048,
         head_dim=16,
     )
-    block = Qwen3NextSparseMoeBlock(args)
+    block = cls(args)
     block.eval()
     nn.quantize(block.switch_mlp, group_size=64, bits=4)
     nn.quantize(block.shared_expert, group_size=64, bits=4)
@@ -81,6 +83,8 @@ def test_install_is_explicitly_gated_and_idempotent(monkeypatch):
     assert isinstance(wrapper, CompiledMLPBlock)
     assert CompiledMLPBlocks.install(host, enabled=True) == 0
     assert host.mlp is wrapper
+    assert CompiledMLPBlocks.install(wrapper, enabled=True) == 0
+    assert not isinstance(wrapper.inner, CompiledMLPBlock)
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
@@ -107,17 +111,50 @@ def test_compiled_quantized_dense_output_is_bit_exact(batch, seq):
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
-def test_compiled_quantized_moe_output_is_bit_exact():
-    inner = _moe_block()
+@pytest.mark.parametrize("cls", [Qwen3NextSparseMoeBlock, Qwen3_5MoeSparseMoeBlock])
+@pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
+@pytest.mark.parametrize("batch,seq", [(1, 1), (1, 3), (4, 1), (1, 5)])
+@pytest.mark.parametrize("direct", [False, True])
+def test_quantized_moe_stays_eager_and_bit_exact(
+    cls, dtype, batch, seq, direct, monkeypatch
+):
+    inner = _moe_block(cls)
     host = _Host(inner)
-    x = mx.random.normal((1, 3, 64)).astype(mx.float16)
+    model = inner if direct else host
+    shared_expert = inner.shared_expert
+    x = mx.random.normal((batch, seq, 64)).astype(dtype)
     expected = inner(x)
-    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+    mx.eval(expected)
+
+    def fail_compile(*args, **kwargs):
+        raise AssertionError("sparse MoE blocks and their children must stay eager")
+
+    monkeypatch.setattr(mx, "compile", fail_compile)
+    assert CompiledMLPBlocks.install(model, enabled=True) == 0
+    assert host.mlp is inner
+    assert host.mlp.shared_expert is shared_expert
+    assert CompiledMLPBlocks.install(model, enabled=True) == 0
 
     actual = host.mlp(x)
-    mx.eval(expected, actual)
+    mx.eval(actual)
 
     assert mx.array_equal(actual, expected).item()
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
+@pytest.mark.parametrize("cls", [Qwen3NextSparseMoeBlock, Qwen3_5MoeSparseMoeBlock])
+def test_mixed_model_compiles_only_dense_blocks(cls):
+    sparse = _moe_block(cls)
+    dense = _dense_mlp()
+    host = _Host(sparse)
+    host.dense = dense
+
+    assert CompiledMLPBlocks.install(host, enabled=True) == 1
+    assert host.mlp is sparse
+    assert not isinstance(host.mlp.shared_expert, CompiledMLPBlock)
+    assert isinstance(host.dense, CompiledMLPBlock)
+    assert host.dense.inner is dense
+    assert CompiledMLPBlocks.install(host, enabled=True) == 0
 
 
 @pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
