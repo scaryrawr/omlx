@@ -1,9 +1,15 @@
 # Qwen3.5-Family Compiled Decode MLP
 
-oMLX compiles stateless Qwen3.5/3.6/3.8 MLP blocks for singleton decode calls
+oMLX compiles stateless dense Qwen3.5/3.6/3.8 MLP blocks for singleton decode calls
 of up to four tokens. This reduces scheduling overhead and fuses elementwise
 work around the quantized matrix multiplications. Prefill, batched decode, and
 VLM target-verification calls keep their eager paths.
+
+Sparse MoE blocks, including their nested shared experts, stay eager.
+Compiling the whole MoE block can change floating-point results on some Metal
+GPUs, even when it is bit-exact on the development machine. This policy applies
+to both mlx-lm and mlx-vlm models and preserves exact eager outputs rather than
+relaxing the numerical regression checks.
 
 The optimization is enabled by default. Set
 `OMLX_QWEN35_COMPILED_MLP=0` before starting oMLX to disable it.
