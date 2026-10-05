@@ -41,7 +41,7 @@ _STEP_TEXT_POSITIONS_DISABLED = os.environ.get(
 # (~12k serial, higher for MTP) -- unless Qwen4's fused attention rows run on
 # this GPU: the masked path is then faster at every context (M5 Ultra, 16K-128K)
 # and bit-identical to the unfused MLX ops, so steps never switch.
-_STEP_TEXT_POSITIONS_MIN_CONTEXT: Optional[int] = (
+_STEP_TEXT_POSITIONS_MIN_CONTEXT: int | None = (
     int(os.environ["OMLX_QWEN4_STEP_TEXT_POSITIONS_MIN_CONTEXT"])
     if "OMLX_QWEN4_STEP_TEXT_POSITIONS_MIN_CONTEXT" in os.environ
     else None

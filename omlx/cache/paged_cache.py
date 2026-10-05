@@ -578,7 +578,7 @@ class PagedCacheManager(CacheManager):
 
         # Tail blocks by chain parent (None for a root). A tail is shorter
         # than a block, so the grid walk cannot derive its hash.
-        self._tail_index: Dict[Optional[BlockHash], "OrderedDict[BlockHash, int]"] = {}
+        self._tail_index: dict[BlockHash | None, OrderedDict[BlockHash, int]] = {}
 
         logger.info(
             f"PagedCacheManager initialized: block_size={block_size}, "
@@ -1177,7 +1177,7 @@ class PagedCacheManager(CacheManager):
 
     def register_tail_block(
         self,
-        parent_hash: Optional[BlockHash],
+        parent_hash: BlockHash | None,
         tail_hash: BlockHash,
         token_count: int,
     ) -> None:
@@ -1197,7 +1197,7 @@ class PagedCacheManager(CacheManager):
                 tails.popitem(last=False)
 
     def seed_tail_blocks(
-        self, entries: Iterable[Tuple[Optional[BlockHash], BlockHash, int]]
+        self, entries: Iterable[tuple[BlockHash | None, BlockHash, int]]
     ) -> int:
         """Rebuild the tail index from persisted block metadata."""
         seeded = 0
@@ -1208,13 +1208,13 @@ class PagedCacheManager(CacheManager):
 
     def _match_tail_block(
         self,
-        token_ids: List[int],
-        parent_hash: Optional[BlockHash],
+        token_ids: list[int],
+        parent_hash: BlockHash | None,
         start: int,
-        extra_keys: Optional[Tuple[Any, ...]] = None,
-        extra_key_token_start: Optional[int] = None,
-        extra_key_ranges: Optional[List[Tuple[int, Tuple[Any, ...]]]] = None,
-    ) -> Optional[CacheBlock]:
+        extra_keys: tuple[Any, ...] | None = None,
+        extra_key_token_start: int | None = None,
+        extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None,
+    ) -> CacheBlock | None:
         """Find the longest tail block that prefixes ``token_ids[start:]``.
 
         Stale entries are dropped on the way. Called with ``self._lock`` held.
