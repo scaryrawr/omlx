@@ -425,7 +425,6 @@ def test_std_tax_probe_measures_and_smooths(monkeypatch):
         _arm_std_tax_probe,
         _record_std_tax_sample,
     )
-
     # The process-wide prefill tracker may hold another test's prefill.
     monkeypatch.setattr(batch_generator, "_prefill_activity_recent", lambda: False)
     model = SimpleNamespace()
