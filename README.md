@@ -194,6 +194,8 @@ checklist.
 
 Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; the fork also accepts `input_video: {"data": "<base64>", "format": "mp4"}` and inline video file attachments. Video needs OpenCV (`opencv-python-headless`) and cannot be combined with images or audio in one native-video request. Remote video URLs and local file paths are rejected. oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
 
+Qwen3.8-Flash-Next (`qwen4_exp`) PLE SSD offloading supports dense/raw-FP8, affine, and native MXFP4 embedding shards, including mixed storage layouts. Native MXFP4 uses packed U32 weights and U8 scales (4 bits, group size 32, no biases). The mmap path reads and dequantizes only requested rows, keeping the full PLE table off the GPU without converting the checkpoint.
+
 ### Tiered KV Cache (Hot + Cold)
 
 Block-based KV cache management inspired by vLLM, with prefix sharing and Copy-on-Write. The cache operates across two tiers:
