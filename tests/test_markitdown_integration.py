@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
+import json
 import logging
 import sys
 import types
@@ -13,6 +15,7 @@ from dataclasses import dataclass
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.responses import StreamingResponse
 
@@ -551,6 +554,23 @@ def test_preprocess_still_rejects_missing_latest_file_part():
         )
 
 
+def test_parse_file_part_missing_source_requires_file_data():
+    with pytest.raises(
+        MarkItDownRequestError,
+        match=r"file\.file_data",
+    ):
+        parse_file_part(
+            {
+                "type": "file",
+                "file": {
+                    "filename": "paper.pdf",
+                    "mime_type": "application/pdf",
+                },
+            },
+            max_file_size_mb=10,
+        )
+
+
 def test_async_preprocess_allows_missing_historical_file_parts(monkeypatch):
     def fake_convert(file: MarkItDownFile, **kwargs) -> str:
         raise AssertionError("missing historical files should not be converted")
@@ -630,6 +650,42 @@ def test_server_llm_preprocess_allows_stored_document_placeholders(monkeypatch):
     assert "Attached file unavailable: paper.pdf" in (parts[0].text or "")
 
 
+def test_server_llm_preprocess_preserves_media_file_parts():
+    state = ServerState()
+    state.engine_pool = _EmptyPool()
+    state.global_settings = GlobalSettings()
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[
+            Message(
+                role="user",
+                content=[
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "clip.mp4",
+                            "mime_type": "video/mp4",
+                            "file_data": _data_uri(b"video", mime_type="video/mp4"),
+                        },
+                    },
+                    {"type": "text", "text": "Describe it."},
+                ],
+            )
+        ],
+    )
+
+    async def exercise():
+        with patch("omlx.server._server_state", state):
+            return await server_module._preprocess_markitdown_files_for_llm(request)
+
+    processed = asyncio.run(exercise())
+    content = processed.messages[0].content
+
+    assert isinstance(content, list)
+    assert content[0]["type"] == "input_video"
+    assert content[0]["input_video"]["filename"] == "clip.mp4"
+
+
 def test_preprocess_file_parts_rejects_when_disabled():
     settings = GlobalSettings()
     settings.integrations.markitdown_enabled = False
@@ -639,6 +695,215 @@ def test_preprocess_file_parts_rejects_when_disabled():
             [Message(role="user", content=[_file_part()])],
             global_settings=settings,
         )
+
+
+@pytest.mark.parametrize("with_file", [False, True])
+def test_responses_preprocessing_preserves_tool_argument_objects(
+    monkeypatch, with_file
+):
+    """Codex tool history must still render after Message validation/file conversion."""
+    from jinja2 import Environment
+
+    from omlx.api.responses_models import ResponsesRequest
+    from omlx.api.responses_utils import convert_responses_input_to_messages
+
+    arguments = {"cmd": "pwd", "options": {"login": False}, "paths": ["a", "b"]}
+    request = ResponsesRequest(
+        model="test-model",
+        input=[
+            {"role": "user", "content": "Inspect the workspace."},
+            {
+                "type": "function_call",
+                "call_id": "call_shell",
+                "name": "exec_command",
+                "arguments": json.dumps(arguments),
+            },
+            {"type": "function_call_output", "call_id": "call_shell", "output": "/tmp"},
+            {"role": "user", "content": "Continue."},
+        ],
+    )
+    messages = convert_responses_input_to_messages(request.input)
+    if with_file:
+        messages[-1]["content"] = [_file_part(), {"type": "text", "text": "Continue."}]
+        monkeypatch.setattr(
+            "omlx.api.markitdown.convert_file_to_markdown",
+            lambda *args, **kwargs: "Converted document",
+        )
+    state = ServerState()
+    state.engine_pool = _EmptyPool()
+    state.global_settings = GlobalSettings()
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+
+    call = processed[1]["tool_calls"][0]
+    assert call["function"]["arguments"] == arguments
+    assert call["id"] == "call_shell"
+    assert processed[2] == {
+        "role": "tool",
+        "tool_call_id": "call_shell",
+        "content": "/tmp",
+    }
+    assert all("partial" not in message for message in processed)
+    # Qwen's native tool template uses this filter, which raises on JSON strings.
+    rendered = (
+        Environment()
+        .from_string(
+            "{% for name, value in arguments|items %}{{ name }}={{ value }};{% endfor %}"
+        )
+        .render(arguments=call["function"]["arguments"])
+    )
+    assert "cmd=pwd;" in rendered
+    if with_file:
+        assert "Converted document" in str(processed[-1]["content"])
+
+
+def test_responses_without_files_bypass_message_validation():
+    messages = [
+        {
+            "role": "assistant",
+            "channel": "commentary",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "exec_command",
+                        "namespace": "functions",
+                        "arguments": {"cmd": "pwd"},
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "/tmp"},
+    ]
+    original = copy.deepcopy(messages)
+    with patch.object(server_module, "Message") as message_type:
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+        message_type.model_validate.assert_not_called()
+        message_type.assert_not_called()
+    assert processed is messages
+    assert messages == original
+
+
+@pytest.mark.parametrize("with_document", [False, True])
+@pytest.mark.parametrize("media_kind,extension", [("audio", "wav"), ("video", "mp4")])
+def test_responses_attachments_preserve_unrelated_history_and_content(
+    monkeypatch, with_document, media_kind, extension
+):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown", lambda *a, **k: "Document"
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "channel": "commentary",
+            "partial": True,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "exec_command",
+                        "namespace": "functions",
+                        "arguments": {"cmd": "pwd"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "metadata": {"keep": True},
+            "content": [
+                _file_part(f"clip.{extension}", mime_type=f"{media_kind}/{extension}"),
+                {"type": "text", "text": "Describe it.", "metadata": {"keep": True}},
+            ],
+        },
+    ]
+    if with_document:
+        messages[-1]["content"].append(_file_part())
+    original = copy.deepcopy(messages)
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+    assert messages == original
+    assert processed[0] is messages[0]
+    assert processed[1]["metadata"] == original[1]["metadata"]
+    assert processed[1]["content"][0]["type"] == f"input_{media_kind}"
+    assert processed[1]["content"][1] is messages[1]["content"][1]
+    if with_document:
+        assert processed[1]["content"][2]["type"] == "text"
+        assert "Document" in processed[1]["content"][2]["text"]
+
+
+def test_responses_historical_documents_keep_latest_user_position(monkeypatch):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown",
+        lambda *a, **k: pytest.fail("Historical placeholder must not be converted"),
+    )
+    messages = [
+        {"role": "user", "content": [_file_part(data="")]},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": "Continue."},
+    ]
+    # _file_part fills empty data by default; simulate a persisted placeholder.
+    messages[0]["content"][0]["file"]["file_data"] = ""
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    with patch("omlx.server._server_state", state):
+        processed = asyncio.run(
+            server_module._preprocess_response_files_for_llm(messages)
+        )
+    assert "Attached file unavailable" in processed[0]["content"][0]["text"]
+    assert processed[1] is messages[1]
+    assert processed[2] is messages[2]
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_responses_document_processing_keeps_request_limits(monkeypatch, disabled):
+    monkeypatch.setattr(
+        "omlx.api.markitdown.convert_file_to_markdown", lambda *a, **k: "Document"
+    )
+    messages = [
+        {"role": "user", "content": [_file_part()]},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": [_file_part()]},
+    ]
+    state = ServerState(engine_pool=_EmptyPool(), global_settings=GlobalSettings())
+    state.global_settings.integrations.markitdown_max_files_per_request = 1
+    state.global_settings.integrations.markitdown_enabled = not disabled
+    with (
+        patch("omlx.server._server_state", state),
+        pytest.raises(HTTPException) as error,
+    ):
+        asyncio.run(server_module._preprocess_response_files_for_llm(messages))
+    assert error.value.status_code == 400
+    assert ("disabled" if disabled else "Too many attached files") in error.value.detail
+
+
+def test_responses_file_url_is_rejected_without_downloading():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "notes.txt",
+                        "mime_type": "text/plain",
+                        "file_url": "https://example.com/notes.txt",
+                    },
+                }
+            ],
+        }
+    ]
+
+    with patch("urllib.request.build_opener") as download:
+        with pytest.raises(HTTPException, match="File URLs are not supported"):
+            asyncio.run(server_module._preprocess_response_files_for_llm(messages))
+        download.assert_not_called()
 
 
 def test_xlsx_is_rejected_without_pandas_dependency():
