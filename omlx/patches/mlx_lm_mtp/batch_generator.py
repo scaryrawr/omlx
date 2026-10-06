@@ -2120,6 +2120,10 @@ def _call_backbone_impl(
     MTP head's ``hidden_pre_norm`` is the same array with or without a
     capture request.
 
+    The exact-verifier convenience API returns only the last hidden state.
+    Layer captures use the model's capture-bearing ``return_hidden`` contract,
+    which must retain its architecture-specific verification and rollback.
+
     The first three entries:
 
     - mlx-lm path returns the 2-tuple ``(logits, hidden)``; ``gdn_states``
@@ -2159,7 +2163,7 @@ def _call_backbone_impl(
             getattr(language_model, "speculative_verify_logits", None)
         ):
             exact_verify = None
-        if n_confirmed and callable(exact_verify):
+        if n_confirmed and not capture_layer_ids and callable(exact_verify):
             hidden, _, rollback_state, logits = exact_verify(
                 inputs,
                 cache,
