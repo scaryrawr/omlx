@@ -32,12 +32,79 @@ from omlx.server import (
     _reject_diffusion_structured_outputs,
     _reset_boundary_snapshots_for_server,
     _resolve_metric_durations,
+    _select_default_chat_model,
     app,
     get_engine,
     get_max_context_window,
     get_sampling_params,
 )
 from omlx.settings import GlobalSettings
+
+
+class _DefaultModelPool:
+    def __init__(self, entries: dict[str, EngineEntry]):
+        self._entries = entries
+
+    def get_model_ids(self) -> list[str]:
+        return list(self._entries)
+
+    def get_entry(self, model_id: str) -> EngineEntry | None:
+        return self._entries.get(model_id)
+
+
+def _entry(model_id: str, model_type: str) -> EngineEntry:
+    engine_type = "batched" if model_type == "llm" else model_type
+    return EngineEntry(
+        model_id=model_id,
+        model_path=f"/models/{model_id}",
+        model_type=model_type,
+        engine_type=engine_type,
+        estimated_size=1,
+    )
+
+
+class TestDefaultChatModelSelection:
+    def test_missing_default_skips_image_first_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "qwen-chat": _entry("qwen-chat", "vlm"),
+                "embedding": _entry("embedding", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "missing-model")
+
+        assert model_id == "qwen-chat"
+        assert reason == "Default model 'missing-model' not found"
+
+    def test_image_default_falls_back_to_chat_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "llama-chat": _entry("llama-chat", "llm"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "flux-image")
+
+        assert model_id == "llama-chat"
+        assert reason == (
+            "Default model 'flux-image' is a image model, not a chat-capable model"
+        )
+
+    def test_no_chat_capable_models_returns_none(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "embed": _entry("embed", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, None)
+
+        assert model_id is None
+        assert reason is None
 
 
 class TestBoundarySnapshotLifecycle:
@@ -1134,6 +1201,11 @@ class TestExposedProfileModels:
                     return source
             return model_id
 
+        def get_active_model_aliases(self, settings_manager):
+            settings = settings_manager.get_settings("qwen-base")
+            alias = settings.model_alias.strip() if settings.model_alias else ""
+            return {"qwen-base": alias} if alias else {}
+
     @staticmethod
     def _save_exposed_profile(manager, settings):
         return manager.save_profile(
@@ -1208,6 +1280,9 @@ class TestExposedProfileModels:
         assert profile_model["config_model_type"] == "gemma4"
         assert profile_model["max_context_window"] == 4096
         assert profile_model["max_tokens"] == 1024
+        assert profile_model["enable_thinking"] is True
+        base_model = next(m for m in status["models"] if m["id"] == "qwen-base")
+        assert base_model["enable_thinking"] is None
 
     @pytest.mark.asyncio
     async def test_v1_models_advertises_alias_form_for_exposed_profiles(self, manager):
@@ -1627,3 +1702,109 @@ def test_chat_routes_reuse_final_prepared_prompt(
         ]
         start = next(event for event in events if event["type"] == "message_start")
         assert start["message"]["usage"]["input_tokens"] == len(prepared[1])
+@pytest.mark.parametrize("stream", [False, True])
+def test_responses_tool_result_round_trip_renders_native_arguments(monkeypatch, stream):
+    """The next Codex turn must reach generation, not retry a template HTTP 500."""
+    from jinja2 import Environment
+
+    from omlx.engine.base import GenerationOutput
+
+    template = Environment().from_string(
+        "{% for message in messages %}{{ message.role }}:{{ message.content or '' }}"
+        "{% for call in message.tool_calls or [] %}"
+        "{% for key, value in call.function.arguments|items %}{{ key }}={{ value }};"
+        "{% endfor %}{% endfor %}{% endfor %}"
+    )
+
+    class NativeToolTokenizer:
+        chat_template = "tool_calls"
+
+        def apply_chat_template(self, messages, **kwargs):
+            return template.render(messages=messages)
+
+        def encode(self, text, **kwargs):
+            return [1] * len(text.split())
+
+    engine = MagicMock()
+    engine.tokenizer = NativeToolTokenizer()
+    engine.model_type = "qwen3_5"
+    engine.is_diffusion_model = False
+    engine.supports_multimodal_fallback = False
+    engine.supports_request_scoped_abort = False
+    engine.preflight_chat = AsyncMock()
+    captured_prompts = []
+
+    def count_chat_tokens(messages, *args, **kwargs):
+        rendered = engine.tokenizer.apply_chat_template(messages)
+        captured_prompts.append(rendered)
+        return 16
+
+    engine.count_chat_tokens.side_effect = count_chat_tokens
+    output = GenerationOutput(
+        text="All done.", new_text="All done.", prompt_tokens=16, completion_tokens=2
+    )
+    engine.chat = AsyncMock(return_value=output)
+
+    async def stream_chat(**kwargs):
+        yield output
+
+    engine.stream_chat = stream_chat
+    pool = MagicMock()
+    pool.get_entry.return_value = SimpleNamespace(
+        config_model_type="qwen3_5", preserve_thinking_default=False
+    )
+    monkeypatch.setattr(
+        srv,
+        "_server_state",
+        ServerState(engine_pool=pool, global_settings=GlobalSettings()),
+    )
+    monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(return_value=engine))
+    monkeypatch.setattr(srv, "resolve_model_id", lambda name: name)
+    monkeypatch.setattr(srv, "validate_context_window", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        srv, "get_model_settings_for_request", lambda name: ModelSettings()
+    )
+    monkeypatch.setitem(
+        srv.app.dependency_overrides, srv.verify_inference_api_key, lambda: True
+    )
+    response = TestClient(srv.app).post(
+        "/v1/responses",
+        json={
+            "model": "test-model",
+            "stream": stream,
+            "store": False,
+            "input": [
+                {"role": "user", "content": "Inspect the workspace."},
+                {
+                    "type": "function_call",
+                    "call_id": "call_shell",
+                    "name": "exec_command",
+                    "arguments": '{"cmd":"pwd"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_shell",
+                    "output": "/tmp",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert captured_prompts and "cmd=pwd;" in captured_prompts[0]
+    if stream:
+        events = [
+            json.loads(line[6:])
+            for line in response.text.splitlines()
+            if line.startswith("data: {")
+        ]
+        assert events[-1]["type"] == "response.completed"
+        final = events[-1]["response"]
+        sequence = [event["sequence_number"] for event in events]
+        assert sequence == sorted(set(sequence))
+    else:
+        final = response.json()
+    assert final["status"] == "completed"
+    assert final["output"][0]["content"][0]["text"] == "All done."
+    assert final["usage"]["input_tokens"] == 16
+    assert final["usage"]["output_tokens"] == 2
+    assert final["usage"]["total_tokens"] == 18
