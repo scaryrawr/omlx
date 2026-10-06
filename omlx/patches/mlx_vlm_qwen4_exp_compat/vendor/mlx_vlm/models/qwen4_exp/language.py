@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import json
@@ -2704,7 +2705,7 @@ _PLE_REARM_MIN_INTERVAL_SECONDS = 60.0
 
 
 class _SafeTensorMMap:
-    """Read selected dense or affine-packed rows without resident weights."""
+    """Read selected dense or quantized rows without resident weights."""
 
     def __init__(self, path: Path):
         _ple_require_owner()
@@ -2764,6 +2765,7 @@ class _SafeTensorMMap:
             "F16": (np.dtype("<f2"), 2),
             "F32": (np.dtype("<f4"), 4),
             "U32": (np.dtype("<u4"), 4),
+            "U8": (np.dtype("u1"), 1),
             "F8_E4M3": (np.dtype("u1"), 1),
         }.get(dtype)
         if dtype_info is None:
@@ -2888,7 +2890,7 @@ class _SafeTensorMMap:
 
 
 class DiskBackedShardedEmbedding(nn.Module):
-    """The 128-way dense or oQ-affine PLE table, gathered from SSD mmap."""
+    """The dense, affine or native MXFP4 PLE table, gathered from SSD mmap."""
 
     def __init__(
         self,
@@ -2925,7 +2927,7 @@ class DiskBackedShardedEmbedding(nn.Module):
         self._readers: dict[str, _SafeTensorMMap] = {}
         self._tensor_readers: dict[str, _SafeTensorMMap] = {}
         self._shard_specs: dict[
-            int, tuple[str, str | None, str | None, int | None, int | None]
+            int, tuple[str, str | None, str | None, int | None, int | None, str | None]
         ] = {}
 
         register_ple_resource(self, priority=1)
@@ -2993,62 +2995,92 @@ class DiskBackedShardedEmbedding(nn.Module):
                     None,
                     None,
                     None,
+                    None,
                 )
                 continue
 
-            if scales_key not in weight_map or biases_key not in weight_map:
+            if scales_key not in weight_map:
                 raise ValueError(
                     f"Incomplete affine PLE tensors for {base}: both scales and "
                     "biases are required"
                 )
             if weight_dtype != "U32":
                 raise TypeError(
-                    f"Affine Qwen4 PLE weight must be U32, got {weight_dtype} "
+                    f"Quantized Qwen4 PLE weight must be U32, got {weight_dtype} "
                     f"for {weight_key}"
                 )
 
             scales_reader = register_reader(scales_key)
-            biases_reader = register_reader(biases_key)
             scales_shape = scales_reader.tensor_shape(scales_key)
-            biases_shape = biases_reader.tensor_shape(biases_key)
-            if scales_shape != biases_shape or len(scales_shape) != 2:
+            scales_dtype = scales_reader.tensor_dtype(scales_key)
+            mode = "affine"
+            if biases_key in weight_map:
+                biases_reader = register_reader(biases_key)
+                biases_shape = biases_reader.tensor_shape(biases_key)
+                biases_dtype = biases_reader.tensor_dtype(biases_key)
+                if scales_shape != biases_shape:
+                    raise ValueError(
+                        f"Invalid affine PLE parameter shapes for {base}: "
+                        f"scales={scales_shape}, biases={biases_shape}"
+                    )
+                if (
+                    scales_dtype not in {"BF16", "F16", "F32"}
+                    or biases_dtype not in {"BF16", "F16", "F32"}
+                ):
+                    raise TypeError(
+                        f"Affine PLE scales and biases must have float dtypes "
+                        f"for {base}: scales={scales_dtype}, biases={biases_dtype}"
+                    )
+            elif scales_dtype == "U8":
+                mode = "mxfp4"
+            else:
                 raise ValueError(
-                    f"Invalid affine PLE parameter shapes for {base}: "
-                    f"scales={scales_shape}, biases={biases_shape}"
+                    f"Incomplete or unsupported PLE tensors for {base}: "
+                    f"scales={scales_dtype}, no biases; only native MXFP4 "
+                    "supports U8 scales without biases"
                 )
-            if scales_shape[0] != shard_size or scales_shape[1] <= 0:
+            if (
+                len(scales_shape) != 2
+                or scales_shape[0] != shard_size
+                or scales_shape[1] <= 0
+            ):
                 raise ValueError(
-                    f"Unexpected affine PLE scale shape for {base}: {scales_shape}"
+                    f"Unexpected {mode} PLE scale shape for {base}: {scales_shape}"
                 )
             if dims % scales_shape[1] != 0:
                 raise ValueError(
-                    f"Cannot infer affine PLE group size for {base}: "
+                    f"Cannot infer {mode} PLE group size for {base}: "
                     f"dims={dims}, scales={scales_shape}"
                 )
             group_size = dims // scales_shape[1]
             packed_bits = weight_shape[1] * 32
             if packed_bits % dims != 0:
                 raise ValueError(
-                    f"Cannot infer affine PLE bits for {base}: "
+                    f"Cannot infer {mode} PLE bits for {base}: "
                     f"dims={dims}, packed_shape={weight_shape}"
                 )
             bits = packed_bits // dims
-            if bits not in {2, 3, 4, 5, 6, 8} or group_size not in {32, 64, 128}:
+            if (
+                mode == "mxfp4" and (bits != 4 or group_size != 32)
+                or mode == "affine"
+                and (bits not in {2, 3, 4, 5, 6, 8} or group_size not in {32, 64, 128})
+            ):
                 raise ValueError(
-                    f"Unsupported affine PLE layout for {base}: "
+                    f"Unsupported {mode} PLE layout for {base}: "
                     f"bits={bits}, group_size={group_size}"
                 )
             if dims % group_size or weight_shape[1] != dims * bits // 32:
                 raise ValueError(
-                    f"Inconsistent affine PLE layout for {base}: "
+                    f"Inconsistent {mode} PLE layout for {base}: "
                     f"weight={weight_shape}, scales={scales_shape}, dims={dims}"
                 )
             self._shard_specs[shard_index] = (
                 weight_key,
                 scales_key,
-                biases_key,
+                biases_key if mode == "affine" else None,
                 bits,
                 group_size,
+                mode,
             )
 
     def _plan(self, host: np.ndarray):
@@ -3058,23 +3090,25 @@ class DiskBackedShardedEmbedding(nn.Module):
         local = host - offsets[shard]
         touched = [int(index) for index in np.unique(shard)]
         specs = [self._shard_specs[index] for index in touched]
-        bits, group_size = specs[0][3], specs[0][4]
-        families = [0] if bits is None else [0, 1, 2]
+        bits, group_size, mode = specs[0][3:]
+        families = [
+            family for family, key in enumerate(specs[0][:3]) if key is not None
+        ]
         dtypes = {
             family: self._tensor_readers[specs[0][family]].tensor_dtype(specs[0][family])
             for family in families
         }
-        if any(spec[3:] != (bits, group_size) for spec in specs) or any(
+        if any(spec[3:] != (bits, group_size, mode) for spec in specs) or any(
             self._tensor_readers[spec[family]].tensor_dtype(spec[family]) != dtypes[family]
             for spec in specs
             for family in families
         ):
             return None
-        return shard, local, touched, specs, families, dtypes, bits, group_size
+        return shard, local, touched, specs, families, dtypes, bits, group_size, mode
 
     def _assemble(self, host: np.ndarray, plan) -> dict[int, np.ndarray]:
         """Copy every family's rows into one host buffer in index order (runs off the main thread on prefetch)."""
-        shard, local, touched, specs, families, _, _, _ = plan
+        shard, local, touched, specs, families, _, _, _, _ = plan
         buffers: dict[int, np.ndarray] = {}
         for shard_index, spec in zip(touched, specs):
             positions = np.flatnonzero(shard == shard_index)
@@ -3131,6 +3165,17 @@ class DiskBackedShardedEmbedding(nn.Module):
                 raise RuntimeError("SSD-backed Qwen4 PLE embedding is closed")
             return self._call_owned(indices)
 
+    @staticmethod
+    def _dequantize_rows(values, scales, biases, *, group_size, bits, mode):
+        if mode == "affine" and biases is not None and scales.dtype != biases.dtype:
+            # MLX's Metal dequantizer reads scales and biases with one scalar type.
+            dtype = mx.result_type(scales, biases)
+            scales = scales.astype(dtype)
+            biases = biases.astype(dtype)
+        return mx.dequantize(
+            values, scales, biases, group_size=group_size, bits=bits, mode=mode
+        )
+
     def _call_owned(self, indices):
         shape = indices.shape
         host = self._host_indices(indices)
@@ -3146,20 +3191,20 @@ class DiskBackedShardedEmbedding(nn.Module):
             if plan is None:
                 return self._gather_per_shard([int(index) for index in host], shape)
             buffers = self._assemble(host, plan)
-        _, _, touched, _, families, dtypes, bits, group_size = plan
+        _, _, touched, _, families, dtypes, bits, group_size, mode = plan
         self.last_touched_shards = tuple(touched)
         self.rows_read = int(host.size)
         arrays = [_SafeTensorMMap.to_mx(buffers[family], dtypes[family]) for family in families]
         self.last_uploads = len(arrays)
         values = arrays[0]
         if bits is not None:
-            values = mx.dequantize(
+            values = self._dequantize_rows(
                 values,
                 arrays[1],
-                arrays[2],
+                arrays[2] if len(arrays) == 3 else None,
                 group_size=group_size,
                 bits=bits,
-                mode="affine",
+                mode=mode,
             )
         values = values.astype(mx.bfloat16) * self.weight_scale
         return values.reshape(*shape, self.dims)
@@ -3183,23 +3228,27 @@ class DiskBackedShardedEmbedding(nn.Module):
             local = [
                 host_indices[i] - self.shard_offsets[shard_index] for i in positions
             ]
-            weight_key, scales_key, biases_key, bits, group_size = self._shard_specs[
+            weight_key, scales_key, biases_key, bits, group_size, mode = self._shard_specs[
                 shard_index
             ]
             values = self._tensor_readers[weight_key].rows(weight_key, local)
             if bits is not None:
                 assert scales_key is not None
-                assert biases_key is not None
                 assert group_size is not None
+                assert mode is not None
                 scales = self._tensor_readers[scales_key].rows(scales_key, local)
-                biases = self._tensor_readers[biases_key].rows(biases_key, local)
-                values = mx.dequantize(
+                biases = (
+                    self._tensor_readers[biases_key].rows(biases_key, local)
+                    if biases_key is not None
+                    else None
+                )
+                values = self._dequantize_rows(
                     values,
                     scales,
                     biases,
                     group_size=group_size,
                     bits=bits,
-                    mode="affine",
+                    mode=mode,
                 )
             values = values.astype(mx.bfloat16) * self.weight_scale
             self.rows_read += len(local)
@@ -4177,6 +4226,46 @@ class LanguageModel(Qwen3_5LanguageModel):
         finally:
             if step is not None:
                 _MTP_ONE_ROW_STEP.reset(step)
+
+    def speculative_verify_logits(self, inputs: mx.array, cache, sampler):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+                sampler(output.logits),
+            )
+        except BaseException:
+            transaction.abort()
+            raise
+
+    def speculative_verify_hidden(self, inputs: mx.array, cache):
+        transaction = start_speculative_cache(cache or [], inputs.shape[1])
+        try:
+            output = self(
+                inputs,
+                cache=cache,
+                capture_layer_ids=[],
+                return_hidden=True,
+                return_shared_kv=True,
+                skip_logits=True,
+            )
+            return (
+                output.hidden_states[0],
+                output.shared_kv_states,
+                transaction,
+            )
+        except BaseException:
+            transaction.abort()
+            raise
 
     def ple_gathers_ahead(self) -> bool:
         """True when an SSD-backed PLE table gathers rows one prefill chunk ahead."""
