@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the vendored Unlimited-OCR mlx-vlm compatibility layer."""
+"""Regression tests for native Unlimited-OCR mlx-vlm compatibility."""
 
 from __future__ import annotations
 
 
-def test_unlimited_ocr_compat_installs_vendor_module():
+def test_unlimited_ocr_compat_loads_native_module():
     from omlx.patches.mlx_vlm_unlimited_ocr_compat import (
         apply_mlx_vlm_unlimited_ocr_compat_patch,
     )
@@ -15,7 +15,6 @@ def test_unlimited_ocr_compat_installs_vendor_module():
 
     assert hasattr(unlimited_ocr, "Model")
     assert hasattr(unlimited_ocr, "ModelConfig")
-    assert hasattr(unlimited_ocr, "RingSlidingKVCache")
 
 
 def test_unlimited_ocr_model_remapping_resolves_module():
