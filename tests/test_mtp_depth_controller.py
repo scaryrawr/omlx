@@ -415,7 +415,7 @@ def test_exit_margin_arg_overrides_prior_with_clamp():
     assert _DepthController(3, exit_margin=0.5).EXIT_MARGIN == 1.0
 
 
-def test_std_tax_probe_measures_and_smooths():
+def test_std_tax_probe_measures_and_smooths(monkeypatch):
     from types import SimpleNamespace
 
     from omlx.patches.mlx_lm_mtp.batch_generator import (
@@ -424,7 +424,12 @@ def test_std_tax_probe_measures_and_smooths():
         _arm_std_tax_probe,
         _record_std_tax_sample,
     )
+    from omlx.prefill_progress import PrefillProgressTracker
 
+    tracker = PrefillProgressTracker()
+    monkeypatch.setattr(
+        "omlx.patches.mlx_lm_mtp.batch_generator.get_prefill_tracker", lambda: tracker
+    )
     model = SimpleNamespace()
     gb = SimpleNamespace(model=model)
     _arm_std_tax_probe(gb, 12.0)
