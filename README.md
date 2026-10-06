@@ -67,6 +67,8 @@ omlx start
 
 # Optional: MCP (Model Context Protocol) support
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+
+# mlx-vlm image generation and editing support is included with oMLX.
 ```
 
 ### From Source
@@ -78,6 +80,10 @@ make install                # Editable install with the web UI and native custom
 # No full Xcode? make install-no-kernels installs without the kernels
 make mcp                    # Optional: MCP (Model Context Protocol) support
 ```
+
+Image generation and editing use the core `mlx-vlm` dependency. The retained
+`image` extra is a no-op compatibility alias; source and released installs do
+not need it.
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4/M5).
 
@@ -97,6 +103,9 @@ Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/
 > ```bash
 > python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
 > ```
+
+Core installs include text, VLM, embedding, reranker, and mlx-vlm image
+generation/editing support. MCP remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -121,7 +130,7 @@ omlx restart
 omlx serve --model-dir ~/models
 ```
 
-The server discovers LLMs, VLMs, embedding models, and rerankers from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
+The server discovers LLMs, VLMs, embedding models, rerankers, and image model manifests from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
 
 ### Homebrew Service
 
@@ -146,7 +155,8 @@ Logs are written to two locations:
 
 ## Features
 
-Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon.
+Supports text LLMs, vision-language models (VLM), OCR models, embeddings,
+rerankers, and mlx-vlm image generation/editing models on Apple Silicon.
 
 ### Admin Dashboard
 
@@ -172,7 +182,9 @@ checklist.
 
 ### Vision-Language Models
 
-Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; video needs OpenCV (`opencv-python-headless`). oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
+Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; the fork also accepts `input_video: {"data": "<base64>", "format": "mp4"}` and inline video file attachments. Video needs OpenCV (`opencv-python-headless`) and cannot be combined with images or audio in one native-video request. Remote video URLs and local file paths are rejected. oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
+
+Qwen3.8-Flash-Next (`qwen4_exp`) PLE SSD offloading supports dense/raw-FP8, affine, and native MXFP4 embedding shards, including mixed storage layouts. Native MXFP4 uses packed U32 weights and U8 scales (4 bits, group size 32, no biases). The mmap path reads and dequantizes only requested rows, keeping the full PLE table off the GPU without converting the checkpoint.
 
 ### Tiered KV Cache (Hot + Cold)
 
@@ -195,7 +207,7 @@ Runs smaller context models with Claude Code by reporting the model's real conte
 
 ### Multi-Model Serving
 
-Load LLMs, VLMs, embedding models, and rerankers within the same server. Models are managed through a combination of automatic and manual controls:
+Load LLMs, VLMs, embedding models, rerankers, and image models within the same server. Models are managed through a combination of automatic and manual controls:
 
 - **LRU eviction**: Least-recently-used models are evicted automatically when memory runs low.
 - **Manual load/unload**: Interactive status badges in the admin panel let you load or unload models on demand.
@@ -240,6 +252,45 @@ Set up OpenClaw, OpenCode, Codex, Hermes Agent, Copilot, Pi, and DeepSeek Harnes
   <img src="docs/images/omlx_integrations.png" alt="oMLX Integrations" width="720">
 </p>
 
+#### Codex model switching
+
+```bash
+omlx launch codex
+omlx launch codex_app
+# Optionally select the initial model; other models remain available:
+omlx launch codex --model your-model-id
+```
+
+Both integrations refresh a Codex model catalog from oMLX's available chat models,
+so you can switch models with the CLI's `/model` selector or the desktop app's
+model picker instead of selecting just one model before launch. Without `--model`,
+oMLX uses the saved Codex integration model when available, otherwise the
+oMLX default model (including its served alias). If neither is available,
+it falls back to the first chat model returned by the server (favorites first).
+The selected model starts loading in the background before Codex opens; launch
+does not wait for loading to finish. Warm-up request failures produce a warning
+without preventing launch, and normal inference can still load the model on demand.
+
+The catalog preserves served aliases and exposed profiles, includes unloaded
+models that oMLX can load on demand, and records each model's context window and
+text/image input support. Embedding, reranking, audio, and image-generation models
+are excluded when their type is available from the model status endpoint. If
+status is unavailable, the public model listing supplies context limits and input
+support defaults to text-only. Thinking models retain the existing high-effort
+default; additional reasoning effort levels are not inferred.
+
+Requires a Codex version supporting
+[`model_catalog_json`](https://developers.openai.com/codex/config-reference/#model_catalog_json).
+The catalog is loaded at startup: relaunch through oMLX after adding or removing
+models, changing aliases, or updating model settings. Restart an already-running
+desktop app to apply the refreshed configuration. The CLI uses process-scoped
+provider/catalog overrides without changing your `config.toml`; the desktop
+integration backs up and updates that file as before. A custom `CODEX_HOME` is
+respected, and oMLX's generated catalogs do not overwrite other catalog files.
+User-specified global context/reasoning overrides in CLI configuration can still
+take precedence over catalog metadata; the desktop integration clears these
+overrides so limits follow the selected model.
+
 ### Performance Benchmark
 
 One-click benchmarking from the admin panel. Measures prefill (PP) and text generation (TG) tokens per second, with partial prefix cache hit testing for realistic performance numbers.
@@ -268,6 +319,8 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
 | `POST /v1/systemone` | Typed decisions with decision models (TypeSafe System One) |
+| `POST /v1/images/generations` | Image generation |
+| `POST /v1/images/edits` | Image editing |
 | `GET /v1/models` | List available models |
 | `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`) |
 
@@ -316,6 +369,47 @@ Models are auto-detected by type. You can also download models directly from the
 | Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
 | Reranker | ModernBERT, XLM-RoBERTa |
 | Decision | Clef, Clef-Flash, OpenJev |
+| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+
+### Image Model Manifests
+
+Image generation and editing use the core mlx-vlm dependency. Add an
+`omlx-image-model.json` manifest when a local image-model directory needs an
+explicit family or task declaration.
+
+Add an `omlx-image-model.json` file in a model subdirectory to expose an
+mlx-vlm image model through `/v1/images/generations` and/or `/v1/images/edits`:
+
+```json
+{
+  "backend": "mlx-vlm",
+  "base_model": "flux2-klein-4b",
+  "task": ["generation", "edit"],
+  "model_path": ".",
+  "default_steps": 28,
+  "default_guidance": 3.5,
+  "default_image_strength": 0.4,
+  "estimated_size": 4294967296
+}
+```
+
+`model_path`, defaults, and `estimated_size` are optional. When
+`estimated_size` is omitted, oMLX uses the local `model_path` size when
+available, otherwise a conservative family estimate for memory accounting.
+`quantize` is not a valid image manifest setting because mlx-vlm loads the
+checkpoint's native weight format directly.
+
+Supported `base_model` aliases include FLUX.2 Klein 4B/9B/base/KV variants
+(generation and multi-image edit), Mage-Flow base/aligned/turbo and their edit
+variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
+Ming-Image 0.1 Design (generation only), Ideogram 4 FP8, and Bonsai Ternary.
+The original `Ming-Image-0.1-Design` and quantized variants (such as
+`Ming-Image-0.1-Design-mxfp8`) are discovered without a manifest when placed
+under the model directory. Defaults are 1024×1024, 12 steps, and guidance 1.0;
+the output PNG retains its alpha channel. Z-Image
+and ERNIE-Image edit modes require
+exactly one source image; masks are not supported by the current mlx-vlm image
+families.
 
 ## CLI Configuration
 
