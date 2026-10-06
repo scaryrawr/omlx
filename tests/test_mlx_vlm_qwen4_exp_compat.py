@@ -1597,7 +1597,7 @@ def test_disk_backed_affine_ple_supports_all_oq_bits(tmp_path, bits):
     assert mx.allclose(values, expected, atol=2e-2, rtol=2e-2).item()
     assert embedding.last_touched_shards == (0, 1)
     assert embedding.rows_read == 2
-    assert embedding._shard_specs[0][3:] == (bits, 32)
+    assert embedding._shard_specs[0][3:] == (bits, 32, "affine")
     embedding.close()
 
 # ---------------------------------------------------------------------------

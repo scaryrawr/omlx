@@ -8,6 +8,7 @@ in the patched ``TextModel.__call__`` and the activation handoff in
 wiring is exercised by the real-model smoke test.
 """
 
+import contextlib
 import threading
 from collections import OrderedDict
 from types import SimpleNamespace
@@ -449,10 +450,8 @@ class TestCaptureSkips:
         cache = _make_cache(model)
         toks = _tokens(12).reshape(2, 6)
         # Batched cache shapes differ; just assert no ctx is created.
-        try:
+        with contextlib.suppress(Exception):
             model(toks, cache=cache)
-        except Exception:
-            pass
         assert prompt_priming.prime_ctx_stats(model) is None
 
     def test_batch_forward_drops_pending_ctx(self, model):
@@ -504,19 +503,19 @@ class TestCaptureSkips:
             getattr(c, "_omlx_mtp_prime_ctx", None) is None for c in cache
         )
 
-    def test_interleaved_request_restarts_slot(self, model):
-        """A second request's prefill on the same model can never continue
-        the first request's timeline: its offsets restart at zero, which
-        breaks contiguity and restarts the slot."""
+    def test_latest_prefill_owns_the_model_context(self, model):
         cache_a = _make_cache(model)
         _chunked_prefill(model, cache_a, _tokens(10, seed=23), [10])
         assert prompt_priming.prime_ctx_stats(model) == 9
         cache_b = _make_cache(model)
         _chunked_prefill(model, cache_b, _tokens(6, seed=24), [6])
         assert prompt_priming.prime_ctx_stats(model) == 5
-        # Request A activating now must not see B's history.
-        model(_tokens(1, seed=25)[None, :], cache=cache_a, return_hidden=True)
-        assert prompt_priming.take_primed(model, cache_a, _tokens(1, seed=25)) is None
+
+        main_b = _tokens(1, seed=26)
+        model(main_b[None, :], cache=cache_b, return_hidden=True)
+        primed_b = prompt_priming.take_primed(model, cache_b, main_b)
+        assert primed_b is not None
+        assert primed_b[1] == 6
 
     def test_ctx_survives_kv_entry_replacement(self, model):
         """Simulate the TurboQuant convert: swap every KVCache entry for a
@@ -610,6 +609,29 @@ class TestBatchCacheAnchor:
         for (k, v), (rk, rv) in zip(_kv_entries(mtp_cache), _kv_entries(ref_cache)):
             assert mx.allclose(k, rk, rtol=1e-4, atol=1e-4)
             assert mx.allclose(v, rv, rtol=1e-4, atol=1e-4)
+
+
+class TestBatchGeneratorCacheOwnership:
+    def test_prompt_batch_keeps_ctx_through_merge_and_extend(self, model):
+        from mlx_lm.generate import PromptProcessingBatch
+
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        assert batch_generator.apply()
+
+        source_cache = _make_cache(model)
+        _chunked_prefill(model, source_cache, _tokens(6, seed=36), [6])
+
+        donor = PromptProcessingBatch(
+            model=model,
+            uids=[0],
+            caches=[source_cache],
+        )
+        assert prompt_priming.prime_ctx_stats(model) == 5
+
+        target = PromptProcessingBatch.empty(model, lambda x: mx.argmax(x, axis=-1))
+        target.extend(donor)
+        assert prompt_priming.prime_ctx_stats(model) == 5
 
 
 class TestHookFallthrough:
