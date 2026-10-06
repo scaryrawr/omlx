@@ -1,10 +1,10 @@
 # ruff: noqa: N806
-"""Qwen3.5/3.6 quantized MLP prefill matmul patch.
+"""Qwen3.5/3.6 quantized prefill matmul patch.
 
-This is an exact path: it replaces eligible affine QuantizedLinear calls
-inside the Qwen MLP with the same MLX quantized qmm implementation exposed via
-an oMLX native wrapper using a Qwen-friendly tile.  Decode and target-verify
-paths fall through to the original implementation.
+This is an exact path: it replaces eligible affine, MXFP4, and MXFP8
+QuantizedLinear calls with the corresponding MLX qmm implementation exposed
+through an oMLX native wrapper using a Qwen-friendly tile. Decode and
+target-verify paths fall through to the original implementation.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import logging
 from collections.abc import Callable
+from functools import wraps
 from typing import Any
 
 import mlx.core as mx
@@ -41,10 +42,16 @@ _SUPPORTED_QMM_BITS = frozenset((2, 4, 5, 6, 8))
 # Native qmm tile variant and the prompt lengths from which it beats stock MLX.
 _QMM_VARIANT = 8
 _MIN_TOKENS = 2048
+_SUPPORTED_FP_QMM_VARIANTS = frozenset((0, 1, 2, 3, 4, 6, 7, 8, 9))
 _Q8_MIN_TOKENS = 16384
 # Decode and verify guard, not a profitability floor: the A8 backend applies
 # qwen35_oq_a8_min_tokens itself, and rows below this never ask it.
 _Q8_BACKEND_MIN_ROWS = 64
+
+
+def _default_min_tokens() -> int:
+    name = str(mx.device_info().get("device_name", ""))
+    return 128 if name.startswith("Apple M4") else 2048
 
 
 def register_qwen35_lm_gdn_prefill_backend(
@@ -124,12 +131,31 @@ def _native_qmm_for_bits(bits: int) -> Callable[..., mx.array] | None:
     return getattr(fast, name)
 
 
+def _native_fp_qmm_for_mode(mode: str) -> Callable[..., mx.array] | None:
+    try:
+        from omlx.custom_kernels.qwen35_prefill import fast
+    except Exception:
+        return None
+    name = f"qwen35_{mode}_qmm_t"
+    if mode not in ("mxfp4", "mxfp8") or not fast.has_symbol(name):
+        return None
+    return getattr(fast, name)
+
+
 def _qmm_supports_group_size(group_size: int) -> bool:
     try:
         from omlx.custom_kernels.qwen35_prefill import fast
     except Exception:
         return False
     return fast.qmm_supports_group_size(group_size)
+
+
+def _qmm_supports_narrow_affine() -> bool:
+    try:
+        from omlx.custom_kernels.qwen35_prefill import fast
+    except Exception:
+        return False
+    return fast.qmm_supports_narrow_affine()
 
 
 def _has_native_qmm() -> bool:
@@ -145,43 +171,84 @@ def _is_supported_affine_linear_shape(
 ) -> bool:
     if not isinstance(linear, nn.QuantizedLinear):
         return False
+    if mx.default_device() != mx.gpu:
+        return False
     if dtype not in (mx.float16, mx.bfloat16):
         return False
     if ndim < 2 or seq_len <= 1:
         return False
     group_size = getattr(linear, "group_size", None)
-    if group_size not in (64, 128):
-        return False
-    if not _qmm_supports_group_size(int(group_size)):
-        return False
-    if group_size == 128 and is_nax_available():
-        # The custom gs128 tile cannot use NAX; stock MLX can on M5 hardware.
-        return False
     bits = getattr(linear, "bits", None)
-    if bits not in _SUPPORTED_QMM_BITS or getattr(linear, "mode", None) != "affine":
-        return False
-    if _native_qmm_for_bits(int(bits)) is None:
+    mode = getattr(linear, "mode", None)
+    if mode == "affine":
+        if group_size not in (64, 128):
+            return False
+        if not _qmm_supports_group_size(int(group_size)):
+            return False
+        if (
+            group_size == 128
+            and is_nax_available()
+        ):
+            # The custom gs128 tile cannot use NAX; stock MLX can on M5 hardware.
+            return False
+        if bits not in _SUPPORTED_QMM_BITS or _native_qmm_for_bits(int(bits)) is None:
+            return False
+    elif mode in ("mxfp4", "mxfp8"):
+        expected_bits = 4 if mode == "mxfp4" else 8
+        if (
+            group_size != 32
+            or bits != expected_bits
+            or _native_fp_qmm_for_mode(mode) is None
+        ):
+            return False
+    else:
         return False
     if "bias" in linear:
         return False
     weight = getattr(linear, "weight", None)
     scales = getattr(linear, "scales", None)
     biases = getattr(linear, "biases", None)
-    if weight is None or scales is None or biases is None:
+    if weight is None or scales is None:
         return False
-    if weight.dtype != mx.uint32 or scales.dtype != dtype or biases.dtype != dtype:
+    if weight.dtype != mx.uint32:
         return False
-    if weight.ndim != 2 or scales.ndim != 2 or biases.ndim != 2:
+    if weight.ndim != 2 or scales.ndim != 2:
         return False
     if weight.shape[1] * 32 != input_dim * int(bits):
         return False
-    if input_dim % 64 != 0 or weight.shape[0] % 64 != 0:
+    narrow_affine = (
+        mode == "affine"
+        and _qmm_supports_narrow_affine()
+        and group_size == 64
+        and bits in (4, 5)
+        and dtype == mx.bfloat16
+        and seq_len >= 2048
+        and weight.shape[0] == 48
+    )
+    narrow_mxfp4 = (
+        mode == "mxfp4"
+        and dtype == mx.bfloat16
+        and seq_len >= 8192
+        and weight.shape[0] == 48
+    )
+    if input_dim % 64 != 0 or (
+        weight.shape[0] % 64 != 0 and not narrow_affine and not narrow_mxfp4
+    ):
         return False
-    if scales.shape != biases.shape:
-        return False
+    expected_scale_shape = (weight.shape[0], input_dim // int(group_size))
+    if mode == "affine":
+        return (
+            scales.dtype == dtype
+            and biases is not None
+            and biases.dtype == dtype
+            and biases.ndim == 2
+            and scales.shape == expected_scale_shape
+            and biases.shape == expected_scale_shape
+        )
     return (
-        scales.shape[0] == weight.shape[0]
-        and scales.shape[1] == input_dim // group_size
+        scales.dtype == mx.uint8
+        and biases is None
+        and scales.shape == expected_scale_shape
     )
 
 
@@ -242,6 +309,34 @@ def _quantized_linear_output_dim(linear: Any) -> int | None:
 
 
 def _linear_qmm(linear: nn.QuantizedLinear, x: mx.array, variant: int) -> mx.array:
+    mode = getattr(linear, "mode", None)
+    weight = getattr(linear, "weight", None)
+    if (
+        mode == "affine"
+        and weight is not None
+        and weight.shape[0] == 48
+        and x.shape[-2] >= 2048
+        and variant != 8
+    ):
+        return linear(x)
+    if mode in ("mxfp4", "mxfp8"):
+        if (
+            mode == "mxfp4"
+            and weight is not None
+            and weight.shape[0] == 48
+            and x.shape[-2] >= 8192
+            and variant != 8
+        ):
+            return linear(x)
+        qmm = _native_fp_qmm_for_mode(mode)
+        if (
+            qmm is None
+            or variant not in _SUPPORTED_FP_QMM_VARIANTS
+            or not _is_supported_affine_linear(linear, x)
+        ):
+            return linear(x)
+        return qmm(x, linear.weight, linear.scales, variant)
+
     bits = getattr(linear, "bits", None)
     qmm = _native_qmm_for_bits(int(bits)) if bits is not None else None
     if qmm is None:
@@ -268,19 +363,23 @@ def _make_patched_mlp(
     min_tokens: int,
     q8_min_tokens: int,
 ):
+    @wraps(orig_call)
     def patched(self, x, *args, **kwargs):
         # Decode / short-sequence fast path first: this wrapper runs on every
         # MLP call of every layer of every decode step, so the common case
         # must exit on a single shape check (issue #2132 — per-call gate
         # overhead across the qwen35 prefill patches costs ~2% TG).
-        if x.ndim < 3 or x.shape[-2] < min_tokens:
+        gate_proj = getattr(self, "gate_proj", None)
+        route_min = _route_min_tokens_for_bits(
+            getattr(gate_proj, "bits", None), min_tokens, q8_min_tokens
+        )
+        if x.ndim < 3 or x.shape[-2] < route_min:
             return orig_call(self, x, *args, **kwargs)
         target_verify = bool(kwargs.get("target_verify", False))
         if args and isinstance(args[0], bool):
             target_verify = target_verify or bool(args[0])
         if target_verify:
             return orig_call(self, x, *args, **kwargs)
-        gate_proj = getattr(self, "gate_proj", None)
         up_proj = getattr(self, "up_proj", None)
         down_proj = getattr(self, "down_proj", None)
         gate_dim = _quantized_linear_output_dim(gate_proj)
@@ -339,7 +438,7 @@ def apply_qwen35_q4_mlp_patch() -> bool:
         return False
 
     variant = _QMM_VARIANT
-    min_tokens = _MIN_TOKENS
+    min_tokens = _default_min_tokens()
     q8_min_tokens = _Q8_MIN_TOKENS
     patched = False
     patched |= _patch_class(
@@ -490,7 +589,7 @@ def apply_qwen35_q4_prefill_linear_patch(model) -> bool:
     """Route the loaded Qwen projections without replacing their forward graph."""
     if not _has_native_qmm():
         return False
-    _VLMQuantizedPrefillLinear._route_min_tokens = _MIN_TOKENS
+    _VLMQuantizedPrefillLinear._route_min_tokens = _default_min_tokens()
     _VLMQuantizedPrefillLinear._route_q8_min_tokens = _Q8_MIN_TOKENS
     _VLMQuantizedPrefillLinear._route_variant = _QMM_VARIANT
     installed = False
@@ -539,7 +638,7 @@ def apply_qwen35_q4_lm_prefill_linear_patch() -> bool:
         return False
 
     variant = _QMM_VARIANT
-    min_tokens = _MIN_TOKENS
+    min_tokens = _default_min_tokens()
     q8_min_tokens = _Q8_MIN_TOKENS
 
     def should_route(linear: Any, x: mx.array) -> bool:
@@ -877,7 +976,7 @@ def apply_muse_glimmer_q4_prefill_patch() -> bool:
         return False
 
     variant = _QMM_VARIANT
-    min_tokens = _MIN_TOKENS
+    min_tokens = _default_min_tokens()
     q8_min_tokens = _Q8_MIN_TOKENS
 
     patched = _patch_class(
