@@ -15,7 +15,7 @@ import math
 import struct
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from PIL import Image, ImageOps
 
@@ -302,8 +302,8 @@ def _load_image_bytes(
 
 
 def extract_images_from_messages(
-    messages: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], List[Image.Image], List]:
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[Image.Image], list]:
     """Extract images and audio; video parts are rejected.
 
     See :func:`extract_media_from_messages` for models with native video input.
@@ -452,6 +452,12 @@ def _extract_media(
                         "Video content part is missing video_url.",
                         field="messages",
                     )
+                if not url.strip().startswith("data:video/"):
+                    raise InvalidRequestError(
+                        "Video inputs must be base64 video data URIs. "
+                        "Remote URLs and local file paths are not supported.",
+                        field="messages",
+                    )
                 videos.append(url)
 
         new_msg = {"role": role, "content": "\n".join(text_parts) if text_parts else ""}
@@ -472,7 +478,24 @@ def _extract_media(
     return text_messages, images, audio
 
 
-def compute_image_hash(images: List[Image.Image]) -> Optional[str]:
+def compute_audio_video_hash(audio: list[Any], videos: list[Any]) -> str | None:
+    """Hash inline audio and video without changing audio buffer positions."""
+    if not audio and not videos:
+        return None
+    hasher = hashlib.sha256()
+    for label, items in (("audio", audio), ("video", videos)):
+        for item in items:
+            hasher.update(label.encode())
+            if isinstance(item, io.BytesIO):
+                hasher.update(item.getvalue())
+            elif isinstance(item, (bytes, bytearray, memoryview)):
+                hasher.update(bytes(item))
+            else:
+                hasher.update(str(item).encode())
+    return hasher.hexdigest()
+
+
+def compute_image_hash(images: list[Image.Image]) -> str | None:
     """
     Compute a SHA256 hash from a list of images for prefix cache deduplication.
 
@@ -499,7 +522,7 @@ def compute_image_hash(images: List[Image.Image]) -> Optional[str]:
     return hasher.hexdigest()
 
 
-def compute_per_image_hashes(images: List[Image.Image]) -> List[str]:
+def compute_per_image_hashes(images: list[Image.Image]) -> list[str]:
     """Compute individual SHA256 hashes for each image.
 
     Returns a list of hex-encoded hash strings, one per image.
