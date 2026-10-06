@@ -2100,6 +2100,135 @@ class TestRowExactVerifyGate:
         assert calls[0] == (True, armed)
 
 
+class TestBackboneCaptureDispatch:
+    @pytest.mark.parametrize("adapter", [False, True])
+    @pytest.mark.parametrize("n_confirmed", [0, 1])
+    def test_backbone_capture_uses_capture_bearing_verification(
+        self, adapter, n_confirmed
+    ):
+        from mlx_vlm.models.base import LanguageModelOutput
+
+        requested = [61, 5, 33, 19, 47]
+        inputs = mx.array([[1, 2, 3, 4, 5]])
+        logits = mx.zeros((1, 5, 8))
+        hidden = mx.full((1, 5, 4), 63)
+        rollback = object()
+        calls = []
+
+        class Target:
+            def speculative_verify_logits(self, inputs, cache, sampler):
+                return hidden, {}, rollback, sampler(logits)
+
+            def __call__(self, inputs, **kwargs):
+                calls.append(kwargs)
+                return LanguageModelOutput(
+                    logits=logits,
+                    hidden_states=[
+                        mx.full((1, 5, 4), layer)
+                        for layer in kwargs["capture_layer_ids"]
+                    ]
+                    + [hidden],
+                    gdn_states=rollback,
+                )
+
+        target = Target()
+        model = _adapter(target) if adapter else target
+        cache = []
+        actual = bg._call_backbone_captured(
+            model, inputs, cache, n_confirmed=n_confirmed, capture_layer_ids=requested
+        )
+        assert actual[0] is logits
+        assert actual[1] is hidden
+        assert actual[2] is rollback
+        assert len(actual[3]) == len(requested)
+        for layer, capture in zip(requested, actual[3]):
+            assert capture.shape == (1, 5, 4)
+            assert mx.all(capture == layer)
+        expected = {
+            "cache": cache,
+            "return_hidden": True,
+            "capture_layer_ids": requested,
+        }
+        if n_confirmed:
+            expected["n_confirmed"] = n_confirmed
+        assert calls == [expected]
+
+    @pytest.mark.parametrize("capture_ids", [None, []])
+    def test_backbone_capture_empty_keeps_exact_convenience_path(self, capture_ids):
+        values = mx.zeros((1, 3, 4))
+        rollback = object()
+        calls = []
+
+        class Target:
+            def speculative_verify_logits(self, inputs, cache, sampler):
+                calls.append(tuple(inputs.shape))
+                return values, {}, rollback, sampler(values)
+
+            def __call__(self, inputs, **kwargs):
+                pytest.fail("Native no-capture verification lost its fast path")
+
+        actual = bg._call_backbone_captured(
+            Target(), mx.array([[1, 2, 3]]), [], 1, capture_ids
+        )
+        assert actual == (values, values, rollback, None)
+        assert calls == [(1, 3)]
+
+    @pytest.mark.parametrize("size", [2, 3])
+    def test_backbone_capture_none_preserves_tuple_outputs(self, size):
+        values = mx.zeros((1, 3, 4))
+        rollback = object() if size == 3 else None
+
+        class Target:
+            def __call__(self, inputs, **kwargs):
+                return (values, values, rollback)[:size]
+
+        actual = bg._call_backbone_captured(
+            Target(), mx.array([[1, 2, 3]]), [], n_confirmed=1
+        )
+        assert actual == (values, values, rollback, None)
+
+    @pytest.mark.parametrize("result_kind", ["tuple2", "tuple3", "short", "error"])
+    def test_backbone_capture_contract_errors_disarm_verification(
+        self, monkeypatch, result_kind
+    ):
+        from mlx_vlm.models.base import LanguageModelOutput
+
+        armed = []
+        monkeypatch.setattr(
+            bg._rollback_mod, "set_undo_armed", lambda value: armed.append(value)
+        )
+        qmm = []
+        monkeypatch.setattr(
+            bg, "_set_verify_qmm_armed", lambda value, **kwargs: qmm.append(value)
+        )
+
+        class Target:
+            def __call__(self, inputs, **kwargs):
+                if result_kind == "error":
+                    raise RuntimeError("capture producer failed")
+                if result_kind == "short":
+                    return LanguageModelOutput(
+                        logits=mx.zeros((1, 3, 8)),
+                        hidden_states=[mx.zeros((1, 3, 4))],
+                    )
+                return (None,) * (2 if result_kind == "tuple2" else 3)
+
+        error = RuntimeError if result_kind == "error" else TypeError
+        match = (
+            "capture producer failed"
+            if result_kind == "error"
+            else (
+                "0 captures for 2 requested"
+                if result_kind == "short"
+                else "tuple output cannot carry layer captures"
+            )
+        )
+        with pytest.raises(error, match=match):
+            bg._call_backbone_captured(Target(), mx.array([[1, 2, 3]]), [], 1, [0, 2])
+        assert armed == [True, False]
+        assert qmm == [True, False]
+
+
 class TestPreLoadPatchDispatch:
     def test_dispatch_skips_when_mtp_disabled(self, tmp_path):
         config_path = tmp_path / "config.json"
@@ -3476,6 +3605,12 @@ class CapturingCountingModel(CountingModel):
         )
 
 
+class ExactCapturingCountingModel(CapturingCountingModel):
+    def speculative_verify_logits(self, inputs, cache, sampler):
+        out = self(inputs, cache=cache, return_hidden=True, n_confirmed=1)
+        return out.hidden_states[-1], {}, out.gdn_states, sampler(out.logits)
+
+
 class TableDrafter:
     """Block drafter proposing successors, optionally wrong from a position."""
 
@@ -3531,8 +3666,8 @@ class TableDrafter:
         self.released.extend(uids)
 
 
-def _drafted_counting_model(depth, wrong_from=None):
-    model = CapturingCountingModel()
+def _drafted_counting_model(depth, wrong_from=None, exact_verify=False):
+    model = ExactCapturingCountingModel() if exact_verify else CapturingCountingModel()
     model._omlx_mtp_depth = depth
     model._omlx_drafter = TableDrafter(depth, wrong_from=wrong_from)
     return model
@@ -3540,8 +3675,9 @@ def _drafted_counting_model(depth, wrong_from=None):
 
 @pytest.mark.parametrize("wrong_from", [None, 0, 2])
 @pytest.mark.parametrize("late_join", [False, True])
+@pytest.mark.parametrize("exact_verify", [False, True])
 def test_block_drafter_matches_standard_and_feeds_committed_context(
-    wrong_from, late_join
+    wrong_from, late_join, exact_verify
 ):
     prompts = [[1, 2], [10, 11, 12], [30, 31]]
     limits = [12, 8, 15]
@@ -3549,7 +3685,7 @@ def test_block_drafter_matches_standard_and_feeds_committed_context(
     standard._omlx_mtp_decode_enabled = False
     expected, _ = generate(standard, prompts, limits, late_join=late_join)
 
-    model = _drafted_counting_model(5, wrong_from=wrong_from)
+    model = _drafted_counting_model(5, wrong_from=wrong_from, exact_verify=exact_verify)
     output, terminal = generate(model, prompts, limits, late_join=late_join)
     assert output == expected
     drafter = model._omlx_drafter
@@ -3561,8 +3697,61 @@ def test_block_drafter_matches_standard_and_feeds_committed_context(
     # one, which is still the anchor. Rejected drafts never enter it.
     for uid in terminal:
         assert drafter.fed[uid] == len(output[uid])
+        assert len(output[uid]) == limits[uid]
+        assert terminal[uid].finish_reason == "length"
     # Finished rows leave the drafter registry.
     assert sorted(drafter.released) == sorted(terminal)
+
+
+def test_exact_capture_block_drafter_stop_keeps_survivor_correct():
+    model = _drafted_counting_model(5, exact_verify=True)
+    output, terminal = generate(
+        model, [[1, 2], [10, 11, 12]], [12, 9], stop_tokens=[[6]]
+    )
+    assert output[0] == [3, 4, 5, 6]
+    assert terminal[0].finish_reason == "stop"
+    assert output[1] == list(range(13, 22))
+    assert terminal[1].finish_reason == "length"
+    cache = terminal[0].prompt_cache[0]
+    assert cache.keys[0, 0, : cache.offset, 0].tolist() == [1, 2, 3, 4, 5]
+    for uid in terminal:
+        assert model._omlx_drafter.fed[uid] == len(output[uid])
+
+
+def test_exact_capture_block_drafter_cancellation_releases_context():
+    bg.apply()
+    cache_rollback.apply()
+    model = _drafted_counting_model(5, wrong_from=2, exact_verify=True)
+    gen = BatchGenerator(
+        model, sampler=lambda lp: mx.argmax(lp, -1), prefill_batch_size=3, max_tokens=24
+    )
+    try:
+        uids = gen.insert([[1, 2], [10, 11], [20, 21]])
+        output = {uid: [] for uid in uids}
+        cancelled = None
+        terminal = {}
+        for step in range(60):
+            if step == 3:
+                gen.remove([uids[1]])
+                cancelled = len(output[uids[1]])
+            _, responses = gen.next()
+            for response in responses:
+                assert response.uid not in terminal
+                if cancelled is not None:
+                    assert response.uid != uids[1]
+                output[response.uid].append(response.token)
+                if response.finish_reason:
+                    terminal[response.uid] = response
+            if len(terminal) == 2:
+                break
+        assert model._omlx_drafter.jobs > 0
+        assert len(output[uids[1]]) == cancelled
+        assert output[uids[0]] == list(range(3, 27))
+        assert output[uids[2]] == list(range(22, 46))
+        assert all(response.finish_reason == "length" for response in terminal.values())
+        assert set(model._omlx_drafter.released) == set(uids)
+    finally:
+        gen.close()
 
 
 def test_block_drafter_serves_sampled_rows_with_draft_distribution():
@@ -4242,6 +4431,212 @@ def _model(family):
         fixture.close()
         return model
     raise AssertionError(family)
+
+
+def _exact_capture_qwen(family, layers=4, bits=None):
+    from mlx_vlm.models.qwen3_5 import config, language
+    from test_mtp_prompt_priming import TINY_CONFIG
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
+
+    qwen35_vlm_runtime.apply()
+    if family == "moe":
+        from mlx_vlm.models.qwen3_5_moe import config, language
+
+        from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_runtime
+
+        qwen35_moe_vlm_runtime.apply()
+    args = config.TextConfig.from_dict(
+        dict(
+            TINY_CONFIG,
+            model_type="qwen3_5_moe" if family == "moe" else "qwen3_5",
+            num_hidden_layers=layers,
+            tie_word_embeddings=False,
+            num_experts=4,
+            num_experts_per_tok=2,
+            moe_intermediate_size=64,
+            shared_expert_intermediate_size=64,
+        )
+    )
+    target = language.LanguageModel(
+        args, config.ModelConfig(args, config.VisionConfig(), args.model_type)
+    )
+    if bits is not None:
+        nn.quantize(target, bits=bits, group_size=32)
+        target.set_dtype(mx.bfloat16)
+    mx.eval(target.parameters())
+    return _adapter(target)
+
+
+def _assert_exact_capture_cache(actual, expected, *, atol=0):
+    assert len(actual) == len(expected)
+    for left, right in zip(actual, expected):
+        a, b = tree_flatten(left.state), tree_flatten(right.state)
+        assert [key for key, _ in a] == [key for key, _ in b]
+        for (_, value), (_, reference) in zip(a, b):
+            if isinstance(value, mx.array):
+                assert value.shape == reference.shape
+                assert value.dtype == reference.dtype
+                assert mx.allclose(
+                    value, reference, atol=atol, rtol=1e-5 if atol else 0
+                )
+            else:
+                assert value == reference
+        if hasattr(left, "offset"):
+            assert mx.array_equal(mx.array(left.offset), mx.array(right.offset))
+        assert getattr(left, "_speculation", None) is None
+
+
+@pytest.mark.parametrize(
+    "family,layers,capture_ids,bits",
+    [
+        ("dense", 64, [61, 5, 33, 19, 47], None),
+        ("dense", 4, [3, 0, 3, 2], None),
+        ("dense", 4, [2, 0], 4),
+        ("moe", 4, [3, 0, 2], None),
+    ],
+)
+def test_exact_capture_matches_verifier_tensors(
+    monkeypatch, family, layers, capture_ids, bits
+):
+    from mlx_vlm.models.qwen3_5 import language
+    from mlx_vlm.speculative.cache_state import SpeculativeCacheTransaction
+
+    mx.random.seed(916)
+    model = _exact_capture_qwen(family, layers, bits)
+    target = model._language_model
+    prefix = mx.array([[3, 4, 5]])
+    inputs = mx.array([[6, 7, 8, 9, 10]])
+    cache = target.make_cache()
+    mx.eval(model(prefix, cache=cache))
+    reference_cache = copy.deepcopy(cache)
+    verifier = language._EXACT_SPECULATIVE_VERIFIER
+    original = verifier._layer
+    reference_layers = {}
+    indices = {id(layer): index for index, layer in enumerate(target.model.layers)}
+
+    def record(layer, *args, **kwargs):
+        out = original(layer, *args, **kwargs)
+        reference_layers[indices[id(layer)]] = out
+        return out
+
+    with monkeypatch.context() as m:
+        m.setattr(verifier, "_layer", record)
+        logits, hidden, transaction = bg._call_backbone(
+            model, inputs, reference_cache, n_confirmed=1
+        )
+    assert isinstance(transaction, SpeculativeCacheTransaction)
+    transaction.commit(inputs.shape[1])
+    assert set(reference_layers) == set(range(layers))
+    verified = []
+    original_verify = verifier.verify
+
+    def verify(*args, **kwargs):
+        verified.append(kwargs["capture_layer_ids"])
+        return original_verify(*args, **kwargs)
+
+    monkeypatch.setattr(verifier, "verify", verify)
+    actual = bg._call_backbone_captured(
+        model, inputs, cache, n_confirmed=1, capture_layer_ids=capture_ids
+    )
+    transaction = actual[2]
+    assert isinstance(transaction, SpeculativeCacheTransaction)
+    try:
+        assert verified == [sorted({*capture_ids, layers - 1})]
+        assert mx.array_equal(actual[0], logits)
+        assert mx.array_equal(actual[1], hidden)
+        assert mx.array_equal(actual[1], reference_layers[layers - 1])
+        assert len(actual[3]) == len(capture_ids)
+        for layer, capture in zip(capture_ids, actual[3]):
+            assert capture.shape == (1, 5, 64)
+            assert mx.array_equal(capture, reference_layers[layer])
+        assert bg._chain_rollback(model, cache, 4, 4, transaction)
+        assert not transaction.active
+        _assert_exact_capture_cache(cache, reference_cache)
+    finally:
+        transaction.abort()
+
+
+@pytest.mark.parametrize("family", ["dense", "moe"])
+def test_exact_capture_prefill_commits_transaction(family):
+    mx.random.seed(935)
+    model = _exact_capture_qwen(family)
+    cache = model._language_model.make_cache()
+    reference = copy.deepcopy(cache)
+    inputs = mx.array([[3, 4, 5]])
+    actual = bg._call_backbone_captured(model, inputs, cache, capture_layer_ids=[2, 0])
+    expected = bg._call_backbone(model, inputs, reference, n_confirmed=1)
+    expected[2].commit(inputs.shape[1])
+    assert actual[2] is None
+    assert mx.array_equal(actual[0], expected[0])
+    assert mx.array_equal(actual[1], expected[1])
+    assert len(actual[3]) == 2
+    _assert_exact_capture_cache(cache, reference)
+
+
+@pytest.mark.parametrize("accepted", [0, 1, 4])
+@pytest.mark.parametrize("bits", [None, 4])
+def test_exact_capture_rollback_matches_native_verifier(accepted, bits):
+    from mlx_vlm.speculative.cache_state import SpeculativeCacheTransaction
+
+    mx.random.seed(927)
+    model = _exact_capture_qwen("dense", bits=bits)
+    cache = model._language_model.make_cache()
+    mx.eval(model(mx.array([[3, 4, 5]]), cache=cache))
+    reference = copy.deepcopy(cache)
+    inputs = mx.array([[6, 7, 8, 9, 10]])
+    result = bg._call_backbone_captured(
+        model, inputs, cache, n_confirmed=1, capture_layer_ids=[2, 0]
+    )
+    transaction = result[2]
+    assert isinstance(transaction, SpeculativeCacheTransaction)
+    try:
+        assert bg._chain_rollback(model, cache, accepted, 4, transaction)
+        assert not transaction.active
+        # The last-hidden-only native verifier is an independent capture-free path.
+        reference_result = bg._call_backbone(model, inputs, reference, n_confirmed=1)
+        reference_result[2].commit(accepted + 1)
+        _assert_exact_capture_cache(cache, reference)
+        next_input = mx.array([[11]])
+        actual_logits = model(next_input, cache=cache)
+        expected_logits = model(next_input, cache=reference)
+        assert mx.array_equal(actual_logits, expected_logits)
+        assert mx.array_equal(
+            mx.argmax(actual_logits, axis=-1), mx.argmax(expected_logits, axis=-1)
+        )
+        _assert_exact_capture_cache(cache, reference)
+    finally:
+        transaction.abort()
+
+
+@pytest.mark.parametrize("accepted", [0, 1, 4])
+def test_exact_capture_rollback_matches_committed_prefix(accepted):
+    mx.random.seed(927)
+    model = _exact_capture_qwen("dense")
+    cache = model._language_model.make_cache()
+    mx.eval(model(mx.array([[3, 4, 5]]), cache=cache))
+    reference = copy.deepcopy(cache)
+    inputs = mx.array([[6, 7, 8, 9, 10]])
+    result = bg._call_backbone_captured(
+        model, inputs, cache, n_confirmed=1, capture_layer_ids=[2, 0]
+    )
+    transaction = result[2]
+    try:
+        assert bg._chain_rollback(model, cache, accepted, 4, transaction)
+        committed = bg._call_backbone(
+            model, inputs[:, : accepted + 1], reference, n_confirmed=1
+        )
+        committed[2].commit(accepted + 1)
+        # Different FP32 window lengths can change reductions at roundoff scale.
+        _assert_exact_capture_cache(cache, reference, atol=1e-6)
+        next_input = mx.array([[11]])
+        actual = model(next_input, cache=cache)
+        expected = model(next_input, cache=reference)
+        assert mx.allclose(actual, expected, atol=1e-6, rtol=1e-5)
+        assert mx.array_equal(mx.argmax(actual, -1), mx.argmax(expected, -1))
+        _assert_exact_capture_cache(cache, reference, atol=1e-6)
+    finally:
+        transaction.abort()
 
 
 @pytest.mark.parametrize("family", ["qwen", "qwen_vlm"])
