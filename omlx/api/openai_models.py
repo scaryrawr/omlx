@@ -509,18 +509,10 @@ class CompletionRequest(BaseModel):
     repetition_context_size: int | None = Field(default=None, gt=0)
     max_tokens: int | None = None
     stream: bool = False
-<<<<<<< HEAD
-    stream_options: Optional[StreamOptions] = None
+    stream_options: StreamOptions | None = None
     # llama.cpp extension: stream prompt_progress chunks during prefill.
     return_progress: bool = False
-    stop: Optional[List[str]] = None
-||||||| parent of db65d7da (feat(api): retain multimodal protocols and native VLM MTP)
-    stream_options: Optional[StreamOptions] = None
-    stop: Optional[List[str]] = None
-=======
-    stream_options: StreamOptions | None = None
     stop: list[str] | None = None
->>>>>>> db65d7da (feat(api): retain multimodal protocols and native VLM MTP)
     min_p: float | None = None
     xtc_probability: float | None = None
     xtc_threshold: float | None = None
