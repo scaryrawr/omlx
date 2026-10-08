@@ -417,6 +417,8 @@ class TestLaunchCommandFunction:
             ("text-model", "vision-alias", "vision-alias", "text-model"),
             ("embedding-model", None, "text-model", None),
             ("image-model", None, "text-model", None),
+            ("helper-model", None, "text-model", None),
+            ("embeddinggemma", None, "text-model", None),
         ],
     )
     def test_codex_uses_native_picker_with_all_chat_models(
@@ -457,6 +459,12 @@ class TestLaunchCommandFunction:
                     "loaded": True,
                 },
                 {"id": "embedding-model", "model_type": "embedding"},
+                {"id": "helper-model", "model_type": "llm", "is_helper": True},
+                {
+                    "id": "embeddinggemma",
+                    "model_type": "vlm",
+                    "config_model_type": "embedding_gemma2",
+                },
                 {"id": "hidden-model", "model_type": "llm", "is_hidden": True},
                 {"id": "audio-model", "model_type": "stt"},
                 {"id": "image-model", "model_type": "llm", "engine_type": "image"},
@@ -468,6 +476,8 @@ class TestLaunchCommandFunction:
                 {"id": "vision-alias"},
                 {"id": "text-model"},
                 {"id": "embedding-model"},
+                {"id": "helper-model"},
+                {"id": "embeddinggemma"},
                 {"id": "audio-model"},
                 {"id": "image-model"},
             ]
