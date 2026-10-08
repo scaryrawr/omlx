@@ -497,6 +497,7 @@ def launch_command(args, extra_args: list[str] | None = None):
 
     from .integrations import IntegrationContext, get_integration, list_integrations
     from .integrations.base import IntegrationModel
+    from .integrations.codex import is_codex_chat_model
     from .settings import GlobalSettings
 
     def _optional_str(value) -> str | None:
@@ -611,7 +612,9 @@ def launch_command(args, extra_args: list[str] | None = None):
             for entry in resp.json().get("data", []):
                 model_id = entry["id"]
                 info = {**entry, **models_status_map.get(model_id, {}), "id": model_id}
-                if _is_chat_model(info):
+                if (is_codex_chat_model if native_model_picker else _is_chat_model)(
+                    info
+                ):
                     models_info_list.append(info)
         except (requests.RequestException, ValueError, KeyError) as exc:
             if native_model_picker and model:
@@ -620,7 +623,7 @@ def launch_command(args, extra_args: list[str] | None = None):
             models_info_list = []
 
     if native_model_picker:
-        if not _is_chat_model(models_status_map.get(model, {})):
+        if not is_codex_chat_model(models_status_map.get(model, {})):
             print(
                 f"Cannot launch {integration.display_name} with non-chat model '{model}'."
             )
