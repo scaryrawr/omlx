@@ -3,6 +3,8 @@
 
 import json
 import plistlib
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -47,6 +49,36 @@ def ctx(**overrides) -> IntegrationContext:
 
 
 class TestIntegrationRegistry:
+    def test_registry_and_listing_do_not_import_inference_dependencies(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import importlib.abc
+import sys
+from types import SimpleNamespace
+
+class NoInferenceImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in ("omlx.model_discovery", "mlx_audio"):
+            raise ImportError(f"Unexpected inference dependency: {fullname}")
+
+sys.meta_path.insert(0, NoInferenceImports())
+from omlx.integrations import list_integrations
+assert len(list_integrations()) == 9
+from omlx.cli import launch_command
+launch_command(SimpleNamespace(tool="list"))
+""",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Available integrations:" in result.stdout
+        assert "codex_app" in result.stdout
+
     def test_list_integrations(self):
         integrations = list_integrations()
         assert len(integrations) == 9
@@ -267,6 +299,26 @@ class TestCodexModelCatalog:
         )["models"][0]
         assert model["supported_reasoning_levels"] == []
         assert model["default_reasoning_level"] is None
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            {"model_type": "llm", "is_helper": True},
+            {"model_type": "vlm", "config_model_type": "embedding_gemma2"},
+            {"model_type": "llm", "config_model_type": "qwen3_5_mtp"},
+            {"model_type": "embedding"},
+            {"model_type": "llm", "engine_type": "reranker"},
+        ],
+    )
+    @pytest.mark.parametrize("listed", [False, True])
+    def test_status_excludes_non_chat_models_even_when_selected(self, status, listed):
+        assert codex_model_catalog(
+            ctx(
+                model="alias",
+                models=(IntegrationModel("alias", model_type="vlm"),) if listed else (),
+                models_status_map={"alias": status},
+            )
+        ) == {"models": []}
 
     def test_explicit_non_chat_model_is_not_added(self):
         assert codex_model_catalog(ctx(model="embedding", model_type="embedding")) == {

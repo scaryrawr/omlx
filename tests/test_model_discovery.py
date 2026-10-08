@@ -743,6 +743,20 @@ class TestDetectModelType:
         (tmp_path / "modules.json").write_text(json.dumps(modules))
         assert detect_model_type(tmp_path) == "llm"
 
+    def test_detect_embedding_gemma2_without_sentence_transformers_modules(
+        self, tmp_path
+    ):
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "embedding_gemma2",
+                    "architectures": ["EmbeddingGemma2Model"],
+                    "vision_config": {"model_type": "gemma4_vision"},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "embedding"
+
     def test_detect_embedding_gemma2_with_vision_config_as_embedding(self, tmp_path):
         """EmbeddingGemma 2 ships a vision_config and sentence-transformers v6 modules."""
         config = {

@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 from omlx.integrations.base import Integration, IntegrationContext, IntegrationModel
+from omlx.model_classification import EMBEDDING_MODEL_TYPES, is_helper_config_model_type
 from omlx.utils.install import get_cli_command_prefix
 
 CODEX_CONFIG_PATH = (
@@ -34,6 +35,21 @@ def _is_reasoning_model(model_id: str, reasoning: bool | None) -> bool:
     return bool(re.search(r"\b(thinking|o1|o3|r1)\b", model_id.lower()))
 
 
+def is_codex_chat_model(info: dict) -> bool:
+    """Exclude non-chat checkpoints even if the server reports a chat engine."""
+    config_type = info.get("config_model_type") or ""
+    normalized_type = config_type.lower().replace("-", "_")
+    return (
+        info.get("model_type") in (None, "llm", "vlm")
+        and info.get("engine_type") in (None, "batched", "vlm")
+        and not info.get("is_helper")
+        and not info.get("is_hidden")
+        and not info.get("unavailable_reason")
+        and not is_helper_config_model_type(config_type)
+        and normalized_type not in EMBEDDING_MODEL_TYPES
+    )
+
+
 def codex_model_catalog(ctx: IntegrationContext) -> dict:
     """Build Codex's ModelInfo catalog, not an OpenAI /v1/models response.
 
@@ -43,9 +59,17 @@ def codex_model_catalog(ctx: IntegrationContext) -> dict:
     models = {
         model.id: model
         for model in ctx.models
-        if model.model_type in (None, "llm", "vlm")
+        if is_codex_chat_model(
+            {"model_type": model.model_type, **ctx.models_status_map.get(model.id, {})}
+        )
     }
-    if ctx.model and ctx.model not in models and ctx.model_type in (None, "llm", "vlm"):
+    if (
+        ctx.model
+        and ctx.model not in models
+        and is_codex_chat_model(
+            {"model_type": ctx.model_type, **ctx.models_status_map.get(ctx.model, {})}
+        )
+    ):
         models[ctx.model] = IntegrationModel(
             id=ctx.model,
             context_window=ctx.context_window,
