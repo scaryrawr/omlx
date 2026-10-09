@@ -83,14 +83,14 @@ class TestLoginPage:
 
 
 class TestProtectedPages:
-    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat"])
+    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"])
     def test_browser_without_session_redirects_to_login(self, web, path):
         client, _ = web
         resp = client.get(path, headers=HTML)
         assert resp.status_code == 302
         assert resp.headers["location"] == "/admin"
 
-    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat"])
+    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"])
     def test_json_without_session_is_401(self, web, path):
         client, _ = web
         resp = client.get(path, headers=JSON)
@@ -120,6 +120,15 @@ class TestProtectedPages:
         resp = client.get("/admin/chat", headers=HTML)
         assert resp.status_code == 200
         assert f'const serverApiKey = "{MAIN_KEY}";' in resp.text
+
+    def test_imagine_injects_main_key_and_locale(self, web):
+        client, _ = web
+        _login(client)
+        resp = client.get("/admin/imagine", headers=HTML)
+        assert resp.status_code == 200
+        assert f'const serverApiKey = "{MAIN_KEY}";' in resp.text
+        assert '<html lang="en">' in resp.text
+        assert "Imagine - oMLX Admin" in resp.text
 
     def test_language_change_applies_to_next_render(self, web):
         client, _ = web

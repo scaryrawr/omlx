@@ -3402,7 +3402,6 @@ class EnginePool:
         # for that inference to finish. Live memory remains visible to future
         # admission checks if allocator cache is not immediately reclaimable.
         gc.collect()
-        await self._metal_sync_clear_cache(model_id)
 
         # RAM Engram tables share MLX buffers with CPU views, so their packed
         # bytes are included in both admission and Metal unload settlement.
@@ -3438,7 +3437,7 @@ class EnginePool:
         else:
             # Run mx.clear_cache on the global MLX executor only while the
             # pool is otherwise idle. See issues #85 and #300.
-            await loop.run_in_executor(get_mlx_executor(), _clear_mlx_cache_sync)
+            await self._metal_sync_clear_cache(model_id)
 
         for _settle_round in range(10 if not settle_indeterminate else 0):
             active_now = mx.get_active_memory()
