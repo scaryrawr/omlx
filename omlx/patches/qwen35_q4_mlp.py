@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: N806
 """Qwen3.5/3.6 quantized prefill matmul patch.
 
@@ -51,7 +52,7 @@ _Q8_BACKEND_MIN_ROWS = 64
 
 def _default_min_tokens() -> int:
     name = str(mx.device_info().get("device_name", ""))
-    return 128 if name.startswith("Apple M4") else 2048
+    return 128 if name.startswith("Apple M4") else _MIN_TOKENS
 
 
 def register_qwen35_lm_gdn_prefill_backend(
@@ -185,10 +186,7 @@ def _is_supported_affine_linear_shape(
             return False
         if not _qmm_supports_group_size(int(group_size)):
             return False
-        if (
-            group_size == 128
-            and is_nax_available()
-        ):
+        if group_size == 128 and is_nax_available():
             # The custom gs128 tile cannot use NAX; stock MLX can on M5 hardware.
             return False
         if bits not in _SUPPORTED_QMM_BITS or _native_qmm_for_bits(int(bits)) is None:

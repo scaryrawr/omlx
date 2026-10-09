@@ -10,7 +10,12 @@ from omlx.model_settings import ModelSettings
 from omlx.settings import GlobalSettings
 
 CHAT_TEMPLATE = (
-    Path(__file__).parent.parent / "omlx" / "admin" / "templates" / "chat.html"
+    Path(__file__).parent.parent
+    / "apps"
+    / "omlx-web"
+    / "omlx_web"
+    / "templates"
+    / "chat.html"
 )
 
 

@@ -75,7 +75,7 @@ class _ChatTemplateEmbeddingInputs:
     """Build text, image, and audio embedding inputs with an mlx-vlm processor."""
 
     def __init__(
-        self, processor, max_length: int, audio_max_seconds: Optional[float] = None
+        self, processor, max_length: int, audio_max_seconds: float | None = None
     ):
         self._processor = processor
         self._max_length = max_length
@@ -151,7 +151,7 @@ class MLXEmbeddingModel:
         model_name: str,
         trust_remote_code: bool = False,
         audio_enabled: bool = False,
-        audio_max_seconds: Optional[float] = None,
+        audio_max_seconds: float | None = None,
     ):
         """
         Initialize the MLX embedding model.

@@ -5,11 +5,12 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-IMAGINE_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "imagine.html"
-CHAT_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "chat.html"
-NAVBAR_TEMPLATE = ROOT / "omlx" / "admin" / "templates" / "dashboard" / "_navbar.html"
-ROUTES = ROOT / "omlx" / "admin" / "routes.py"
-I18N_DIR = ROOT / "omlx" / "admin" / "i18n"
+WEB_ROOT = ROOT / "apps" / "omlx-web" / "omlx_web"
+IMAGINE_TEMPLATE = WEB_ROOT / "templates" / "imagine.html"
+CHAT_TEMPLATE = WEB_ROOT / "templates" / "chat.html"
+NAVBAR_TEMPLATE = WEB_ROOT / "templates" / "dashboard" / "_navbar.html"
+ROUTES = WEB_ROOT / "routes.py"
+I18N_DIR = WEB_ROOT / "i18n"
 
 REQUIRED_IMAGINE_KEYS = [
     "navbar.tab.imagine",
@@ -256,7 +257,9 @@ def test_imagine_template_refilters_model_on_mode_change():
 
 
 def test_i18n_imagine_keys_present_in_every_language_file():
-    for lang_file in I18N_DIR.glob("*.json"):
+    language_files = list(I18N_DIR.glob("*.json"))
+    assert language_files, "Imagine translations must be packaged"
+    for lang_file in language_files:
         translations = json.loads(lang_file.read_text())
         for key in REQUIRED_IMAGINE_KEYS:
             assert key in translations, f"Missing key '{key}' in {lang_file.name}"

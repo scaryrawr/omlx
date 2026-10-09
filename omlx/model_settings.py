@@ -497,7 +497,7 @@ class ModelSettings:
     # the waveform. None keeps the processor default (Gemma 4 audio: 30 s).
     # The model's context still bounds it: EmbeddingGemma 2 fits about 327 s
     # (8192 tokens at 40 ms each); longer inputs get the token-limit error.
-    embedding_audio_max_seconds: Optional[float] = None
+    embedding_audio_max_seconds: float | None = None
 
     # Metadata
     display_name: str | None = None
