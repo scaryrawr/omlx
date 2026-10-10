@@ -9,6 +9,7 @@ These models define request and response schemas for:
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -91,6 +92,7 @@ class _ImageRequestBase(BaseModel):
     # oMLX/mlx-vlm extension fields passed through by routes when supported.
     seed: int | None = None
     steps: int | None = None
+    sigmas: list[float] | None = None
     guidance: float | None = None
     negative_prompt: str | None = None
     scheduler: str | None = None
@@ -106,6 +108,30 @@ class _ImageRequestBase(BaseModel):
         """Require a non-empty prompt while preserving caller whitespace."""
         if not value.strip():
             raise ValueError("prompt must not be empty")
+        return value
+
+    @field_validator("sigmas", mode="before")
+    @classmethod
+    def validate_sigmas(cls, value: Any) -> Any:
+        """Input grids contain denoising sigmas, never the terminal zero."""
+        if value is None:
+            return None
+        if (
+            not isinstance(value, list)
+            or not value
+            or any(
+                isinstance(sigma, bool)
+                or not isinstance(sigma, (int, float))
+                or not math.isfinite(sigma)
+                or not 0 < sigma <= 1
+                for sigma in value
+            )
+            or any(left <= right for left, right in zip(value, value[1:]))
+        ):
+            raise ValueError(
+                "sigmas must be a nonempty, finite, strictly descending list "
+                "in (0, 1], without a terminal zero"
+            )
         return value
 
     @field_validator("output_format", mode="before")
@@ -192,6 +218,8 @@ class ImageData(BaseModel):
     quality: str | None = None
     output_format: ImageOutputFormat | None = None
     background: str | None = None
+    steps: int | None = None
+    guidance: float | None = None
 
     @field_validator("output_format", mode="before")
     @classmethod

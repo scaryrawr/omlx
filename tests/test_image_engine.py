@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -147,6 +149,77 @@ async def test_stop_can_defer_global_mlx_cleanup(fake_mlx_vlm):
 
     assert engine.get_stats()["loaded"] is False
     assert fake_mlx_vlm.cleanup_calls == []
+
+
+@pytest.mark.parametrize("base_model", ["qwen-image-2.1", "qwen-image-2.1-turbo"])
+async def test_qwen21_generates_edits_and_switches_one_variant(
+    fake_mlx_vlm, base_model
+):
+    engine = ImageEngine(
+        model_name=base_model,
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
+        tasks=["generation", "edit"],
+    )
+    await engine.start()
+    generation = await engine.generate("a fox", sigmas=[1, 0.5])
+    assert fake_mlx_vlm.api.models[-1].calls[-1][1].extra == {"sigmas": [1, 0.5]}
+    assert generation.metadata["task"] == "generation"
+    edit = await engine.edit("combine", ["first.png", "second.png"])
+    request = fake_mlx_vlm.api.models[-1].calls[-1][1]
+    assert request.image_paths == ("first.png", "second.png")
+    assert request.steps == (8 if "turbo" in base_model else 40)
+    assert "strength" not in request.extra
+    assert edit.metadata["input_image_count"] == 2
+    assert len(engine._models) == 1
+    assert engine.get_stats()["loaded_tasks"] == ["edit"]
+    await engine.stop()
+    assert engine.get_stats()["loaded_tasks"] == []
+
+
+@pytest.mark.parametrize("option", ["image_strength", "scheduler"])
+async def test_qwen21_rejects_unimplemented_explicit_options(fake_mlx_vlm, option):
+    engine = ImageEngine(
+        model_name="qwen",
+        image_metadata={"backend": "mlx-vlm", "base_model": "qwen-image-2.1-turbo"},
+        tasks=["generation", "edit"],
+    )
+    await engine.start()
+    with pytest.raises(ValueError, match=option):
+        await engine.edit("change", ["input.png"], **{option: 0.5})
+    assert fake_mlx_vlm.api.models[0].calls == []
+
+
+async def test_image_cancellation_drains_worker_before_unlock_and_cleanup(
+    fake_mlx_vlm, monkeypatch
+):
+    engine = ImageEngine(
+        model_name="image-model",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["generation"],
+    )
+    await engine.start()
+    started, finish = threading.Event(), threading.Event()
+
+    def generate(model, request, *, task):
+        started.set()
+        assert finish.wait(5), "test worker was not released"
+        return SimpleNamespace(image="completed")
+
+    monkeypatch.setattr(fake_mlx_vlm.api, "generate_image", generate)
+    task = asyncio.create_task(engine.generate("a fox"))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert engine._call_lock.locked()
+        assert fake_mlx_vlm.cleanup_calls == []
+    finally:
+        finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not engine._call_lock.locked()
+    assert "clear_cache" in fake_mlx_vlm.cleanup_calls
 
 
 @pytest.mark.parametrize(
@@ -328,9 +401,7 @@ async def test_dual_task_engine_keeps_one_loaded_variant(fake_mlx_vlm):
     assert len(fake_mlx_vlm.api.loads) == 3
 
 
-async def test_model_path_override_is_a_distinct_loaded_variant(
-    fake_mlx_vlm, tmp_path
-):
+async def test_model_path_override_is_a_distinct_loaded_variant(fake_mlx_vlm, tmp_path):
     model_root = tmp_path / "models"
     model_root.mkdir()
     override = tmp_path / "other-model"

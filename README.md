@@ -369,7 +369,7 @@ Models are auto-detected by type. You can also download models directly from the
 | Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
 | Reranker | ModernBERT, XLM-RoBERTa |
 | Decision | Clef, Clef-Flash, OpenJev |
-| Image | mlx-vlm models: FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+| Image | mlx-vlm models: Qwen Image 2.1/base/Turbo, FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
 
 ### Image Model Manifests
 
@@ -410,6 +410,54 @@ the output PNG retains its alpha channel. Z-Image
 and ERNIE-Image edit modes require
 exactly one source image; masks are not supported by the current mlx-vlm image
 families.
+
+Qwen Image **2.1 base and 2.1 Turbo** support generation and reference-image
+editing. Local multi-component checkpoints are detected from their 2.1
+pipeline/transformer/VAE configuration, even after renaming the directory;
+a Qwen-looking folder name alone is not sufficient. Older Qwen Image/Edit
+architectures are not included in this support. Explicit manifests can use
+`qwen-image-2.1` or `qwen-image-2.1-turbo`.
+
+The saved Turbo recipe has eight denoising steps and guidance 1.0. Schedule
+precedence is **request `sigmas` > checkpoint `sample_sigmas` > generated
+schedule from `steps`**. Setting only `steps`, including a manifest default,
+does not replace a saved checkpoint grid. Base checkpoints without saved
+grids keep 30 generation steps or 40 editing steps. Finite positive guidance
+overrides remain supported.
+
+Custom sigma grids are an API extension, not an Imagine editor. Supply a
+nonempty, finite, strictly descending JSON array in `(0, 1]`, without terminal
+zero; the scheduler applies the checkpoint's shift settings and appends the
+terminal zero. For multipart edits, encode the `sigmas` form field as a JSON
+array, for example `[1, 0.8, 0.4]`. Each response image includes the backend's
+effective `steps` and `guidance` when available, plus its actual output size.
+Imagine explains saved-grid precedence and displays the actual result steps.
+
+Qwen 2.1 editing conditions on all supplied reference images; the existing
+API/UI upload limits still apply. With automatic size, the backend selects
+the output aspect from the last resized reference. Qwen does not implement
+mask editing, `image_strength`, or an alternative `scheduler` selection;
+explicit unsupported options are rejected rather than ignored.
+
+The Qwen image compatibility patch temporarily backports mlx-vlm commit
+`9a200804c81b98fd420d1f8a064a6824cec76f4f`'s saved-grid,
+static-shift, effective-default/result, and nested processor-config fixes.
+It activates only for Qwen loads, refuses unknown upstream source shapes, and
+does nothing when the complete native fix is present. Remove the backport once
+oMLX's mlx-vlm pin contains the complete fix, retaining registry/API/UI wiring
+and regression tests. Full-checkpoint generation/edit validation and deployment
+are separate from weight-free tests and require a coordinated GPU memory
+budget; no checkpoint conversion or modification is needed.
+
+The checked-in backport is generated from immutable upstream revisions.
+To regenerate it against that source checkout:
+
+```bash
+uv run --python python3.12 python \
+  omlx/patches/mlx_vlm_qwen_image_compat/generate_backport.py \
+  --source-repo /path/to/mlx-vlm \
+  --source-revision 9a200804c81b98fd420d1f8a064a6824cec76f4f
+```
 
 ## CLI Configuration
 

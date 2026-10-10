@@ -2104,6 +2104,8 @@
   "imagine.error.image_too_large": "Obrázek musí být menší než 25 MB",
   "modal.model_settings.model_type_image": "Obrázek",
   "imagine.advanced.steps": "Počet kroků",
+  "imagine.checkpoint_schedule_hint": "Uložený plán modelu má přednost před počtem kroků. Plán lze změnit polem sigmas v API.",
+  "imagine.effective_steps": "Skutečný počet kroků",
   "imagine.results_heading": "Výsledky",
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.n": "Počet obrázků",

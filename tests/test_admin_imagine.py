@@ -2,7 +2,11 @@
 """Regression tests for the admin Imagine image UI."""
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parent.parent
 WEB_ROOT = ROOT / "apps" / "omlx-web" / "omlx_web"
@@ -27,6 +31,8 @@ REQUIRED_IMAGINE_KEYS = [
     "imagine.advanced.title",
     "imagine.advanced.seed",
     "imagine.advanced.steps",
+    "imagine.checkpoint_schedule_hint",
+    "imagine.effective_steps",
     "imagine.advanced.guidance",
     "imagine.advanced.size",
     "imagine.advanced.n",
@@ -45,6 +51,83 @@ REQUIRED_IMAGINE_KEYS = [
     "imagine.error.invalid_image_type",
     "imagine.error.image_too_large",
 ]
+
+
+def test_imagine_executes_qwen_recipe_and_request_behavior():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to execute Imagine JavaScript")
+    source = IMAGINE_TEMPLATE.read_text().split("{% block scripts %}", 1)[1]
+    source = source.split("<script>", 1)[1].split("</script>", 1)[0]
+    source = source.replace("{{ api_key | tojson }}", '""')
+    harness = (
+        r"""
+const assert = require('node:assert/strict');
+global.localStorage = {getItem: () => null};
+global.window = {t: key => key};
+"""
+        + source
+        + r"""
+(async () => {
+    const app = imagineApp();
+    app.apiKeySet = true;
+    app.apiKeyInput = 'test';
+    app.mergeStatusMetadata([
+        {id: 'raw', model_alias: 'turbo', model_type: 'image', engine_type: 'image',
+         tasks: ['generation', 'edit'],
+         image_metadata: {uses_checkpoint_sigmas: true, checkpoint_steps: 8}},
+        {id: 'chat', model_type: 'llm', tasks: []},
+        {id: 'collision', model_alias: 'chat', model_type: 'image', tasks: ['edit']}
+    ]);
+    app.currentModel = 'turbo';
+    app.availableModels = [{id: 'turbo'}, {id: 'chat'}];
+    assert.equal(app.currentRecipe().checkpoint_steps, 8);
+    assert.equal(app.modelTypeMap.chat, 'llm');
+    assert.deepEqual(app.modeModels(), [{id: 'turbo'}]);
+    app.prompt = 'a fox';
+    assert.equal(app.commonPayload().steps, undefined);
+    assert.equal(app.commonPayload().guidance, undefined);
+    app.settings.steps = '30';
+    let generation;
+    global.fetch = async (url, options) => {
+        assert.equal(url, '/v1/images/generations');
+        generation = JSON.parse(options.body);
+        return {ok: true, json: async () => ({data: [
+            {b64_json: 'AA==', output_format: 'png', steps: 8, guidance: 1, size: '4x2'}
+        ]})};
+    };
+    await app.submit();
+    assert.equal(generation.steps, 30);
+    assert.equal(generation.sigmas, undefined);
+    assert.equal(app.results[0].images[0].steps, 8);
+    assert.equal(app.results[0].images[0].guidance, 1);
+    app.setMode('edit');
+    app.uploadImages = [
+        {id: 'one', file: new File(['first'], 'first.png'), preview: 'data:first'},
+        {id: 'two', file: new File(['second'], 'second.png'), preview: 'data:second'}
+    ];
+    global.fetch = async (url, options) => {
+        assert.equal(url, '/v1/images/edits');
+        assert.deepEqual(options.body.getAll('image').map(file => file.name),
+                         ['first.png', 'second.png']);
+        assert.equal(options.body.get('sigmas'), null);
+        assert.equal(options.body.get('image_strength'), null);
+        assert.equal(options.body.get('mask'), null);
+        return {ok: true, json: async () => ({data: [
+            {b64_json: 'AA==', steps: 8, output_format: 'png'}
+        ]})};
+    };
+    await app.submit();
+    assert.equal(app.results[0].mode, 'edit');
+    assert.equal(app.results[0].originals.length, 2);
+    assert.equal(app.results[0].images[0].steps, 8);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+"""
+    )
+    result = subprocess.run(
+        [node], input=harness, text=True, capture_output=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _imagine_model_selectable(model_type, engine_type=""):

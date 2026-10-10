@@ -2102,6 +2102,8 @@
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.size": "Taille",
   "imagine.advanced.steps": "Étapes",
+  "imagine.checkpoint_schedule_hint": "Le calendrier enregistré du modèle prime sur les étapes. Utilisez le champ sigmas de l'API pour le modifier.",
+  "imagine.effective_steps": "Étapes réelles",
   "imagine.advanced.title": "Avancé",
   "imagine.api_key_continue": "Continuer",
   "imagine.api_key_placeholder": "Entrez la clé API...",

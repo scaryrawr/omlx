@@ -7,6 +7,7 @@ import asyncio
 import gc
 import importlib
 import logging
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,24 @@ def _cleanup_mlx_cache() -> None:
 def _clear_mlx_cache() -> None:
     mx.synchronize()
     mx.clear_cache()
+
+
+async def _await_image_worker(future: asyncio.Future[Any]) -> Any:
+    cancelled = False
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        error = future.exception()
+        if error is not None:
+            logger.error(
+                "Cancelled image worker failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        raise asyncio.CancelledError
+    return future.result()
 
 
 @dataclass(frozen=True)
@@ -168,7 +187,9 @@ class ImageEngine(BaseNonStreamingEngine):
                 "Image manifest quantize is not supported by the mlx-vlm image backend"
             )
         if not self._tasks:
-            raise ValueError(f"Image model {self._model_id} declares no supported tasks")
+            raise ValueError(
+                f"Image model {self._model_id} declares no supported tasks"
+            )
         for task in self._tasks:
             self._resolve_spec(task)
 
@@ -224,6 +245,9 @@ class ImageEngine(BaseNonStreamingEngine):
         self._ensure_started()
         self._ensure_task_supported("generation")
         self._reject_quantize(kwargs)
+        self._validate_qwen_options(
+            kwargs, self._resolve_guidance(guidance, "generation")
+        )
 
         activity_id = self._begin_activity(
             "generating image",
@@ -280,16 +304,16 @@ class ImageEngine(BaseNonStreamingEngine):
         self._ensure_started()
         self._ensure_task_supported("edit")
         self._reject_quantize(kwargs)
+        self._validate_qwen_options(kwargs, self._resolve_guidance(guidance, "edit"))
         if not image_paths:
             raise ValueError("edit requires at least one input image path")
         if mask_path is not None:
             raise ValueError("mlx-vlm image models do not support masks")
-        if not image_edit_accepts_multiple_inputs(self.base_model) and len(
-            image_paths
-        ) != 1:
-            raise ValueError(
-                f"{self.base_model} edit supports exactly one input image"
-            )
+        if (
+            not image_edit_accepts_multiple_inputs(self.base_model)
+            and len(image_paths) != 1
+        ):
+            raise ValueError(f"{self.base_model} edit supports exactly one input image")
 
         activity_id = self._begin_activity(
             "editing image",
@@ -360,7 +384,9 @@ class ImageEngine(BaseNonStreamingEngine):
         elif isinstance(raw_tasks, Iterable):
             items = raw_tasks
         else:
-            raise ValueError("Image model tasks must be a string or iterable of strings")
+            raise ValueError(
+                "Image model tasks must be a string or iterable of strings"
+            )
         normalized: list[ImageTask] = []
         for item in items:
             if not isinstance(item, str):
@@ -387,7 +413,9 @@ class ImageEngine(BaseNonStreamingEngine):
 
     def _ensure_task_supported(self, task: ImageTask) -> None:
         if task not in self._tasks:
-            raise ValueError(f"Image model {self._model_id} does not support task {task!r}")
+            raise ValueError(
+                f"Image model {self._model_id} does not support task {task!r}"
+            )
 
     def _resolve_spec(self, task: ImageTask):
         spec = get_image_model_spec(self.base_model)
@@ -396,6 +424,10 @@ class ImageEngine(BaseNonStreamingEngine):
                 f"Unsupported mlx-vlm image base_model {self.base_model!r} "
                 f"for task {task!r}"
             )
+        if spec.base_model.startswith("qwen-image-2-1") and (
+            self._image_metadata.get("default_image_strength") is not None
+        ):
+            raise ValueError("Qwen Image 2.1 does not support default_image_strength")
         return spec
 
     def _resolve_model_reference(self, override: object = None) -> str:
@@ -413,7 +445,11 @@ class ImageEngine(BaseNonStreamingEngine):
                 )
             return str(root)
         if not isinstance(value, str) or not value.strip():
-            field = "Image manifest model_path" if override is None else "image model_path override"
+            field = (
+                "Image manifest model_path"
+                if override is None
+                else "image model_path override"
+            )
             raise ValueError(f"{field} must be a non-empty string")
         path = Path(value).expanduser()
         if not path.is_absolute():
@@ -509,6 +545,12 @@ class ImageEngine(BaseNonStreamingEngine):
             loader_task = "generate" if task == "generation" else "edit"
 
             def load_sync() -> Any:
+                if self._is_qwen_image():
+                    from ..patches.mlx_vlm_qwen_image_compat import (
+                        apply_qwen_image_compat_patch,
+                    )
+
+                    apply_qwen_image_compat_patch()
                 return api.load_image_model(key.model_reference, task=loader_task)
 
             logger.info(
@@ -521,7 +563,9 @@ class ImageEngine(BaseNonStreamingEngine):
             )
             loop = asyncio.get_running_loop()
             try:
-                model = await loop.run_in_executor(get_mlx_executor(), load_sync)
+                model = await _await_image_worker(
+                    loop.run_in_executor(get_mlx_executor(), load_sync)
+                )
             except ImportError as exc:
                 raise ImportError(MLX_VLM_MISSING_MESSAGE) from exc
             self._models[key] = model
@@ -536,10 +580,32 @@ class ImageEngine(BaseNonStreamingEngine):
         task: str,
     ) -> Any:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        future = loop.run_in_executor(
             get_mlx_executor(),
             lambda: generate_image(model, request, task=task),
         )
+        return await _await_image_worker(future)
+
+    def _is_qwen_image(self) -> bool:
+        spec = get_image_model_spec(self.base_model)
+        return spec is not None and spec.base_model in {
+            "qwen-image-2-1",
+            "qwen-image-2-1-turbo",
+        }
+
+    def _validate_qwen_options(
+        self, kwargs: dict[str, Any], guidance: float | None
+    ) -> None:
+        if not self._is_qwen_image():
+            if kwargs.get("sigmas") is not None:
+                raise ValueError("sigmas is supported only for Qwen Image 2.1 models")
+            return
+        if kwargs.get("image_strength") is not None:
+            raise ValueError("Qwen Image 2.1 does not support image_strength")
+        if kwargs.get("scheduler") is not None:
+            raise ValueError("Qwen Image 2.1 uses its checkpoint scheduler")
+        if guidance is not None and (not math.isfinite(guidance) or guidance <= 0):
+            raise ValueError("Qwen Image 2.1 guidance must be finite and positive")
 
     def _request_extra(
         self,

@@ -2102,6 +2102,8 @@
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.size": "Size",
   "imagine.advanced.steps": "Steps",
+  "imagine.checkpoint_schedule_hint": "The saved checkpoint schedule overrides Steps. Use the API sigmas field to change the schedule.",
+  "imagine.effective_steps": "Actual steps",
   "imagine.advanced.title": "Advanced",
   "imagine.api_key_continue": "Continue",
   "imagine.api_key_placeholder": "Enter API key...",
