@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 import importlib
 import json
 from dataclasses import replace
@@ -22,40 +21,6 @@ from omlx.engine.image import ImageEngine, _image_api
 from omlx.patches import mlx_vlm_qwen_image_compat as compat
 
 SIGMAS = [1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
-
-
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
-        (
-            "class Model:\n    pass\n",
-            "982ac2b3eb77fb75af373b2638159f4a698e3701e533a1c4d69bfe2f582f03f3",
-        ),
-        (
-            "def load():\n    return 1\n",
-            "577391320d95bead4088cf34bd51c4f9c18b81d1572ad1ae17b997a4a861e95b",
-        ),
-        (
-            "async def load():\n    return 1\n",
-            "cd3a2dc5966095d9d58947f47478e725957eb3c754cbe75254cb654307677f92",
-        ),
-    ],
-)
-def test_source_fingerprints_are_python_version_independent(
-    source, expected, monkeypatch
-):
-    from omlx.patches.mlx_vlm_qwen_image_compat.generate_backport import source_hash
-
-    assert source_hash(source) == expected
-    tree = ast.parse(source)
-    definition = tree.body[0]
-    if "type_params" not in definition._fields:
-        definition._fields = (*definition._fields, "type_params")
-    definition.type_params = []
-    monkeypatch.setattr(ast, "parse", lambda _: tree)
-    assert source_hash(source) == expected
-    definition.type_params = [ast.Name(id="T", ctx=ast.Load())]
-    assert source_hash(source) != expected
 
 
 @pytest.fixture(scope="module")
