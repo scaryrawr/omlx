@@ -38,6 +38,7 @@ def module_entry(monkeypatch, tmp_path):
     # HOME alone is not enough when a macOS app bootstrap file exists.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("OMLX_BASE_PATH", str(tmp_path / "omlx-base"))
+    monkeypatch.delenv("OMLX_API_KEY", raising=False)
     reset_settings()
 
     # Reset the middleware stack so init_server's add_middleware works
@@ -203,6 +204,7 @@ def test_module_entry_api_key_setup_end_to_end(tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     env = os.environ.copy()
+    env.pop("OMLX_API_KEY", None)
     env["HOME"] = str(tmp_path)
     env["OMLX_BASE_PATH"] = str(tmp_path / "base")
 

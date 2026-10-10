@@ -2146,8 +2146,10 @@ class TestGlobalSettings:
             assert settings.cache.enabled is False
             assert settings.cache.ssd_cache_dir == "/cli/cache"
 
-    def test_save_cli_overrides_preserves_runtime_secrets_and_env(self):
+    def test_save_cli_overrides_preserves_runtime_secrets_and_env(self, monkeypatch):
         """Saving a CLI setting must not serialize transient overrides."""
+        monkeypatch.delenv("OMLX_API_KEY", raising=False)
+        monkeypatch.delenv("OMLX_CACHE_ENABLED", raising=False)
         with tempfile.TemporaryDirectory() as tmpdir:
             base_path = Path(tmpdir)
             stored = GlobalSettings(base_path=base_path)

@@ -1442,7 +1442,10 @@ class TestServeCommandFunctions:
         assert "embedding_batch_size" in result.stdout
         assert not (tmp_path / "settings.json").exists()
 
-    def test_network_bind_without_api_key_exits_before_persisting(self, tmp_path):
+    def test_network_bind_without_api_key_exits_before_persisting(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("OMLX_API_KEY", raising=False)
         result = subprocess.run(
             [
                 sys.executable,
