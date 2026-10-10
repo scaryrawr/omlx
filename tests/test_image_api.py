@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import tempfile
+import threading
 from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
@@ -124,6 +126,143 @@ def _install_pool(monkeypatch, tasks: list[str]) -> FakeImageEngine:
     return engine
 
 
+def test_generation_forwards_sigmas_and_reports_backend_effective_recipe(
+    image_client, monkeypatch
+):
+    engine = _install_pool(monkeypatch, ["generation"])
+    calls = []
+
+    async def generate(prompt, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            image=Image.new("RGB", (4, 2)),
+            metadata={"steps": 2, "guidance": 1.0, "model_path": "/private/model"},
+        )
+
+    monkeypatch.setattr(engine, "generate", generate)
+    response = image_client.post(
+        "/v1/images/generations",
+        json={
+            "model": "alias",
+            "prompt": "a fox",
+            "steps": 30,
+            "sigmas": [1, 0.5],
+        },
+    )
+    assert response.status_code == 200
+    assert calls[0]["sigmas"] == [1, 0.5]
+    assert calls[0]["steps"] == 30
+    result = response.json()["data"][0]
+    assert result["steps"] == 2
+    assert result["guidance"] == 1.0
+    assert result["size"] == "4x2"
+    assert "model_path" not in result
+
+
+@pytest.mark.parametrize("sigmas", ["[1, 0]", "[]", "invalid"])
+def test_multipart_invalid_sigma_grid_fails_before_loading(
+    image_client, monkeypatch, sigmas
+):
+    engine = _install_pool(monkeypatch, ["edit"])
+    response = image_client.post(
+        "/v1/images/edits",
+        data={"model": "alias", "prompt": "a fox", "sigmas": sigmas},
+        files={"image": ("input.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 422
+    assert engine.pool.get_engine_calls == []
+
+
+def test_multipart_edit_forwards_sigma_grid_and_reference_order(
+    image_client, monkeypatch
+):
+    engine = _install_pool(monkeypatch, ["edit"])
+    response = image_client.post(
+        "/v1/images/edits",
+        data={
+            "model": "alias",
+            "prompt": "combine",
+            "sigmas": "[1, 0.5]",
+            "steps": "30",
+        },
+        files=[
+            ("image", ("first.png", _png_bytes((255, 0, 0)), "image/png")),
+            ("image", ("second.png", _png_bytes((0, 0, 255)), "image/png")),
+        ],
+    )
+    assert response.status_code == 200
+    assert engine.edit_calls[0]["sigmas"] == [1, 0.5]
+    assert len(engine.edit_calls[0]["image_paths"]) == 2
+    assert all(not Path(path).exists() for path in engine.seen_paths)
+    assert engine.pool.in_use == 0
+
+
+async def test_cancelled_edit_keeps_inputs_and_pool_lease_until_worker_exits(
+    monkeypatch, tmp_path
+):
+    from dataclasses import replace
+
+    from omlx.engine.image import ImageEngine, _image_api
+
+    engine = ImageEngine(
+        model_name="image-model",
+        image_metadata={"backend": "mlx-vlm", "base_model": "flux2-klein-4b"},
+        tasks=["edit"],
+    )
+    engine._started = True
+    pool = FakePool(engine, ["edit"])
+    started, finish = threading.Event(), threading.Event()
+    paths = []
+
+    async def loaded(*args, **kwargs):
+        return None, object()
+
+    def worker(model, request, *, task):
+        paths.extend(request.image_paths)
+        started.set()
+        assert finish.wait(5)
+        assert all(Path(path).exists() for path in paths)
+        return SimpleNamespace(image=Image.new("RGB", (2, 2)))
+
+    monkeypatch.setattr(engine, "_load_model_for_task", loaded)
+    api = replace(_image_api(), generate_image=worker)
+    monkeypatch.setattr("omlx.engine.image._image_api", lambda: api)
+    monkeypatch.setattr(image_routes, "_get_engine_pool", lambda: pool)
+    monkeypatch.setattr(
+        image_routes, "_resolve_model", lambda _: "resolved-image-model"
+    )
+    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(tmp_path / "inputs"))
+
+    async def payload():
+        return {
+            "model": "image-model",
+            "prompt": "change",
+            "images": [
+                {
+                    "image_url": "data:image/png;base64,"
+                    + base64.b64encode(_png_bytes()).decode()
+                }
+            ],
+        }
+
+    task = asyncio.create_task(
+        image_routes._create_json_image_edit(SimpleNamespace(json=payload))
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert pool.in_use == 1
+        assert all(Path(path).exists() for path in paths)
+    finally:
+        finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert pool.in_use == 0
+    assert all(not Path(path).exists() for path in paths)
+
+
 def test_generation_returns_b64_json_and_increments_seed(image_client, monkeypatch):
     engine = _install_pool(monkeypatch, ["generation"])
 
@@ -219,9 +358,7 @@ def test_generation_missing_mlx_vlm_returns_503_before_engine_pool(
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(
-        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
-    )
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", missing_mlx_vlm)
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
     response = image_client.post(
@@ -253,9 +390,10 @@ def test_generation_incompatible_mlx_vlm_returns_503_during_inference(
     )
 
     assert response.status_code == 503
-    assert "mlx-vlm image support is unavailable or incompatible" in response.json()[
-        "detail"
-    ]
+    assert (
+        "mlx-vlm image support is unavailable or incompatible"
+        in response.json()["detail"]
+    )
     assert engine.pool is not None
     assert engine.pool.in_use == 0
     assert engine.pool.release_engine_calls == ["resolved-image-model"]
@@ -385,10 +523,10 @@ def test_json_edit_missing_mlx_vlm_returns_503_before_download_or_engine_pool(
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", missing_mlx_vlm)
     monkeypatch.setattr(
-        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
+        image_routes, "_image_reference_to_path", image_reference_to_path
     )
-    monkeypatch.setattr(image_routes, "_image_reference_to_path", image_reference_to_path)
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
     response = image_client.post(
@@ -447,7 +585,9 @@ def test_json_edit_rejects_url_response_format_before_image_fetch(
     def get_engine_pool():
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(image_routes, "_image_reference_to_path", image_reference_to_path)
+    monkeypatch.setattr(
+        image_routes, "_image_reference_to_path", image_reference_to_path
+    )
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
     response = image_client.post(
@@ -522,9 +662,25 @@ def test_http_image_download_rejects_redirect_to_internal_host(monkeypatch):
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "example.com":
-            return [(image_routes.socket.AF_INET, image_routes.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+            return [
+                (
+                    image_routes.socket.AF_INET,
+                    image_routes.socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("93.184.216.34", port),
+                )
+            ]
         if host == "127.0.0.1":
-            return [(image_routes.socket.AF_INET, image_routes.socket.SOCK_STREAM, 0, "", ("127.0.0.1", port))]
+            return [
+                (
+                    image_routes.socket.AF_INET,
+                    image_routes.socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("127.0.0.1", port),
+                )
+            ]
         raise AssertionError(host)
 
     class RedirectResponse:
@@ -559,7 +715,15 @@ def test_http_image_download_uses_pinned_resolved_ip(monkeypatch):
 
     def fake_getaddrinfo(host, port, *args, **kwargs):
         calls.append(f"resolve:{host}:{port}")
-        return [(image_routes.socket.AF_INET, image_routes.socket.SOCK_STREAM, 0, "", ("93.184.216.34", port))]
+        return [
+            (
+                image_routes.socket.AF_INET,
+                image_routes.socket.SOCK_STREAM,
+                0,
+                "",
+                ("93.184.216.34", port),
+            )
+        ]
 
     class OKResponse:
         status = 200
@@ -608,7 +772,15 @@ def test_http_image_download_uses_pinned_resolved_ip(monkeypatch):
 )
 def test_http_image_download_rejects_non_public_addresses(monkeypatch, url_host, ip):
     def fake_getaddrinfo(resolved_host, port, *args, **kwargs):
-        return [(image_routes.socket.AF_INET, image_routes.socket.SOCK_STREAM, 0, "", (ip, port))]
+        return [
+            (
+                image_routes.socket.AF_INET,
+                image_routes.socket.SOCK_STREAM,
+                0,
+                "",
+                (ip, port),
+            )
+        ]
 
     monkeypatch.setattr(image_routes.socket, "getaddrinfo", fake_getaddrinfo)
 
@@ -708,9 +880,7 @@ def test_validate_image_bytes_rejects_excessive_pixels(monkeypatch):
     assert "maximum allowed pixels" in exc_info.value.detail
 
 
-def test_json_edit_rejects_invalid_and_oversized_data_uri(
-    image_client, monkeypatch
-):
+def test_json_edit_rejects_invalid_and_oversized_data_uri(image_client, monkeypatch):
     _install_pool(monkeypatch, ["edit"])
 
     invalid_response = image_client.post(
@@ -779,9 +949,7 @@ def test_multipart_edit_missing_mlx_vlm_returns_503_before_file_processing_or_en
         pool_touched = True
         raise AssertionError("engine pool should not be touched")
 
-    monkeypatch.setattr(
-        image_routes, "require_mlx_vlm_available", missing_mlx_vlm
-    )
+    monkeypatch.setattr(image_routes, "require_mlx_vlm_available", missing_mlx_vlm)
     monkeypatch.setattr(image_routes, "_upload_to_path", upload_to_path)
     monkeypatch.setattr(image_routes, "_get_engine_pool", get_engine_pool)
 
@@ -907,9 +1075,7 @@ def test_multipart_edit_rejects_url_response_format_before_upload_processing(
     )
 
 
-def test_multipart_edit_rejects_invalid_and_oversized_upload(
-    image_client, monkeypatch
-):
+def test_multipart_edit_rejects_invalid_and_oversized_upload(image_client, monkeypatch):
     _install_pool(monkeypatch, ["edit"])
 
     invalid_response = image_client.post(

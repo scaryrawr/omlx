@@ -17,6 +17,33 @@ from omlx.api.image_models import (
 )
 
 
+@pytest.mark.parametrize(
+    "sigmas",
+    [
+        [],
+        [1, 0],
+        [1, 1],
+        [0.5, 1],
+        [1.1, 0.5],
+        [True, 0.5],
+        [float("nan")],
+        [float("inf")],
+        "bad",
+    ],
+)
+def test_image_request_rejects_invalid_sigma_grid(sigmas):
+    with pytest.raises(ValidationError, match="sigmas"):
+        ImageGenerationRequest(prompt="a fox", model="qwen-image-2.1", sigmas=sigmas)
+
+
+def test_sigma_grid_can_override_a_different_requested_step_count():
+    request = ImageGenerationRequest(
+        prompt="a fox", model="qwen-image-2.1", steps=30, sigmas=[1, 0.5]
+    )
+    assert request.sigmas == [1, 0.5]
+    assert request.steps == 30
+
+
 def test_generation_request_defaults_and_extensions():
     request = ImageGenerationRequest(
         prompt="a watercolor fox",

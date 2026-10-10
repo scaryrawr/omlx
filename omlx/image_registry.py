@@ -41,6 +41,20 @@ def _aliases(*values: str) -> tuple[str, ...]:
 
 IMAGE_MODEL_SPECS: tuple[ImageModelSpec, ...] = (
     ImageModelSpec(
+        base_model="qwen-image-2-1",
+        tasks=("generation", "edit"),
+        estimated_size=IMAGE_UNKNOWN_FALLBACK_SIZE,
+        discovery_aliases=_aliases("qwen-image-2.1", "Qwen/Qwen-Image-2.1"),
+        allows_multiple_edit_images=True,
+    ),
+    ImageModelSpec(
+        base_model="qwen-image-2-1-turbo",
+        tasks=("generation", "edit"),
+        estimated_size=IMAGE_UNKNOWN_FALLBACK_SIZE,
+        discovery_aliases=_aliases("qwen-image-2.1-turbo", "Qwen/Qwen-Image-2.1-Turbo"),
+        allows_multiple_edit_images=True,
+    ),
+    ImageModelSpec(
         base_model="flux2-klein-4b",
         tasks=("generation", "edit"),
         estimated_size=8 * 1024**3,
@@ -257,6 +271,8 @@ def _build_aliases() -> dict[tuple[ImageTask, str], tuple[str, ...]]:
 IMAGE_ENGINE_ALIASES = _build_aliases()
 _SPEC_BY_BASE_MODEL = {spec.base_model: spec for spec in IMAGE_MODEL_SPECS}
 _RUNTIME_MODEL_REFERENCES = {
+    "qwen-image-2-1": "Qwen/Qwen-Image-2.1",
+    "qwen-image-2-1-turbo": "Qwen/Qwen-Image-2.1-Turbo",
     "ideogram-4-fp8": "ideogram-ai/ideogram-4-fp8",
     "ming-image-0-1-design": "inclusionAI/Ming-Image-0.1-Design",
     "z-image": "Tongyi-MAI/Z-Image",
@@ -304,6 +320,8 @@ IMAGE_DEFAULT_ESTIMATED_SIZES = {
 # Defaults documented by mlx-vlm model configurations. Request values and
 # manifest defaults always override these family defaults.
 IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
+    "qwen-image-2-1": {"default_steps": 30, "default_guidance": 1.0},
+    "qwen-image-2-1-turbo": {"default_steps": 8, "default_guidance": 1.0},
     "flux2-klein-4b": {"default_steps": 4, "default_guidance": 1.0},
     "flux2-klein-9b": {"default_steps": 4, "default_guidance": 1.0},
     "flux2-klein-base-4b": {"default_steps": 4, "default_guidance": 1.0},
@@ -339,6 +357,7 @@ IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
 }
 
 IMAGE_TASK_DEFAULTS: dict[tuple[str, ImageTask], dict[str, int | float]] = {
+    ("qwen-image-2-1", "edit"): {"default_steps": 40},
     # The Z-Image Turbo adapter uses eight denoising steps for img2img while
     # its text-to-image configuration uses nine.
     ("z-image-turbo", "edit"): {"default_steps": 8},

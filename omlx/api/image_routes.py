@@ -8,6 +8,7 @@ import base64
 import binascii
 import http.client
 import ipaddress
+import json
 import logging
 import os
 import socket
@@ -61,6 +62,7 @@ _SAFE_ENGINE_KWARG_FIELDS = {
     "negative_prompt",
     "scheduler",
     "image_strength",
+    "sigmas",
 }
 _MULTIPART_FIELD_NAMES = {
     "prompt",
@@ -78,6 +80,7 @@ _MULTIPART_FIELD_NAMES = {
     "partial_images",
     "seed",
     "steps",
+    "sigmas",
     "guidance",
     "negative_prompt",
     "scheduler",
@@ -174,7 +177,9 @@ def _resolve_model(model_id: str) -> str:
 
 
 def _validation_detail(exc: ValidationError) -> list[dict[str, Any]]:
-    return [dict(error) for error in exc.errors(include_url=False, include_context=False)]
+    return [
+        dict(error) for error in exc.errors(include_url=False, include_context=False)
+    ]
 
 
 def _normalize_task_names(tasks: object) -> set[str]:
@@ -308,7 +313,9 @@ async def _load_image_engine(model: str, task: str) -> tuple[str, Any, Any]:
     try:
         engine = await pool.get_engine(resolved_model, _lease=True)
     except ModelNotFoundError as exc:
-        available = ", ".join(exc.available_models) if exc.available_models else "(none)"
+        available = (
+            ", ".join(exc.available_models) if exc.available_models else "(none)"
+        )
         raise HTTPException(
             status_code=404,
             detail=f"Model '{resolved_model}' not found. Available: {available}",
@@ -337,7 +344,11 @@ async def _load_image_engine(model: str, task: str) -> tuple[str, Any, Any]:
 
 def _image_tmpdir() -> Path:
     configured = os.environ.get(_IMAGE_TMPDIR_ENV)
-    root = Path(configured).expanduser() if configured else Path.cwd() / _DEFAULT_IMAGE_TMPDIR
+    root = (
+        Path(configured).expanduser()
+        if configured
+        else Path.cwd() / _DEFAULT_IMAGE_TMPDIR
+    )
     resolved_root = root.resolve()
     if configured:
         for forbidden in (Path("/tmp").resolve(), Path("/var/tmp").resolve()):
@@ -397,7 +408,9 @@ def _validate_image_bytes(data: bytes) -> None:
                 )
             image.verify()
     except (UnidentifiedImageError, OSError) as exc:
-        raise HTTPException(status_code=400, detail="Input is not a valid image") from exc
+        raise HTTPException(
+            status_code=400, detail="Input is not a valid image"
+        ) from exc
 
 
 def _write_image_bytes(data: bytes, suffix: str) -> str:
@@ -653,9 +666,13 @@ def _download_http_image(url: str) -> tuple[bytes, str]:
         finally:
             connection.close()
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Timed out downloading image") from exc
+        raise HTTPException(
+            status_code=504, detail="Timed out downloading image"
+        ) from exc
     except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to download image: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Failed to download image: {exc}"
+        ) from exc
 
 
 async def _image_reference_to_path(reference: ImageReference) -> str:
@@ -738,7 +755,9 @@ def _seed_for_output(seed: int | None, n: int, index: int) -> int | None:
 
 def _encode_image_b64(image: Any, output_format: str) -> str:
     if not hasattr(image, "save"):
-        raise HTTPException(status_code=500, detail="Image engine returned no PIL image")
+        raise HTTPException(
+            status_code=500, detail="Image engine returned no PIL image"
+        )
 
     pil_image = image
     image_format = output_format.upper()
@@ -769,10 +788,16 @@ def _image_data_from_result(
     return ImageData(
         b64_json=_encode_image_b64(image, request.output_format),
         revised_prompt=metadata.get("revised_prompt"),
-        size=request.size,
+        size=(
+            f"{image.width}x{image.height}"
+            if hasattr(image, "width") and hasattr(image, "height")
+            else request.size
+        ),
         quality=request.quality,
         output_format=request.output_format,
         background=getattr(request, "background", None),
+        steps=metadata.get("steps"),
+        guidance=metadata.get("guidance"),
     )
 
 
@@ -869,6 +894,13 @@ def _multipart_request_from_form(form: Any) -> ImageMultipartEditRequest:
             continue
         if field in _MULTI_VALUE_FIELDS:
             payload[field] = _parse_multi_value(values)
+        elif field == "sigmas":
+            try:
+                payload[field] = json.loads(values[-1])
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=422, detail="sigmas must be a JSON array"
+                ) from exc
         else:
             payload[field] = values[-1]
     try:
@@ -882,7 +914,9 @@ def _multipart_request_from_form(form: Any) -> ImageMultipartEditRequest:
 
 async def _upload_to_path(value: object, field_name: str) -> str:
     if not _is_upload(value):
-        raise HTTPException(status_code=400, detail=f"'{field_name}' must be a file upload")
+        raise HTTPException(
+            status_code=400, detail=f"'{field_name}' must be a file upload"
+        )
     upload = cast(UploadFile | StarletteUploadFile, value)
     data = await _read_upload(upload)
     return _write_image_bytes(
@@ -901,9 +935,7 @@ async def create_image_generation(request: ImageGenerationRequest) -> ImageRespo
     _reject_unsupported_streaming(request)
     _reject_unsupported_response_format(request)
     _require_image_dependency()
-    resolved_model, engine, pool = await _load_image_engine(
-        request.model, "generation"
-    )
+    resolved_model, engine, pool = await _load_image_engine(request.model, "generation")
     try:
         return await _run_generation(resolved_model, engine, request)
     except HTTPException:
@@ -989,11 +1021,15 @@ async def _create_multipart_image_edit(request: Request) -> ImageResponse:
     uploads = _form_values(form, "image") + _form_values(form, "image[]")
     uploads = [value for value in uploads if _is_upload(value)]
     if not uploads:
-        raise HTTPException(status_code=400, detail="At least one 'image' upload is required")
+        raise HTTPException(
+            status_code=400, detail="At least one 'image' upload is required"
+        )
 
     mask_values = [value for value in _form_values(form, "mask") if _is_upload(value)]
     if len(mask_values) > 1:
-        raise HTTPException(status_code=400, detail="Only one 'mask' upload is supported")
+        raise HTTPException(
+            status_code=400, detail="Only one 'mask' upload is supported"
+        )
     if mask_values:
         raise HTTPException(
             status_code=400,
