@@ -35,7 +35,15 @@ def selected_source(source: str, symbol: str | None) -> str:
 
 
 def source_hash(source: str) -> str:
-    return hashlib.sha256(ast.dump(ast.parse(source)).encode()).hexdigest()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        # Python 3.12 adds empty type_params fields to non-generic definitions.
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and getattr(node, "type_params", None) == []
+        ):
+            del node.type_params
+    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
 
 
 def replacements(before: str, after: str) -> tuple[tuple[str, str], ...]:

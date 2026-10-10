@@ -3,8 +3,8 @@
 
 SOURCE_REVISION = "9a200804c81b98fd420d1f8a064a6824cec76f4f"
 BASE_REVISION = "4f4634bb813c0298cb1467bed2e957526c71d0b4"
-BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c29642bc15e530acc1de900d381ef6c9ce0822b',
-                                      '5c1f68f52e0bde874dde423ac43907dafd0646732157630e0a3d94998eab189e',
+BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee7512fd06e789512b8d5e3f2ff0d9dea47f2b26',
+                                      '0099f6d10dcf9506b53d21aebd760c123a2d53ea7412da413d8ae74e0d90255e',
                                       (('from __future__ import annotations\n'
                                         '\n'
                                         'import json\n'
@@ -158,8 +158,8 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c296
                                         '    for label, value in (("width", width), ("height", '
                                         'height)):\n'
                                         '        if value < 256 or value > 2048:\n'))),
- 'mlx_vlm.models.qwen_image.scheduler': ('6bae0ac2745970b7cc6ff343caadf7444a4fedc02d192cad51bb156569721149',
-                                         '91682428ed893a6f1d0797f017b77a2603f758bc676d55fe30c4111775690a60',
+ 'mlx_vlm.models.qwen_image.scheduler': ('2a8e6017536d8c6f5b9252d82fd2949de13e576a49735fa69926f410a12dea3b',
+                               '80f6f6976f2ffa5f8b221bc7b28bdd0834ddb645e192649582af593a96a57875',
                                          (('"""FlowMatchEuler scheduler for Qwen-Image-2.1 '
                                            '(dynamic exponential shift).\n'
                                            '\n'
@@ -305,8 +305,8 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c296
                                            '        self.sigmas = mx.concatenate(\n'
                                            '            [sigmas, mx.zeros((1,), '
                                            'dtype=sigmas.dtype)], axis=0\n'))),
- 'mlx_vlm.models.qwen_image.text_encoder': ('e1489fa4704d8b39b66d11a670392d567c03e47dfbd7288cec9c11c0df40b7e0',
-                                            '024ecd3232b453b5f16e5122390b4636725c4568639a8986fc46753aac902f72',
+ 'mlx_vlm.models.qwen_image.text_encoder': ('844c0f95932fdb28265f3ce25e17a5300802f5143ec593baf2ddcae0f8891115',
+                                  'edfdfe05f14b5c3a9bad9a2ca0cf26c885753ae5732c194e50355d47f001500f',
                                             (('        return hidden[:, self.drop_idx :]\n'
                                               '\n'
                                               '    @property\n'
@@ -354,8 +354,8 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c296
                                               'config.get("min_pixels") or size.get(\n'
                                               '                "shortest_edge", 65536\n'
                                               '            )\n'),)),
- 'mlx_vlm.models.qwen_image.pipeline': ('50d640123a2013d81a9bffed44444ece562a5919a9e2022bf2d606117f2e959b',
-                                        '25a732da718a9e268565b0412ce3861b7d7e1e4325eac4a46c31d8dc3edd2b3e',
+ 'mlx_vlm.models.qwen_image.pipeline': ('10d29a321c9467b571e284c56167e4e666f7441bb66d43c03c1c3649debc6280',
+                              '2fb6b85468f0ff8bf58b5f8cdbb2381b788ece4f19a4495b386fed99f75e112b',
                                         (('import numpy as np\n'
                                           'from PIL import Image\n'
                                           '\n'
@@ -577,8 +577,8 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c296
                                           '1].astype(latents.dtype) / 1000\n'
                                           '            model_input = latents\n'
                                           '            edit_kwargs = {}\n'))),
- 'mlx_vlm.models.qwen_image.model': ('f81775c94a5b127ba473647b93efd51eba1f084ce1d586c5a67f96de25f024a8',
-                                     '2e08a86e2ea52ec49bec20897a2c6f7adf89b8a2d5386851c464ff8b3ba3bb7e',
+ 'mlx_vlm.models.qwen_image.model': ('c3cc0c52908879d46d577a75787662e0eb30dd8a513a3a8e96b19c7dbd236f1f',
+                           'aa6a434676e00ace2b6fbcb28505aab0b5b67a82ce5c49c94d20e618eea841d7',
                                      (('from __future__ import annotations\n'
                                        '\n'
                                        'from dataclasses import dataclass\n'
@@ -789,8 +789,8 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('ddcb1bd9fe73004888332be48c296
                                        '        metadata = {\n'
                                        '            "model_path": '
                                        'str(self.pipeline.model_path),\n'))),
- 'mlx_vlm.generate.image': ('c00b6e0fb6991f0032180dfd588183f47d6d2e59b0c445d33cd87a62d8776a0b',
-                            'b40d33ddf22559c7d61f046e1c29d93761307e1d49ba5a24cafa5c498b3aaa86',
+ 'mlx_vlm.generate.image': ('0c49d940b6d575d445d19c930a7b95e90de1291522fe6dcb9724805b7f117701',
+                            '0cff132a99b7f740bd8116378514829e6d81d78b5ac54cd84d396d92ca4d0e37',
                             (('def _model_types_from_class_name(class_name: str) -> tuple[str, '
                               '...]:\n'
                               '    tokens = re.findall(r"[A-Z][a-z0-9]*|[A-Z]+(?=[A-Z]|$)", '

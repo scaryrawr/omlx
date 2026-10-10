@@ -451,7 +451,9 @@ budget; no checkpoint conversion or modification is needed.
 
 The source revision above is not yet published in the upstream repository.
 The checked-in hunks contain the exact before/after source and AST fingerprints,
-so they can be verified without that local commit. Against a public
+normalized across Python versions by omitting only empty type-parameter fields.
+Nonempty type parameters and other source changes still affect the fingerprint.
+The hunks can be verified without that local commit. Against a public
 `Blaizzy/mlx-vlm` checkout containing the pinned base
 `4f4634bb813c0298cb1467bed2e957526c71d0b4`, run:
 
