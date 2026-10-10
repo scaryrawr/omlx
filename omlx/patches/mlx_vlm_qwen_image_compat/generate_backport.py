@@ -54,8 +54,35 @@ def replacements(before: str, after: str) -> tuple[tuple[str, str], ...]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-repo", type=Path, required=True)
-    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--source-revision")
+    parser.add_argument("--verify-from-base", action="store_true")
     args = parser.parse_args()
+    if args.verify_from_base:
+        from omlx.patches.mlx_vlm_qwen_image_compat import _prepare_sources
+        from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORTS
+
+        sources = {
+            name: subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(args.source_repo),
+                    "show",
+                    f"{BASE_REVISION}:{name.replace('.', '/')}.py",
+                ],
+                text=True,
+            )
+            for name in MODULES
+        }
+        patched = _prepare_sources(sources, BACKPORTS)
+        if set(patched) != set(MODULES):
+            raise ValueError("Expected the complete legacy-to-native backport")
+        print(
+            "All backport hunks and target AST fingerprints verified from public base"
+        )
+        return
+    if args.source_revision is None:
+        parser.error("--source-revision is required unless --verify-from-base is used")
     revision = subprocess.check_output(
         ["git", "-C", str(args.source_repo), "rev-parse", args.source_revision],
         text=True,

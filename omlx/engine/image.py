@@ -49,6 +49,9 @@ async def _await_image_worker(future: asyncio.Future[Any]) -> Any:
             await asyncio.shield(future)
         except asyncio.CancelledError:
             cancelled = True
+        except Exception:
+            if not cancelled:
+                raise
     if cancelled:
         error = future.exception()
         if error is not None:

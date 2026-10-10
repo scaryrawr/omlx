@@ -189,8 +189,9 @@ async def test_qwen21_rejects_unimplemented_explicit_options(fake_mlx_vlm, optio
     assert fake_mlx_vlm.api.models[0].calls == []
 
 
+@pytest.mark.parametrize("worker_error", [None, ValueError("worker failed")])
 async def test_image_cancellation_drains_worker_before_unlock_and_cleanup(
-    fake_mlx_vlm, monkeypatch
+    fake_mlx_vlm, monkeypatch, caplog, worker_error
 ):
     engine = ImageEngine(
         model_name="image-model",
@@ -203,6 +204,8 @@ async def test_image_cancellation_drains_worker_before_unlock_and_cleanup(
     def generate(model, request, *, task):
         started.set()
         assert finish.wait(5), "test worker was not released"
+        if worker_error is not None:
+            raise worker_error
         return SimpleNamespace(image="completed")
 
     monkeypatch.setattr(fake_mlx_vlm.api, "generate_image", generate)
@@ -220,6 +223,8 @@ async def test_image_cancellation_drains_worker_before_unlock_and_cleanup(
         await task
     assert not engine._call_lock.locked()
     assert "clear_cache" in fake_mlx_vlm.cleanup_calls
+    if worker_error is not None:
+        assert "Cancelled image worker failed" in caplog.text
 
 
 @pytest.mark.parametrize(

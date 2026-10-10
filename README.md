@@ -439,7 +439,7 @@ the output aspect from the last resized reference. Qwen does not implement
 mask editing, `image_strength`, or an alternative `scheduler` selection;
 explicit unsupported options are rejected rather than ignored.
 
-The Qwen image compatibility patch temporarily backports mlx-vlm commit
+The Qwen image compatibility patch temporarily backports a local mlx-vlm commit
 `9a200804c81b98fd420d1f8a064a6824cec76f4f`'s saved-grid,
 static-shift, effective-default/result, and nested processor-config fixes.
 It activates only for Qwen loads, refuses unknown upstream source shapes, and
@@ -449,8 +449,23 @@ and regression tests. Full-checkpoint generation/edit validation and deployment
 are separate from weight-free tests and require a coordinated GPU memory
 budget; no checkpoint conversion or modification is needed.
 
-The checked-in backport is generated from immutable upstream revisions.
-To regenerate it against that source checkout:
+The source revision above is not yet published in the upstream repository.
+The checked-in hunks contain the exact before/after source and AST fingerprints,
+so they can be verified without that local commit. Against a public
+`Blaizzy/mlx-vlm` checkout containing the pinned base
+`4f4634bb813c0298cb1467bed2e957526c71d0b4`, run:
+
+```bash
+uv run --python python3.12 python \
+  omlx/patches/mlx_vlm_qwen_image_compat/generate_backport.py \
+  --source-repo /path/to/mlx-vlm \
+  --verify-from-base
+```
+
+This reconstructs each target from the public base, verifies every hunk's unique
+context and the resulting AST fingerprint, and does not change any files.
+To regenerate the backport, a checkout containing the local source commit is
+required:
 
 ```bash
 uv run --python python3.12 python \
