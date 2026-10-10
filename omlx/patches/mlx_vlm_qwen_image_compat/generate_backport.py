@@ -9,6 +9,7 @@ import difflib
 import hashlib
 import pprint
 import subprocess
+import sys
 from pathlib import Path
 
 BASE_REVISION = "4f4634bb813c0298cb1467bed2e957526c71d0b4"
@@ -43,7 +44,9 @@ def source_hash(source: str) -> str:
             and getattr(node, "type_params", None) == []
         ):
             del node.type_params
-    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
+    # Python 3.13 omits empty lists by default; retain the older dump format.
+    options = {"show_empty": True} if sys.version_info >= (3, 13) else {}
+    return hashlib.sha256(ast.dump(tree, **options).encode()).hexdigest()
 
 
 def replacements(before: str, after: str) -> tuple[tuple[str, str], ...]:
