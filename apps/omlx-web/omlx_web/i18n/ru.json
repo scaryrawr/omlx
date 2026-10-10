@@ -2104,6 +2104,8 @@
   "imagine.error.image_too_large": "Размер изображения должен быть меньше 25 МБ",
   "modal.model_settings.model_type_image": "Изображение",
   "imagine.advanced.steps": "Шаги",
+  "imagine.checkpoint_schedule_hint": "Сохранённое расписание модели имеет приоритет над числом шагов. Для изменения используйте поле sigmas в API.",
+  "imagine.effective_steps": "Фактические шаги",
   "imagine.results_heading": "Результаты",
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.n": "Изображения",

@@ -2104,6 +2104,8 @@
   "imagine.error.image_too_large": "图像大小不能超过 25MB",
   "modal.model_settings.model_type_image": "图像",
   "imagine.advanced.steps": "步数",
+  "imagine.checkpoint_schedule_hint": "模型保存的调度优先于步数设置。请使用 API 的 sigmas 字段更改调度。",
+  "imagine.effective_steps": "实际步数",
   "imagine.results_heading": "结果",
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.n": "图像数",

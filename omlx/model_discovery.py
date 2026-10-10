@@ -21,6 +21,7 @@ import contextlib
 import importlib
 import json
 import logging
+import math
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from typing import Literal
 from .image_registry import (
     IMAGE_DEFAULT_ESTIMATED_SIZES,
     IMAGE_UNKNOWN_FALLBACK_SIZE,
+    get_image_model_spec,
     infer_image_model_spec_from_name,
     normalize_image_alias,
 )
@@ -547,8 +549,15 @@ def _has_local_image_layout(model_path: Path) -> bool:
 
 def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
     """Infer an mlx-vlm image manifest from known local model layouts."""
-    spec = infer_image_model_spec_from_name(model_path.name)
+    qwen_metadata = _infer_qwen_image_metadata(model_path)
+    spec = (
+        get_image_model_spec(str(qwen_metadata["base_model"]))
+        if qwen_metadata is not None
+        else infer_image_model_spec_from_name(model_path.name)
+    )
     if spec is None:
+        return None
+    if spec.base_model.startswith("qwen-image-") and qwen_metadata is None:
         return None
     if not _has_local_image_layout(model_path):
         return None
@@ -562,6 +571,8 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
         "capabilities": tasks,
         "inferred": True,
     }
+    if qwen_metadata is not None:
+        metadata.update(qwen_metadata)
     return ImageModelManifest(
         backend="mlx-vlm",
         base_model=spec.base_model,
@@ -569,6 +580,60 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
         metadata=metadata,
         model_path=".",
     )
+
+
+def _infer_qwen_image_metadata(model_path: Path) -> dict[str, object] | None:
+    """Recognize Qwen 2.1 from component identity, including renamed folders."""
+    index_path = model_path / "model_index.json"
+    if not index_path.is_file():
+        return None
+    try:
+        with index_path.open() as file:
+            index = json.load(file)
+        if not isinstance(index, dict) or index.get("_class_name") != "QwenImage21Pipeline":
+            return None
+        with (model_path / "transformer" / "config.json").open() as file:
+            transformer = json.load(file)
+        if (
+            not isinstance(transformer, dict)
+            or transformer.get("_class_name") != "QwenImage21Transformer2DModel"
+            or index.get("transformer") != ["diffusers", "QwenImage21Transformer2DModel"]
+            or index.get("vae") != ["diffusers", "AutoencoderKLQwenImage21"]
+        ):
+            logger.warning("Invalid Qwen Image 2.1 component identity at %s", model_path)
+            return None
+        sigmas = index.get("sample_sigmas")
+        if sigmas is not None and (
+            not isinstance(sigmas, list)
+            or not sigmas
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 < value <= 1
+                for value in sigmas
+            )
+            or any(left <= right for left, right in zip(sigmas, sigmas[1:]))
+        ):
+            logger.warning("Invalid Qwen Image 2.1 sample_sigmas at %s", index_path)
+            return None
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Cannot read Qwen Image 2.1 config at %s: %s", model_path, exc)
+        return None
+
+    # Distinguish the official Turbo recipe without relying on a folder name.
+    turbo_sigmas = [1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
+    metadata: dict[str, object] = {
+        "base_model": (
+            "qwen-image-2-1-turbo" if sigmas == turbo_sigmas else "qwen-image-2-1"
+        ),
+        "default_guidance": 1.0,
+        "uses_checkpoint_sigmas": sigmas is not None,
+    }
+    if sigmas is not None:
+        metadata["default_steps"] = len(sigmas)
+        metadata["checkpoint_steps"] = len(sigmas)
+    return metadata
 
 
 def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
@@ -663,6 +728,17 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
     metadata["tasks"] = list(tasks)
     metadata["capabilities"] = list(tasks)
     metadata["manifest_path"] = str(manifest_path)
+    spec = get_image_model_spec(base_model)
+    if spec is not None and spec.base_model.startswith("qwen-image-2-1"):
+        local_path = Path(model_path_value).expanduser() if model_path_value else model_path
+        if model_path_value and not local_path.is_absolute():
+            local_path = model_path / local_path
+        qwen_metadata = _infer_qwen_image_metadata(local_path)
+        if qwen_metadata is not None:
+            metadata["uses_checkpoint_sigmas"] = qwen_metadata["uses_checkpoint_sigmas"]
+            if "checkpoint_steps" in qwen_metadata:
+                metadata["checkpoint_steps"] = qwen_metadata["checkpoint_steps"]
+                metadata.setdefault("default_steps", qwen_metadata["default_steps"])
 
     return ImageModelManifest(
         backend="mlx-vlm",

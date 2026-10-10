@@ -303,6 +303,10 @@
                         :class="{ 'rotate-180': advancedOpen }"></i>
                 </button>
                 <div x-show="advancedOpen" class="p-4 space-y-3" x-cloak>
+                    <p x-show="currentRecipe().uses_checkpoint_sigmas" class="text-xs text-fg-tertiary" x-cloak>
+                        {{ t('imagine.checkpoint_schedule_hint') }}
+                        <span x-text="window.t('imagine.advanced.steps') + ': ' + currentRecipe().checkpoint_steps"></span>
+                    </p>
                     <div class="grid grid-cols-2 gap-3">
                         <label class="block">
                             <span class="block text-xs text-fg-tertiary mb-1">{{ t('imagine.advanced.seed') }}</span>
@@ -481,6 +485,8 @@
                                                         <img :src="result.src" class="w-full aspect-square object-contain" :alt="window.t('imagine.result_image_alt')">
                                                     </button>
                                                     <div class="p-3 space-y-3">
+                                                        <p x-show="result.steps != null" class="text-xs text-fg-tertiary"
+                                                            x-text="window.t('imagine.effective_steps') + ': ' + result.steps"></p>
                                                         <p x-show="result.revised_prompt" class="text-xs text-fg-tertiary"
                                                             x-text="result.revised_prompt"></p>
                                                         <div class="flex items-center gap-2">
@@ -533,6 +539,7 @@
             modelTypeMap: {},
             modelEngineTypeMap: {},
             modelTaskMap: {},
+            modelRecipeMap: {},
 
             prompt: '',
             settings: {
@@ -624,21 +631,29 @@
                 const typeMap = {};
                 const engineMap = {};
                 const taskMap = {};
+                const recipeMap = {};
                 for (const model of models) {
                     if (!model.id) continue;
                     typeMap[model.id] = model.model_type || 'llm';
                     engineMap[model.id] = model.engine_type || '';
                     taskMap[model.id] = this.extractTasks(model);
+                    recipeMap[model.id] = model.image_metadata || {};
                 }
                 for (const model of models) {
                     if (!model.model_alias || typeMap[model.model_alias] !== undefined) continue;
                     typeMap[model.model_alias] = model.model_type || 'llm';
                     engineMap[model.model_alias] = model.engine_type || '';
                     taskMap[model.model_alias] = this.extractTasks(model);
+                    recipeMap[model.model_alias] = model.image_metadata || {};
                 }
                 this.modelTypeMap = typeMap;
                 this.modelEngineTypeMap = engineMap;
                 this.modelTaskMap = taskMap;
+                this.modelRecipeMap = recipeMap;
+            },
+
+            currentRecipe() {
+                return this.modelRecipeMap[this.currentModel] || {};
             },
 
             async loadModels() {
@@ -860,7 +875,9 @@
                             src: `data:image/${format};base64,${item.b64_json}`,
                             format,
                             revised_prompt: item.revised_prompt || '',
-                            size: item.size || ''
+                            size: item.size || '',
+                            steps: item.steps ?? null,
+                            guidance: item.guidance ?? null
                         };
                     });
                     const attempt = {

@@ -2104,6 +2104,8 @@
   "imagine.error.image_too_large": "이미지 크기는 25MB 이하여야 합니다",
   "modal.model_settings.model_type_image": "이미지",
   "imagine.advanced.steps": "스텝",
+  "imagine.checkpoint_schedule_hint": "저장된 모델 스케줄이 스텝 수보다 우선합니다. 변경하려면 API의 sigmas 필드를 사용하세요.",
+  "imagine.effective_steps": "실제 스텝 수",
   "imagine.results_heading": "결과",
   "imagine.advanced.seed": "Seed",
   "imagine.advanced.n": "이미지 수",
