@@ -8,7 +8,7 @@ import zlib
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from omlx.admin import recipe as settings_recipe
@@ -76,6 +76,20 @@ class _FakePool:
 
 class _FakeServerState:
     default_model = None
+
+
+@pytest.mark.asyncio
+async def test_settings_reset_requires_initialized_engine_pool(client, monkeypatch):
+    _, mgr = client
+    mgr.set_settings("model-a", ModelSettings(temperature=0.3))
+    monkeypatch.setattr(admin_routes, "_get_engine_pool", None)
+
+    with pytest.raises(HTTPException) as error:
+        await admin_routes._apply_settings_snapshot(
+            _FakeEntry("model-a"), "model-a", {}, reset=True
+        )
+    assert error.value.status_code == 503
+    assert mgr.get_settings("model-a").temperature == 0.3
 
 
 @pytest.fixture

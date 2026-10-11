@@ -12,6 +12,7 @@ base bits and add targeted routed-expert protection plus a higher bpw budget.
 import contextlib
 import functools
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -1448,7 +1449,9 @@ def validate_gemma4_assistant_pair(
     quantization run.
     """
     base_type = base_config.get("model_type")
-    expected = GEMMA4_ASSISTANT_TYPES.get(base_type)
+    expected = (
+        GEMMA4_ASSISTANT_TYPES.get(base_type) if isinstance(base_type, str) else None
+    )
     if expected is None:
         raise ValueError(
             "Assistant MTP combine requires a gemma4 base model "
@@ -8727,10 +8730,13 @@ def _streamed_text_args(model_path, config, *, trust_remote_code: bool = False):
 
         layer_cls = Qwen4ExpDecoderLayer
     elif _stream_source_model_type(config) == "glm5_next":
-        from mlx_vlm.models.glm5_next.config import TextConfig
-        from mlx_vlm.models.glm5_next.language import Glm5NextDecoderLayer
+        g5_config = importlib.import_module("mlx_vlm.models.glm5_next.config")
+        g5_lang = importlib.import_module("mlx_vlm.models.glm5_next.language")
 
-        layer_cls = Glm5NextDecoderLayer
+        return (
+            g5_config.TextConfig.from_dict(config["text_config"]),
+            g5_lang.Glm5NextDecoderLayer,
+        )
     else:
         from mlx_vlm.models.minimax_m3_vl.config import TextConfig
         from mlx_vlm.models.minimax_m3_vl.language import MiniMaxDecoderLayer
@@ -9243,15 +9249,16 @@ def _collect_streamed_glm5_next_lm_head(source, config, collector, working) -> i
 
 
 def _collect_streamed_glm5_next_mtp(
-    source, config, collector, calib_data, working, ranges
+    source, config, collector: OQImatrixCollector, calib_data, working, ranges
 ) -> int:
     """Streamed counterpart of the glm5_next branch of _collect_mtp_head_imatrix."""
-    from mlx_vlm.models.glm5_next import language as g5_lang
     from mlx_vlm.models.glm5_next.config import TextConfig
 
     from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime
 
-    glm5_next_vlm_runtime.apply()
+    if not glm5_next_vlm_runtime.apply():
+        raise RuntimeError("GLM-5.3 streamed MTP calibration requires the runtime patch")
+    g5_lang = importlib.import_module("mlx_vlm.models.glm5_next.language")
     prefix = "language_model.mtp.0."
     plan = _streamed_source_plan(source, config, preserve_mtp=True)
     head = g5_lang.Glm5NextMTPBlock(TextConfig.from_dict(config["text_config"]))

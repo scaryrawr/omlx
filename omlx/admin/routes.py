@@ -3992,6 +3992,8 @@ async def _apply_settings_snapshot(
     mgr = _require_settings_manager()
     skipped: list[dict] = []
     if reset:
+        if _get_engine_pool is None:
+            raise HTTPException(status_code=503, detail="Engine pool not initialized")
         cleaned = _get_engine_pool().recommended_sampling_settings(entry)
         scope = set(ALL_FIELDS) & set(ModelSettingsRequest.model_fields)
     else:

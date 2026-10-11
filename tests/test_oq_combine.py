@@ -33,12 +33,19 @@ BASE_CONFIG = {
     "quantization": {"group_size": 64, "bits": 4},
 }
 
+
 ASSISTANT_CONFIG = {
     "model_type": "gemma4_assistant",
     "backbone_hidden_size": 24,
     "tie_word_embeddings": True,
     "text_config": {"model_type": "gemma4_text", "hidden_size": 8, "num_hidden_layers": 2},
 }
+
+
+@pytest.mark.parametrize("model_type", [None, [], {}, 42])
+def test_assistant_pair_rejects_invalid_base_type(model_type):
+    with pytest.raises(ValueError, match="requires a gemma4 base model"):
+        validate_gemma4_assistant_pair({"model_type": model_type}, ASSISTANT_CONFIG)
 
 
 def _write_base_output(tmp_path):
