@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin model-settings UI gates."""
 
 import json
@@ -528,6 +529,33 @@ function setup(fetch) {
     state.loadProfilesForModel = async () => {};
     return state;
 }
+
+test('MiniCPM uses fixed DSpark defaults without changing other families', async () => {
+    for (const [family, mode] of [['minicpmv4_7', 'dflash'], ['qwen3_5', 'adaptive']]) {
+        let payload;
+        const state = setup(async (url, options) => {
+            assert.equal(options.method, 'PUT');
+            payload = JSON.parse(options.body);
+            return {ok: true, json: async () => ({})};
+        });
+        state.selectedModel = {id: 'model-a', config_model_type: family};
+        const controls = family === 'minicpmv4_7' ? {downsample_mode: '4x', max_slice_nums: 36} : null;
+        state.modelSettings = state.buildModelSettingsState(state.selectedModel, {mm_processor_kwargs: controls});
+        assert.equal(state.modelSettings.dflash_verify_mode, mode);
+        state.modelSettings.dflash_enabled = true;
+        state.modelSettings.dflash_draft_model = '/paired/helper';
+        state.modelSettings.dflash_verify_mode = '';
+        state.loadModels = async () => {};
+        await state.saveModelSettings();
+        assert.equal(payload.dflash_verify_mode, mode);
+        assert.deepEqual(payload.mm_processor_kwargs, controls);
+        state.profileFields = {universal: [], model_specific: ['mm_processor_kwargs']};
+        const profile = JSON.parse(JSON.stringify(state.formValuesForProfile()));
+        assert.deepEqual(profile.mm_processor_kwargs, controls === null ? undefined : controls);
+        const explicit = state.buildModelSettingsState(state.selectedModel, {dflash_verify_mode: 'adaptive'});
+        assert.equal(explicit.dflash_verify_mode, 'adaptive');
+    }
+});
 
 test('Template apply uses server identity and effective settings', async () => {
     const requests = [];

@@ -123,6 +123,87 @@ def client(tmp_path, monkeypatch):
 
 
 class TestProfileRoutes:
+    def test_minicpm_dspark_settings_use_batched_compatibility(self, client, tmp_path):
+        c, mgr = client
+        helper = tmp_path / "paired-helper"
+        helper.mkdir()
+        (helper / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3",
+                    "architectures": ["Qwen3DSparkModel"],
+                    "dflash_config": {"projector_type": "dspark"},
+                }
+            )
+        )
+        entry = admin_routes._get_engine_pool().get_entry("model-a")
+        entry.config_model_type = "minicpmv4_7"
+        entry.engine_type = "vlm"
+        entry.model_type = "vlm"
+        response = c.put(
+            "/admin/api/models/model-a/settings",
+            json={
+                "dflash_enabled": True,
+                "dflash_draft_model": str(helper),
+                "dflash_verify_mode": "dflash",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert mgr.get_settings("model-a").dflash_enabled is True
+        assert admin_routes._dflash_compat_for_model(
+            {"config_model_type": "minicpmv4_7", "model_path": entry.model_path}
+        ) == (True, "")
+
+    def test_processor_controls_reject_other_models_without_saving(self, client):
+        c, mgr = client
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "visual",
+                "display_name": "Visual",
+                "settings": {"mm_processor_kwargs": {"downsample_mode": "4x"}},
+            },
+        )
+        assert response.status_code == 400
+        assert "MiniCPM-V 4.7" in response.json()["detail"]
+        assert mgr.list_profiles("model-a") == []
+
+    def test_processor_controls_survive_profile_save_and_apply(self, client):
+        c, mgr = client
+        entry = admin_routes._get_engine_pool().get_entry("model-a")
+        entry.config_model_type = "minicpmv4_7"
+        options = {"downsample_mode": "4x", "max_slice_nums": 36}
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "visual",
+                "display_name": "Visual",
+                "settings": {"mm_processor_kwargs": options},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["profile"]["settings"]["mm_processor_kwargs"] == options
+        response = c.post("/admin/api/models/model-a/profiles/visual/apply")
+        assert response.status_code == 200, response.text
+        assert mgr.get_settings("model-a").mm_processor_kwargs == options
+
+    @pytest.mark.parametrize("options", [{"stack_frames": 4}, {"max_slice_nums": True}])
+    def test_processor_profile_controls_are_validated_before_saving(self, client, options):
+        c, mgr = client
+        admin_routes._get_engine_pool().get_entry(
+            "model-a"
+        ).config_model_type = "minicpmv4_7"
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "visual",
+                "display_name": "Visual",
+                "settings": {"mm_processor_kwargs": options},
+            },
+        )
+        assert response.status_code == 422, response.text
+        assert mgr.list_profiles("model-a") == []
+
     def test_list_profiles_empty(self, client):
         c, _ = client
         r = c.get("/admin/api/models/model-a/profiles")

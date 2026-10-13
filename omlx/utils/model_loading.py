@@ -812,6 +812,15 @@ def maybe_apply_pre_load_patches(
                 model_name,
             )
 
+    if for_vlm and model_type == "minicpmv4_7":
+        from ..patches.mlx_vlm_minicpm47_compat import (
+            apply_mlx_vlm_minicpm47_compat_patch,
+            validate_target_config,
+        )
+
+        validate_target_config(config)
+        apply_mlx_vlm_minicpm47_compat_patch()
+
     if for_vlm and model_type == "qwen4_exp":
         from ..patches.mlx_vlm_qwen4_exp_compat import (
             apply_mlx_vlm_qwen4_exp_compat_patch,
@@ -1452,7 +1461,7 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
     return _checkpoint_weight_prefix(Path(model_path) / "mtp", prefixes) is not None
 
 
-_DFLASH_BATCHED_MODEL_TYPES = ("qwen3_5", "qwen3_5_moe")
+_DFLASH_BATCHED_MODEL_TYPES = ("qwen3_5", "qwen3_5_moe", "minicpmv4_7")
 
 
 def dflash_batched_supported(model_type: str | None, engine_type: str | None) -> bool:

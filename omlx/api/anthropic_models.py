@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
+from omlx.api.media_options import MultimodalProcessorOptions
 from omlx.api.shared_models import IDPrefix, generate_id
 
 # =============================================================================
@@ -245,6 +246,7 @@ class MessagesRequest(BaseModel):
     output_config: OutputConfig | None = None
     # Chat template kwargs (e.g. enable_thinking, reasoning_effort)
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
 
 
 # =============================================================================
@@ -262,6 +264,7 @@ class TokenCountRequest(BaseModel):
     tool_choice: ToolChoice | dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
     output_config: OutputConfig | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
 
 
 class TokenCountResponse(BaseModel):

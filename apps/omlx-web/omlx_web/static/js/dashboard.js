@@ -2124,6 +2124,7 @@
             buildModelSettingsState(model, settings) {
                 const s = settings || {};
                 const isDiffusion = this.isDiffusionModel(model);
+                const isMiniCPM = model?.config_model_type === 'minicpmv4_7';
                 const ctKwargEntries = this.buildCtKwargEntries(
                     s.chat_template_kwargs,
                     s.forced_ct_kwargs,
@@ -2200,6 +2201,7 @@
                     qwen35_ane_prefill_cpu_threads: s.qwen35_ane_prefill_cpu_threads ?? 8,
                     qwen35_ane_prefill_cpu_shared_resource: s.qwen35_ane_prefill_cpu_shared_resource !== false,
                     specprefill_enabled: s.specprefill_enabled || false,
+                    mm_processor_kwargs: s.mm_processor_kwargs ?? null,
                     specprefill_draft_model: s.specprefill_draft_model || '',
                     specprefill_keep_pct: s.specprefill_keep_pct ? String(s.specprefill_keep_pct) : '0.2',
                     specprefill_threshold: s.specprefill_threshold || null,
@@ -2222,7 +2224,8 @@
                     dflash_draft_window_size: s.dflash_draft_window_size ?? null,
                     dflash_draft_sink_size: s.dflash_draft_sink_size ?? 0,
                     dflash_block_size: s.dflash_block_size ?? null,
-                    dflash_verify_mode: s.dflash_verify_mode || 'adaptive',
+                    dflash_verify_mode: s.dflash_verify_mode || (isMiniCPM ? 'dflash' : 'adaptive'),
+                    is_minicpm_model: isMiniCPM,
                     dflash_compatible: model?.dflash_compatible !== false,
                     dflash_compatibility_reason: model?.dflash_compatibility_reason || '',
                     dflash_ssd_cache_available: !!model?.dflash_ssd_cache_available,
@@ -3306,8 +3309,9 @@
                                     ? parseInt(this.modelSettings.dflash_block_size)
                                     : null,
                                 dflash_verify_mode: this.modelSettings.dflash_enabled
-                                    ? (this.modelSettings.dflash_verify_mode || 'adaptive')
+                                    ? (this.modelSettings.dflash_verify_mode || (this.modelSettings.is_minicpm_model ? 'dflash' : 'adaptive'))
                                     : null,
+                                mm_processor_kwargs: this.modelSettings.mm_processor_kwargs,
                                 mtp_enabled: !!this.modelSettings.mtp_enabled,
                                 mtp_adaptive_max_depth: this.modelSettings.mtp_enabled
                                     ? parseInt(this.modelSettings.mtp_adaptive_max_depth || '3')
@@ -3652,7 +3656,7 @@
                         this.modelSettings.dflash_draft_window_size = null;
                         this.modelSettings.dflash_draft_sink_size = 0;
                         this.modelSettings.dflash_block_size = null;
-                        this.modelSettings.dflash_verify_mode = 'adaptive';
+                        this.modelSettings.dflash_verify_mode = this.modelSettings.is_minicpm_model ? 'dflash' : 'adaptive';
                         this.modelSettings.mtp_enabled = false;
                         this.modelSettings.mtp_adaptive_max_depth = '3';
                         this.modelSettings.trust_remote_code = false;
