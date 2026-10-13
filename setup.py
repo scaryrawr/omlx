@@ -49,6 +49,7 @@ def _custom_kernel_build_kwargs() -> dict:
             "omlx_qwen35_prefill_kernels",
             sources=[
                 f"{qwen}/qwen35_attention.metal",
+                f"{qwen}/qwen35_fp_qmm.metal",
                 f"{qwen}/qwen35_qmm.metal",
                 f"{qwen}/qwen35_oq_a8.metal",
                 f"{qwen}/qwen35_ane.metal",
