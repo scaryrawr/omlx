@@ -8,7 +8,7 @@ import zlib
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from omlx.admin import recipe as settings_recipe
@@ -79,6 +79,20 @@ class _FakePool:
 
 class _FakeServerState:
     default_model = None
+
+
+@pytest.mark.asyncio
+async def test_settings_reset_requires_initialized_engine_pool(client, monkeypatch):
+    _, mgr = client
+    mgr.set_settings("model-a", ModelSettings(temperature=0.3))
+    monkeypatch.setattr(admin_routes, "_get_engine_pool", None)
+
+    with pytest.raises(HTTPException) as error:
+        await admin_routes._apply_settings_snapshot(
+            _FakeEntry("model-a"), "model-a", {}, reset=True
+        )
+    assert error.value.status_code == 503
+    assert mgr.get_settings("model-a").temperature == 0.3
 
 
 @pytest.fixture
@@ -674,6 +688,17 @@ class TestModelsResponseActiveProfile:
         assert settings["dflash_enabled"] is False
         assert settings["mtp_enabled"] is False
         assert settings["vlm_mtp_enabled"] is False
+
+    def test_admin_model_type_override_accepts_image(self, client):
+        c, mgr = client
+        r = c.put("/admin/api/models/model-a/settings", json={
+            "model_type_override": "image",
+        })
+
+        assert r.status_code == 200, r.text
+        assert r.json()["model_type"] == "image"
+        assert r.json()["engine_type"] == "image"
+        assert mgr.get_settings("model-a").model_type_override == "image"
 
 
 class TestActiveProfileDriftClearing:
