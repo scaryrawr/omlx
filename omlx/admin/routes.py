@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -59,15 +59,15 @@ from ..model_profiles import (
 )
 from ..model_settings import (
     MAX_LIGHTNING_MTP_DRAFT_TOKENS,
+    MOE_OFFLOAD_MTP_MODEL_TYPES,
     ModelSettings,
     ane_prefill_backend,
     ane_prefill_fraction,
+    merge_chat_template_kwargs,
     resolve_qwen35_prefill_conflicts,
     resolve_vlm_mtp_conflicts,
     validate_ane_prefill,
     validate_moe_expert_offload,
-    MOE_OFFLOAD_MTP_MODEL_TYPES,
-    merge_chat_template_kwargs,
 )
 from ..patches.deepseek_v4.chat_template_v4 import REASONING_EFFORT_PROMPTS
 from ..patches.deepseek_v41.encoding import REASONING_EFFORT_MAPPINGS
@@ -1201,6 +1201,52 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
             "converter that preserves MTP weights."
         )
     return True, ""
+
+
+def _model_has_mtp_weight_tensors(model_dir) -> bool:
+    """Return True iff the model directory's weight files contain ``mtp.*`` keys.
+
+    Uses ``model.safetensors.index.json`` when present (cheap — only reads
+    the weight_map). Falls back to opening each ``*.safetensors`` and
+    checking its keys when no index is present (single-shard models).
+    Returns False on any error (we treat the model as incompatible rather
+    than risking a confusing load failure mid-inference).
+    """
+    import json
+    from pathlib import Path
+
+    try:
+        from safetensors import safe_open
+    except ImportError:
+        # Library should be installed via mlx-lm deps; if it's not we can't
+        # peek the weights. Stay conservative and assume incompatible.
+        return False
+
+    model_dir = Path(model_dir)
+
+    # Preferred path: read the index file's weight_map (no tensor data loaded).
+    index_path = model_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        try:
+            index = json.loads(index_path.read_text())
+            weight_map = index.get("weight_map", {})
+            return any("mtp." in key for key in weight_map)
+        except Exception:
+            return False
+
+    # Single-shard fallback: enumerate keys via safe_open metadata. We
+    # short-circuit on the first ``mtp.*`` key.
+    from ..utils.safetensors_shards import select_safetensors_weight_files
+
+    for path in select_safetensors_weight_files(model_dir):
+        try:
+            with safe_open(str(path), framework="numpy") as f:  # type: ignore[arg-type]
+                for key in f.keys():  # noqa: SIM118 - safe_open exposes keys()
+                    if "mtp." in key:
+                        return True
+        except Exception:
+            continue
+    return False
 
 
 def _apply_log_level_runtime(level: str) -> None:
@@ -2505,6 +2551,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "engine_type": model_info.get("engine_type", "batched"),
             "model_type": model_info.get("model_type", "llm"),
             "config_model_type": model_info.get("config_model_type", ""),
+            "unavailable_reason": model_info.get("unavailable_reason"),
             # Native context window from the model's config.json — used by
             # the context bench UI to hide targets the model cannot reach.
             "model_context_length": model_info.get("model_context_length"),
@@ -2515,6 +2562,9 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "source_repo_id": model_info.get("source_repo_id"),
             "distributed": model_info.get("distributed", False),
             "cluster": model_info.get("cluster"),
+            "capabilities": model_info.get("capabilities", []),
+            "tasks": model_info.get("tasks", []),
+            "image_metadata": model_info.get("image_metadata"),
             "last_access": model_info.get("last_access"),
             "external_engines": external_engines,
             "dflash_compatible": compat_ok,
@@ -2808,6 +2858,7 @@ async def update_model_settings(
             "audio_tts",
             "audio_sts",
             "decision",
+            "image",
         }
         # Treat empty string as None (auto-detect)
         override_value = request.model_type_override or None
@@ -2827,6 +2878,7 @@ async def update_model_settings(
             "audio_tts": "audio_tts",
             "audio_sts": "audio_sts",
             "decision": "decision",
+            "image": "image",
         }
         if override_value:
             entry.model_type = override_value
@@ -4042,6 +4094,8 @@ async def _apply_settings_snapshot(
     mgr = _require_settings_manager()
     skipped: list[dict] = []
     if reset:
+        if _get_engine_pool is None:
+            raise HTTPException(status_code=503, detail="Engine pool not initialized")
         cleaned = _get_engine_pool().recommended_sampling_settings(entry)
         scope = set(ALL_FIELDS) & set(ModelSettingsRequest.model_fields)
     else:
@@ -6124,7 +6178,7 @@ def _get_engine_info() -> dict:
         "mlx": "https://github.com/ml-explore/mlx",
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
     }
 
@@ -7803,10 +7857,10 @@ async def search_hf_models(
     limit: int = 100,
     mlx_only: bool = True,
     # Filtering
-    min_params: Optional[int] = None,
-    max_params: Optional[int] = None,
-    min_size: Optional[int] = None,  # bytes
-    max_size: Optional[int] = None,  # bytes
+    min_params: int | None = None,
+    max_params: int | None = None,
+    min_size: int | None = None,  # bytes
+    max_size: int | None = None,  # bytes
     # Sorting
     sort_by_size: bool = False,
     sort_ascending: bool = False,
@@ -7894,7 +7948,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
 
-    from ..model_discovery import _resolve_hf_cache_entry
+    from ..model_discovery import _is_model_dir, _resolve_hf_cache_entry
 
     def _add_model(
         model_path: Path,
@@ -7933,14 +7987,14 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
 
-            if (subdir / "config.json").exists():
+            if _is_model_dir(subdir):
                 # Level 1: direct model folder
                 _add_model(subdir, subdir.name)
             else:
                 # HF Hub cache entry: models--Org--Name/snapshots/<hash>/
                 hf_resolved = _resolve_hf_cache_entry(subdir)
                 if hf_resolved is not None:
-                    if (hf_resolved.snapshot_path / "config.json").exists():
+                    if _is_model_dir(hf_resolved.snapshot_path):
                         _add_model(
                             hf_resolved.snapshot_path,
                             hf_resolved.model_id,
@@ -7952,7 +8006,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                 for child in sorted(subdir.iterdir()):
                     if not child.is_dir() or child.name.startswith("."):
                         continue
-                    if (child / "config.json").exists():
+                    if _is_model_dir(child):
                         _add_model(
                             child, child.name, repo_id=f"{subdir.name}/{child.name}"
                         )
@@ -7975,6 +8029,7 @@ async def delete_hf_model(
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     model_dirs = global_settings.model.get_model_dirs(global_settings.base_path)
+    from ..model_discovery import _is_model_dir
 
     # Search for model across all directories in both flat and org-folder layouts
     model_path = None
@@ -7983,7 +8038,7 @@ async def delete_hf_model(
         if not model_dir.exists():
             continue
         candidate = model_dir / model_name
-        if candidate.is_dir() and (candidate / "config.json").exists():
+        if candidate.is_dir() and _is_model_dir(candidate):
             model_path = candidate
             parent_model_dir = model_dir
             break
@@ -7992,7 +8047,7 @@ async def delete_hf_model(
             if not subdir.is_dir() or subdir.name.startswith("."):
                 continue
             candidate = subdir / model_name
-            if candidate.is_dir() and (candidate / "config.json").exists():
+            if candidate.is_dir() and _is_model_dir(candidate):
                 model_path = candidate
                 parent_model_dir = model_dir
                 break
