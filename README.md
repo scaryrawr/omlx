@@ -375,6 +375,90 @@ Models are auto-detected by type. You can also download models directly from the
 | Decision | Clef, Clef-Flash, OpenJev, Decision 3.0 (d3, d3-flash, d3-mini, d3-nano, d3-lite, d3-edge) |
 | Image | mlx-vlm models: Qwen Image 2.1/base/Turbo, FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
 
+### MiniCPM-V 4.7
+
+`MiniCPM-V-4.7-35B-A3B` requires the complete native `minicpmv4_7`
+implementation; it cannot be aliased to MiniCPM 4.6. The paired
+`MiniCPM-V-4.7-35B-A3B-DSpark` checkpoint is a drafter, not an independently
+served chat model. Support uses the existing chat, Anthropic Messages and
+Responses APIs; no audio or image/video generation capability is implied.
+
+The temporary serving-only bridge vendors the reviewed native source at
+`70b9ddc6fad39a7fb7639c9941e2847f3cacd414`. It accepts the exact pinned legacy
+runtime or performs a no-op for the complete reviewed native implementation;
+unknown/partial implementations fail explicitly. It does not upgrade native
+mlx-vlm CLI generation or unrelated model/offload/quantization code. Repeated
+calls recheck owned in-memory modules, exports, helpers and registrations,
+while other families may wrap shared dispatchers. Payload hashes and
+dependency preimages are recorded in
+`omlx/patches/mlx_vlm_minicpm47_compat/source_manifest.json`; the adjacent
+`vendor_sync.py` regenerates the payload from that immutable source. Retire
+the bridge only after an upstream dependency provides and passes the complete
+model, processor, local GDN verifier and helper/serving transport contract.
+The official target uses normalized top-k routing; `norm_topk_prob=False`
+is not supported.
+
+Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_minicpm47_compat.py tests/test_minicpm_pairing.py`
+for isolated, offline CPU compatibility checks. These exercise tiny strict
+checkpoints, processor/vision inputs, capture and cache rollback, and real
+oMLX greedy/sampled DSpark generation with cancellation and exception cleanup.
+Transformers 5.18 numerical-oracle cases skip on the pinned 5.17 runtime.
+Tiny fixtures do not establish full-checkpoint or deployed GPU compatibility.
+
+The optional `mm_processor_kwargs` request field controls compression and
+slicing, separately from `chat_template_kwargs`:
+
+```json
+{
+  "mm_processor_kwargs": {
+    "downsample_mode": "4x",
+    "max_slice_nums": 36
+  }
+}
+```
+
+`downsample_mode` accepts `"4x"` or `"16x"`; `max_slice_nums` must be a positive
+integer. These controls can also be stored in per-model settings/profiles.
+In the admin UI, open **Model Settings > MiniCPM Media** to edit them.
+Choose **Default** for compression or clear the slicing limit to remove that
+override. Saving a MiniCPM profile with both controls unset records processor
+defaults explicitly rather than retaining previously applied media overrides.
+Non-null request values override model settings, then checkpoint/processor
+defaults. Omitted controls do not change existing defaults. The same effective
+compression mode is used for preprocessing, canvas positions and encoding.
+Advanced frame stacking (`stack_frames`) is deferred and rejected. Ordinary
+video retains the existing frame limit and can be combined with images.
+
+DSpark is explicitly opt-in through per-model `dflash_enabled: true` and
+`dflash_draft_model` pointing to its existing local paired checkpoint. The
+helper uses the target tokenizer and native sequential Markov proposals,
+proposal probabilities and confidence outputs. Verification is fixed-width,
+with at most eight proposals plus an anchor; confidence is observational, not
+an adaptive controller. Unsupported adaptive modes, sampled batches, stochastic
+XTC, constrained grammar decoding, sparse prefill, context-window truncation
+and private SSD drafter caching fail
+explicitly. Helper activation failures do not silently fall back to ordinary
+generation.
+
+Helper admission also checks source provenance, not just matching dimensions.
+Original Hugging Face local-directory downloads must retain their
+`.cache/huggingface/download/config.json.metadata`. Converted checkpoints
+may declare their source in `config.json`:
+`"omlx_source": {"repo_id": "...", "revision": "..."}`. The reviewed target
+source is `openbmb/MiniCPM-V-4.7-35B-A3B` at
+`4c7623a9326e0f74313bbc7292d852a9e3018a70`, and the helper source is
+`openbmb/MiniCPM-V-4.7-35B-A3B-DSpark` at
+`5facb75c251ffd524524a544c1f5fd97ba0d6c5c`.
+Conversion metadata is an explicit origin declaration, not a cryptographic
+certification of the trained tensors.
+
+DSpark requests re-prefill the complete prompt because ordinary KV prefix
+entries do not contain its target-layer capture history. Base serving without
+DSpark retains normal prefix-cache behavior. MiniCPM vision-feature caching is
+disabled until crop/position-equivalent reuse is proven. Original weights and
+configs are not rewritten; full checkpoint admission and installed-runtime
+validation require a separate memory-safe execution slot.
+
 ### Image Model Manifests
 
 Image generation and editing use the core mlx-vlm dependency. Add an

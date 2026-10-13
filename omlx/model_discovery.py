@@ -196,6 +196,7 @@ def is_helper_model_config(config: dict) -> bool:
 
 # Known VLM architectures
 VLM_ARCHITECTURES = {
+    "MiniCPMV4_7ForConditionalGeneration",
     "LlavaForConditionalGeneration",
     "LlavaNextForConditionalGeneration",
     "Qwen2VLForConditionalGeneration",

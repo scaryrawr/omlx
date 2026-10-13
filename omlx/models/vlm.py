@@ -157,9 +157,21 @@ class VLMModelAdapter(nn.Module):
         # rows stay on standard decode because prompt-history priming skips
         # inputs_embeds forwards.
         self._native_mtp_disabled_uids: set[int] = set()
+        self._minicpm_speculative_transactions: list[Any] = []
+
+    def abort_speculative_forward(self) -> None:
+        """Restore any uncommitted native verify after a failed decode step."""
+        transactions = self._minicpm_speculative_transactions
+        self._minicpm_speculative_transactions = []
+        if transactions:
+            from mlx_vlm.speculative.cache_state import abort_speculative_round
+
+            for transaction in transactions:
+                abort_speculative_round(transaction)
 
     def release_resources(self) -> None:
         """Drop references to VLM-owned MLX arrays before engine teardown reclaim."""
+        self.abort_speculative_forward()
         if self._vlm_model is not None:
             try:
                 from ..patches.qwen35_ane_prefill import release_qwen35_ane_prefill
@@ -658,6 +670,17 @@ class VLMModelAdapter(nn.Module):
         return_hidden = bool(kwargs.get("return_hidden", False)) or bool(
             kwargs.get("capture_layer_ids")
         )
+        minicpm_captures = None
+        minicpm_final_hidden = bool(kwargs.get("return_hidden", False))
+        if self.model_type == "minicpmv4_7" and return_hidden:
+            minicpm_captures = list(kwargs.get("capture_layer_ids") or [])
+            native_captures = set(minicpm_captures)
+            if minicpm_final_hidden:
+                native_captures.add(len(self.layers) - 1)
+            kwargs["capture_layer_ids"] = sorted(native_captures)
+            # Native return_hidden appends normalized hidden; oMLX's MTP head
+            # consumes the final layer's pre-norm capture instead.
+            kwargs["return_hidden"] = False
         # Scheduler prefill chunks discard their logits. Translate the shared
         # cache-only contract into the official Qwen model hook.
         if skip_lm_head and self.model_type == "qwen4_exp":
@@ -665,6 +688,16 @@ class VLMModelAdapter(nn.Module):
         inputs_embeds = kwargs.pop("inputs_embeds", None)
         vlm_extra = kwargs.pop("vlm_extra_kwargs", None) or {}
         vlm_extra.pop("_captured_rope_deltas", None)
+        if (
+            self.model_type == "minicpmv4_7"
+            and inputs_embeds is None
+            and self._pending_embeds is None
+            and cache is not None
+            and "rope_deltas" not in kwargs
+        ):
+            deltas = self._batch_rope_deltas_for_size(input_ids.shape[0])
+            if deltas is not None:
+                kwargs["rope_deltas"] = deltas.reshape(-1, 1)
 
         if inputs_embeds is not None:
             result = self._language_model(
@@ -752,6 +785,21 @@ class VLMModelAdapter(nn.Module):
                     self._vlm_model._set_position_state(input_ids)
                 result = self._language_model(input_ids, cache=cache, **kwargs)
 
+        if self.model_type == "minicpmv4_7" and getattr(result, "gdn_states", None) is not None:
+            self._minicpm_speculative_transactions.append(result.gdn_states)
+        if minicpm_captures is not None:
+            try:
+                by_layer = dict(
+                    zip(kwargs["capture_layer_ids"], result.hidden_states, strict=True)
+                )
+                result.hidden_states = [by_layer[layer] for layer in minicpm_captures]
+                if minicpm_final_hidden:
+                    result.hidden_states.append(by_layer[len(self.layers) - 1])
+            except BaseException:
+                from mlx_vlm.speculative.cache_state import abort_speculative_round
+
+                abort_speculative_round(result.gdn_states)
+                raise
         if return_hidden and hasattr(result, "logits"):
             return result
         if hasattr(result, "logits"):

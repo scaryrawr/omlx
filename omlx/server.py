@@ -54,6 +54,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +121,7 @@ from .api.media_inputs import (
     has_audio_video_parts,
     normalize_media_file_parts_in_messages,
 )
+from .api.media_options import merge_mm_processor_kwargs
 
 # Import from new modular API
 from .api.openai_models import (
@@ -2280,12 +2282,13 @@ def get_embedding_max_length(
     return get_max_context_window(model_id)
 
 
-def _prepare_chat_prompt_for_request(
+async def _prepare_chat_prompt_for_request(
     engine: BaseEngine,
     messages: list,
     tools: list | None = None,
     chat_template_kwargs: dict | None = None,
     is_partial: bool | None = None,
+    mm_processor_kwargs: dict | None = None,
 ) -> tuple[int, tuple[str, list[int]] | None]:
     # Subclasses (e.g. distributed) have their own prompt handling.
     if type(engine) is BatchedEngine:
@@ -2293,15 +2296,37 @@ def _prepare_chat_prompt_for_request(
             messages, tools, chat_template_kwargs, is_partial
         )
         return len(prepared[1]), prepared
-    return (
-        engine.count_chat_tokens(
-            messages,
-            tools,
-            chat_template_kwargs=chat_template_kwargs,
-            is_partial=is_partial,
-        ),
-        None,
+    processor_kwargs = (
+        {"mm_processor_kwargs": mm_processor_kwargs} if mm_processor_kwargs else {}
     )
+    count_prompt = partial(
+        engine.count_chat_tokens,
+        messages,
+        tools,
+        chat_template_kwargs=chat_template_kwargs,
+        is_partial=is_partial,
+        **processor_kwargs,
+    )
+    if getattr(engine, "model_type", None) == "minicpmv4_7":
+        count = await asyncio.get_running_loop().run_in_executor(
+            engine._engine._mlx_executor, count_prompt
+        )
+    else:
+        count = count_prompt()
+    return count, None
+
+
+def _request_mm_processor_kwargs(engine: BaseEngine, request, settings) -> dict:
+    options = merge_mm_processor_kwargs(
+        getattr(settings, "mm_processor_kwargs", None),
+        request.mm_processor_kwargs,
+    )
+    if options and getattr(engine, "model_type", None) != "minicpmv4_7":
+        raise InvalidRequestError(
+            "mm_processor_kwargs is only supported by MiniCPM-V 4.7.",
+            field="mm_processor_kwargs",
+        )
+    return options
 
 
 class _ContextLengthExceededError(HTTPException):
@@ -4970,6 +4995,7 @@ async def create_chat_completion(
             reasoning_parser = ms.reasoning_parser
             settings_guided_grammar = _settings_guided_grammar(ms)
         merged_ct_kwargs, thinking_budget = _merge_chat_template_kwargs(request, ms)
+        mm_processor_kwargs = _request_mm_processor_kwargs(engine, request, ms)
 
         chat_messages = _extract_chat_messages(
             request, engine, resolved_model, max_tool_result_tokens
@@ -5045,12 +5071,13 @@ async def create_chat_completion(
         )
         # Validate context window before sending to model
         try:
-            num_prompt_tokens, prepared_prompt = _prepare_chat_prompt_for_request(
+            num_prompt_tokens, prepared_prompt = await _prepare_chat_prompt_for_request(
                 engine,
                 messages,
                 tools_for_template,
                 chat_template_kwargs=merged_ct_kwargs or None,
                 is_partial=is_partial,
+                mm_processor_kwargs=mm_processor_kwargs,
             )
         except Exception as e:
             if _is_chat_template_error(e):
@@ -5139,6 +5166,8 @@ async def create_chat_completion(
         # Add chat template kwargs
         if merged_ct_kwargs:
             chat_kwargs["chat_template_kwargs"] = merged_ct_kwargs
+        if mm_processor_kwargs:
+            chat_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
 
         # Forward partial-mode decision to the engine explicitly
         chat_kwargs["is_partial"] = is_partial
@@ -7558,6 +7587,7 @@ async def create_anthropic_message(
             ),
         )
         forced_keys = forced_ct_keys(ms)
+        mm_processor_kwargs = _request_mm_processor_kwargs(engine, request, ms)
         _entry = get_engine_pool().get_entry(resolved_model)
 
         # Pass Anthropic thinking config to chat template (except forced keys)
@@ -7743,6 +7773,8 @@ async def create_anthropic_message(
         # Add chat template kwargs
         if merged_ct_kwargs:
             chat_kwargs["chat_template_kwargs"] = merged_ct_kwargs
+        if mm_processor_kwargs:
+            chat_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
 
         # Forward partial-mode decision to the engine explicitly
         chat_kwargs["is_partial"] = is_partial
@@ -7762,12 +7794,13 @@ async def create_anthropic_message(
 
         # Validate context window before sending to model
         try:
-            num_prompt_tokens, prepared_prompt = _prepare_chat_prompt_for_request(
+            num_prompt_tokens, prepared_prompt = await _prepare_chat_prompt_for_request(
                 engine,
                 messages,
                 internal_tools,
                 chat_template_kwargs=merged_ct_kwargs or None,
                 is_partial=is_partial,
+                mm_processor_kwargs=mm_processor_kwargs,
             )
         except Exception as e:
             err_name = type(e).__name__.lower()
@@ -7971,6 +8004,7 @@ async def count_anthropic_tokens(
             tool_choice=request.tool_choice,
             thinking=request.thinking,
             output_config=request.output_config,
+            mm_processor_kwargs=request.mm_processor_kwargs,
         )
         messages = convert_anthropic_to_internal(temp_request)
 
@@ -7990,17 +8024,20 @@ async def count_anthropic_tokens(
             ),
         )
         forced_keys = forced_ct_keys(ms)
+        mm_processor_kwargs = _request_mm_processor_kwargs(engine, request, ms)
         if request.thinking and "enable_thinking" not in forced_keys:
             if request.thinking.type in ("enabled", "adaptive"):
                 merged_ct_kwargs["enable_thinking"] = True
             elif request.thinking.type == "disabled":
                 merged_ct_kwargs["enable_thinking"] = False
 
-        input_tokens = engine.count_chat_tokens(
+        input_tokens, _ = await _prepare_chat_prompt_for_request(
+            engine,
             messages,
             internal_tools,
             chat_template_kwargs=merged_ct_kwargs or None,
             is_partial=False,
+            mm_processor_kwargs=mm_processor_kwargs,
         )
         logger.debug(f"Token count: {input_tokens} tokens for {len(messages)} messages")
 
@@ -8335,6 +8372,7 @@ async def create_response(
             ),
         )
 
+        mm_processor_kwargs = _request_mm_processor_kwargs(engine, request, ms)
         # Auto-set enable_thinking when a positive thinking budget is active.
         # Set it before grammar compilation, which reads the thinking state.
         thinking_budget = _resolve_thinking_budget(request, request.model)
@@ -8457,11 +8495,12 @@ async def create_response(
 
         # Validate context window
         try:
-            num_prompt_tokens, prepared_prompt = _prepare_chat_prompt_for_request(
+            num_prompt_tokens, prepared_prompt = await _prepare_chat_prompt_for_request(
                 engine,
                 messages,
                 tools_for_template,
                 chat_template_kwargs=merged_ct_kwargs or None,
+                mm_processor_kwargs=mm_processor_kwargs,
             )
         except Exception as e:
             err_name = type(e).__name__.lower()
@@ -8542,6 +8581,8 @@ async def create_response(
             chat_kwargs["tools"] = tools_for_template
         if merged_ct_kwargs:
             chat_kwargs["chat_template_kwargs"] = merged_ct_kwargs
+        if mm_processor_kwargs:
+            chat_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
 
         chat_kwargs["preserve_reasoning"] = cache_reasoning_output(
             ms,
