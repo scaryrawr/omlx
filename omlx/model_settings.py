@@ -17,6 +17,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
+from .api.media_options import MultimodalProcessorOptions
 from .model_profiles import (
     MODEL_SPECIFIC_PROFILE_FIELDS,
     UNIVERSAL_FIELDS_SET,
@@ -68,6 +69,40 @@ def validate_moe_expert_offload(settings: dict, model_type: str | None = None) -
                 "MoE expert offload cannot be combined with Lightning MTP, "
                 "VLM MTP, or DFlash; disable speculative decoding first."
             )
+
+
+def validate_minicpm_speculation(settings: dict, model_type: str | None) -> None:
+    if model_type != "minicpmv4_7":
+        return
+    if settings.get("mtp_enabled") or settings.get("vlm_mtp_enabled"):
+        raise ValueError(
+            "MiniCPM-V 4.7 has no embedded MTP head; use its paired DSpark "
+            "helper through dflash_enabled."
+        )
+    if not settings.get("dflash_enabled"):
+        return
+    if not settings.get("dflash_draft_model"):
+        raise ValueError("MiniCPM DSpark requires an explicit local paired helper.")
+    if settings.get("dflash_verify_mode") not in (None, "dflash"):
+        raise ValueError("MiniCPM DSpark supports fixed verification, not adaptive modes.")
+    unsupported = [
+        name
+        for name, default in (
+            ("dflash_max_ctx", None),
+            ("dflash_draft_window_size", None),
+            ("dflash_draft_sink_size", 0),
+            ("dflash_ssd_cache", False),
+            ("mtp_adaptive_max_depth", None),
+            ("mtp_fixed_depth", None),
+            ("specprefill_enabled", False),
+            ("guided_grammar_enabled", False),
+        )
+        if settings.get(name, default) not in (None, default)
+    ]
+    if unsupported:
+        raise ValueError(
+            "MiniCPM DSpark does not support these controls: " + ", ".join(unsupported)
+        )
 
 
 def ane_prefill_backend(model_type: str | None) -> str | None:
@@ -324,6 +359,7 @@ class ModelSettings:
     force_sampling: bool = False
     max_tool_result_tokens: int | None = None
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: dict[str, str | int] | None = None
     forced_ct_kwargs: list[str] | None = (
         None  # Keys that cannot be overridden by API requests
     )
@@ -509,6 +545,10 @@ class ModelSettings:
     active_profile_name: str | None = None  # Name of the currently-applied profile
 
     def __post_init__(self) -> None:
+        if self.mm_processor_kwargs is not None:
+            self.mm_processor_kwargs = MultimodalProcessorOptions.model_validate(
+                self.mm_processor_kwargs
+            ).model_dump(exclude_none=True)
         # Profiles retain raw JSON types; engine signatures use repr().
         self.turboquant_kv_bits = normalize_turboquant_kv_bits(self.turboquant_kv_bits)
         if self.qwen35_oq_a8_enabled and self.qwen35_oq_a8_min_tokens < 1:

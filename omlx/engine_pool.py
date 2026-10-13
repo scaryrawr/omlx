@@ -1095,6 +1095,7 @@ class EnginePool:
         # Security/load gates.
         add("trust_remote_code", bool(data.get("trust_remote_code", False)))
         add("external_engine", data.get("external_engine") or None)
+        add("mm_processor_kwargs", data.get("mm_processor_kwargs") or None)
         add("index_cache_freq", normalized_index_cache_freq())
         # Embedding audio tower residency is decided at load. The audio length
         # only matters while the tower is loaded.
@@ -1947,9 +1948,12 @@ class EnginePool:
 
     @staticmethod
     def _has_mlx_lm_path(entry: EngineEntry) -> bool:
-        """False for text families that only mlx-vlm implements."""
+        """False for families that only mlx-vlm implements."""
         model_type = (entry.config_model_type or "").replace("-", "_").lower()
-        return model_type not in VLM_NATIVE_TEXT_MODEL_TYPES
+        return (
+            model_type not in VLM_NATIVE_TEXT_MODEL_TYPES
+            and model_type != "minicpmv4_7"
+        )
 
     def _force_lm_replaces_engine(self, model_id: str) -> bool:
         """True when ``get_engine(force_lm=True)`` would reload a resident VLM."""
@@ -3949,6 +3953,16 @@ class EnginePool:
             model_settings = self._effective_deepseek_v41_model_settings(
                 entry, model_settings
             )
+            if entry.config_model_type == "minicpmv4_7" and model_settings is not None:
+                from .model_settings import validate_minicpm_speculation
+
+                validate_minicpm_speculation(
+                    model_settings.to_dict(), entry.config_model_type
+                )
+                if model_settings.dflash_enabled and effective_type != "vlm":
+                    raise ValueError(
+                        "MiniCPM DSpark requires the native batched VLM engine."
+                    )
             if getattr(model_settings, "qwen35_ane_prefill_enabled", False):
                 validate_ane_prefill(model_settings.to_dict(), entry.config_model_type)
 
@@ -4403,6 +4417,7 @@ class EnginePool:
                     return load_dflash_drafter(
                         path,
                         engine.vlm_model,
+                        target_path=entry.model_path,
                         block_size=getattr(model_settings, "dflash_block_size", None),
                         quant_enabled=bool(
                             getattr(model_settings, "dflash_draft_quant_enabled", False)
@@ -4423,6 +4438,10 @@ class EnginePool:
                         get_mlx_executor(), _load_dflash_sync
                     )
                 except Exception as e:
+                    if entry.config_model_type == "minicpmv4_7":
+                        await self._unload_engine(model_id)
+                        load_completed = False
+                        raise
                     logger.warning(
                         f"DFlash drafter load raised for {model_id} "
                         f"(drafter={drafter_id}): {e} -- toggle ignored"

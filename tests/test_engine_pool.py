@@ -1997,6 +1997,32 @@ class TestEnginePoolAsync:
         base_engine.stop.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_minicpm_dspark_load_failure_unloads_instead_of_falling_back(
+        self, pool_with_mock_engines
+    ):
+        pool = pool_with_mock_engines
+        entry = pool.get_entry("model-a")
+        entry.model_type = "vlm"
+        entry.engine_type = "vlm"
+        entry.config_model_type = "minicpmv4_7"
+        settings = ModelSettings(dflash_enabled=True, dflash_draft_model="/paired/helper")
+        engine = MagicMock()
+        engine.start = AsyncMock()
+        engine.stop = AsyncMock()
+        with (
+            patch("omlx.engine_pool.VLMBatchedEngine", return_value=engine),
+            patch(
+                "omlx.speculative.dflash_drafter.load_dflash_drafter",
+                side_effect=ValueError("paired helper is incompatible"),
+            ),
+            pytest.raises(ModelUnavailableError, match="paired helper is incompatible"),
+        ):
+            await pool._load_engine("model-a", runtime_settings=settings)
+        engine.stop.assert_awaited_once()
+        assert entry.engine is None
+        assert entry.load_failed
+
+    @pytest.mark.asyncio
     async def test_dflash_start_fallback_reuses_requested_variant_while_leased(
         self, pool_with_mock_engines
     ):

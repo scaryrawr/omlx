@@ -264,6 +264,16 @@ def apply() -> bool:
             return result
 
         def scoped_next(self, *args, **kwargs):
+            model = getattr(self, "model", None)
+            uids = getattr(self, "uids", ())
+            drafter = _drafter_for(model) if model is not None else None
+            if getattr(drafter, "kind", None) == "dspark" and len(uids) > 1:
+                for idx in range(len(uids)):
+                    sampler = _row_value(getattr(self, "samplers", None), idx)
+                    if sampler is None:
+                        sampler = getattr(self, "fallback_sampler", None)
+                    if getattr(sampler, "temp", 0.0) != 0.0:
+                        raise ValueError("Batched sampled DSpark is not supported.")
             realign_rows = getattr(self, "_omlx_realign_rows", None)
             if callable(realign_rows):
                 realign_rows()
@@ -271,7 +281,12 @@ def apply() -> bool:
             model = getattr(self, "model", None)
             uids = getattr(self, "uids", ())
             with _prompt_priming.decode_scope(model, uids), _drafter_scope(model, uids):
-                return patched_next(self, *args, **kwargs)
+                try:
+                    return patched_next(self, *args, **kwargs)
+                finally:
+                    abort = getattr(type(model), "abort_speculative_forward", None)
+                    if callable(abort):
+                        abort(model)
 
         GenerationBatch.__init__ = patched_init
         GenerationBatch.next = scoped_next
@@ -564,7 +579,11 @@ def _mtp_common_eligible(gen_batch: Any) -> bool:
     native_mtp_allowed = getattr(
         gen_batch.model, "native_mtp_allowed_for_uids", None
     )
-    if callable(native_mtp_allowed) and not native_mtp_allowed(list(uids)):
+    if (
+        drafter is None
+        and callable(native_mtp_allowed)
+        and not native_mtp_allowed(list(uids))
+    ):
         return False
     if _has_grammar_processors(gen_batch):
         return False
@@ -2165,6 +2184,11 @@ def _call_backbone_impl(
         kwargs["n_confirmed"] = n_confirmed
     if capture_layer_ids:
         kwargs["capture_layer_ids"] = list(capture_layer_ids)
+    minicpm_verify = bool(
+        n_confirmed and getattr(model, "model_type", None) == "minicpmv4_7"
+    )
+    if minicpm_verify:
+        kwargs["speculative_verify"] = True
     dspark_verify = bool(n_confirmed and _dspark_host(model) is not None)
     _rollback_mod.set_undo_armed(True)
     # The affine verify qmm kernel is a Qwen-specific optimization. Keep the
@@ -2183,7 +2207,12 @@ def _call_backbone_impl(
             getattr(language_model, "speculative_verify_logits", None)
         ):
             exact_verify = None
-        if n_confirmed and not capture_layer_ids and callable(exact_verify):
+        if (
+            n_confirmed
+            and not minicpm_verify
+            and not capture_layer_ids
+            and callable(exact_verify)
+        ):
             hidden, _, rollback_state, logits = exact_verify(
                 inputs,
                 cache,
