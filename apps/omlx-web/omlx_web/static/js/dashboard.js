@@ -1742,6 +1742,11 @@
                         if (g) out.guided_grammar = g;
                         continue;
                     }
+                    if (k === 'mm_processor_kwargs') {
+                        const options = this.mmProcessorOptions();
+                        if (options || ms.is_minicpm_model) out[k] = options || {};
+                        continue;
+                    }
                     // Standard field: omit unset values entirely — the server
                     // treats absent universal keys as "reset to default" when
                     // the profile is applied (snapshot semantics).
@@ -2201,7 +2206,11 @@
                     qwen35_ane_prefill_cpu_threads: s.qwen35_ane_prefill_cpu_threads ?? 8,
                     qwen35_ane_prefill_cpu_shared_resource: s.qwen35_ane_prefill_cpu_shared_resource !== false,
                     specprefill_enabled: s.specprefill_enabled || false,
-                    mm_processor_kwargs: s.mm_processor_kwargs ?? null,
+                    mm_processor_kwargs: {
+                        downsample_mode: '',
+                        max_slice_nums: null,
+                        ...s.mm_processor_kwargs,
+                    },
                     specprefill_draft_model: s.specprefill_draft_model || '',
                     specprefill_keep_pct: s.specprefill_keep_pct ? String(s.specprefill_keep_pct) : '0.2',
                     specprefill_threshold: s.specprefill_threshold || null,
@@ -2248,6 +2257,14 @@
                     embedding_audio_enabled: s.embedding_audio_enabled || false,
                     embedding_audio_max_seconds: s.embedding_audio_max_seconds ?? null,
                 };
+            },
+
+            mmProcessorOptions() {
+                const options = { ...this.modelSettings.mm_processor_kwargs };
+                for (const key of ['downsample_mode', 'max_slice_nums']) {
+                    if (options[key] == null || options[key] === '') delete options[key];
+                }
+                return Object.keys(options).length ? options : null;
             },
 
             moeExpertOffloadResidentInvalid() {
@@ -3311,7 +3328,7 @@
                                 dflash_verify_mode: this.modelSettings.dflash_enabled
                                     ? (this.modelSettings.dflash_verify_mode || (this.modelSettings.is_minicpm_model ? 'dflash' : 'adaptive'))
                                     : null,
-                                mm_processor_kwargs: this.modelSettings.mm_processor_kwargs,
+                                mm_processor_kwargs: this.mmProcessorOptions(),
                                 mtp_enabled: !!this.modelSettings.mtp_enabled,
                                 mtp_adaptive_max_depth: this.modelSettings.mtp_enabled
                                     ? parseInt(this.modelSettings.mtp_adaptive_max_depth || '3')

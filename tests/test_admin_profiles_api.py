@@ -187,7 +187,39 @@ class TestProfileRoutes:
         assert response.status_code == 200, response.text
         assert mgr.get_settings("model-a").mm_processor_kwargs == options
 
-    @pytest.mark.parametrize("options", [{"stack_frames": 4}, {"max_slice_nums": True}])
+    def test_processor_profile_defaults_clear_previous_controls(self, client):
+        c, mgr = client
+        admin_routes._get_engine_pool().get_entry(
+            "model-a"
+        ).config_model_type = "minicpmv4_7"
+        response = c.put(
+            "/admin/api/models/model-a/settings",
+            json={"mm_processor_kwargs": {"downsample_mode": "4x", "max_slice_nums": 36}},
+        )
+        assert response.status_code == 200, response.text
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "default-visual",
+                "display_name": "Default Visual",
+                "settings": {"mm_processor_kwargs": {}},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["profile"]["settings"]["mm_processor_kwargs"] == {}
+        response = c.post("/admin/api/models/model-a/profiles/default-visual/apply")
+        assert response.status_code == 200, response.text
+        assert mgr.get_settings("model-a").mm_processor_kwargs == {}
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"stack_frames": 4},
+            {"max_slice_nums": True},
+            {"max_slice_nums": 0},
+            {"max_slice_nums": 1.5},
+        ],
+    )
     def test_processor_profile_controls_are_validated_before_saving(self, client, options):
         c, mgr = client
         admin_routes._get_engine_pool().get_entry(

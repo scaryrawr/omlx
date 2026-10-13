@@ -47,6 +47,7 @@
                         ('ms-profiles', t('modal.model_settings.profiles.section_label'), "!modelSettings.is_diffusion_model"),
                         ('ms-basic', t('modal.model_settings.basic_label'), "true"),
                         ('ms-generation', t('modal.model_settings.generation_label'), ms_llm),
+                        ('ms-media', t('modal.model_settings.minicpm_media'), "modelSettings.is_minicpm_model"),
                         ('ms-acceleration', t('modal.model_settings.acceleration_label'), ms_llm_non_diffusion),
                         ('ms-memory', t('modal.model_settings.memory_label'), ms_llm_non_diffusion),
                         ('ms-advanced', t('modal.model_settings.advanced_label'), ms_llm ~ " || selectedModel?.embedding_audio_supported"),
@@ -493,6 +494,36 @@
                                     </button>
                                 </div>
                             </div>
+                        </div>
+                    </section>
+                </template>
+
+                <template x-if="modelSettings.is_minicpm_model">
+                    <section id="ms-media" class="model-settings-section mt-8">
+                        <h3 class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3">{{ t('modal.model_settings.minicpm_media') }}</h3>
+                        <div class="{{ ms_rows }}">
+                            <label class="{{ ms_row }}">
+                                <span class="min-w-0">
+                                    <span class="block {{ ms_row_label }}">{{ t('modal.model_settings.minicpm_downsample_mode') }}</span>
+                                    <span class="{{ ms_row_hint }}">{{ t('modal.model_settings.minicpm_downsample_mode_hint') }}</span>
+                                </span>
+                                <select x-model="modelSettings.mm_processor_kwargs.downsample_mode"
+                                        class="{{ ms_field_short }}">
+                                    <option value="">{{ t('modal.model_settings.placeholder_default') }}</option>
+                                    <option value="4x">4x</option>
+                                    <option value="16x">16x</option>
+                                </select>
+                            </label>
+                            <label class="{{ ms_row }}">
+                                <span class="min-w-0">
+                                    <span class="block {{ ms_row_label }}">{{ t('modal.model_settings.minicpm_max_slice_nums') }}</span>
+                                    <span class="{{ ms_row_hint }}">{{ t('modal.model_settings.minicpm_max_slice_nums_hint') }}</span>
+                                </span>
+                                <input type="number" x-model.number="modelSettings.mm_processor_kwargs.max_slice_nums"
+                                       min="1" step="1"
+                                       placeholder="{{ t('modal.model_settings.placeholder_default') }}"
+                                       class="{{ ms_field_short }}">
+                            </label>
                         </div>
                     </section>
                 </template>

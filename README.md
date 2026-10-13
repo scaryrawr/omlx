@@ -418,6 +418,10 @@ slicing, separately from `chat_template_kwargs`:
 
 `downsample_mode` accepts `"4x"` or `"16x"`; `max_slice_nums` must be a positive
 integer. These controls can also be stored in per-model settings/profiles.
+In the admin UI, open **Model Settings > MiniCPM Media** to edit them.
+Choose **Default** for compression or clear the slicing limit to remove that
+override. Saving a MiniCPM profile with both controls unset records processor
+defaults explicitly rather than retaining previously applied media overrides.
 Non-null request values override model settings, then checkpoint/processor
 defaults. Omitted controls do not change existing defaults. The same effective
 compression mode is used for preprocessing, canvas positions and encoding.
