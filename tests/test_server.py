@@ -1611,7 +1611,8 @@ def prepared_chat_engine():
 
 
 @pytest.mark.parametrize("subclass", [False, True])
-def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass):
+@pytest.mark.asyncio
+async def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass):
     class OtherBatchedEngine(BatchedEngine):
         pass
 
@@ -1619,7 +1620,7 @@ def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass)
     engine.count_chat_tokens = MagicMock(return_value=7)
     messages = [{"role": "user", "content": "Hello"}]
 
-    assert srv._prepare_chat_prompt_for_request(
+    assert await srv._prepare_chat_prompt_for_request(
         engine,
         messages,
         chat_template_kwargs={"enable_thinking": False},

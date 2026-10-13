@@ -817,6 +817,15 @@ def maybe_apply_pre_load_patches(
                 model_name,
             )
 
+    if for_vlm and model_type == "minicpmv4_7":
+        from ..patches.mlx_vlm_minicpm47_compat import (
+            apply_mlx_vlm_minicpm47_compat_patch,
+            validate_target_config,
+        )
+
+        validate_target_config(config)
+        apply_mlx_vlm_minicpm47_compat_patch()
+
     if for_vlm and model_type == "qwen4_exp":
         from ..patches.mlx_vlm_qwen4_exp_compat import (
             apply_mlx_vlm_qwen4_exp_compat_patch,
@@ -1466,6 +1475,7 @@ _DFLASH_BATCHED_MODEL_TYPES = {
         "gemma4",
         "gemma4_unified",
         "muse_glimmer",
+        "minicpmv4_7",
     ),
     "batched": (
         "qwen3_5",
@@ -1492,7 +1502,7 @@ def dflash_compatibility(
         return True, ""
     return False, (
         "DFlash supports Qwen3, Qwen3.5/3.6, Laguna, MiMo V2, GLM-5.3, Gemma 4 and "
-        f"Muse Glimmer models (model_type='{model_type or ''}', "
+        f        "Muse Glimmer and MiniCPM-V 4.7 models (model_type='{model_type or ''}', "
         f"engine='{engine_type}')"
     )
 

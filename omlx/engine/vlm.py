@@ -40,6 +40,7 @@ from typing import Any
 
 import mlx.core as mx
 
+from ..api.media_options import merge_mm_processor_kwargs
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import (
     clean_special_tokens,
@@ -64,6 +65,7 @@ from ..utils.image import (
     extract_media_from_messages,
 )
 from ..utils.video import (
+    NATIVE_VIDEO_MAX_FRAMES,
     NATIVE_VIDEO_MODEL_TYPES,
     attach_native_video_processor,
     estimate_native_video_tokens,
@@ -2225,6 +2227,8 @@ class VLMBatchedEngine(BaseEngine):
         except ValueError:
             raise
         except Exception as e:
+            if _read_config_model_type(self._model_name) == "minicpmv4_7":
+                raise
             logger.debug(f"pre-load patches skipped: {e}")
 
         # Load VLM model on the global MLX executor to avoid blocking the event loop
@@ -2343,6 +2347,11 @@ class VLMBatchedEngine(BaseEngine):
             self._native_video = attach_native_video_processor(
                 self._processor, self._model_name
             )
+        elif self.model_type == "minicpmv4_7":
+            self._native_video = (
+                getattr(self._processor, "video_processor", None) is not None
+            )
+            self._vision_cache_enabled = False
 
         if self.model_type == "unlimited-ocr":
             from ..utils.tokenizer import (
@@ -3357,6 +3366,55 @@ class VLMBatchedEngine(BaseEngine):
 
             return format_messages(messages, num_images)
 
+        if model_type == "minicpmv4_7":
+            formatted_messages = []
+            explicit_visuals = False
+            for message in messages:
+                formatted = dict(message)
+                content = formatted.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for part in content:
+                        kind = part.get("type")
+                        if kind in {"image", "image_url", "input_image"}:
+                            parts.append({"type": "image"})
+                            explicit_visuals = True
+                        elif kind in {"video", "video_url", "input_video"}:
+                            parts.append({"type": "video"})
+                            explicit_visuals = True
+                        elif kind == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                        else:
+                            raise InvalidRequestError(
+                                f"Unsupported MiniCPM content type: {kind!r}.",
+                                field="messages",
+                            )
+                    if formatted.get("role") == "system" and any(
+                        part["type"] != "text" for part in parts
+                    ):
+                        raise InvalidRequestError(
+                            "MiniCPM system messages cannot contain images or videos.",
+                            field="messages",
+                        )
+                    formatted["content"] = parts
+                formatted_messages.append(formatted)
+            if not explicit_visuals and (num_images or num_videos):
+                for formatted in formatted_messages:
+                    if formatted.get("role") == "user":
+                        content = formatted.get("content")
+                        text_parts = (
+                            content
+                            if isinstance(content, list)
+                            else [{"type": "text", "text": content or ""}]
+                        )
+                        formatted["content"] = [
+                            *({"type": "image"} for _ in range(num_images)),
+                            *({"type": "video"} for _ in range(num_videos)),
+                            *text_parts,
+                        ]
+                        break
+            return formatted_messages, []
+
         image_part_types = {"image", "image_url", "input_image"}
         audio_part_types = {"input_audio"}
         video_part_types = {"video", "video_url", "input_video"}
@@ -4187,6 +4245,22 @@ class VLMBatchedEngine(BaseEngine):
             if extra_model_inputs.get(key) is not None
         }
 
+    def _mm_processor_kwargs(self, request_options: dict | None) -> dict:
+        options = merge_mm_processor_kwargs(
+            getattr(self._model_settings, "mm_processor_kwargs", None),
+            request_options,
+        )
+        if self.model_type != "minicpmv4_7":
+            if options:
+                raise InvalidRequestError(
+                    "mm_processor_kwargs is only supported by MiniCPM-V 4.7.",
+                    field="mm_processor_kwargs",
+                )
+            return {}
+        config = self._vlm_model.config
+        options.setdefault("downsample_mode", config.downsample_mode)
+        return options
+
     def _prepare_vision_inputs(
         self,
         messages: list[dict[str, Any]],
@@ -4197,6 +4271,8 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         videos: list[str] | None = None,
         video_hashes: list[str] | None = None,
+        mm_processor_kwargs: dict | None = None,
+        encode_vision: bool = True,
     ) -> tuple[
         list[int],
         mx.array | None,
@@ -4248,6 +4324,12 @@ class VLMBatchedEngine(BaseEngine):
         num_videos = len(videos) if videos else 0
 
         model_type = self.model_type or _read_config_model_type(self._model_name) or ""
+        processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
+        if model_type == "minicpmv4_7" and num_audios:
+            raise InvalidRequestError(
+                "MiniCPM-V 4.7 supports text, image and video input, not audio.",
+                field="messages",
+            )
         if model_type == COHERE2_MOE_MODEL_TYPE and (
             num_images > 0 or num_audios > 0
         ):
@@ -4306,7 +4388,7 @@ class VLMBatchedEngine(BaseEngine):
         except Exception as e:
             # The upstream formatter has no video placeholders; falling back
             # would send frames the prompt never references.
-            if num_videos:
+            if num_videos or model_type == "minicpmv4_7":
                 raise
             logger.debug(
                 "Falling back to mlx-vlm apply_chat_template for VLM formatting: %s",
@@ -4437,6 +4519,12 @@ class VLMBatchedEngine(BaseEngine):
                 audio=audio if audio else None,
                 videos=videos if videos else None,
                 prompts=prompts,
+                **processor_options,
+                **(
+                    {"max_frames": NATIVE_VIDEO_MAX_FRAMES}
+                    if num_videos and model_type == "minicpmv4_7"
+                    else {}
+                ),
             )
 
         input_ids = inputs["input_ids"]
@@ -4446,7 +4534,7 @@ class VLMBatchedEngine(BaseEngine):
         token_ids = input_ids[0].tolist() if input_ids.ndim > 1 else input_ids.tolist()
         image_cache_key_start = 0
         image_cache_key_ranges: list[tuple[int, str]] = []
-        if image_message_ranges:
+        if image_message_ranges and model_type != "minicpmv4_7":
             try:
                 image_starts = None
                 if (
@@ -4508,6 +4596,7 @@ class VLMBatchedEngine(BaseEngine):
                                 if images_consumed > 0
                                 else None
                             ),
+                            **processor_options,
                             prompts=(
                                 [prefix_prompt]
                                 if isinstance(prefix_prompt, str)
@@ -4559,6 +4648,10 @@ class VLMBatchedEngine(BaseEngine):
             )
             and v is not None
         }
+        if not encode_vision:
+            return token_ids, None, None, None, 0, []
+        if model_type == "minicpmv4_7":
+            extra_model_inputs["downsample_mode"] = processor_options["downsample_mode"]
 
         # Check for any multimodal inputs. Most processors expose audio as
         # ``input_features``; MiMo's tokenizer produces discrete ``audio_codes``.
@@ -4570,7 +4663,7 @@ class VLMBatchedEngine(BaseEngine):
             (pixel_values is not None and num_images > 0) or has_audio or has_video
         )
 
-        if has_multimodal:
+        if has_multimodal or model_type == "minicpmv4_7":
             # Build call kwargs from extra_model_inputs (includes input_features
             # for audio, image_grid_thw, etc.)
             call_kwargs = dict(extra_model_inputs)
@@ -4595,14 +4688,19 @@ class VLMBatchedEngine(BaseEngine):
                 else:
                     image_cache_key_start = 0
                     image_hash = self._video_cache_identity(video_hashes or [])
-                video_features = self._cached_video_features(
-                    image_hash, input_ids, extra_model_inputs
+                video_features = (
+                    self._cached_video_features(
+                        image_hash, input_ids, extra_model_inputs
+                    )
+                    if model_type != "minicpmv4_7"
+                    else None
                 )
                 if video_features is not None:
                     call_kwargs["cached_image_features"] = video_features
 
             if (
                 num_images > 0
+                and model_type != "minicpmv4_7"
                 and self._vision_cache is not None
                 and self._vision_cache_enabled
                 # Fast path already assembled the combined features.
@@ -4769,6 +4867,13 @@ class VLMBatchedEngine(BaseEngine):
             _capture_vlm_position_state(
                 getattr(self._vlm_model, "language_model", None), extra_kwargs
             )
+            if model_type == "minicpmv4_7" and has_multimodal:
+                controls_hash = hashlib.sha256(
+                    json.dumps(processor_options, sort_keys=True).encode()
+                ).hexdigest()
+                image_hash = f"minicpm:{controls_hash}:{image_hash}"
+                image_cache_key_start = 0
+                image_cache_key_ranges = [(0, image_hash)]
 
             if model_type in {"mimo_v2", "mimo_v2_flash"} and has_audio:
                 from ..patches.mimo_v2.audio import audio_cache_key_ranges
@@ -4964,6 +5069,28 @@ class VLMBatchedEngine(BaseEngine):
             except Exception as e:
                 logger.debug(f"SpecPrefill: system_end calc failed: {e}")
 
+    def _validate_dspark_request(self, **kwargs) -> None:
+        if getattr(self._dflash_drafter, "kind", None) != "dspark":
+            return
+        if kwargs.get("specprefill"):
+            raise InvalidRequestError(
+                "DSpark requires full target context and cannot use SpecPrefill.",
+                field="specprefill",
+            )
+        if (
+            kwargs.get("xtc_probability", 0.0) > 0.0
+            and kwargs.get("temperature", 1.0) > 0.0
+        ):
+            raise InvalidRequestError(
+                "Sampled DSpark does not support stochastic XTC filtering.",
+                field="xtc_probability",
+            )
+        if kwargs.get("compiled_grammar") is not None:
+            raise InvalidRequestError(
+                "DSpark does not support constrained grammar decoding.",
+                field="structured_outputs",
+            )
+
     async def generate(
         self,
         prompt: str | list[int],
@@ -4985,6 +5112,7 @@ class VLMBatchedEngine(BaseEngine):
         """Generate a complete response (non-streaming)."""
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(temperature=temperature, **kwargs)
 
         if self.is_diffusion_model:
             full_text = ""
@@ -5098,6 +5226,7 @@ class VLMBatchedEngine(BaseEngine):
         """Stream generation token by token."""
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(temperature=temperature, **kwargs)
 
         if self.is_diffusion_model:
             if (
@@ -5355,6 +5484,9 @@ class VLMBatchedEngine(BaseEngine):
         miscalibrates the token count but also bypasses the actual
         tool-prompt rendering on the real chat path.
 
+        MiniCPM instead counts the real packed processor output on the MLX
+        executor, without running its vision encoder.
+
         Raises ``PrefillMemoryExceededError`` if the conservative estimate
         would exceed the configured memory ceiling. See
         ``BatchedEngine.preflight_chat`` for the upstream rationale
@@ -5363,6 +5495,7 @@ class VLMBatchedEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(**kwargs)
         if self.is_diffusion_model:
             has_audio = any(
                 self._count_content_parts(msg.get("content"), {"input_audio"})
@@ -5378,6 +5511,28 @@ class VLMBatchedEngine(BaseEngine):
         template_tools = convert_tools_for_template(tools) if tools else None
         ct_kwargs = kwargs.get("chat_template_kwargs")
         partial = kwargs.get("is_partial")
+        if self.model_type == "minicpmv4_7":
+            count = functools.partial(
+                self.count_chat_tokens,
+                messages,
+                template_tools,
+                chat_template_kwargs=ct_kwargs,
+                is_partial=partial,
+                mm_processor_kwargs=kwargs.get("mm_processor_kwargs"),
+            )
+            num_tokens = await asyncio.get_running_loop().run_in_executor(
+                self._engine._mlx_executor, count
+            )
+            scheduler = getattr(getattr(self._engine, "engine", None), "scheduler", None)
+            if scheduler is None:
+                _warn_scheduler_unreachable_once(self, "preflight_chat")
+                return
+            await self._preflight_or_raise_with_eviction(
+                scheduler,
+                num_prompt_tokens=num_tokens,
+                request_id=request_id,
+            )
+            return
         # Strip image content-parts BEFORE templating. Modern HF chat
         # templates (Qwen2.5-VL, Gemma-Vision, Llama-3.2-Vision) render
         # ``image_url`` / ``image`` content parts as literal placeholder
@@ -5656,7 +5811,7 @@ class VLMBatchedEngine(BaseEngine):
             )
         # mlx-vlm's Qwen3-VL embedding path takes the grid of one modality per
         # call, so a request that mixes them would silently lose one.
-        if videos and (images or audio):
+        if videos and (images or audio) and model_type != "minicpmv4_7":
             raise InvalidRequestError(
                 "Video input cannot be combined with image or audio input "
                 "in the same request.",
@@ -5683,6 +5838,15 @@ class VLMBatchedEngine(BaseEngine):
         )
         ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         partial = kwargs.pop("is_partial", None)
+        processor_options = self._mm_processor_kwargs(
+            kwargs.pop("mm_processor_kwargs", None)
+        )
+        preparation_kwargs = {}
+        if processor_options:
+            preparation_kwargs["mm_processor_kwargs"] = processor_options
+        if "_encode_vision" in kwargs:
+            preparation_kwargs["encode_vision"] = kwargs.pop("_encode_vision")
+        encode_vision = preparation_kwargs.get("encode_vision", True)
 
         # Keep VLM-capable models on one prompt-rendering path, even before the
         # first image arrives. Otherwise the conversation switches prompt families
@@ -5703,9 +5867,12 @@ class VLMBatchedEngine(BaseEngine):
                 video_files.append(write_video_data_uri(uri))
                 # Rejects undecodable or degenerate clips with a 400 before
                 # mlx-vlm samples them.
-                native_video_token_count(
-                    probe_video(video_files[-1][0]), video_processor
-                )
+                if self.model_type == "minicpmv4_7":
+                    probe_video(video_files[-1][0])
+                else:
+                    native_video_token_count(
+                        probe_video(video_files[-1][0]), video_processor
+                    )
             video_kwargs = (
                 {
                     "videos": [str(path) for path, _ in video_files],
@@ -5729,6 +5896,7 @@ class VLMBatchedEngine(BaseEngine):
                 tools=template_tools,
                 is_partial=partial,
                 **video_kwargs,
+                **preparation_kwargs,
             )
         finally:
             for path, _ in video_files:
@@ -5742,7 +5910,7 @@ class VLMBatchedEngine(BaseEngine):
             image_cache_key_start = 0
             image_cache_key_ranges = []
 
-        if images or videos:
+        if encode_vision and (images or videos):
             # Free Metal intermediates from vision encoding.
             mx.synchronize()
             mx.clear_cache()
@@ -6176,12 +6344,26 @@ class VLMBatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         is_partial: bool | None = None,
+        mm_processor_kwargs: dict | None = None,
     ) -> int:
-        """Count prompt tokens for chat messages (text-only approximation).
+        """Count exact packed MiniCPM prompts; approximate other VLMs as text.
 
-        For VLM messages with images, this counts only the text tokens.
-        Image tokens are added during vision encoding and vary by model.
+        MiniCPM preprocessing expands crop/frame markers without running its
+        vision encoder. Other families add visual tokens during encoding.
         """
+        processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
+        if self.model_type == "minicpmv4_7":
+            token_ids, *_ = self._process_chat_messages(
+                messages,
+                tools,
+                {
+                    "chat_template_kwargs": chat_template_kwargs,
+                    "is_partial": is_partial,
+                    "mm_processor_kwargs": processor_options,
+                    "_encode_vision": False,
+                },
+            )
+            return len(token_ids)
         # Extract text-only version for token counting through the same media
         # split as the real request, so video parts are not rejected here
         # before they reach the multimodal path.
@@ -6224,6 +6406,8 @@ class VLMBatchedEngine(BaseEngine):
         if add_generation_prompt is not None:
             ct_kwargs["add_generation_prompt"] = add_generation_prompt
         kwargs = {"chat_template_kwargs": ct_kwargs or None, "is_partial": is_partial}
+        if self.model_type == "minicpmv4_7":
+            kwargs["_encode_vision"] = False
         loop = asyncio.get_running_loop()
         token_ids, *_ = await loop.run_in_executor(
             self._engine._mlx_executor,

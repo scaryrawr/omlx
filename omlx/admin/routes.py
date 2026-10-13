@@ -41,6 +41,7 @@ from pydantic import (
 
 from .._version import __version__ as _omlx_version
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
+from ..api.media_options import MultimodalProcessorOptions
 from ..api.openai_models import _coerce_tool_call_arguments
 from ..api.utils import _try_parse_json
 from ..engine.splash import (
@@ -353,6 +354,7 @@ class ModelSettingsRequest(BaseModel):
     force_sampling: bool | None = None
     max_tool_result_tokens: int | None = None
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
     forced_ct_kwargs: list[str] | None = None
     ttl_seconds: int | None = None
     index_cache_freq: int | None = None
@@ -2925,6 +2927,13 @@ async def update_model_settings(
         current_settings.cache_reasoning_output = request.cache_reasoning_output
     if "chat_template_kwargs" in sent:
         current_settings.chat_template_kwargs = request.chat_template_kwargs
+    if "mm_processor_kwargs" in sent:
+        if request.mm_processor_kwargs is not None:
+            current_settings.mm_processor_kwargs = (
+                request.mm_processor_kwargs.model_dump(exclude_none=True)
+            )
+        else:
+            current_settings.mm_processor_kwargs = None
     if "forced_ct_kwargs" in sent:
         current_settings.forced_ct_kwargs = request.forced_ct_kwargs
     if "ttl_seconds" in sent:
@@ -3561,9 +3570,21 @@ def _raise_if_alias_conflicts_exposed_profiles(
 
 
 def _validate_model_settings(entry, settings):
-    from ..model_settings import validate_moe_expert_offload
+    from ..model_settings import (
+        validate_minicpm_speculation,
+        validate_moe_expert_offload,
+    )
 
     try:
+        validate_minicpm_speculation(
+            settings, getattr(entry, "config_model_type", None)
+        )
+        if settings.get("mm_processor_kwargs") is not None:
+            if getattr(entry, "config_model_type", None) != "minicpmv4_7":
+                raise ValueError(
+                    "mm_processor_kwargs is only supported by MiniCPM-V 4.7."
+                )
+            MultimodalProcessorOptions.model_validate(settings["mm_processor_kwargs"])
         validate_moe_expert_offload(
             settings, model_type=getattr(entry, "config_model_type", None)
         )

@@ -111,6 +111,7 @@ VLM_MODEL_TYPES = {
     "glm_ocr",
     "minimax_m3_vl",
     "minicpmv",
+    "minicpmv4_7",
     "phi4_siglip",
     "phi4mm",
     "youtu_vl",
@@ -195,6 +196,7 @@ def is_helper_model_config(config: dict) -> bool:
 
 # Known VLM architectures
 VLM_ARCHITECTURES = {
+    "MiniCPMV4_7ForConditionalGeneration",
     "LlavaForConditionalGeneration",
     "LlavaNextForConditionalGeneration",
     "Qwen2VLForConditionalGeneration",

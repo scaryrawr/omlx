@@ -15,6 +15,7 @@ from typing import Annotated, Any
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
+from omlx.api.media_options import MultimodalProcessorOptions
 from omlx.api.shared_models import (
     BaseUsage,
     IDPrefix,
@@ -398,6 +399,7 @@ class ChatCompletionRequest(BaseModel):
     guided_grammar: str | None = None
     # Chat template kwargs (e.g. enable_thinking, reasoning_effort)
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
     # Top-level alias used by OpenAI-compatible clients.
     enable_thinking: bool | None = None
     # OpenAI-compatible reasoning depth; forwarded to the chat template.

@@ -93,6 +93,33 @@ class TestIsHelperModelConfig:
         config = {"model_type": "qwen3", "dflash_config": {"block_size": 16}}
         assert is_helper_model_config(config) is True
 
+    def test_minicpm_dspark_is_helper_not_independent_chat_model(self, tmp_path):
+        config = {
+            "model_type": "qwen3",
+            "architectures": ["Qwen3DSparkModel"],
+            "dflash_config": {
+                "projector_type": "dspark",
+                "target_layer_ids": [3, 11, 19, 27, 35],
+            },
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_helper_model_config(config)
+        assert _is_helper_checkpoint(tmp_path)
+
+    def test_minicpm_target_is_not_helper_despite_embedded_mtp_config(self, tmp_path):
+        config = {
+            "model_type": "minicpmv4_7",
+            "architectures": ["MiniCPMV4_7ForConditionalGeneration"],
+            "text_config": {
+                "model_type": "qwen3_5_moe_text",
+                "mtp_num_hidden_layers": 1,
+            },
+            "vision_config": {"model_type": "minicpmv4_7_vision"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert not is_helper_model_config(config)
+        assert detect_model_type(tmp_path) == "vlm"
+
     def test_assistant_via_model_type(self):
         config = {
             "model_type": "gemma4_assistant",

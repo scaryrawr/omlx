@@ -10351,6 +10351,9 @@ class Scheduler:
         if (
             self.block_aware_cache is not None
             and not self._model_has_unreconstructible_cache()
+            # DSpark needs every target-layer capture, which KV prefix entries
+            # do not contain. Re-prefill rather than silently truncate its context.
+            and getattr(_block_drafter_for(self.model), "kind", None) != "dspark"
         ):
             # Use paged cache
             fetch_started = time.perf_counter()
