@@ -1290,7 +1290,7 @@ class PagedCacheManager(CacheManager):
                 self.request_tables[request_id] = BlockTable(request_id=request_id)
             return self.request_tables[request_id]
 
-    def detach_block_table(self, request_id: str) -> Optional[BlockTable]:
+    def detach_block_table(self, request_id: str) -> BlockTable | None:
         """Remove a request's block table without freeing its blocks."""
         with self._lock:
             return self.request_tables.pop(request_id, None)

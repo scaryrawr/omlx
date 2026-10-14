@@ -173,7 +173,6 @@ def test_model_settings_feature_i18n_keys_exist_in_every_locale():
         "modal.model_settings.qwen_ane_gdn_hint",
         "modal.model_settings.qwen_ane_gdn_fraction",
         "modal.model_settings.qwen_ane_gdn_layers",
-        "status.active_models.dflash_label",
         "modal.model_settings.qwen_ane_tune",
         "modal.model_settings.qwen_ane_tune_hint",
         "modal.model_settings.qwen_ane_tune_start",

@@ -4397,9 +4397,9 @@ async def create_decisions(
                 engine, "supports_multimodal_fallback", False
             )
 
-            def _prepare_readout(messages):
+            async def _prepare_readout(messages):
                 try:
-                    num_prompt_tokens, prepared = _prepare_chat_prompt_for_request(
+                    num_prompt_tokens, prepared = await _prepare_chat_prompt_for_request(
                         engine,
                         messages,
                         chat_template_kwargs=READOUT_TEMPLATE_KWARGS,

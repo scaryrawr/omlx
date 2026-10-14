@@ -58,7 +58,19 @@ class DSparkDrafter:
             for index, uid in enumerate(uids):
                 self.seed(uid, [layer[index : index + 1] for layer in captured])
 
-    def seed_request(self, request_id: str, captured: Sequence[mx.array]) -> None:
+    def prepare_request(
+        self, request_id: str, tokens: Sequence[int], cached: int
+    ) -> int:
+        """DSpark never restores a truncated prefix context."""
+        return 0
+
+    def seed_request(
+        self,
+        request_id: str,
+        captured: Sequence[mx.array],
+        position: int | None = None,
+    ) -> None:
+        """Queue all captures; absolute positions never trim DSpark's history."""
         if captured:
             self._request_seeds.setdefault(request_id, []).append(
                 _concat_captured(captured)
@@ -69,15 +81,21 @@ class DSparkDrafter:
         if seeds:
             self._row(uid).pending.extend(seeds)
 
-    def release_request(self, request_id: str) -> None:
+    def release_request(
+        self, request_id: str, tokens: Sequence[int] | None = None
+    ) -> None:
+        """Release pending captures without retaining context for prefix hits."""
         self._request_seeds.pop(request_id, None)
 
     def release(self, uids: Iterable[Any]) -> None:
         for uid in uids:
             self._rows.pop(uid, None)
 
-    def clear(self) -> None:
+    def reset_rows(self) -> None:
         self._rows.clear()
+
+    def clear(self) -> None:
+        self.reset_rows()
         self._request_seeds.clear()
 
     @contextmanager

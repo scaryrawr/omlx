@@ -92,6 +92,21 @@ def inputs():
     }
 
 
+@pytest.mark.parametrize(
+    ("model_type", "needs_hooks"), [("minicpmv4_7", False), ("muse_glimmer", True)]
+)
+def test_drafter_preparation_preserves_native_minicpm_transactions(
+    engine, model_type, needs_hooks
+):
+    engine._vlm_model.config.model_type = model_type
+    with patch("omlx.engine.vlm.drafter_target.apply") as install:
+        assert engine.prepare_dflash_target() is engine._vlm_model
+    if needs_hooks:
+        install.assert_called_once_with(engine._vlm_model.language_model)
+    else:
+        install.assert_not_called()
+
+
 def test_compression_reaches_processor_and_encoder_with_request_local_positions(
     engine, inputs
 ):

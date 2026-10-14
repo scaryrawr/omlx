@@ -161,7 +161,7 @@ class Request:
     memory_requeues: int = 0
     requeued_output_tokens: int = 0
     requeue_reported_cached_tokens: int = 0
-    requeue_row_state: Optional[Tuple[Any, List[Any], Any]] = None
+    requeue_row_state: tuple[Any, list[Any], Any] | None = None
     # Token index after the last media placeholder. Embeddings are gone by
     # then, so the resumed prefix must cover every media token.
     requeue_media_end: int = 0

@@ -61,6 +61,28 @@ def _run(engine, request, multimodal=False):
     return asyncio.run(decisions.decide(engine, request, multimodal))
 
 
+@pytest.mark.asyncio
+async def test_each_readout_awaits_preparation_and_forwards_prepared_prompt():
+    engine = _FakeChatEngine(lambda text, letters: [1.0] * len(letters))
+    request = _request(
+        questions=[
+            {"type": "predicate", "name": name, "instructions": "Is this urgent?"}
+            for name in ("first", "second")
+        ]
+    )
+    prepared = []
+
+    async def prepare(messages):
+        await asyncio.sleep(0)
+        prompt = object()
+        prepared.append(prompt)
+        return {"_prepared_prompt": prompt}
+
+    result = await decisions.decide(engine, request, False, prepare=prepare)
+    assert len(result["answers"]) == 2
+    assert [call["_prepared_prompt"] for call in engine.calls] == prepared
+
+
 def test_capture_reads_option_logprobs_and_keeps_logits():
     capture = decisions.OptionLogitsCapture([[1, 2], [3]])
     logits = mx.array([[0.0, 1.0, 1.0, 2.0]])
