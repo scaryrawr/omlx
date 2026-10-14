@@ -470,6 +470,11 @@ def test_real_helper_strict_load_without_tokenizer_and_native_q_handoff(tmp_path
         dict(tree_flatten(helper.parameters())),
     )
     target = model()
+    engine = VLMBatchedEngine(model_name="tiny-minicpm")
+    engine._vlm_model = target
+    with patch("omlx.engine.vlm.drafter_target.apply") as install:
+        assert engine.prepare_dflash_target() is target
+    install.assert_not_called()
     target_path = tmp_path / "target"
     target_path.mkdir()
     (target_path / "config.json").write_text(

@@ -275,8 +275,6 @@ def _model_settings(native_mtp: bool) -> Any:
         mtp_enabled=native_mtp,
         vlm_mtp_enabled=False,
         dflash_enabled=False,
-        dflash_in_memory_cache=False,
-        dflash_ssd_cache=False,
         specprefill_enabled=False,
         turboquant_kv_enabled=False,
     )

@@ -151,7 +151,11 @@ class TestProfileRoutes:
         assert response.status_code == 200, response.text
         assert mgr.get_settings("model-a").dflash_enabled is True
         assert admin_routes._dflash_compat_for_model(
-            {"config_model_type": "minicpmv4_7", "model_path": entry.model_path}
+            {
+                "config_model_type": "minicpmv4_7",
+                "engine_type": "vlm",
+                "model_path": entry.model_path,
+            }
         ) == (True, "")
 
     def test_processor_controls_reject_other_models_without_saving(self, client):

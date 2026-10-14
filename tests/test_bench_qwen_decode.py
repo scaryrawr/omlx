@@ -240,8 +240,6 @@ def test_model_settings_disable_other_cache_and_speculative_paths(benchmark):
     assert settings.mtp_enabled is True
     assert settings.vlm_mtp_enabled is False
     assert settings.dflash_enabled is False
-    assert settings.dflash_in_memory_cache is False
-    assert settings.dflash_ssd_cache is False
     assert settings.specprefill_enabled is False
     assert settings.turboquant_kv_enabled is False
 

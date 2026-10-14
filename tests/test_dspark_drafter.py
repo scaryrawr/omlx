@@ -215,6 +215,33 @@ def test_release_before_uid_binding_and_nested_scope_cleanup():
     assert drafter._request_seeds == {}
 
 
+def test_scheduler_prefill_positions_and_generator_reset_preserve_unbound_context():
+    from omlx.scheduler import Scheduler
+
+    drafter = DSparkDrafter(
+        _NativeProposalFixture(), block_size=3, source_path="fixture"
+    )
+    scheduler = SimpleNamespace(model=SimpleNamespace(_omlx_drafter=drafter))
+    request = SimpleNamespace(request_id="request", prompt_token_ids=[1, 2, 3, 4])
+    Scheduler._dflash_seed_prefill(
+        scheduler, request, SimpleNamespace(hidden_states=_captures(2)), 0, 0
+    )
+    Scheduler._dflash_seed_prefill(
+        scheduler, request, SimpleNamespace(hidden_states=_captures(1)), 0, 2
+    )
+    drafter.seed(0, _captures(7))
+    drafter.reset_rows()
+    assert drafter._rows == {}
+    drafter.bind_uid(request.request_id, 0)
+    drafter.draft([(None, _state(0), _captures(1), mx.array([42]), None)])
+    assert drafter.context_length(0) == 4
+    drafter.release([0])
+    drafter.release_request(request.request_id, request.prompt_token_ids + [42])
+    assert drafter.prepare_request("next", request.prompt_token_ids, 3) == 0
+    assert not drafter._rows
+    assert not drafter._request_seeds
+
+
 @pytest.mark.parametrize(
     "override",
     [
