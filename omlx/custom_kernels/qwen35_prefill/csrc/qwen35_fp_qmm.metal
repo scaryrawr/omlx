@@ -21,7 +21,7 @@
     threadgroup T Xs[BM * BK_padded];                                          \
     threadgroup T Ws[BN * BK_padded];                                          \
                                                                                 \
-    fp_qmm_t_impl<T, 32, bits, true, false, BM, BK, BN>(                       \
+    fp_qmm_t_impl<T, 32, bits, true, T, false, BM, BK, BN>(                    \
         w,                                                                     \
         scales,                                                                \
         nullptr,                                                               \

@@ -472,6 +472,12 @@ class PromptTokensDetails(BaseModel):
     audio_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    """Breakdown of completion tokens used."""
+
+    reasoning_tokens: int = 0
+
+
 class Usage(BaseUsage):
     """Token usage statistics for OpenAI API.
 
@@ -480,6 +486,7 @@ class Usage(BaseUsage):
     """
 
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
     # Timing metrics (oMLX extension, seconds)
     model_load_duration: float | None = None
     time_to_first_token: float | None = None

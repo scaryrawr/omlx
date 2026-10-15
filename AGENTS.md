@@ -24,7 +24,7 @@ Key areas:
 
 ## Setup and validation
 
-Use `uv run` for Python tooling and tests. If dependencies are missing, start with `uv sync --dev`. Pin validation commands to Python 3.12 (for example, `UV_PYTHON=python3.12 uv run --python python3.12 pytest ...`): `onnxruntime==1.20.1` does not support CPython 3.14. MLX is pinned to 0.32.3 and xgrammar to 0.2.8; rebuild local custom kernels after MLX upgrades with `OMLX_WITH_CUSTOM_KERNEL=1 uv pip install --python .venv/bin/python --reinstall --no-deps -e .`. Native floating-point QMM wrappers must match MLX's template parameters and global-scale argument, even when global scaling is disabled.
+Use `uv run` for Python tooling and tests. If dependencies are missing, start with `uv sync --dev`. Pin validation commands to Python 3.12 (for example, `UV_PYTHON=python3.12 uv run --python python3.12 pytest ...`): `onnxruntime==1.20.1` does not support CPython 3.14. MLX is pinned to 0.32.4 and xgrammar to 0.2.8; rebuild local custom kernels after MLX upgrades with `OMLX_WITH_CUSTOM_KERNEL=1 uv pip install --python .venv/bin/python --reinstall --no-deps -e .`. Native floating-point QMM wrappers must match MLX's template parameters and global-scale argument, even when global scaling is disabled.
 
 `uv.lock` is intentionally ignored in this repository; dependency pin changes should be tracked in `pyproject.toml` unless a task explicitly changes the lockfile policy.
 
