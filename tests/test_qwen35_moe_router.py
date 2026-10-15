@@ -136,6 +136,7 @@ def test_verifier_routes_short_moe_blocks_through_fused_router(
             shared_expert_intermediate_size=64,
             num_experts=512,
             num_experts_per_tok=10,
+            norm_topk_prob=True,
         )
     )
     model.set_dtype(mx.bfloat16)
@@ -241,6 +242,7 @@ def test_one_row_moe_block_matches_composed_combine(monkeypatch, seed):
             shared_expert_intermediate_size=128,
             num_experts=32,
             num_experts_per_tok=10,
+            norm_topk_prob=True,
         )
     )
     block.set_dtype(mx.bfloat16)
