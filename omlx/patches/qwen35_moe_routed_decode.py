@@ -786,6 +786,7 @@ def routed_decode_plan(block, x) -> _Plan | None:
     """The block's cached plan when ``x`` is one bf16 or fp16 token it can route."""
     if (
         _DISABLED
+        or not block.norm_topk_prob
         or x.dtype not in (mx.bfloat16, mx.float16)
         or block.top_k not in TOP_KS
     ):
@@ -912,6 +913,7 @@ def routed_verify_window(block, x):
     if (
         _WINDOW_DISABLED
         or _DISABLED
+        or not block.norm_topk_prob
         or x.ndim != 3
         or x.dtype not in (mx.bfloat16, mx.float16)
         or block.top_k not in TOP_KS

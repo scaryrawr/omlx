@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Real native/oMLX contracts, collected only by the isolated CPU runner."""
 
+import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -381,6 +382,73 @@ def test_paired_dspark_policy_and_probability_errors():
             lambda logits: logits.argmax(-1),
             proposal_probs=lambda logprobs: mx.zeros_like(logprobs),
         )
+
+
+@pytest.mark.parametrize("mode", ["4x", "16x"])
+@pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
+def test_quantized_token_table_preserves_image_and_video_encoding(
+    tmp_path, monkeypatch, mode, dtype
+):
+    from mlx_vlm.utils import load_model
+
+    model()
+    config = tiny_config()
+    config["text_config"]["hidden_size"] = 32
+    target = Model(ModelConfig.from_dict(config))
+    embedding = target.language_model.model.embed_tokens.to_quantized(32, 8)
+    embedding.set_dtype(dtype)
+    target.language_model.model.embed_tokens = embedding
+    reference = copy.deepcopy(target)
+    plain = nn.Embedding(32, 32)
+    plain.weight = mx.dequantize(
+        embedding.weight, embedding.scales, embedding.biases, group_size=32, bits=8
+    )
+    reference.language_model.model.embed_tokens = plain
+    config["quantization"] = {
+        "group_size": 32,
+        "bits": 4,
+        "mode": "affine",
+        "language_model.model.embed_tokens": {
+            "group_size": 32,
+            "bits": 8,
+            "mode": "affine",
+        },
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    mx.save_safetensors(
+        str(tmp_path / "model.safetensors"), dict(tree_flatten(target.parameters()))
+    )
+    target = load_model(tmp_path, strict=True, lazy=False)
+    assert target.language_model.model.embed_tokens.weight.dtype == mx.uint32
+    embedding_class = type(target.vision_tower.embeddings)
+    original_call = embedding_class.__call__
+    pixel_dtypes = []
+
+    def record_pixels(self, pixels, *args, **kwargs):
+        pixel_dtypes.append(pixels.dtype)
+        return original_call(self, pixels, *args, **kwargs)
+
+    monkeypatch.setattr(embedding_class, "__call__", record_pixels)
+    count = 4 if mode == "4x" else 1
+    ids = mx.array([[3] + [8] * count + [4] + [9] * count + [5]])
+    pixels = mx.arange(192, dtype=mx.float32).reshape(3, 2, 32) / 192 - 0.5
+    inputs = {
+        "pixel_values": [[pixels, -pixels]],
+        "tgt_sizes": [mx.array([[4, 4], [4, 4]])],
+        "downsample_mode": mode,
+    }
+    expected = reference.get_input_embeddings(ids, **inputs)
+    actual = target.get_input_embeddings(ids, **inputs)
+    assert (
+        pixel_dtypes
+        == [target.vision_tower.embeddings.patch_embedding.weight.dtype] * 4
+    )
+    assert actual.inputs_embeds.dtype == dtype
+    assert mx.all(mx.isfinite(actual.inputs_embeds)).item()
+    assert mx.array_equal(actual.inputs_embeds, expected.inputs_embeds).item()
+    np.testing.assert_array_equal(
+        np.asarray(actual.position_ids), np.asarray(expected.position_ids)
+    )
 
 
 def test_real_native_parameter_order_keeps_fused_expert_mates_adjacent():

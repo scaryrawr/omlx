@@ -8,6 +8,7 @@ import threading
 from types import MethodType
 
 import mlx.core as mx
+import numpy as np
 
 _LOCK = threading.Lock()
 _APPLIED = False
@@ -25,6 +26,56 @@ def _normalize_qk(layer, q, k):
         inv_scale**2 * mx.fast.rms_norm(q, None, eps),
         inv_scale * mx.fast.rms_norm(k, None, eps),
     )
+
+
+def _get_vision_embedding(self, pixel_values, tgt_sizes, downsample_mode=None):
+    """Use floating compute dtypes rather than packed token-table storage."""
+    from mlx_vlm.models.minicpmv4_6.minicpmv4_6 import _to_mx_array, _to_numpy
+
+    if pixel_values is None:
+        return []
+    vision_dtype = self.vision_tower.embeddings.patch_embedding.weight.dtype
+    embedding = self.language_model.model.embed_tokens
+    output_dtype = embedding(mx.array([0], dtype=mx.int32)).dtype
+    outputs = []
+    for batch_idx, batch_pixels in enumerate(pixel_values):
+        grids = _to_numpy(tgt_sizes[batch_idx]) if tgt_sizes is not None else None
+        grids = (
+            np.asarray(grids, dtype=np.int32)
+            if grids is not None and len(grids)
+            else np.zeros((0, 2), dtype=np.int32)
+        )
+        features = []
+        for image_idx, pixels in enumerate(batch_pixels):
+            pixels = _to_mx_array(pixels, dtype=vision_dtype)
+            if pixels is None or pixels.ndim != 3:
+                continue
+            if pixels.shape[0] == 3:
+                pixels = pixels.transpose(1, 2, 0)
+            pixels = mx.expand_dims(pixels, axis=0)
+            grid = (
+                grids[image_idx]
+                if image_idx < len(grids)
+                else np.array(
+                    [1, max(int(pixels.shape[2] // self.config.patch_size), 1)],
+                    dtype=np.int32,
+                )
+            )
+            target = mx.array(grid, dtype=mx.int32)[None]
+            hidden = self.vision_tower.embeddings(pixels, tgt_sizes=target)
+            hidden = hidden.astype(vision_dtype)
+            height, width = map(int, grid)
+            use_vit_merger = (downsample_mode or self.config.downsample_mode) != "4x"
+            for index, layer in enumerate(self.vision_tower.encoder.layers):
+                hidden = layer(hidden, attention_mask=None)
+                if use_vit_merger and index == self.config.insert_layer_id:
+                    hidden, height, width = self.vit_merger(hidden[0], height, width)
+                    hidden = mx.expand_dims(hidden, axis=0)
+            hidden = self.vision_tower.post_layernorm(hidden)[0]
+            merged, _, _ = self.merger(hidden, height, width)
+            features.append(merged.astype(output_dtype))
+        outputs.append(mx.concatenate(features, axis=0) if features else [])
+    return outputs
 
 
 def _prepare_padding(inputs, embeds, positions, mask, cache):
@@ -131,6 +182,7 @@ def apply_minicpm47_serving_patch() -> bool:
             return (f"vision_tower.{path}",) if path.startswith("vit_merger.") else ()
 
         minicpmv4_7.Model.quantization_path_aliases = quantization_path_aliases  # type: ignore[attr-defined]
+        minicpmv4_7.Model.get_vision_embedding = _get_vision_embedding  # type: ignore[method-assign]
 
         class ServingLanguage:
             requires_explicit_rope_deltas = True

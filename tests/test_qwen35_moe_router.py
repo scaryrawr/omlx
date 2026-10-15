@@ -161,6 +161,61 @@ def _composed_combine(routed, scores, shared, gate):
     return y + shared
 
 
+@pytest.mark.parametrize("length", [1, 4, 9])
+@pytest.mark.parametrize("verify", [False, True])
+def test_non_normalized_vlm_routing_preserves_selected_scores(
+    monkeypatch, length, verify
+):
+    from types import SimpleNamespace
+
+    from mlx_vlm.models.qwen3_5.speculative_verifier import Qwen3_5BatchInvariantForward
+    from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
+    from omlx.patches import qwen35_moe_router as router
+
+    assert router.apply_qwen35_moe_router_patch()
+    block = Qwen3_5MoeSparseMoeBlock(
+        SimpleNamespace(
+            hidden_size=64,
+            moe_intermediate_size=64,
+            shared_expert_intermediate_size=64,
+            num_experts=32,
+            num_experts_per_tok=8,
+            norm_topk_prob=False,
+        )
+    )
+    block.set_dtype(mx.bfloat16)
+    x = mx.random.normal((1, length, 64)).astype(mx.bfloat16)
+    verifier = Qwen3_5BatchInvariantForward()
+    linear = verifier._linear if verify else lambda layer, value: layer(value)
+    gates = mx.softmax(linear(block.gate, x), axis=-1, precise=True)
+    indices = mx.argpartition(gates, kth=-block.top_k, axis=-1)[..., -block.top_k :]
+    scores = mx.take_along_axis(gates, indices, axis=-1)
+    routed = (
+        verifier._switch_glu(block.switch_mlp, x, indices)
+        if verify
+        else block.switch_mlp(x, indices)
+    )
+    shared = (
+        verifier._feed_forward(block.shared_expert, x)
+        if verify
+        else block.shared_expert(x)
+    )
+    shared *= mx.sigmoid(linear(block.shared_expert_gate, x))
+    expected = (routed * scores[..., None]).sum(axis=-2) + shared
+    normalized = (
+        routed * (scores / scores.sum(axis=-1, keepdims=True))[..., None]
+    ).sum(axis=-2) + shared
+    assert not mx.array_equal(expected, normalized).item()
+    monkeypatch.setattr(
+        router,
+        "fused_router_topk",
+        lambda *args: pytest.fail("Normalized router used for norm_topk_prob=False"),
+    )
+    actual = verifier._feed_forward(block, x) if verify else block(x)
+    assert mx.array_equal(actual, expected).item()
+
+
 def _same_bits(a, b):
     # NaN payloads aside, every element must carry the same BF16 bits.
     both_nan = mx.isnan(a) & mx.isnan(b)
