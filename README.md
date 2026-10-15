@@ -391,7 +391,9 @@ oMLX retains its existing MLX pin and Transformers upper bound.
 Small serving hooks in `omlx/patches/minicpm47.py` preserve request-local
 positions, padded-prefill behavior and the existing MiniCPM GDN normalization,
 including the official exact verifier. They also expose processor controls to
-mlx-vlm's signature-based input dispatcher.
+mlx-vlm's signature-based input dispatcher and resolve legacy ViT-merger
+quantization paths through its per-model alias hook. The Qwen MTP constructor
+leaves foreign subclasses, including MiniCPM, responsible for their own heads.
 `omlx/speculative/minicpm_dspark.py` extends the official
 DSpark drafter with oMLX's proposal-probability/confidence transport and fixed
 paired-helper policy. The model, vision encoder, processor, checkpoint loading

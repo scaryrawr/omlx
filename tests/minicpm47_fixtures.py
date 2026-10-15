@@ -26,6 +26,7 @@ def tiny_config():
             "model_type": "qwen3_5_moe_text",
             "hidden_size": 16,
             "num_hidden_layers": 4,
+            "mtp_num_hidden_layers": 1,
             "num_attention_heads": 2,
             "num_key_value_heads": 1,
             "head_dim": 8,

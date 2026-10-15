@@ -127,6 +127,11 @@ def apply_minicpm47_serving_patch() -> bool:
 
         MiniCPMV4_7Processor.process = process  # type: ignore[attr-defined]
 
+        def quantization_path_aliases(self, path: str) -> tuple[str, ...]:
+            return (f"vision_tower.{path}",) if path.startswith("vit_merger.") else ()
+
+        minicpmv4_7.Model.quantization_path_aliases = quantization_path_aliases  # type: ignore[attr-defined]
+
         class ServingLanguage:
             requires_explicit_rope_deltas = True
 

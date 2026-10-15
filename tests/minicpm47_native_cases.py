@@ -39,7 +39,9 @@ def model():
     return target
 
 
-@pytest.mark.parametrize("representation", ["hf", "canonical", "mixed"])
+@pytest.mark.parametrize(
+    "representation", ["hf", "canonical", "mixed", "mixed-current"]
+)
 def test_complete_checkpoint_through_official_strict_loader(tmp_path, representation):
     from mlx_vlm.utils import load_model
 
@@ -48,7 +50,7 @@ def test_complete_checkpoint_through_official_strict_loader(tmp_path, representa
     if representation == "hf":
         weights = hf_weight_fixture()
     else:
-        if representation == "mixed":
+        if representation.startswith("mixed"):
             config["quantization"] = {"bits": 4, "group_size": 32, "mode": "affine"}
             overrides = {
                 "merger.mlp.0.linear_1": {
@@ -61,8 +63,28 @@ def test_complete_checkpoint_through_official_strict_loader(tmp_path, representa
                     "group_size": 32,
                     "mode": "affine",
                 },
+                "vit_merger.linear_1": {
+                    "bits": 8,
+                    "group_size": 32,
+                    "mode": "affine",
+                },
             }
-            config["quantization"].update(overrides)
+            config["quantization"].update(
+                {
+                    (
+                        f"vision_tower.{path}"
+                        if path.startswith("vit_merger.") and representation == "mixed"
+                        else path
+                    ): value
+                    for path, value in overrides.items()
+                }
+            )
+            if representation == "mixed-current":
+                config["quantization"]["vision_tower.vit_merger.linear_1"] = {
+                    "bits": 4,
+                    "group_size": 32,
+                    "mode": "affine",
+                }
             nn.quantize(
                 target,
                 bits=4,
@@ -87,14 +109,45 @@ def test_complete_checkpoint_through_official_strict_loader(tmp_path, representa
     (tmp_path / "config.json").write_text(json.dumps(config))
     mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
     loaded = load_model(tmp_path, strict=True, lazy=False)
+    assert json.loads((tmp_path / "config.json").read_text()) == config
     expected = dict(tree_flatten(target.parameters()))
     actual = dict(tree_flatten(loaded.parameters()))
     assert actual.keys() == expected.keys()
     for key in expected:
         np.testing.assert_array_equal(np.array(actual[key]), np.array(expected[key]))
-    if representation == "mixed":
+    if representation.startswith("mixed"):
         assert loaded.merger.mlp[0].linear_1.bits == 8
         assert loaded.merger.mlp[0].linear_2.bits == 4
+        assert loaded.vit_merger.linear_1.bits == 8
+
+
+def test_qwen_mtp_load_does_not_attach_head_to_following_minicpm(tmp_path, monkeypatch):
+    from mlx_vlm.models.qwen3_5_moe.config import TextConfig
+    from mlx_vlm.models.qwen3_5_moe.language import LanguageModel
+    from mlx_vlm.utils import load_model
+
+    from omlx.patches import mlx_lm_mtp, mlx_vlm_mtp
+
+    model()
+    mlx_vlm_mtp.apply_mlx_vlm_mtp_runtime_patch("qwen3_5_moe")
+    monkeypatch.setattr(mlx_vlm_mtp, "_MTP_ATTACH_ENABLED", True)
+    monkeypatch.setattr(mlx_lm_mtp, "_MTP_ACTIVE", True)
+    config = tiny_config()
+    qwen = LanguageModel(TextConfig.from_dict(config["text_config"]))
+    assert qwen.mtp is not None
+    assert qwen._omlx_mtp_decode_enabled
+
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), hf_weight_fixture())
+    target = load_model(tmp_path, strict=True, lazy=False)
+    assert target.config.text_config.mtp_num_hidden_layers == 1
+    assert not hasattr(target.language_model, "mtp")
+    assert not getattr(target.language_model, "_omlx_mtp_decode_enabled", False)
+    assert mlx_vlm_mtp.is_mtp_attach_enabled()
+    assert mlx_lm_mtp.is_mtp_active()
+    following_qwen = LanguageModel(TextConfig.from_dict(config["text_config"]))
+    assert following_qwen.mtp is not None
+    assert following_qwen._omlx_mtp_decode_enabled
 
 
 def test_hooks_are_family_local_and_preserve_normalization():

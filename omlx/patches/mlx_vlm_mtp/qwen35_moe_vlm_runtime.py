@@ -215,6 +215,9 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
         from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
 
+        # Subclasses own their MTP wiring, as in the dense Qwen wrapper.
+        if type(self) is not cls:
+            return original_init(self, args, config)
         original_init(self, args, config)
         # Attach MTPModule when the config declares MTP heads, so mlx-vlm's
         # load_weights (which skips Model.sanitize for is_mlx_format
