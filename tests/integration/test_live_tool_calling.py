@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Check a live model's tool calls and tool-result turns, including SSE and usage.
+"""Check live tool turns, SSE, usage, and chat-backed decision readouts.
 
 Run against an isolated server:
   OMLX_BASE_URL=http://127.0.0.1:18080 OMLX_TEST_MODEL=Qwen3.5-9B-oQ4e-mtp \\
@@ -162,3 +162,40 @@ def test_live_tool_call_round_trip(live_server, stream):
     assert "42" in choice["message"]["content"], response
     assert not choice["message"].get("tool_calls"), response
     assert response["usage"]["completion_tokens"] > 0
+
+
+@pytest.mark.parametrize("endpoint", ["/v1/decisions", "/v1/systemone"])
+def test_live_chat_decision_readout(live_server, endpoint):
+    client, model = live_server
+    question = {
+        "type": "choice",
+        "instructions": "What color is the stop sign?",
+    }
+    if endpoint == "/v1/systemone":
+        payload = {
+            "state": "The stop sign is red.",
+            "questions": {
+                "color": {**question, "criteria": {"red": None, "blue": None}}
+            },
+        }
+    else:
+        payload = {
+            "input": "The stop sign is red.",
+            "questions": [{"name": "color", **question, "choices": ["red", "blue"]}],
+        }
+    response = client.post(endpoint, json={"model": model, **payload})
+    response.raise_for_status()
+    body = response.json()
+    if endpoint == "/v1/systemone":
+        answer = body["answers"]["color"]
+        probabilities = list(answer["probabilities"].values())
+    else:
+        (answer,) = body["answers"]
+        assert answer["name"] == "color"
+        probabilities = [entry["probability"] for entry in answer["probabilities"]]
+    assert body["usage"]["input_tokens"] > 0
+    assert body["usage"]["output_tokens"] == 0
+    assert answer["choice"] == "red", body
+    assert len(probabilities) == 2
+    assert all(0 <= probability <= 1 for probability in probabilities)
+    assert sum(probabilities) == pytest.approx(1, abs=0.0002)

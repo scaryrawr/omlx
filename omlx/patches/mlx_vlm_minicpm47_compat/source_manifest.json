@@ -32,571 +32,714 @@
   "guards": {
     "mlx_vlm/__init__.py": {
       "legacy": "609662121e39f1b1a945000d5cca0de94059b882c584dbf21cffeac3c5e02e7f",
-      "native": "609662121e39f1b1a945000d5cca0de94059b882c584dbf21cffeac3c5e02e7f"
+      "native": "609662121e39f1b1a945000d5cca0de94059b882c584dbf21cffeac3c5e02e7f",
+      "upgraded": "609662121e39f1b1a945000d5cca0de94059b882c584dbf21cffeac3c5e02e7f"
     },
     "mlx_vlm/_stream_cleanup.py": {
       "legacy": "00bf5797510f088cfe4cea7798dce0f2902af99a956888748ff0ddc11de21c5d",
-      "native": "00bf5797510f088cfe4cea7798dce0f2902af99a956888748ff0ddc11de21c5d"
+      "native": "00bf5797510f088cfe4cea7798dce0f2902af99a956888748ff0ddc11de21c5d",
+      "upgraded": "00bf5797510f088cfe4cea7798dce0f2902af99a956888748ff0ddc11de21c5d"
     },
     "mlx_vlm/apc.py": {
       "legacy": "cf9aa91ce3915558dfdcd2faf1afe8764d8a29f1caa31d2bd4f3e2b4d81d859b",
-      "native": "cf9aa91ce3915558dfdcd2faf1afe8764d8a29f1caa31d2bd4f3e2b4d81d859b"
+      "native": "cf9aa91ce3915558dfdcd2faf1afe8764d8a29f1caa31d2bd4f3e2b4d81d859b",
+      "upgraded": "cf9aa91ce3915558dfdcd2faf1afe8764d8a29f1caa31d2bd4f3e2b4d81d859b"
     },
     "mlx_vlm/apc_adapters.py": {
       "legacy": "d6acb80ea781df4122fa083bed37cfb9d87f928b23626645d652b112a6802e78",
-      "native": "d6acb80ea781df4122fa083bed37cfb9d87f928b23626645d652b112a6802e78"
+      "native": "d6acb80ea781df4122fa083bed37cfb9d87f928b23626645d652b112a6802e78",
+      "upgraded": "d6acb80ea781df4122fa083bed37cfb9d87f928b23626645d652b112a6802e78"
     },
     "mlx_vlm/apc_coordinator.py": {
       "legacy": "a2f1f07f0f103f67abc9e1ffc968eb3447393e3f3a5a68a7cca67d66ceb538db",
-      "native": "a2f1f07f0f103f67abc9e1ffc968eb3447393e3f3a5a68a7cca67d66ceb538db"
+      "native": "a2f1f07f0f103f67abc9e1ffc968eb3447393e3f3a5a68a7cca67d66ceb538db",
+      "upgraded": "a2f1f07f0f103f67abc9e1ffc968eb3447393e3f3a5a68a7cca67d66ceb538db"
     },
     "mlx_vlm/apc_storage.py": {
       "legacy": "e58b3a5aa5fa875764194712e38a7752006aeb31db5abe132057c667759e7010",
-      "native": "e58b3a5aa5fa875764194712e38a7752006aeb31db5abe132057c667759e7010"
+      "native": "e58b3a5aa5fa875764194712e38a7752006aeb31db5abe132057c667759e7010",
+      "upgraded": "e58b3a5aa5fa875764194712e38a7752006aeb31db5abe132057c667759e7010"
     },
     "mlx_vlm/convert.py": {
       "legacy": "b2eb31f79300c52a94a7ff33f785c2228ac94fe288f4a369a0cc3b09cd0c63b5",
-      "native": "7fbb3c45a8c767a3a09d9f0da8bf46ff61041f457223302ee047bc4d2915a0ed"
+      "native": "7fbb3c45a8c767a3a09d9f0da8bf46ff61041f457223302ee047bc4d2915a0ed",
+      "upgraded": "7fbb3c45a8c767a3a09d9f0da8bf46ff61041f457223302ee047bc4d2915a0ed"
     },
     "mlx_vlm/decision.py": {
       "legacy": "4093ddf697ba389132ef6bba58ecb50f46db12a0828044f0c910c377b377eb20",
-      "native": "59b41b69a8b10a1dd8a9ec45b4aa125d68daccbc6faea1e2357468054a0e1d9b"
+      "native": "59b41b69a8b10a1dd8a9ec45b4aa125d68daccbc6faea1e2357468054a0e1d9b",
+      "upgraded": "59b41b69a8b10a1dd8a9ec45b4aa125d68daccbc6faea1e2357468054a0e1d9b"
     },
     "mlx_vlm/fp8.py": {
       "legacy": "91395897d4b9f9987db67391d4034714135faf2d6cdd171066de90f958dc2069",
-      "native": "91395897d4b9f9987db67391d4034714135faf2d6cdd171066de90f958dc2069"
+      "native": "91395897d4b9f9987db67391d4034714135faf2d6cdd171066de90f958dc2069",
+      "upgraded": "91395897d4b9f9987db67391d4034714135faf2d6cdd171066de90f958dc2069"
     },
     "mlx_vlm/generate/__init__.py": {
       "legacy": "ec4ad155af4a0f0bc5e2e0f9f46e115343420deb19fb6024047fa39ec07f0ed1",
-      "native": "ec4ad155af4a0f0bc5e2e0f9f46e115343420deb19fb6024047fa39ec07f0ed1"
+      "native": "ec4ad155af4a0f0bc5e2e0f9f46e115343420deb19fb6024047fa39ec07f0ed1",
+      "upgraded": "ec4ad155af4a0f0bc5e2e0f9f46e115343420deb19fb6024047fa39ec07f0ed1"
     },
     "mlx_vlm/generate/ar.py": {
       "legacy": "6f60faefc70bc7dec60e8fdec8f11fe9609eee4966f8240617cbcaf101046e19",
-      "native": "3260003c91024e53569ec8468095769e059fdb34fd3fe7ec63402d8bfc088827"
+      "native": "3260003c91024e53569ec8468095769e059fdb34fd3fe7ec63402d8bfc088827",
+      "upgraded": "c38f86a5d94924daf819f4bfd206a7c874526bd15e8dd3447921621ee7850050"
     },
     "mlx_vlm/generate/audio.py": {
       "legacy": "33dfde340761855e8171446e365f235144e4f845e5dde9d48dbd6495cef05433",
-      "native": "33dfde340761855e8171446e365f235144e4f845e5dde9d48dbd6495cef05433"
+      "native": "33dfde340761855e8171446e365f235144e4f845e5dde9d48dbd6495cef05433",
+      "upgraded": "33dfde340761855e8171446e365f235144e4f845e5dde9d48dbd6495cef05433"
     },
     "mlx_vlm/generate/cli.py": {
       "legacy": "86e9348e69596623ffe36b76111fa252b55cfac75633b048f7afba051086aa9a",
-      "native": "86e9348e69596623ffe36b76111fa252b55cfac75633b048f7afba051086aa9a"
+      "native": "86e9348e69596623ffe36b76111fa252b55cfac75633b048f7afba051086aa9a",
+      "upgraded": "86e9348e69596623ffe36b76111fa252b55cfac75633b048f7afba051086aa9a"
     },
     "mlx_vlm/generate/common.py": {
       "legacy": "c69e7e38a09990404d299b0a8d4be55c8220e60652e67a2456e8177633813ba0",
-      "native": "c69e7e38a09990404d299b0a8d4be55c8220e60652e67a2456e8177633813ba0"
+      "native": "c69e7e38a09990404d299b0a8d4be55c8220e60652e67a2456e8177633813ba0",
+      "upgraded": "c69e7e38a09990404d299b0a8d4be55c8220e60652e67a2456e8177633813ba0"
     },
     "mlx_vlm/generate/diffusion.py": {
       "legacy": "d96ec647af9d9bf77a8a71c74af62fb474beac0ddea61e0806d5750d26ab8dbd",
-      "native": "d96ec647af9d9bf77a8a71c74af62fb474beac0ddea61e0806d5750d26ab8dbd"
+      "native": "d96ec647af9d9bf77a8a71c74af62fb474beac0ddea61e0806d5750d26ab8dbd",
+      "upgraded": "d96ec647af9d9bf77a8a71c74af62fb474beac0ddea61e0806d5750d26ab8dbd"
     },
     "mlx_vlm/generate/dispatch.py": {
       "legacy": "33d87833850ea978ea1f153e4653be98a6414cfe0f535cae7b370bd2b1926a6b",
-      "native": "c924b435267d758419a562c6dd16c244cb863e60e0fec0b39fe6696f83fd1a65"
+      "native": "c924b435267d758419a562c6dd16c244cb863e60e0fec0b39fe6696f83fd1a65",
+      "upgraded": "f7dcec326a4d2aff1286b1abd4419f8ec533189d1d26b0ac69002513ba45dab8"
     },
     "mlx_vlm/generate/edit_image.py": {
       "legacy": "1f7045cece1b173e8832ae47c9df625e241cd2b203618bff9fe63125591b03e7",
-      "native": "1f7045cece1b173e8832ae47c9df625e241cd2b203618bff9fe63125591b03e7"
+      "native": "1f7045cece1b173e8832ae47c9df625e241cd2b203618bff9fe63125591b03e7",
+      "upgraded": "1f7045cece1b173e8832ae47c9df625e241cd2b203618bff9fe63125591b03e7"
     },
     "mlx_vlm/generate/image.py": {
       "legacy": "e45d50ead882fc88bd13f6166656699f799b24536a627c9c9efb93693baea167",
-      "native": "e45d50ead882fc88bd13f6166656699f799b24536a627c9c9efb93693baea167"
+      "native": "e45d50ead882fc88bd13f6166656699f799b24536a627c9c9efb93693baea167",
+      "upgraded": "e45d50ead882fc88bd13f6166656699f799b24536a627c9c9efb93693baea167"
     },
     "mlx_vlm/generate/image_defaults.py": {
       "legacy": "a99c75e71eb85e947e5952067212f003cef9dfaf58c0a2b4dc444b5a23aeac2b",
-      "native": "a99c75e71eb85e947e5952067212f003cef9dfaf58c0a2b4dc444b5a23aeac2b"
+      "native": "a99c75e71eb85e947e5952067212f003cef9dfaf58c0a2b4dc444b5a23aeac2b",
+      "upgraded": "a99c75e71eb85e947e5952067212f003cef9dfaf58c0a2b4dc444b5a23aeac2b"
     },
     "mlx_vlm/generate/types.py": {
       "legacy": "dff487807bedaa3549c39dea02986ada31a45e9e4c27ab447a207e3fff009f6c",
-      "native": "1ad9d50e487265704e447a17ba35dec71bc7c2ab47d1fb040af947373a5e2a5e"
+      "native": "1ad9d50e487265704e447a17ba35dec71bc7c2ab47d1fb040af947373a5e2a5e",
+      "upgraded": "dff487807bedaa3549c39dea02986ada31a45e9e4c27ab447a207e3fff009f6c"
     },
     "mlx_vlm/generate/video.py": {
       "legacy": "0db72aab9c27495ebbe1da67a4a8f3cd092f520e3c1f20911c2e2907f31a31c8",
-      "native": "0db72aab9c27495ebbe1da67a4a8f3cd092f520e3c1f20911c2e2907f31a31c8"
+      "native": "0db72aab9c27495ebbe1da67a4a8f3cd092f520e3c1f20911c2e2907f31a31c8",
+      "upgraded": "0db72aab9c27495ebbe1da67a4a8f3cd092f520e3c1f20911c2e2907f31a31c8"
     },
     "mlx_vlm/generate/video_generation.py": {
       "legacy": "a190a4ef83499eec4a97ee13fe9d1155a007af50437f7e45410ced5adcb08ca1",
-      "native": "a190a4ef83499eec4a97ee13fe9d1155a007af50437f7e45410ced5adcb08ca1"
+      "native": "a190a4ef83499eec4a97ee13fe9d1155a007af50437f7e45410ced5adcb08ca1",
+      "upgraded": "a190a4ef83499eec4a97ee13fe9d1155a007af50437f7e45410ced5adcb08ca1"
     },
     "mlx_vlm/kv_quant.py": {
       "legacy": "2936878096435dd2540e7a029b986259e5b7101c972a5be7168495a58e7fbfa3",
-      "native": "2936878096435dd2540e7a029b986259e5b7101c972a5be7168495a58e7fbfa3"
+      "native": "2936878096435dd2540e7a029b986259e5b7101c972a5be7168495a58e7fbfa3",
+      "upgraded": "2936878096435dd2540e7a029b986259e5b7101c972a5be7168495a58e7fbfa3"
     },
     "mlx_vlm/models/__init__.py": {
       "legacy": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "native": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "native": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "upgraded": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "mlx_vlm/models/activations.py": {
       "legacy": "2ce04422f5670d8c3507f723d33253632e14121f45f2aa8070b08544ea92dfc9",
-      "native": "2ce04422f5670d8c3507f723d33253632e14121f45f2aa8070b08544ea92dfc9"
+      "native": "2ce04422f5670d8c3507f723d33253632e14121f45f2aa8070b08544ea92dfc9",
+      "upgraded": "2ce04422f5670d8c3507f723d33253632e14121f45f2aa8070b08544ea92dfc9"
     },
     "mlx_vlm/models/base.py": {
       "legacy": "a7cfa38413bea057946c5d56c9edd34dbcceb33f6613529f5201ca2ad5b41120",
-      "native": "a7cfa38413bea057946c5d56c9edd34dbcceb33f6613529f5201ca2ad5b41120"
+      "native": "a7cfa38413bea057946c5d56c9edd34dbcceb33f6613529f5201ca2ad5b41120",
+      "upgraded": "a7cfa38413bea057946c5d56c9edd34dbcceb33f6613529f5201ca2ad5b41120"
     },
     "mlx_vlm/models/cache.py": {
       "legacy": "b715008771817eb4fe05d8591e537bef30b827104950d65eea01a8abf0f2a3b0",
-      "native": "b715008771817eb4fe05d8591e537bef30b827104950d65eea01a8abf0f2a3b0"
+      "native": "b715008771817eb4fe05d8591e537bef30b827104950d65eea01a8abf0f2a3b0",
+      "upgraded": "852466aae4478e6f1f2b44f772f176a385ed53a47071938ede184924fec97fd7"
     },
     "mlx_vlm/models/deepseek_v4/__init__.py": {
       "legacy": "9c0032d1462e464a0defb94d63e4e38b0b562f4a47ed41d232f0250f03dd0cf4",
-      "native": "9c0032d1462e464a0defb94d63e4e38b0b562f4a47ed41d232f0250f03dd0cf4"
+      "native": "9c0032d1462e464a0defb94d63e4e38b0b562f4a47ed41d232f0250f03dd0cf4",
+      "upgraded": "9c0032d1462e464a0defb94d63e4e38b0b562f4a47ed41d232f0250f03dd0cf4"
     },
     "mlx_vlm/models/deepseek_v4/config.py": {
       "legacy": "7925befb9f0ef2e1f34d6b168aa152761651eaed1e93ab886954d40c8c660752",
-      "native": "7925befb9f0ef2e1f34d6b168aa152761651eaed1e93ab886954d40c8c660752"
+      "native": "7925befb9f0ef2e1f34d6b168aa152761651eaed1e93ab886954d40c8c660752",
+      "upgraded": "7925befb9f0ef2e1f34d6b168aa152761651eaed1e93ab886954d40c8c660752"
     },
     "mlx_vlm/models/deepseek_v4/deepseek_v4.py": {
       "legacy": "284fd25f3811238035c512eb4bc5809fa2e8045662838cf6bab26feaf4452d4d",
-      "native": "284fd25f3811238035c512eb4bc5809fa2e8045662838cf6bab26feaf4452d4d"
+      "native": "284fd25f3811238035c512eb4bc5809fa2e8045662838cf6bab26feaf4452d4d",
+      "upgraded": "284fd25f3811238035c512eb4bc5809fa2e8045662838cf6bab26feaf4452d4d"
     },
     "mlx_vlm/models/deepseek_v4/hisa_kernel.py": {
       "legacy": "2e50af0551399a23da87f93b2a0aa80302a57e8b94e099f0b5360b1e1b904280",
-      "native": "2e50af0551399a23da87f93b2a0aa80302a57e8b94e099f0b5360b1e1b904280"
+      "native": "2e50af0551399a23da87f93b2a0aa80302a57e8b94e099f0b5360b1e1b904280",
+      "upgraded": "2e50af0551399a23da87f93b2a0aa80302a57e8b94e099f0b5360b1e1b904280"
     },
     "mlx_vlm/models/deepseek_v4/hyper_connection.py": {
       "legacy": "1903249ed5f6b8e8c09813a69611b7c200c6169b490ab859307137993fc005d7",
-      "native": "1903249ed5f6b8e8c09813a69611b7c200c6169b490ab859307137993fc005d7"
+      "native": "1903249ed5f6b8e8c09813a69611b7c200c6169b490ab859307137993fc005d7",
+      "upgraded": "1903249ed5f6b8e8c09813a69611b7c200c6169b490ab859307137993fc005d7"
     },
     "mlx_vlm/models/deepseek_v4/language.py": {
       "legacy": "9913b682a47b9ecdca31dae727ce634375039813a5b2ae9bc1ba4e42ac02638f",
-      "native": "dac17de2bc0056794b67b07617852f7514b7cef5e249defb8b925fdfb876205f"
+      "native": "dac17de2bc0056794b67b07617852f7514b7cef5e249defb8b925fdfb876205f",
+      "upgraded": "dac17de2bc0056794b67b07617852f7514b7cef5e249defb8b925fdfb876205f"
     },
     "mlx_vlm/models/deepseek_v4/processing_deepseek_v4.py": {
       "legacy": "d0b009e2158cfb3414078fce670f4045a7503c5a9aaabfe13212fc1ac441e232",
-      "native": "d0b009e2158cfb3414078fce670f4045a7503c5a9aaabfe13212fc1ac441e232"
+      "native": "d0b009e2158cfb3414078fce670f4045a7503c5a9aaabfe13212fc1ac441e232",
+      "upgraded": "d0b009e2158cfb3414078fce670f4045a7503c5a9aaabfe13212fc1ac441e232"
     },
     "mlx_vlm/models/deepseek_v4/vision.py": {
       "legacy": "7d74a57df893b326d7141bf71d4bff93e3e47ed7c1960f38ca2b9979724b1025",
-      "native": "7d74a57df893b326d7141bf71d4bff93e3e47ed7c1960f38ca2b9979724b1025"
+      "native": "7d74a57df893b326d7141bf71d4bff93e3e47ed7c1960f38ca2b9979724b1025",
+      "upgraded": "7d74a57df893b326d7141bf71d4bff93e3e47ed7c1960f38ca2b9979724b1025"
     },
     "mlx_vlm/models/deepseekocr/__init__.py": {
       "legacy": "5f5c1b59b9ed4d018dc910f835ef67771defee23c24551451b1e88f038a5901a",
-      "native": "5f5c1b59b9ed4d018dc910f835ef67771defee23c24551451b1e88f038a5901a"
+      "native": "5f5c1b59b9ed4d018dc910f835ef67771defee23c24551451b1e88f038a5901a",
+      "upgraded": "5f5c1b59b9ed4d018dc910f835ef67771defee23c24551451b1e88f038a5901a"
     },
     "mlx_vlm/models/deepseekocr/config.py": {
       "legacy": "ef40ebd5fab0b3c2e5a7bad0aebe3a719ec177e9d578215ed3c8ccefa0da2f34",
-      "native": "ef40ebd5fab0b3c2e5a7bad0aebe3a719ec177e9d578215ed3c8ccefa0da2f34"
+      "native": "ef40ebd5fab0b3c2e5a7bad0aebe3a719ec177e9d578215ed3c8ccefa0da2f34",
+      "upgraded": "ef40ebd5fab0b3c2e5a7bad0aebe3a719ec177e9d578215ed3c8ccefa0da2f34"
     },
     "mlx_vlm/models/deepseekocr/deepseekocr.py": {
       "legacy": "e2ff4215a55d82a4e8c540837ff1e92bb751b36df2a2561495fa5c3adc112f54",
-      "native": "e2ff4215a55d82a4e8c540837ff1e92bb751b36df2a2561495fa5c3adc112f54"
+      "native": "e2ff4215a55d82a4e8c540837ff1e92bb751b36df2a2561495fa5c3adc112f54",
+      "upgraded": "e2ff4215a55d82a4e8c540837ff1e92bb751b36df2a2561495fa5c3adc112f54"
     },
     "mlx_vlm/models/deepseekocr/language.py": {
       "legacy": "c72af3b0dcbc22b993b520236207ed3bf35226014558a81d52e29ff2cbc50cb9",
-      "native": "c72af3b0dcbc22b993b520236207ed3bf35226014558a81d52e29ff2cbc50cb9"
+      "native": "c72af3b0dcbc22b993b520236207ed3bf35226014558a81d52e29ff2cbc50cb9",
+      "upgraded": "c72af3b0dcbc22b993b520236207ed3bf35226014558a81d52e29ff2cbc50cb9"
     },
     "mlx_vlm/models/deepseekocr/processing_deepseekocr.py": {
       "legacy": "81695810d61e1bb8f6db0e2033ac1fe9ed66506d029effe77ab320fc763d9e25",
-      "native": "81695810d61e1bb8f6db0e2033ac1fe9ed66506d029effe77ab320fc763d9e25"
+      "native": "81695810d61e1bb8f6db0e2033ac1fe9ed66506d029effe77ab320fc763d9e25",
+      "upgraded": "81695810d61e1bb8f6db0e2033ac1fe9ed66506d029effe77ab320fc763d9e25"
     },
     "mlx_vlm/models/deepseekocr/sam.py": {
       "legacy": "84325d5f831f6206e7a3249055c40b065a8e1293b410b8d94a91916d1f2ede97",
-      "native": "84325d5f831f6206e7a3249055c40b065a8e1293b410b8d94a91916d1f2ede97"
+      "native": "84325d5f831f6206e7a3249055c40b065a8e1293b410b8d94a91916d1f2ede97",
+      "upgraded": "84325d5f831f6206e7a3249055c40b065a8e1293b410b8d94a91916d1f2ede97"
     },
     "mlx_vlm/models/deepseekocr/vision.py": {
       "legacy": "da7722cd6cd2b653ed3f485579766197cd8d6caab9abd36e4adb83dd80e1e535",
-      "native": "da7722cd6cd2b653ed3f485579766197cd8d6caab9abd36e4adb83dd80e1e535"
+      "native": "da7722cd6cd2b653ed3f485579766197cd8d6caab9abd36e4adb83dd80e1e535",
+      "upgraded": "da7722cd6cd2b653ed3f485579766197cd8d6caab9abd36e4adb83dd80e1e535"
     },
     "mlx_vlm/models/diffusion_visualizer.py": {
       "legacy": "cc6e81669f938036af96bf6f49f5f065eca4edfc89311b9867ff0a2ccb092210",
-      "native": "cc6e81669f938036af96bf6f49f5f065eca4edfc89311b9867ff0a2ccb092210"
+      "native": "cc6e81669f938036af96bf6f49f5f065eca4edfc89311b9867ff0a2ccb092210",
+      "upgraded": "cc6e81669f938036af96bf6f49f5f065eca4edfc89311b9867ff0a2ccb092210"
     },
     "mlx_vlm/models/exact_speculative_verify.py": {
       "legacy": "170d189df3cf4be1d0044ea497e863f04160c6d9f11719462e43f201124b2b96",
-      "native": "170d189df3cf4be1d0044ea497e863f04160c6d9f11719462e43f201124b2b96"
+      "native": "170d189df3cf4be1d0044ea497e863f04160c6d9f11719462e43f201124b2b96",
+      "upgraded": "170d189df3cf4be1d0044ea497e863f04160c6d9f11719462e43f201124b2b96"
     },
     "mlx_vlm/models/fast_ops.py": {
       "legacy": "4223815c63f073270692c32b31f1cbeb4aed01e005a827f1a411e6d26820c2c5",
-      "native": "4223815c63f073270692c32b31f1cbeb4aed01e005a827f1a411e6d26820c2c5"
+      "native": "4223815c63f073270692c32b31f1cbeb4aed01e005a827f1a411e6d26820c2c5",
+      "upgraded": "4223815c63f073270692c32b31f1cbeb4aed01e005a827f1a411e6d26820c2c5"
     },
     "mlx_vlm/models/kernels.py": {
       "legacy": "7f18031e867b31eae7f57f38c53c653983bcd867e65080e66a32f60da8452360",
-      "native": "00929a3acc11d1930894a0cf7e784a6623c0e88d1c80039def97058a6bee74f0"
+      "native": "00929a3acc11d1930894a0cf7e784a6623c0e88d1c80039def97058a6bee74f0",
+      "upgraded": "00929a3acc11d1930894a0cf7e784a6623c0e88d1c80039def97058a6bee74f0"
     },
     "mlx_vlm/models/linear.py": {
       "legacy": "148a56193feaf170097ff1c5edccca8165c1b5df878f1605778c4d3642a4d2fa",
-      "native": "148a56193feaf170097ff1c5edccca8165c1b5df878f1605778c4d3642a4d2fa"
+      "native": "148a56193feaf170097ff1c5edccca8165c1b5df878f1605778c4d3642a4d2fa",
+      "upgraded": "148a56193feaf170097ff1c5edccca8165c1b5df878f1605778c4d3642a4d2fa"
     },
     "mlx_vlm/models/minicpmv4_7/__init__.py": {
       "legacy": null,
-      "native": "31a41ca0b76497189ba4cbd969368aa7fdb4e412e55b9e28a56a8ffefb9c61d6"
+      "native": "31a41ca0b76497189ba4cbd969368aa7fdb4e412e55b9e28a56a8ffefb9c61d6",
+      "upgraded": "2ef37aee2fe78c20d991d016c29dcff79178892127ae2f9b779f613736b93f68"
     },
     "mlx_vlm/models/minicpmv4_7/canvas.py": {
       "legacy": null,
-      "native": "60273ab484d51a70f586be9cd85e82711d6316a1491ae8266652203756e8548c"
+      "native": "60273ab484d51a70f586be9cd85e82711d6316a1491ae8266652203756e8548c",
+      "upgraded": null
     },
     "mlx_vlm/models/minicpmv4_7/config.py": {
       "legacy": null,
-      "native": "edda52e8242e822f0015000df6b222195bb496d0365951e624b6d1456518d237"
+      "native": "edda52e8242e822f0015000df6b222195bb496d0365951e624b6d1456518d237",
+      "upgraded": "584b6ef9ddf700030346895e21851806b1aa9f223c0c4a732df2bb6ba9522778"
     },
     "mlx_vlm/models/minicpmv4_7/language.py": {
       "legacy": null,
-      "native": "84b4877ffe486be6da5666e24eda13a9f1a98e98e1bdb379cfa55198e620482e"
+      "native": "84b4877ffe486be6da5666e24eda13a9f1a98e98e1bdb379cfa55198e620482e",
+      "upgraded": "790769ce0dc543e5cc481cde1ac3084b434684fbbc4d948203d4efbfeb417fb5"
     },
     "mlx_vlm/models/minicpmv4_7/minicpmv4_7.py": {
       "legacy": null,
-      "native": "3597833555e0777130c134135bb8dccc11c6f62814f0507f8e5c26ea06047a15"
+      "native": "3597833555e0777130c134135bb8dccc11c6f62814f0507f8e5c26ea06047a15",
+      "upgraded": "d825e62aafb49b305123e252e56a50ed501d54b916eddda03053ba4b5246b701"
     },
     "mlx_vlm/models/minicpmv4_7/processing_minicpmv4_7.py": {
       "legacy": null,
-      "native": "056950d9308c2e9a22af4a0ae41c0062bbee0cd78da3cfa01bdb2e9eef0d7a76"
+      "native": "056950d9308c2e9a22af4a0ae41c0062bbee0cd78da3cfa01bdb2e9eef0d7a76",
+      "upgraded": "7a2db85f38d054836463f4a664e3232ab6192f9e718c1bdc5297c308ee1d6dfe"
     },
     "mlx_vlm/models/minicpmv4_7/vision.py": {
       "legacy": null,
-      "native": "ac7639e695ea72003cd310373d8714a03916ae17273cd8854fd43912617f6785"
+      "native": "ac7639e695ea72003cd310373d8714a03916ae17273cd8854fd43912617f6785",
+      "upgraded": null
     },
     "mlx_vlm/models/minimax_m3_vl/__init__.py": {
       "legacy": "4cb178feebcdda57cdb2c748773b8c7ab70ba55560c5f4b5f0330cb9fd02bcfd",
-      "native": "4cb178feebcdda57cdb2c748773b8c7ab70ba55560c5f4b5f0330cb9fd02bcfd"
+      "native": "4cb178feebcdda57cdb2c748773b8c7ab70ba55560c5f4b5f0330cb9fd02bcfd",
+      "upgraded": "4cb178feebcdda57cdb2c748773b8c7ab70ba55560c5f4b5f0330cb9fd02bcfd"
     },
     "mlx_vlm/models/minimax_m3_vl/config.py": {
       "legacy": "adee604f7456cc651a91af0e5fc33cbf536667215bdb42ae7c48ffec23482a00",
-      "native": "adee604f7456cc651a91af0e5fc33cbf536667215bdb42ae7c48ffec23482a00"
+      "native": "adee604f7456cc651a91af0e5fc33cbf536667215bdb42ae7c48ffec23482a00",
+      "upgraded": "adee604f7456cc651a91af0e5fc33cbf536667215bdb42ae7c48ffec23482a00"
     },
     "mlx_vlm/models/minimax_m3_vl/language.py": {
       "legacy": "6d19efc0003138ad8941d17079cd48e1913e5d2f422f553635ecf567c77d7484",
-      "native": "6d19efc0003138ad8941d17079cd48e1913e5d2f422f553635ecf567c77d7484"
+      "native": "6d19efc0003138ad8941d17079cd48e1913e5d2f422f553635ecf567c77d7484",
+      "upgraded": "8fb03af3f91630eab5cb81978429e6ed846e007d2d4c290187046e33dfb527e0"
     },
     "mlx_vlm/models/minimax_m3_vl/minimax_m3_vl.py": {
       "legacy": "f188955aedad4284403ae9e232bf3c1a5fa87a8d858008bc9d7963cc75d9f0c3",
-      "native": "7c81639aa5620c74afd49f613563d6d76f623709b0153892c4f1721ca99b51ea"
+      "native": "7c81639aa5620c74afd49f613563d6d76f623709b0153892c4f1721ca99b51ea",
+      "upgraded": "7c81639aa5620c74afd49f613563d6d76f623709b0153892c4f1721ca99b51ea"
     },
     "mlx_vlm/models/minimax_m3_vl/processing_minimax_m3_vl.py": {
       "legacy": "06be57940675c61f534fa014cc8c5e28ac8303286c650f5c048596dd7745d371",
-      "native": "06be57940675c61f534fa014cc8c5e28ac8303286c650f5c048596dd7745d371"
+      "native": "06be57940675c61f534fa014cc8c5e28ac8303286c650f5c048596dd7745d371",
+      "upgraded": "06be57940675c61f534fa014cc8c5e28ac8303286c650f5c048596dd7745d371"
     },
     "mlx_vlm/models/minimax_m3_vl/vision.py": {
       "legacy": "3bc9c25f491f76263e0d12578569376d36474362207da4da0e9835d38b674338",
-      "native": "3bc9c25f491f76263e0d12578569376d36474362207da4da0e9835d38b674338"
+      "native": "3bc9c25f491f76263e0d12578569376d36474362207da4da0e9835d38b674338",
+      "upgraded": "3bc9c25f491f76263e0d12578569376d36474362207da4da0e9835d38b674338"
     },
     "mlx_vlm/models/mla.py": {
       "legacy": "da01333e57a5ba76b778a779e8e98724f48de1fffd24f6353d58bc846ba19bbf",
-      "native": "da01333e57a5ba76b778a779e8e98724f48de1fffd24f6353d58bc846ba19bbf"
+      "native": "da01333e57a5ba76b778a779e8e98724f48de1fffd24f6353d58bc846ba19bbf",
+      "upgraded": "da01333e57a5ba76b778a779e8e98724f48de1fffd24f6353d58bc846ba19bbf"
     },
     "mlx_vlm/models/mlp.py": {
       "legacy": "e5413aa08a61ee26ab3bf70fac9aeef2ac9c13342e2a4507c2e7cc908a3273e7",
-      "native": "e5413aa08a61ee26ab3bf70fac9aeef2ac9c13342e2a4507c2e7cc908a3273e7"
+      "native": "e5413aa08a61ee26ab3bf70fac9aeef2ac9c13342e2a4507c2e7cc908a3273e7",
+      "upgraded": "e5413aa08a61ee26ab3bf70fac9aeef2ac9c13342e2a4507c2e7cc908a3273e7"
     },
     "mlx_vlm/models/pipeline.py": {
       "legacy": "e70015a139b7b070aefad6bb36e03ec7f688df6ef629c56101d84153dd70198a",
-      "native": "e70015a139b7b070aefad6bb36e03ec7f688df6ef629c56101d84153dd70198a"
+      "native": "e70015a139b7b070aefad6bb36e03ec7f688df6ef629c56101d84153dd70198a",
+      "upgraded": "e70015a139b7b070aefad6bb36e03ec7f688df6ef629c56101d84153dd70198a"
     },
     "mlx_vlm/models/quantized_verifier.py": {
       "legacy": "f3f3c485f164fbaf237a7f294b44f7fa0ab3e2078bfcfd71c6fab6bf1a877289",
-      "native": "f3f3c485f164fbaf237a7f294b44f7fa0ab3e2078bfcfd71c6fab6bf1a877289"
+      "native": "f3f3c485f164fbaf237a7f294b44f7fa0ab3e2078bfcfd71c6fab6bf1a877289",
+      "upgraded": "f3f3c485f164fbaf237a7f294b44f7fa0ab3e2078bfcfd71c6fab6bf1a877289"
     },
     "mlx_vlm/models/qwen3_5/__init__.py": {
       "legacy": "d5a1cf335ae0845d0033dcc77dfdd6174f801aa77375cd8d57d69bc0c26f3d2b",
-      "native": "d5a1cf335ae0845d0033dcc77dfdd6174f801aa77375cd8d57d69bc0c26f3d2b"
+      "native": "d5a1cf335ae0845d0033dcc77dfdd6174f801aa77375cd8d57d69bc0c26f3d2b",
+      "upgraded": "d5a1cf335ae0845d0033dcc77dfdd6174f801aa77375cd8d57d69bc0c26f3d2b"
     },
     "mlx_vlm/models/qwen3_5/config.py": {
       "legacy": "b4db2144b162bbc27c0d843833fdd969413b44260ed1f024866eeadf1832dc0f",
-      "native": "b4db2144b162bbc27c0d843833fdd969413b44260ed1f024866eeadf1832dc0f"
+      "native": "b4db2144b162bbc27c0d843833fdd969413b44260ed1f024866eeadf1832dc0f",
+      "upgraded": "b4db2144b162bbc27c0d843833fdd969413b44260ed1f024866eeadf1832dc0f"
     },
     "mlx_vlm/models/qwen3_5/gated_delta.py": {
       "legacy": "71da97ef25a013e185c4d19168b39c452b90f40d5462f4d08ff084a82e922d2f",
-      "native": "71da97ef25a013e185c4d19168b39c452b90f40d5462f4d08ff084a82e922d2f"
+      "native": "71da97ef25a013e185c4d19168b39c452b90f40d5462f4d08ff084a82e922d2f",
+      "upgraded": "71da97ef25a013e185c4d19168b39c452b90f40d5462f4d08ff084a82e922d2f"
     },
     "mlx_vlm/models/qwen3_5/language.py": {
       "legacy": "bdeb2cb3e01338b9cfdb2a5fac7f021265dda62d81d75b952136d38839d4b953",
-      "native": "bdeb2cb3e01338b9cfdb2a5fac7f021265dda62d81d75b952136d38839d4b953"
+      "native": "bdeb2cb3e01338b9cfdb2a5fac7f021265dda62d81d75b952136d38839d4b953",
+      "upgraded": "2b2290617d180021af2aa7a431c4ad17980874e6f0f25a6cb518ef5bc7ab6d1c"
     },
     "mlx_vlm/models/qwen3_5/qwen3_5.py": {
       "legacy": "7c0e360a35e1f5d3819677cd6f7e4d7349f4f3dd2fad5fc8f1e374bd514e8f1b",
-      "native": "7c0e360a35e1f5d3819677cd6f7e4d7349f4f3dd2fad5fc8f1e374bd514e8f1b"
+      "native": "7c0e360a35e1f5d3819677cd6f7e4d7349f4f3dd2fad5fc8f1e374bd514e8f1b",
+      "upgraded": "7c0e360a35e1f5d3819677cd6f7e4d7349f4f3dd2fad5fc8f1e374bd514e8f1b"
     },
     "mlx_vlm/models/qwen3_5/speculative_verifier.py": {
       "legacy": "32b632f3ade3bcdfdab61d280ac3c219edc3b7b54881a2fba8b06415396302e9",
-      "native": "32b632f3ade3bcdfdab61d280ac3c219edc3b7b54881a2fba8b06415396302e9"
+      "native": "32b632f3ade3bcdfdab61d280ac3c219edc3b7b54881a2fba8b06415396302e9",
+      "upgraded": "32b632f3ade3bcdfdab61d280ac3c219edc3b7b54881a2fba8b06415396302e9"
     },
     "mlx_vlm/models/qwen3_5/vision.py": {
       "legacy": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600",
-      "native": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600"
+      "native": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600",
+      "upgraded": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600"
     },
     "mlx_vlm/models/qwen3_5_moe/__init__.py": {
       "legacy": "49f7fe7df4670e6d7eda67568f4c3523c96b914032ebbac89060458868b46621",
-      "native": "49f7fe7df4670e6d7eda67568f4c3523c96b914032ebbac89060458868b46621"
+      "native": "49f7fe7df4670e6d7eda67568f4c3523c96b914032ebbac89060458868b46621",
+      "upgraded": "49f7fe7df4670e6d7eda67568f4c3523c96b914032ebbac89060458868b46621"
     },
     "mlx_vlm/models/qwen3_5_moe/config.py": {
       "legacy": "feda126d7a83379ac8befd9fc5305a4c155c67a58eb25c40e26fa7e05c51abfa",
-      "native": "4a822afc92be024dc879783a801707693d480cde55d82eb4b6edaca5860b4c31"
+      "native": "4a822afc92be024dc879783a801707693d480cde55d82eb4b6edaca5860b4c31",
+      "upgraded": "4a822afc92be024dc879783a801707693d480cde55d82eb4b6edaca5860b4c31"
     },
     "mlx_vlm/models/qwen3_5_moe/language.py": {
       "legacy": "a15155c548752a2de95c657d6c6672ab874d9367bb4fbdf7ea255a294324aab7",
-      "native": "863d237b23a7178a978a7fcada8bdde8a743e26c47a2da01d671796324b9ae9a"
+      "native": "863d237b23a7178a978a7fcada8bdde8a743e26c47a2da01d671796324b9ae9a",
+      "upgraded": "863d237b23a7178a978a7fcada8bdde8a743e26c47a2da01d671796324b9ae9a"
     },
     "mlx_vlm/models/qwen3_5_moe/qwen3_5_moe.py": {
       "legacy": "e4e074a864568fc863f97b11cc5272523baa78210a6308c8f9f78064fed5477a",
-      "native": "3b0d7ec08ca60f5ecc605fbda588590a20f33af5f871c6161103cab992ab2fdc"
+      "native": "3b0d7ec08ca60f5ecc605fbda588590a20f33af5f871c6161103cab992ab2fdc",
+      "upgraded": "3b0d7ec08ca60f5ecc605fbda588590a20f33af5f871c6161103cab992ab2fdc"
     },
     "mlx_vlm/models/qwen3_5_moe/vision.py": {
       "legacy": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600",
-      "native": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600"
+      "native": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600",
+      "upgraded": "a1db23800b564caaedcc79d6a27d76e3186b9315cb68b612d61afbfa69487600"
     },
     "mlx_vlm/models/qwen3_vl/__init__.py": {
       "legacy": "da4897a091e4ddce3d19e8dd01b7b52cc0ed5af484da0a4aa9b65804c2b8d808",
-      "native": "da4897a091e4ddce3d19e8dd01b7b52cc0ed5af484da0a4aa9b65804c2b8d808"
+      "native": "da4897a091e4ddce3d19e8dd01b7b52cc0ed5af484da0a4aa9b65804c2b8d808",
+      "upgraded": "da4897a091e4ddce3d19e8dd01b7b52cc0ed5af484da0a4aa9b65804c2b8d808"
     },
     "mlx_vlm/models/qwen3_vl/config.py": {
       "legacy": "8b529cfbd568c7d202140b4d5212be7fe740310c1a80374fa7dd4e59b9763017",
-      "native": "8b529cfbd568c7d202140b4d5212be7fe740310c1a80374fa7dd4e59b9763017"
+      "native": "8b529cfbd568c7d202140b4d5212be7fe740310c1a80374fa7dd4e59b9763017",
+      "upgraded": "8b529cfbd568c7d202140b4d5212be7fe740310c1a80374fa7dd4e59b9763017"
     },
     "mlx_vlm/models/qwen3_vl/language.py": {
       "legacy": "2ebeacac837db9417e683780b94d24cdee563fa340a9638b0965a6c0bfcde056",
-      "native": "2ebeacac837db9417e683780b94d24cdee563fa340a9638b0965a6c0bfcde056"
+      "native": "2ebeacac837db9417e683780b94d24cdee563fa340a9638b0965a6c0bfcde056",
+      "upgraded": "2ebeacac837db9417e683780b94d24cdee563fa340a9638b0965a6c0bfcde056"
     },
     "mlx_vlm/models/qwen3_vl/processing_qwen3_vl.py": {
       "legacy": "9c6bc521ea6b45c3346967502f2d0b69697371327d7b340c23650e76de91f5d2",
-      "native": "9c6bc521ea6b45c3346967502f2d0b69697371327d7b340c23650e76de91f5d2"
+      "native": "9c6bc521ea6b45c3346967502f2d0b69697371327d7b340c23650e76de91f5d2",
+      "upgraded": "9c6bc521ea6b45c3346967502f2d0b69697371327d7b340c23650e76de91f5d2"
     },
     "mlx_vlm/models/qwen3_vl/qwen3_vl.py": {
       "legacy": "12f0393421918eb1cbaa6daa447d93a405762e997f688676688e5c71d987d3ee",
-      "native": "12f0393421918eb1cbaa6daa447d93a405762e997f688676688e5c71d987d3ee"
+      "native": "12f0393421918eb1cbaa6daa447d93a405762e997f688676688e5c71d987d3ee",
+      "upgraded": "12f0393421918eb1cbaa6daa447d93a405762e997f688676688e5c71d987d3ee"
     },
     "mlx_vlm/models/qwen3_vl/vision.py": {
       "legacy": "9885d83cf85e037a88f8364817007094a82b5941d49e909d2d9fe11b5e03bf6c",
-      "native": "9885d83cf85e037a88f8364817007094a82b5941d49e909d2d9fe11b5e03bf6c"
+      "native": "9885d83cf85e037a88f8364817007094a82b5941d49e909d2d9fe11b5e03bf6c",
+      "upgraded": "9885d83cf85e037a88f8364817007094a82b5941d49e909d2d9fe11b5e03bf6c"
     },
     "mlx_vlm/models/rope_utils.py": {
       "legacy": "6944f69a03c41cbb9613afbd2f1b54b71c504840aaeb0eade39c6109dbfdd25b",
-      "native": "6944f69a03c41cbb9613afbd2f1b54b71c504840aaeb0eade39c6109dbfdd25b"
+      "native": "6944f69a03c41cbb9613afbd2f1b54b71c504840aaeb0eade39c6109dbfdd25b",
+      "upgraded": "6944f69a03c41cbb9613afbd2f1b54b71c504840aaeb0eade39c6109dbfdd25b"
     },
     "mlx_vlm/models/switch_layers.py": {
       "legacy": "ace00152d1d004e52292d8265af640d8dd69ffa67b8906886b53a99eb21951de",
-      "native": "f1903e6e9f8f1871ac0f773c317450297bcfe0ebf5469b907b401dfd91d8dcd8"
+      "native": "f1903e6e9f8f1871ac0f773c317450297bcfe0ebf5469b907b401dfd91d8dcd8",
+      "upgraded": "f1903e6e9f8f1871ac0f773c317450297bcfe0ebf5469b907b401dfd91d8dcd8"
     },
     "mlx_vlm/models/unlimited_ocr/__init__.py": {
       "legacy": "8361c871b9521be7adde7aebd4e98b63fa695fe74b27df32d45e9015923a13d7",
-      "native": "8361c871b9521be7adde7aebd4e98b63fa695fe74b27df32d45e9015923a13d7"
+      "native": "8361c871b9521be7adde7aebd4e98b63fa695fe74b27df32d45e9015923a13d7",
+      "upgraded": "8361c871b9521be7adde7aebd4e98b63fa695fe74b27df32d45e9015923a13d7"
     },
     "mlx_vlm/models/unlimited_ocr/config.py": {
       "legacy": "7823e1ab0da8ddb98a209cc668fb5020c749175feeb5c26c616f452403155fbc",
-      "native": "7823e1ab0da8ddb98a209cc668fb5020c749175feeb5c26c616f452403155fbc"
+      "native": "7823e1ab0da8ddb98a209cc668fb5020c749175feeb5c26c616f452403155fbc",
+      "upgraded": "7823e1ab0da8ddb98a209cc668fb5020c749175feeb5c26c616f452403155fbc"
     },
     "mlx_vlm/models/unlimited_ocr/language.py": {
       "legacy": "656e03580fa0370d9fcee6d41b8e5b175a482b219a7c30d52c7e8be1c6e70241",
-      "native": "656e03580fa0370d9fcee6d41b8e5b175a482b219a7c30d52c7e8be1c6e70241"
+      "native": "656e03580fa0370d9fcee6d41b8e5b175a482b219a7c30d52c7e8be1c6e70241",
+      "upgraded": "656e03580fa0370d9fcee6d41b8e5b175a482b219a7c30d52c7e8be1c6e70241"
     },
     "mlx_vlm/models/unlimited_ocr/processing_unlimitedocr.py": {
       "legacy": "7066405dbadee758e0b8fdb0a81d5d5c88927ba96f3243a86505a8afc8f91eaa",
-      "native": "7066405dbadee758e0b8fdb0a81d5d5c88927ba96f3243a86505a8afc8f91eaa"
+      "native": "7066405dbadee758e0b8fdb0a81d5d5c88927ba96f3243a86505a8afc8f91eaa",
+      "upgraded": "7066405dbadee758e0b8fdb0a81d5d5c88927ba96f3243a86505a8afc8f91eaa"
     },
     "mlx_vlm/models/unlimited_ocr/unlimitedocr.py": {
       "legacy": "2862f0c2f42c43876c5cc413bede25cb8cd4c3777b596fa00d8c485871b3ab64",
-      "native": "2862f0c2f42c43876c5cc413bede25cb8cd4c3777b596fa00d8c485871b3ab64"
+      "native": "2862f0c2f42c43876c5cc413bede25cb8cd4c3777b596fa00d8c485871b3ab64",
+      "upgraded": "2862f0c2f42c43876c5cc413bede25cb8cd4c3777b596fa00d8c485871b3ab64"
     },
     "mlx_vlm/moe_offload.py": {
       "legacy": "c5bc9fc7e76af1d4514076f1e4d9e259099decf452b6f3d50fff0c8ffa31ec5d",
-      "native": "d91163706a56e128b545d5e8b2a979dc4bb44e510175e678cbf23c4a13199fbe"
+      "native": "d91163706a56e128b545d5e8b2a979dc4bb44e510175e678cbf23c4a13199fbe",
+      "upgraded": "d91163706a56e128b545d5e8b2a979dc4bb44e510175e678cbf23c4a13199fbe"
     },
     "mlx_vlm/prompt_utils.py": {
       "legacy": "65358f17a932cab2a0f69ff949adc2cbee22acd05b56975b65fb232ceb8804f5",
-      "native": "8d3469f3d34d58dab84d207d820e0ec3c9c50f2573c47e9a893cc5162469756a"
+      "native": "8d3469f3d34d58dab84d207d820e0ec3c9c50f2573c47e9a893cc5162469756a",
+      "upgraded": "8d3469f3d34d58dab84d207d820e0ec3c9c50f2573c47e9a893cc5162469756a"
     },
     "mlx_vlm/quant/__init__.py": {
       "legacy": "fc84bc2cce35428cc1a30c3ce5eedac3f227f328b117e4bb5936f1211edcfaa4",
-      "native": "fc84bc2cce35428cc1a30c3ce5eedac3f227f328b117e4bb5936f1211edcfaa4"
+      "native": "fc84bc2cce35428cc1a30c3ce5eedac3f227f328b117e4bb5936f1211edcfaa4",
+      "upgraded": "fc84bc2cce35428cc1a30c3ce5eedac3f227f328b117e4bb5936f1211edcfaa4"
     },
     "mlx_vlm/quant/awq.py": {
       "legacy": "75da9639b48141ffb67cd14b6cb6be6c56ec9f011fbc10325f604eaba1d3ac21",
-      "native": "75da9639b48141ffb67cd14b6cb6be6c56ec9f011fbc10325f604eaba1d3ac21"
+      "native": "75da9639b48141ffb67cd14b6cb6be6c56ec9f011fbc10325f604eaba1d3ac21",
+      "upgraded": "75da9639b48141ffb67cd14b6cb6be6c56ec9f011fbc10325f604eaba1d3ac21"
     },
     "mlx_vlm/quant/calibration.py": {
       "legacy": "fa932bab916bbd9d13125e77585308c3683abc881cce94a57354a7721f9ebad0",
-      "native": "fa932bab916bbd9d13125e77585308c3683abc881cce94a57354a7721f9ebad0"
+      "native": "fa932bab916bbd9d13125e77585308c3683abc881cce94a57354a7721f9ebad0",
+      "upgraded": "fa932bab916bbd9d13125e77585308c3683abc881cce94a57354a7721f9ebad0"
     },
     "mlx_vlm/quant_utils.py": {
       "legacy": "e323189054be767e0945c29167ad9de7a5992b24c51c0be98c65477260d454af",
-      "native": "8f1e2508a02857fa6a48d9d443015e4a639efc2d1e24b1e38265cc0d93c840b1"
+      "native": "8f1e2508a02857fa6a48d9d443015e4a639efc2d1e24b1e38265cc0d93c840b1",
+      "upgraded": "8f1e2508a02857fa6a48d9d443015e4a639efc2d1e24b1e38265cc0d93c840b1"
     },
     "mlx_vlm/quantization/__init__.py": {
       "legacy": "7dac848bf14e9db1a3da4bb3a8c30093c3a5fdfeb53ef8137af9234831b3fe1a",
-      "native": "7dac848bf14e9db1a3da4bb3a8c30093c3a5fdfeb53ef8137af9234831b3fe1a"
+      "native": "7dac848bf14e9db1a3da4bb3a8c30093c3a5fdfeb53ef8137af9234831b3fe1a",
+      "upgraded": "7dac848bf14e9db1a3da4bb3a8c30093c3a5fdfeb53ef8137af9234831b3fe1a"
     },
     "mlx_vlm/quantization/checkpoint.py": {
       "legacy": null,
-      "native": "07f67b463133aac9442012b34bbd64b4509556af74faf36741ba54507b599434"
+      "native": "07f67b463133aac9442012b34bbd64b4509556af74faf36741ba54507b599434",
+      "upgraded": "07f67b463133aac9442012b34bbd64b4509556af74faf36741ba54507b599434"
     },
     "mlx_vlm/quantization/nvfp4.py": {
       "legacy": null,
-      "native": "e5100af2286da65a1a69ce5b9664bfb2a115483c52a98ef5cf376b370ee863fb"
+      "native": "e5100af2286da65a1a69ce5b9664bfb2a115483c52a98ef5cf376b370ee863fb",
+      "upgraded": "e5100af2286da65a1a69ce5b9664bfb2a115483c52a98ef5cf376b370ee863fb"
     },
     "mlx_vlm/quantization/one_bit.py": {
       "legacy": "6771b9003e4529658c6f051f208265cceb8a25fe7f7ee27369d2bed4098e46c7",
-      "native": "6771b9003e4529658c6f051f208265cceb8a25fe7f7ee27369d2bed4098e46c7"
+      "native": "6771b9003e4529658c6f051f208265cceb8a25fe7f7ee27369d2bed4098e46c7",
+      "upgraded": "6771b9003e4529658c6f051f208265cceb8a25fe7f7ee27369d2bed4098e46c7"
     },
     "mlx_vlm/sample_utils.py": {
       "legacy": "56b3d5043fe9d9c3e95e184412f694d62669d5865dca6c6d11f5897beac12f7e",
-      "native": "6278ead9e83d04acc80936eef9353854cf4b858aad1558bc5b05703369723c0c"
+      "native": "6278ead9e83d04acc80936eef9353854cf4b858aad1558bc5b05703369723c0c",
+      "upgraded": "56b3d5043fe9d9c3e95e184412f694d62669d5865dca6c6d11f5897beac12f7e"
     },
     "mlx_vlm/speculative/__init__.py": {
       "legacy": "1f98ff6655dc4629b8d8c5001a32d5a95d232e156722be5b1adac848ff6f0559",
-      "native": "1f98ff6655dc4629b8d8c5001a32d5a95d232e156722be5b1adac848ff6f0559"
+      "native": "1f98ff6655dc4629b8d8c5001a32d5a95d232e156722be5b1adac848ff6f0559",
+      "upgraded": "1f98ff6655dc4629b8d8c5001a32d5a95d232e156722be5b1adac848ff6f0559"
     },
     "mlx_vlm/speculative/cache_state.py": {
       "legacy": "39d35ef0aae0c9298f2fcd3ff6b91b106c6b6c1c3ab6becae216a8fafb2c5300",
-      "native": "39d35ef0aae0c9298f2fcd3ff6b91b106c6b6c1c3ab6becae216a8fafb2c5300"
+      "native": "39d35ef0aae0c9298f2fcd3ff6b91b106c6b6c1c3ab6becae216a8fafb2c5300",
+      "upgraded": "39d35ef0aae0c9298f2fcd3ff6b91b106c6b6c1c3ab6becae216a8fafb2c5300"
     },
     "mlx_vlm/speculative/common.py": {
       "legacy": "e3d3c0294a6d6fc915a32e96460370bfe57baef19539c5a290d4254525717cf1",
-      "native": "e3d3c0294a6d6fc915a32e96460370bfe57baef19539c5a290d4254525717cf1"
+      "native": "e3d3c0294a6d6fc915a32e96460370bfe57baef19539c5a290d4254525717cf1",
+      "upgraded": "e3d3c0294a6d6fc915a32e96460370bfe57baef19539c5a290d4254525717cf1"
     },
     "mlx_vlm/speculative/ddtree.py": {
       "legacy": "5e3651fe81aad1adee8ab6de7e15bd97d59845cf05724ae26d86af4eb982a342",
-      "native": "5e3651fe81aad1adee8ab6de7e15bd97d59845cf05724ae26d86af4eb982a342"
+      "native": "5e3651fe81aad1adee8ab6de7e15bd97d59845cf05724ae26d86af4eb982a342",
+      "upgraded": "5e3651fe81aad1adee8ab6de7e15bd97d59845cf05724ae26d86af4eb982a342"
     },
     "mlx_vlm/speculative/dflash.py": {
       "legacy": "39244ec611b38caacd706474722b2997e50954fe48219e26baf9017ade881ad0",
-      "native": "8a6cdee255fff795f84ef142a94f8b3c398061267f689e444f3b76c799371915"
+      "native": "8a6cdee255fff795f84ef142a94f8b3c398061267f689e444f3b76c799371915",
+      "upgraded": "39244ec611b38caacd706474722b2997e50954fe48219e26baf9017ade881ad0"
     },
     "mlx_vlm/speculative/drafters/__init__.py": {
       "legacy": "7e9fd507dd4ec5aa880d7b0cd04a9f09fbc60ce34e7471b7fbc61863f68a714f",
-      "native": "dff4c41e5458eb214bb3ad06c00e3587b2b6a5b1fca0c6d730697bc5955de0ad"
+      "native": "dff4c41e5458eb214bb3ad06c00e3587b2b6a5b1fca0c6d730697bc5955de0ad",
+      "upgraded": "dff4c41e5458eb214bb3ad06c00e3587b2b6a5b1fca0c6d730697bc5955de0ad"
     },
     "mlx_vlm/speculative/drafters/compatibility.py": {
       "legacy": "e360a7f03f25da810229ab04f5a68c667cc3831d291c3c22c03e1a0efa0ee2c4",
-      "native": "e360a7f03f25da810229ab04f5a68c667cc3831d291c3c22c03e1a0efa0ee2c4"
+      "native": "e360a7f03f25da810229ab04f5a68c667cc3831d291c3c22c03e1a0efa0ee2c4",
+      "upgraded": "e360a7f03f25da810229ab04f5a68c667cc3831d291c3c22c03e1a0efa0ee2c4"
     },
     "mlx_vlm/speculative/drafters/dflash2/__init__.py": {
       "legacy": "94b557b7ab3de885bbe98ead9ba9e48828330fc0f76a0bb37d7e396f37d72683",
-      "native": "94b557b7ab3de885bbe98ead9ba9e48828330fc0f76a0bb37d7e396f37d72683"
+      "native": "94b557b7ab3de885bbe98ead9ba9e48828330fc0f76a0bb37d7e396f37d72683",
+      "upgraded": "94b557b7ab3de885bbe98ead9ba9e48828330fc0f76a0bb37d7e396f37d72683"
     },
     "mlx_vlm/speculative/drafters/dflash2/config.py": {
       "legacy": "af864e1190a2eca902adb31cf2ad21e88dc5d2892b3a3d21b2e75b37798930f3",
-      "native": "af864e1190a2eca902adb31cf2ad21e88dc5d2892b3a3d21b2e75b37798930f3"
+      "native": "af864e1190a2eca902adb31cf2ad21e88dc5d2892b3a3d21b2e75b37798930f3",
+      "upgraded": "af864e1190a2eca902adb31cf2ad21e88dc5d2892b3a3d21b2e75b37798930f3"
     },
     "mlx_vlm/speculative/drafters/dflash2/dflash2.py": {
       "legacy": "19287b0e436c6750ccabfcdfb1388dea4123d6da506adea511ce16269a95e8f0",
-      "native": "19287b0e436c6750ccabfcdfb1388dea4123d6da506adea511ce16269a95e8f0"
+      "native": "19287b0e436c6750ccabfcdfb1388dea4123d6da506adea511ce16269a95e8f0",
+      "upgraded": "19287b0e436c6750ccabfcdfb1388dea4123d6da506adea511ce16269a95e8f0"
     },
     "mlx_vlm/speculative/drafters/dspark/__init__.py": {
       "legacy": "c2cec8847ba2291fe0103e6be9285e0d6a1531d855d51f323ba5e60a88b670f7",
-      "native": "751eb4b19a57f75d8ee16a7a8e603d542efedfaf77d58d3aead15c2b8f5be544"
+      "native": "751eb4b19a57f75d8ee16a7a8e603d542efedfaf77d58d3aead15c2b8f5be544",
+      "upgraded": "c2cec8847ba2291fe0103e6be9285e0d6a1531d855d51f323ba5e60a88b670f7"
     },
     "mlx_vlm/speculative/drafters/dspark/config.py": {
       "legacy": "3d7a25c97a2ba97f325b5e0f9d6935f610133e6d02c91a8a9d28c22de1cae1fb",
-      "native": "24c3219588c85e919784b146506820b29d89179ce4db68047e527885c0f5144f"
+      "native": "24c3219588c85e919784b146506820b29d89179ce4db68047e527885c0f5144f",
+      "upgraded": "3d7a25c97a2ba97f325b5e0f9d6935f610133e6d02c91a8a9d28c22de1cae1fb"
     },
     "mlx_vlm/speculative/drafters/dspark/dspark.py": {
       "legacy": "02f16305bceda7217fb3b86eba61909b5f1299563a2039bfb58e3d0561fcfda5",
-      "native": "cce89144bb770e661c66ca4c8cdce251665f1985b3b2fc761893fbb7ff3ca3e4"
+      "native": "cce89144bb770e661c66ca4c8cdce251665f1985b3b2fc761893fbb7ff3ca3e4",
+      "upgraded": "02f16305bceda7217fb3b86eba61909b5f1299563a2039bfb58e3d0561fcfda5"
     },
     "mlx_vlm/speculative/drafters/laguna_dflash/__init__.py": {
       "legacy": "87aa85f84838be7e15a4ae1821dd4c0abd20e8d2da3ec28bbe44be66f108e79b",
-      "native": "87aa85f84838be7e15a4ae1821dd4c0abd20e8d2da3ec28bbe44be66f108e79b"
+      "native": "87aa85f84838be7e15a4ae1821dd4c0abd20e8d2da3ec28bbe44be66f108e79b",
+      "upgraded": "87aa85f84838be7e15a4ae1821dd4c0abd20e8d2da3ec28bbe44be66f108e79b"
     },
     "mlx_vlm/speculative/drafters/laguna_dflash/config.py": {
       "legacy": "ee3e92d7c6f73d1fc1752e93a40c3e4da626c7fb39c25a8750fa96ddee054fe6",
-      "native": "ee3e92d7c6f73d1fc1752e93a40c3e4da626c7fb39c25a8750fa96ddee054fe6"
+      "native": "ee3e92d7c6f73d1fc1752e93a40c3e4da626c7fb39c25a8750fa96ddee054fe6",
+      "upgraded": "ee3e92d7c6f73d1fc1752e93a40c3e4da626c7fb39c25a8750fa96ddee054fe6"
     },
     "mlx_vlm/speculative/drafters/laguna_dflash/dflash.py": {
       "legacy": "65379c6a58ea29fd0f2c990108312f40b3007a07661c97dee5c26e08d0db2409",
-      "native": "65379c6a58ea29fd0f2c990108312f40b3007a07661c97dee5c26e08d0db2409"
+      "native": "65379c6a58ea29fd0f2c990108312f40b3007a07661c97dee5c26e08d0db2409",
+      "upgraded": "65379c6a58ea29fd0f2c990108312f40b3007a07661c97dee5c26e08d0db2409"
     },
     "mlx_vlm/speculative/drafters/mtp_split.py": {
       "legacy": "55afe4b6341ee97d764da90af3d404b0cc86a2a355d198b1d4d299be8040ed2f",
-      "native": "5b62e871f82cd5b8e59eee168b1bb3ce6450c227ddc47d79eb47fe0f108d77a3"
+      "native": "5b62e871f82cd5b8e59eee168b1bb3ce6450c227ddc47d79eb47fe0f108d77a3",
+      "upgraded": "5b62e871f82cd5b8e59eee168b1bb3ce6450c227ddc47d79eb47fe0f108d77a3"
     },
     "mlx_vlm/speculative/drafters/muse_glimmer_assistant/__init__.py": {
       "legacy": "9452a4515568878c5ac902f85e465f3f49726a1ec77650bbc4a588af82376b53",
-      "native": "9452a4515568878c5ac902f85e465f3f49726a1ec77650bbc4a588af82376b53"
+      "native": "9452a4515568878c5ac902f85e465f3f49726a1ec77650bbc4a588af82376b53",
+      "upgraded": "9452a4515568878c5ac902f85e465f3f49726a1ec77650bbc4a588af82376b53"
     },
     "mlx_vlm/speculative/drafters/muse_glimmer_assistant/config.py": {
       "legacy": "1b7fcbcd44f7f68fde1525b579426226c126a44d0c4e33b6d8b8972b795ac06b",
-      "native": "1b7fcbcd44f7f68fde1525b579426226c126a44d0c4e33b6d8b8972b795ac06b"
+      "native": "1b7fcbcd44f7f68fde1525b579426226c126a44d0c4e33b6d8b8972b795ac06b",
+      "upgraded": "1b7fcbcd44f7f68fde1525b579426226c126a44d0c4e33b6d8b8972b795ac06b"
     },
     "mlx_vlm/speculative/drafters/muse_glimmer_assistant/dflash.py": {
       "legacy": "5c9616cd3c469c925af56236794f650132b45def43c5ff67ea27156e57ca5525",
-      "native": "5c9616cd3c469c925af56236794f650132b45def43c5ff67ea27156e57ca5525"
+      "native": "5c9616cd3c469c925af56236794f650132b45def43c5ff67ea27156e57ca5525",
+      "upgraded": "5c9616cd3c469c925af56236794f650132b45def43c5ff67ea27156e57ca5525"
     },
     "mlx_vlm/speculative/drafters/qwen3_dflash/__init__.py": {
       "legacy": "929c03a2169b49c25974f4d292d74b35f3f511acdf459e7e29a0c4bf3083f06b",
-      "native": "929c03a2169b49c25974f4d292d74b35f3f511acdf459e7e29a0c4bf3083f06b"
+      "native": "929c03a2169b49c25974f4d292d74b35f3f511acdf459e7e29a0c4bf3083f06b",
+      "upgraded": "929c03a2169b49c25974f4d292d74b35f3f511acdf459e7e29a0c4bf3083f06b"
     },
     "mlx_vlm/speculative/drafters/qwen3_dflash/config.py": {
       "legacy": "d7ab8dd8742b2232ece0e1240a316e8df5a647f62a6042614cb966fd146ac31e",
-      "native": "d7ab8dd8742b2232ece0e1240a316e8df5a647f62a6042614cb966fd146ac31e"
+      "native": "d7ab8dd8742b2232ece0e1240a316e8df5a647f62a6042614cb966fd146ac31e",
+      "upgraded": "d7ab8dd8742b2232ece0e1240a316e8df5a647f62a6042614cb966fd146ac31e"
     },
     "mlx_vlm/speculative/drafters/qwen3_dflash/dflash.py": {
       "legacy": "4e92910a4f364cccab07c2de1c242177bf62dd849896ba80de32279fc7002cb3",
-      "native": "4e92910a4f364cccab07c2de1c242177bf62dd849896ba80de32279fc7002cb3"
+      "native": "4e92910a4f364cccab07c2de1c242177bf62dd849896ba80de32279fc7002cb3",
+      "upgraded": "4e92910a4f364cccab07c2de1c242177bf62dd849896ba80de32279fc7002cb3"
     },
     "mlx_vlm/speculative/eagle3.py": {
       "legacy": "def8fc04112ae68b7830aa642ce34123f1bd836235cbf0451d8ce9e9471c5d84",
-      "native": "def8fc04112ae68b7830aa642ce34123f1bd836235cbf0451d8ce9e9471c5d84"
+      "native": "def8fc04112ae68b7830aa642ce34123f1bd836235cbf0451d8ce9e9471c5d84",
+      "upgraded": "def8fc04112ae68b7830aa642ce34123f1bd836235cbf0451d8ce9e9471c5d84"
     },
     "mlx_vlm/speculative/mtp.py": {
       "legacy": "4ed467918bd24e26c60730d6d3529c6a9e633448b2fc6028829965bb1f4daad1",
-      "native": "4ed467918bd24e26c60730d6d3529c6a9e633448b2fc6028829965bb1f4daad1"
+      "native": "4ed467918bd24e26c60730d6d3529c6a9e633448b2fc6028829965bb1f4daad1",
+      "upgraded": "4ed467918bd24e26c60730d6d3529c6a9e633448b2fc6028829965bb1f4daad1"
     },
     "mlx_vlm/speculative/ops/__init__.py": {
       "legacy": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "native": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "native": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "upgraded": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "mlx_vlm/speculative/ops/linear.py": {
       "legacy": "02a8c23259882c4476e682dd574accd9714450ff5e7a6fdc6819d174f24dedfa",
-      "native": "02a8c23259882c4476e682dd574accd9714450ff5e7a6fdc6819d174f24dedfa"
+      "native": "02a8c23259882c4476e682dd574accd9714450ff5e7a6fdc6819d174f24dedfa",
+      "upgraded": "02a8c23259882c4476e682dd574accd9714450ff5e7a6fdc6819d174f24dedfa"
     },
     "mlx_vlm/speculative/utils.py": {
       "legacy": "93d2ed29ac7b7c378536bf09d22eb570d5abb1f2d338dc550e59a84468b6a9ff",
-      "native": "5f7454f8de632699e5856f4eaf97e8020aa01d07a703cbd74fc98a932aa133cd"
+      "native": "5f7454f8de632699e5856f4eaf97e8020aa01d07a703cbd74fc98a932aa133cd",
+      "upgraded": "15cfd7e3627659829e49769d522da66fac93174185a7128a0b1209ee819c39b2"
     },
     "mlx_vlm/tokenizer_utils.py": {
       "legacy": "7fb64819e0577e7e960c8b8eb247644b4a70046c117fa5eb4a00d30c0f9c645f",
-      "native": "7fb64819e0577e7e960c8b8eb247644b4a70046c117fa5eb4a00d30c0f9c645f"
+      "native": "7fb64819e0577e7e960c8b8eb247644b4a70046c117fa5eb4a00d30c0f9c645f",
+      "upgraded": "7fb64819e0577e7e960c8b8eb247644b4a70046c117fa5eb4a00d30c0f9c645f"
     },
     "mlx_vlm/trainer/__init__.py": {
       "legacy": "50513348e50eb487d46383a206961fe354841627259b862dde3650181d8d9075",
-      "native": "50513348e50eb487d46383a206961fe354841627259b862dde3650181d8d9075"
+      "native": "50513348e50eb487d46383a206961fe354841627259b862dde3650181d8d9075",
+      "upgraded": "3206df8bbfc9a8acecb376a92cbd983f70241153462550a30913cc4c9238a765"
     },
     "mlx_vlm/trainer/adapter_utils.py": {
       "legacy": "33ebd421808835be35762db982cf0ca330d051774e77043109563fe2eb980f8d",
-      "native": "33ebd421808835be35762db982cf0ca330d051774e77043109563fe2eb980f8d"
+      "native": "33ebd421808835be35762db982cf0ca330d051774e77043109563fe2eb980f8d",
+      "upgraded": null
     },
     "mlx_vlm/trainer/datasets.py": {
       "legacy": "9612076cd2e007fadad6af70dbe4a7fd538504b8fa4262af1cb67ad173aedc6e",
-      "native": "9612076cd2e007fadad6af70dbe4a7fd538504b8fa4262af1cb67ad173aedc6e"
+      "native": "9612076cd2e007fadad6af70dbe4a7fd538504b8fa4262af1cb67ad173aedc6e",
+      "upgraded": null
     },
     "mlx_vlm/trainer/dora_layers.py": {
       "legacy": "b2f2d80bc5091efcb56916157b0166210aca9333fd20a621ed04ea53bc45ba10",
-      "native": "b2f2d80bc5091efcb56916157b0166210aca9333fd20a621ed04ea53bc45ba10"
+      "native": "b2f2d80bc5091efcb56916157b0166210aca9333fd20a621ed04ea53bc45ba10",
+      "upgraded": null
     },
     "mlx_vlm/trainer/lora.py": {
       "legacy": "ffb1977d5f43d23f5679fa18864d86db72cca34f6f23491271f0135bd88e62c8",
-      "native": "ffb1977d5f43d23f5679fa18864d86db72cca34f6f23491271f0135bd88e62c8"
+      "native": "ffb1977d5f43d23f5679fa18864d86db72cca34f6f23491271f0135bd88e62c8",
+      "upgraded": null
     },
     "mlx_vlm/trainer/lora_layers.py": {
       "legacy": "4d3a8edab111d4ddba33398ba8700203db7b61621c39e9c348fdd50e57278b45",
-      "native": "4d3a8edab111d4ddba33398ba8700203db7b61621c39e9c348fdd50e57278b45"
+      "native": "4d3a8edab111d4ddba33398ba8700203db7b61621c39e9c348fdd50e57278b45",
+      "upgraded": null
     },
     "mlx_vlm/trainer/orpo_trainer.py": {
       "legacy": "77235aa4676e90618d5ed5f7a32649eded34578f4fe8b87832622b32f00ef4af",
-      "native": "77235aa4676e90618d5ed5f7a32649eded34578f4fe8b87832622b32f00ef4af"
+      "native": "77235aa4676e90618d5ed5f7a32649eded34578f4fe8b87832622b32f00ef4af",
+      "upgraded": null
     },
     "mlx_vlm/trainer/sft_trainer.py": {
       "legacy": "a22413fa43b388b43f603c6a416c23e649128f3fedbebadd7520b0f0b3b12987",
-      "native": "a22413fa43b388b43f603c6a416c23e649128f3fedbebadd7520b0f0b3b12987"
+      "native": "a22413fa43b388b43f603c6a416c23e649128f3fedbebadd7520b0f0b3b12987",
+      "upgraded": null
     },
     "mlx_vlm/trainer/utils.py": {
       "legacy": "18e817298c115928425f0880fa105f792dc22789487c51ab92675b7ff0dc5e75",
-      "native": "18e817298c115928425f0880fa105f792dc22789487c51ab92675b7ff0dc5e75"
+      "native": "18e817298c115928425f0880fa105f792dc22789487c51ab92675b7ff0dc5e75",
+      "upgraded": "116678dfcf9ba151df3aecb99d66f39ecfd749ed5f0f1cc87ff49325e59beee9"
     },
     "mlx_vlm/turboquant.py": {
       "legacy": "97236efe29d3c35c10af8a48b065811b3a0b9e12dde30c6238f7c7b0edaaea51",
-      "native": "97236efe29d3c35c10af8a48b065811b3a0b9e12dde30c6238f7c7b0edaaea51"
+      "native": "97236efe29d3c35c10af8a48b065811b3a0b9e12dde30c6238f7c7b0edaaea51",
+      "upgraded": "7ea10cdb828b44f52dc53dff61a93ae86e6e88e4df145b39a2e3b10b39ccf85c"
     },
     "mlx_vlm/utils.py": {
       "legacy": "2045e18d1a16222d07b157251e4a5108b2b12bf740b885f9682a071c8dc59134",
-      "native": "cf87e95fbf2cc439394c522efaac2619991ff1558ee924f311d0472f08dc33a9"
+      "native": "cf87e95fbf2cc439394c522efaac2619991ff1558ee924f311d0472f08dc33a9",
+      "upgraded": "d38eabab88d5d6b835d4ab703cdac2e30924fc04463be8134d12ae5406e50b0c"
     },
     "mlx_vlm/version.py": {
       "legacy": "78e9bc9b218fb4f2cda64bb12f4c61566b2d3d06f05efdce93b15b1f4adef930",
-      "native": "78e9bc9b218fb4f2cda64bb12f4c61566b2d3d06f05efdce93b15b1f4adef930"
+      "native": "78e9bc9b218fb4f2cda64bb12f4c61566b2d3d06f05efdce93b15b1f4adef930",
+      "upgraded": "b82f3007d9916e54348d4040394c8240b510277f4c0b6c726d52c1ffc66c7af5"
     },
     "mlx_vlm/vision_cache.py": {
       "legacy": "5db081a4ef9ee07bb1102c6a87b5fb4a0895821bb2c05d19e110ba6f700e4561",
-      "native": "5db081a4ef9ee07bb1102c6a87b5fb4a0895821bb2c05d19e110ba6f700e4561"
+      "native": "5db081a4ef9ee07bb1102c6a87b5fb4a0895821bb2c05d19e110ba6f700e4561",
+      "upgraded": "5db081a4ef9ee07bb1102c6a87b5fb4a0895821bb2c05d19e110ba6f700e4561"
     }
-  }
+  },
+  "upgraded": "9790231827a890eade1a626643a6bc94a1317c72"
 }

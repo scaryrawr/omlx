@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Immutable native CPU fixtures against the actual pinned legacy runtime."""
+"""Immutable native CPU fixtures against the actual pinned runtime."""
 
 import json
 import os
@@ -19,16 +19,29 @@ def test_payload_matches_sealed_source():
         assert compat._hash(compat._VENDOR / path) == expected
 
 
-@pytest.mark.parametrize("state", ["legacy", "native"])
+def test_pinned_runtime_matches_reviewed_upgrade():
+    manifest = compat._inventory()
+    assert manifest["upgraded"] == "9790231827a890eade1a626643a6bc94a1317c72"
+    assert compat._runtime_state(manifest) == "upgraded"
+
+
+@pytest.mark.parametrize("state", ["legacy", "native", "upgraded"])
 def test_preimages_require_the_entire_contract(tmp_path, monkeypatch, state):
     paths = {"model.py": b"native model", "verifier.py": b"native verifier"}
     guards = {}
     for name, contents in paths.items():
         path = tmp_path / name
-        path.write_bytes(contents if state == "native" else b"old " + contents)
+        path.write_bytes(
+            contents if state == "native" else state.encode() + b" " + contents
+        )
         native = compat.hashlib.sha256(contents).hexdigest()
-        legacy = compat.hashlib.sha256(b"old " + contents).hexdigest()
-        guards[name] = {"native": native, "legacy": legacy}
+        guards[name] = {
+            "native": native,
+            **{
+                key: compat.hashlib.sha256(key.encode() + b" " + contents).hexdigest()
+                for key in ("legacy", "upgraded")
+            },
+        }
     monkeypatch.setattr(
         compat.importlib.metadata,
         "distribution",
@@ -99,6 +112,9 @@ before = {name: getattr(utils, name) for name in
           (*compat.UTILS_FUNCTIONS, 'get_model_and_args')}
 paths = list(models.__path__)
 formatter = prompts.MessageFormatter.format_message
+prompt = prompts.MODEL_CONFIG.get('minicpmv4_7')
+experts = {name: getattr(switch, name) for name in compat.EXPERT_SYMBOLS
+           if hasattr(switch, name)}
 with patch.object(compat, '_helper_module', side_effect=RuntimeError('fixture failure')):
     try:
         compat.apply_mlx_vlm_minicpm47_compat_patch()
@@ -110,8 +126,9 @@ assert compat._STATE is None
 assert list(models.__path__) == paths
 assert all(getattr(utils, name) is value for name, value in before.items())
 assert prompts.MessageFormatter.format_message is formatter
-assert 'minicpmv4_7' not in prompts.MODEL_CONFIG
-assert not any(hasattr(switch, name) for name in compat.EXPERT_SYMBOLS)
+assert prompts.MODEL_CONFIG.get('minicpmv4_7') is prompt
+assert {name: getattr(switch, name) for name in compat.EXPERT_SYMBOLS
+        if hasattr(switch, name)} == experts
 assert not any(name.startswith(compat._MODEL_PREFIX) for name in sys.modules)
 assert compat.apply_mlx_vlm_minicpm47_compat_patch()
 """
@@ -171,7 +188,7 @@ else:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_authoritative_model_processor_and_vision_fixtures_on_legacy_cpu():
+def test_authoritative_model_processor_and_vision_fixtures_on_pinned_cpu():
     script = """
 import sys, types
 import mlx.core as mx
@@ -183,9 +200,13 @@ import mlx_vlm.utils as utils
 original_offload = OffloadedSwitchGLU.__init__
 original_dspark = DSparkDraftModel
 original_loader = utils.get_model_and_args
+from mlx_vlm.models import switch_layers
+original_experts = {name: getattr(switch_layers, name) for name in compat.EXPERT_SYMBOLS}
 assert compat.apply_mlx_vlm_minicpm47_compat_patch()
 assert not compat.apply_mlx_vlm_minicpm47_compat_patch()
 assert OffloadedSwitchGLU.__init__ is original_offload
+assert all(getattr(switch_layers, name) is value
+           for name, value in original_experts.items())
 from mlx_vlm.speculative.drafters.dspark import DSparkDraftModel as generic_dspark
 assert generic_dspark is original_dspark
 assert compat.dspark_model_class() is not original_dspark

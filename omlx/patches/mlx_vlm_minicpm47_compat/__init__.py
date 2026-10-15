@@ -57,8 +57,8 @@ def _runtime_state(manifest: dict) -> str:
         path: _hash(Path(str(distribution.locate_file(path))))
         for path in manifest["guards"]
     }
-    for state in ("native", "legacy"):
-        if all(
+    for state in ("native", "legacy", "upgraded"):
+        if all(state in hashes for hashes in manifest["guards"].values()) and all(
             observed[path] == hashes[state]
             for path, hashes in manifest["guards"].items()
         ):
@@ -100,7 +100,7 @@ def _native_loader_functions(utils):
     }
 
 
-def _check_legacy_installation() -> None:
+def _check_bridged_installation() -> None:
     for name, module in _OWNED_MODULES.items():
         if sys.modules.get(name) is not module:
             raise RuntimeError(f"MiniCPM runtime module changed or disappeared: {name}")
@@ -118,7 +118,7 @@ def _check_legacy_installation() -> None:
 
 
 def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
-    """Apply only to the exact legacy preimages; complete native is a no-op."""
+    """Bridge exact reviewed runtimes; the complete reviewed native is a no-op."""
     global _STATE, _OWNED_MODULES, _OWNED_SYMBOLS
     with _LOCK:
         manifest = _inventory()
@@ -126,8 +126,8 @@ def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
         if _STATE is not None:
             if state != _STATE:
                 raise RuntimeError("mlx-vlm changed during MiniCPM compatibility use")
-            if state == "legacy":
-                _check_legacy_installation()
+            if state != "native":
+                _check_bridged_installation()
             return False
         if state == "native":
             _STATE = state
@@ -144,8 +144,15 @@ def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
         import mlx_vlm.prompt_utils as prompt_utils
         import mlx_vlm.utils as utils
 
-        if any(hasattr(switch_layers, name) for name in EXPERT_SYMBOLS):
+        if state == "legacy" and any(
+            hasattr(switch_layers, name) for name in EXPERT_SYMBOLS
+        ):
             raise RuntimeError("Partial MiniCPM expert helpers are already installed")
+        original_experts = {
+            name: getattr(switch_layers, name)
+            for name in EXPERT_SYMBOLS
+            if hasattr(switch_layers, name)
+        }
         native = _native_loader_functions(utils)
         original = {
             name: getattr(utils, name)
@@ -154,7 +161,8 @@ def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
         model_path = str(_VENDOR / "mlx_vlm" / "models")
         helpers_path = _VENDOR / "expert_helpers.py"
         original_formatter = prompt_utils.MessageFormatter.format_message
-        if "minicpmv4_7" in prompt_utils.MODEL_CONFIG:
+        original_prompt = prompt_utils.MODEL_CONFIG.get("minicpmv4_7")
+        if state == "legacy" and original_prompt is not None:
             raise RuntimeError(
                 "Partial MiniCPM prompt registration is already installed"
             )
@@ -207,10 +215,11 @@ def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
             return original["get_model_and_args"](config, model_path=model_path)
 
         try:
-            exec(
-                compile(helpers_path.read_bytes(), str(helpers_path), "exec"),
-                vars(switch_layers),
-            )
+            if state == "legacy":
+                exec(
+                    compile(helpers_path.read_bytes(), str(helpers_path), "exec"),
+                    vars(switch_layers),
+                )
             models.__path__.insert(0, model_path)
             utils.update_module_configs = update_module_configs
             utils.load_processor = load_processor
@@ -245,8 +254,14 @@ def apply_mlx_vlm_minicpm47_compat_patch() -> bool:
             for name, value in original.items():
                 setattr(utils, name, value)
             for name in EXPERT_SYMBOLS:
-                vars(switch_layers).pop(name, None)
-            prompt_utils.MODEL_CONFIG.pop("minicpmv4_7", None)
+                if name in original_experts:
+                    setattr(switch_layers, name, original_experts[name])
+                else:
+                    vars(switch_layers).pop(name, None)
+            if original_prompt is None:
+                prompt_utils.MODEL_CONFIG.pop("minicpmv4_7", None)
+            else:
+                prompt_utils.MODEL_CONFIG["minicpmv4_7"] = original_prompt
             prompt_utils.MessageFormatter.format_message = original_formatter
             if model_path in models.__path__:
                 models.__path__.remove(model_path)
@@ -271,7 +286,7 @@ def _helper_module():
         return importlib.import_module("mlx_vlm.speculative.drafters.dspark")
     if _HELPER_PREFIX in sys.modules:
         return sys.modules[_HELPER_PREFIX]
-    # A private package keeps the generic legacy DSpark class and its aliases
+    # A private package keeps the generic DSpark class and its aliases
     # unchanged. Relative imports still resolve against the native parent.
     source = _VENDOR / "mlx_vlm/speculative/drafters/dspark/__init__.py"
     importlib.import_module("mlx_vlm.speculative.drafters")

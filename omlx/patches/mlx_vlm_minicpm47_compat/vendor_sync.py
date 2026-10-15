@@ -25,8 +25,47 @@ EXPERT_SYMBOLS = (
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
-    parser.add_argument("manifest", type=Path)
+    parser.add_argument("manifest", type=Path, nargs="?")
+    parser.add_argument("--runtime-revision")
     args = parser.parse_args()
+    if args.runtime_revision:
+        path = Path(__file__).parent / "source_manifest.json"
+        manifest = json.loads(path.read_text())
+        paths = set(
+            subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(args.source),
+                    "ls-tree",
+                    "-r",
+                    "--name-only",
+                    args.runtime_revision,
+                ],
+                text=True,
+            ).splitlines()
+        )
+        for name, hashes in manifest["guards"].items():
+            hashes["upgraded"] = (
+                hashlib.sha256(
+                    subprocess.check_output(
+                        [
+                            "git",
+                            "-C",
+                            str(args.source),
+                            "show",
+                            f"{args.runtime_revision}:{name}",
+                        ]
+                    )
+                ).hexdigest()
+                if name in paths
+                else None
+            )
+        manifest["upgraded"] = args.runtime_revision
+        path.write_text(json.dumps(manifest, indent=2) + "\n")
+        return
+    if args.manifest is None:
+        parser.error("manifest is required when regenerating the payload")
     inventory_bytes = args.manifest.read_bytes()
     if hashlib.sha256(inventory_bytes).hexdigest() != (
         "c7c8ce1a63ff5311053c6a60fd91793fec4d31ef82c5d1e135a8a6c497147203"

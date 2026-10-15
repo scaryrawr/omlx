@@ -384,15 +384,19 @@ served chat model. Support uses the existing chat, Anthropic Messages and
 Responses APIs; no audio or image/video generation capability is implied.
 
 The temporary serving-only bridge vendors the reviewed native source at
-`70b9ddc6fad39a7fb7639c9941e2847f3cacd414`. It accepts the exact pinned legacy
-runtime or performs a no-op for the complete reviewed native implementation;
+`70b9ddc6fad39a7fb7639c9941e2847f3cacd414`. It accepts the reviewed legacy
+runtime and the pinned mlx-vlm `9790231827a890eade1a626643a6bc94a1317c72`
+runtime, preserving the latter's existing expert helpers and prompt registration,
+or performs a no-op for the complete reviewed native implementation;
 unknown/partial implementations fail explicitly. It does not upgrade native
 mlx-vlm CLI generation or unrelated model/offload/quantization code. Repeated
 calls recheck owned in-memory modules, exports, helpers and registrations,
 while other families may wrap shared dispatchers. Payload hashes and
 dependency preimages are recorded in
 `omlx/patches/mlx_vlm_minicpm47_compat/source_manifest.json`; the adjacent
-`vendor_sync.py` regenerates the payload from that immutable source. Retire
+`vendor_sync.py` regenerates the payload from that immutable source. Its
+`--runtime-revision <commit>` mode refreshes exact runtime guards from a
+reviewed mlx-vlm checkout without changing the vendored payload. Retire
 the bridge only after an upstream dependency provides and passes the complete
 model, processor, local GDN verifier and helper/serving transport contract.
 The official target uses normalized top-k routing; `norm_topk_prob=False`
