@@ -110,9 +110,8 @@ dependencies = [
     "openai-harmony",
     # Cohere Command/Cohere2 output parser for reasoning and tool calls
     "cohere_melody>=0.9.0",
-    # mlx-vlm from commit 4f4634b (v0.7.7). oMLX model implementations remain registered
-    # by their pre-load patches.
-    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4f4634bb813c0298cb1467bed2e957526c71d0b4",
+    # Official v0.7.8 includes MiniCPM-V 4.7 model and processor support.
+    "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@9790231827a890eade1a626643a6bc94a1317c72",
     # mlx-vlm requires mlx-audio>=0.5.2 in the shared runtime.
     "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio@94c7716212b2228f178d2f9c7619a591fd1b0b78",
     "Pillow>=9.0.0",
@@ -249,17 +248,11 @@ where = [".", "apps/omlx-web"]
 include = ["omlx*"]
 
 [tool.setuptools.package-data]
-"omlx" = ["oq_calibration_data.json", "oqe_calibration_data.json"]
+"omlx" = ["oq_calibration_data.json", "oqe_calibration_data.json", "MLX_VLM_LICENSE.txt"]
 "omlx.admin" = ["bench_corpora/*"]
 "omlx_web" = ["templates/**/*.html", "static/**/*", "i18n/*.json"]
 "omlx.eval" = ["data/*.jsonl"]
 "omlx.patches.deepseek_v41" = ["LICENSE"]
-"omlx.patches.mlx_vlm_minicpm47_compat" = [
-    "source_manifest.json",
-    "vendor/LICENSE",
-    "vendor/mlx_vlm/models/minicpmv4_7/LICENSE",
-    "vendor/mlx_vlm/tests/fixtures/*",
-]
 "omlx.custom_kernels.glm_moe_dsa" = ["*.metallib", "*.dylib", "*.so"]
 "omlx.custom_kernels.decode_fast" = ["*.metallib", "*.dylib", "*.so"]
 "omlx.custom_kernels.minimax_m3" = ["*.metallib", "*.dylib", "*.so"]

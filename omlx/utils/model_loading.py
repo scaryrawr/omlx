@@ -818,13 +818,13 @@ def maybe_apply_pre_load_patches(
             )
 
     if for_vlm and model_type == "minicpmv4_7":
-        from ..patches.mlx_vlm_minicpm47_compat import (
-            apply_mlx_vlm_minicpm47_compat_patch,
+        from ..patches.minicpm47 import (
+            apply_minicpm47_serving_patch,
             validate_target_config,
         )
 
         validate_target_config(config)
-        apply_mlx_vlm_minicpm47_compat_patch()
+        apply_minicpm47_serving_patch()
 
     if for_vlm and model_type == "qwen4_exp":
         from ..patches.mlx_vlm_qwen4_exp_compat import (

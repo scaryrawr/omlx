@@ -382,26 +382,29 @@ implementation; it cannot be aliased to MiniCPM 4.6. The paired
 served chat model. Support uses the existing chat, Anthropic Messages and
 Responses APIs; no audio or image/video generation capability is implied.
 
-The temporary serving-only bridge vendors the reviewed native source at
-`70b9ddc6fad39a7fb7639c9941e2847f3cacd414`. It accepts the exact pinned legacy
-runtime or performs a no-op for the complete reviewed native implementation;
-unknown/partial implementations fail explicitly. It does not upgrade native
-mlx-vlm CLI generation or unrelated model/offload/quantization code. Repeated
-calls recheck owned in-memory modules, exports, helpers and registrations,
-while other families may wrap shared dispatchers. Payload hashes and
-dependency preimages are recorded in
-`omlx/patches/mlx_vlm_minicpm47_compat/source_manifest.json`; the adjacent
-`vendor_sync.py` regenerates the payload from that immutable source. Retire
-the bridge only after an upstream dependency provides and passes the complete
-model, processor, local GDN verifier and helper/serving transport contract.
+The model and torch-free processor come from official **mlx-vlm 0.7.8**, pinned
+to release commit `9790231827a890eade1a626643a6bc94a1317c72`. The former full
+vendored implementation and source-hash installation bridge have been removed.
+This release requires Python >=3.10, MLX >=0.32.3 and Transformers >=5.14;
+oMLX retains its existing MLX pin and Transformers upper bound.
+
+Small serving hooks in `omlx/patches/minicpm47.py` preserve request-local
+positions, padded-prefill behavior and the existing MiniCPM GDN normalization,
+including the official exact verifier. They also expose processor controls to
+mlx-vlm's signature-based input dispatcher.
+`omlx/speculative/minicpm_dspark.py` extends the official
+DSpark drafter with oMLX's proposal-probability/confidence transport and fixed
+paired-helper policy. The model, vision encoder, processor, checkpoint loading
+and speculative cache transactions remain upstream implementations.
 The official target uses normalized top-k routing; `norm_topk_prob=False`
 is not supported.
 
-Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_minicpm47_compat.py tests/test_minicpm_pairing.py`
+Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_minicpm47.py tests/test_minicpm_pairing.py`
 for isolated, offline CPU compatibility checks. These exercise tiny strict
-checkpoints, processor/vision inputs, capture and cache rollback, and real
-oMLX greedy/sampled DSpark generation with cancellation and exception cleanup.
-Transformers 5.18 numerical-oracle cases skip on the pinned 5.17 runtime.
+HF/canonical/mixed-quantized checkpoints, processor/vision inputs, capture and
+cache rollback, and real oMLX greedy/sampled DSpark generation with cancellation
+and exception cleanup. Existing converted checkpoints and provenance checks
+are preserved; no reconversion or metadata changes are required.
 Tiny fixtures do not establish full-checkpoint or deployed GPU compatibility.
 
 The optional `mm_processor_kwargs` request field controls compression and
@@ -541,7 +544,7 @@ The checked-in hunks contain the exact before/after source and AST fingerprints,
 normalized across Python versions by omitting only empty type-parameter fields.
 Nonempty type parameters and other source changes still affect the fingerprint.
 The hunks can be verified without that local commit. Against a public
-`Blaizzy/mlx-vlm` checkout containing the pinned base
+`Blaizzy/mlx-vlm` checkout containing the original backport base
 `4f4634bb813c0298cb1467bed2e957526c71d0b4`, run:
 
 ```bash

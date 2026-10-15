@@ -276,10 +276,10 @@ def test_fixed_defaults_and_ordinary_base_serving_are_unchanged():
 
 
 def test_incomplete_native_contract_fails_before_checkpoint_load(tmp_path, monkeypatch):
-    from omlx.patches import mlx_vlm_minicpm47_compat as compatibility
     from omlx.speculative import dflash
+    from omlx.speculative import minicpm_dspark as compatibility
 
-    monkeypatch.setattr(compatibility, "dspark_model_class", lambda: object)
+    monkeypatch.setattr(compatibility, "MiniCPMDSparkDraftModel", object)
     target = SimpleNamespace(config=SimpleNamespace(model_type="minicpmv4_7"))
     with (
         patch.object(compatibility, "load_dspark_model") as load,

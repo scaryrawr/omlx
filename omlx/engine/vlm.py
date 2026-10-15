@@ -4660,7 +4660,11 @@ class VLMBatchedEngine(BaseEngine):
         has_audio = any(
             key in extra_model_inputs for key in ("input_features", "audio_codes")
         )
-        has_video = extra_model_inputs.get("pixel_values_videos") is not None
+        has_video = (
+            bool(num_videos)
+            if model_type == "minicpmv4_7"
+            else extra_model_inputs.get("pixel_values_videos") is not None
+        )
         has_multimodal = (
             (pixel_values is not None and num_images > 0) or has_audio or has_video
         )
@@ -4675,7 +4679,11 @@ class VLMBatchedEngine(BaseEngine):
             # Image-specific: compute hash and try vision feature cache
             image_hash = None
             image_token_count = None
-            if num_images > 0:
+            if model_type == "minicpmv4_7" and has_video:
+                image_hash = self._video_cache_identity(video_hashes or [])
+                if num_images:
+                    image_hash = f"{compute_image_hash(images)}:{image_hash}"
+            elif num_images > 0:
                 image_hash = compute_image_hash(images)
                 image_token_count = self._image_token_count(input_ids)
             elif has_video:

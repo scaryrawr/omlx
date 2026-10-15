@@ -21,19 +21,17 @@ from omlx.models.vlm import VLMModelAdapter
 
 
 @pytest.mark.asyncio
-async def test_minicpm_start_propagates_unknown_runtime_guard_before_tensor_load():
+async def test_minicpm_start_propagates_serving_hook_failure_before_tensor_load():
     engine = VLMBatchedEngine(model_name="minicpm-fixture")
     with (
-        patch(
-            "omlx.engine.vlm._read_config_model_type", return_value="minicpmv4_7"
-        ),
+        patch("omlx.engine.vlm._read_config_model_type", return_value="minicpmv4_7"),
         patch(
             "omlx.utils.model_loading.maybe_apply_pre_load_patches",
-            side_effect=RuntimeError("Unrecognized or partial mlx-vlm"),
+            side_effect=RuntimeError("MiniCPM serving hook failed"),
         ),
         patch("mlx_vlm.utils.load") as loader,
     ):
-        with pytest.raises(RuntimeError, match="Unrecognized or partial"):
+        with pytest.raises(RuntimeError, match="serving hook failed"):
             await engine.start()
         loader.assert_not_called()
 
@@ -87,7 +85,7 @@ def inputs():
     return {
         "input_ids": mx.array([[1, 99, 99, 2]]),
         "pixel_values": mx.zeros((1, 1)),
-        "target_sizes": mx.array([[2, 2]]),
+        "tgt_sizes": [mx.array([[2, 2]])],
         "mm_token_type_ids": mx.array([[0, 1, 1, 0]]),
     }
 
@@ -121,7 +119,7 @@ def test_compression_reaches_processor_and_encoder_with_request_local_positions(
     assert prepare.call_args.kwargs["max_slice_nums"] == 36
     kwargs = engine._vlm_model.get_input_embeddings.call_args.kwargs
     assert kwargs["downsample_mode"] == "4x"
-    assert kwargs["target_sizes"] is inputs["target_sizes"]
+    assert kwargs["tgt_sizes"] is inputs["tgt_sizes"]
     assert kwargs["mm_token_type_ids"] is inputs["mm_token_type_ids"]
     assert result[2]["position_ids"].shape == (3, 1, 4)
     assert result[2]["_captured_rope_deltas"].tolist() == [[3]]
@@ -145,6 +143,30 @@ def test_effective_processor_controls_change_prefix_identity(engine, inputs):
         repeated = engine._prepare_vision_inputs(messages, images)
     assert len({baseline[3], compressed[3], sliced[3]}) == 3
     assert repeated[3] == baseline[3]
+
+
+@pytest.mark.parametrize("with_image", [False, True])
+def test_native_combined_video_pixels_use_video_content_identity(
+    engine, inputs, with_image
+):
+    engine._format_messages_for_vlm_template.return_value = (
+        [{"role": "user", "content": "<|video_pad|>Describe."}],
+        [],
+    )
+    images = [Image.new("RGB", (4, 4))] if with_image else []
+    with patch("mlx_vlm.utils.prepare_inputs", return_value=inputs):
+        first = engine._prepare_vision_inputs(
+            [], images, videos=["owned-video"], video_hashes=["first"]
+        )
+        changed = engine._prepare_vision_inputs(
+            [], images, videos=["owned-video"], video_hashes=["second"]
+        )
+        repeated = engine._prepare_vision_inputs(
+            [], images, videos=["owned-video"], video_hashes=["first"]
+        )
+    assert first[1] is not None
+    assert first[3] != changed[3]
+    assert first[3] == repeated[3]
 
 
 def test_unset_slicing_uses_native_image_and_video_defaults(engine):

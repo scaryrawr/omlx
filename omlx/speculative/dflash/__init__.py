@@ -136,15 +136,15 @@ def load_dflash_drafter(
         == "minicpmv4_7"
     )
     if is_minicpm:
-        from ...patches.mlx_vlm_minicpm47_compat import (
-            dspark_model_class,
+        from ..minicpm_dspark import (
+            MiniCPMDSparkDraftModel,
             load_dspark_model,
         )
         from ..minicpm_pairing import validate_model_pair
 
         if not Path(path).is_dir():
             raise ValueError("MiniCPM DSpark requires an existing local helper checkpoint.")
-        dspark_class = dspark_model_class()
+        dspark_class = MiniCPMDSparkDraftModel
         if not callable(getattr(dspark_class, "propose_block", None)):
             raise ValueError("Native DSpark proposal support is incomplete.")
         validate_model_pair(target_path, path)

@@ -2,35 +2,332 @@
 """Real native/oMLX contracts, collected only by the isolated CPU runner."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 import pytest
+from minicpm47_fixtures import Tokenizer, hf_weight_fixture, tiny_config
 from mlx.utils import tree_flatten
-from mlx_vlm.models.cache import KVCache, RotatingKVCache
+from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache, RotatingKVCache
 from mlx_vlm.models.minicpmv4_7 import Model, ModelConfig
-from mlx_vlm.tests.test_minicpmv4_7 import hf_weight_fixture, tiny_config
-from mlx_vlm.tests.test_minicpmv4_7_processor import Tokenizer
 from PIL import Image
 from transformers.utils.chat_template_utils import render_jinja_template
 
 from omlx.engine.vlm import VLMBatchedEngine
 from omlx.models.vlm import VLMModelAdapter
-from omlx.patches import mlx_vlm_minicpm47_compat as compat
+from omlx.patches.minicpm47 import apply_minicpm47_serving_patch
 from omlx.patches.mlx_lm_mtp import batch_generator as bg
 from omlx.scheduler import _bind_text_prefill_rope_delta
 from omlx.speculative.dflash import attach_drafter, load_dflash_drafter
 from omlx.speculative.dspark_drafter import DSparkDrafter
+from omlx.speculative.minicpm_dspark import (
+    MiniCPMDSparkConfig,
+    MiniCPMDSparkDraftModel,
+)
 from omlx.speculative.minicpm_pairing import HELPER, TARGET
 from omlx.utils.sampling import make_sampler
 
 
 def model():
+    apply_minicpm47_serving_patch()
     target = Model(ModelConfig.from_dict(tiny_config()))
     target.load_weights(list(target.sanitize(hf_weight_fixture()).items()), strict=True)
     return target
+
+
+@pytest.mark.parametrize("representation", ["hf", "canonical", "mixed"])
+def test_complete_checkpoint_through_official_strict_loader(tmp_path, representation):
+    from mlx_vlm.utils import load_model
+
+    target = model()
+    config = tiny_config()
+    if representation == "hf":
+        weights = hf_weight_fixture()
+    else:
+        if representation == "mixed":
+            config["quantization"] = {"bits": 4, "group_size": 32, "mode": "affine"}
+            overrides = {
+                "merger.mlp.0.linear_1": {
+                    "bits": 8,
+                    "group_size": 32,
+                    "mode": "affine",
+                },
+                "merger.mlp.0.linear_2": {
+                    "bits": 4,
+                    "group_size": 32,
+                    "mode": "affine",
+                },
+            }
+            config["quantization"].update(overrides)
+            nn.quantize(
+                target,
+                bits=4,
+                group_size=32,
+                class_predicate=lambda path, module: overrides.get(path, False),
+            )
+        weights = {
+            (
+                key.replace("vit_merger.", "vision_tower.vit_merger.", 1)
+                if key.startswith("vit_merger.")
+                else key
+            ): value
+            for key, value in tree_flatten(target.parameters())
+        }
+        sanitized = target.sanitize(weights)
+        repeated = target.sanitize(sanitized)
+        assert sanitized.keys() == repeated.keys()
+        for key in sanitized:
+            np.testing.assert_array_equal(
+                np.array(sanitized[key]), np.array(repeated[key])
+            )
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    loaded = load_model(tmp_path, strict=True, lazy=False)
+    expected = dict(tree_flatten(target.parameters()))
+    actual = dict(tree_flatten(loaded.parameters()))
+    assert actual.keys() == expected.keys()
+    for key in expected:
+        np.testing.assert_array_equal(np.array(actual[key]), np.array(expected[key]))
+    if representation == "mixed":
+        assert loaded.merger.mlp[0].linear_1.bits == 8
+        assert loaded.merger.mlp[0].linear_2.bits == 4
+
+
+def test_hooks_are_family_local_and_preserve_normalization():
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5GatedDeltaNet
+
+    target = model()
+    layer = target.language_model.layers[0].linear_attn
+    assert not apply_minicpm47_serving_patch()
+    q = mx.full((1, 1, 1, layer.head_k_dim), 0.0001)
+    actual_q, actual_k = layer._normalize_qk(q, q)
+    inv_scale = layer.head_k_dim**-0.5
+    eps = 1e-6 / layer.head_k_dim
+    np.testing.assert_allclose(
+        np.array(actual_q), np.array(inv_scale**2 * mx.fast.rms_norm(q, None, eps))
+    )
+    np.testing.assert_allclose(
+        np.array(actual_k), np.array(inv_scale * mx.fast.rms_norm(q, None, eps))
+    )
+    assert Qwen3_5GatedDeltaNet._normalize_qk is not layer._normalize_qk.__func__
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_padded_prefill_and_continuation_match_unpadded_rows(side):
+    language = model().language_model
+    rows = [[3, 4, 5, 6], [3, 4]]
+    ids = [rows[0], [0, 0, 3, 4] if side == "left" else [3, 4, 0, 0]]
+    mask = [[1] * 4, [0, 0, 1, 1] if side == "left" else [1, 1, 0, 0]]
+    caches = language.make_cache()
+    output = language(
+        mx.array(ids),
+        attention_mask=mx.array(mask),
+        cache=caches,
+        rope_deltas=mx.zeros((2, 1), mx.int32),
+        capture_layer_ids=[0, 3],
+    )
+    continuation = language(
+        mx.array([[5], [5]]), cache=caches, rope_deltas=mx.zeros((2, 1), mx.int32)
+    )
+    for index, row in enumerate(rows):
+        cache = language.make_cache()
+        expected = language(
+            mx.array([row]),
+            cache=cache,
+            capture_layer_ids=[0, 3],
+            rope_deltas=mx.zeros((1, 1), mx.int32),
+        )
+        valid = np.array(mask[index], dtype=bool)
+        np.testing.assert_allclose(
+            np.asarray(output.logits)[index, valid],
+            np.asarray(expected.logits)[0],
+            atol=3e-5,
+        )
+        for layer in range(2):
+            np.testing.assert_allclose(
+                np.asarray(output.hidden_states[layer])[index, valid],
+                np.asarray(expected.hidden_states[layer])[0],
+                atol=3e-5,
+            )
+        next_output = language(
+            mx.array([[5]]), cache=cache, rope_deltas=mx.zeros((1, 1), mx.int32)
+        )
+        np.testing.assert_allclose(
+            np.asarray(continuation.logits)[index],
+            np.asarray(next_output.logits)[0],
+            atol=3e-5,
+        )
+
+
+def test_scheduler_prepared_padding_windows_preserve_cache_and_row_positions():
+    language = model().language_model
+    caches = [
+        (
+            BatchKVCache([0, 2])
+            if isinstance(entry, KVCache)
+            else ArraysCache(len(entry.cache), left_padding=[0, 2])
+        )
+        for entry in language.make_cache()
+    ]
+    language(
+        mx.array([[3, 4], [0, 0]]),
+        attention_mask=mx.array([[1, 1], [0, 0]]),
+        cache=caches,
+        rope_deltas=mx.zeros((2, 1), mx.int32),
+    )
+    output = language(
+        mx.array([[5, 6], [3, 4]]),
+        attention_mask=mx.ones((2, 2), mx.int32),
+        cache=caches,
+        rope_deltas=mx.zeros((2, 1), mx.int32),
+        capture_layer_ids=[3, 0],
+    )
+    continuation = language(
+        mx.array([[5], [5]]), cache=caches, rope_deltas=mx.zeros((2, 1), mx.int32)
+    )
+    for index, row in enumerate([[3, 4, 5, 6], [3, 4]]):
+        cache = language.make_cache()
+        expected = language(
+            mx.array([row]),
+            cache=cache,
+            rope_deltas=mx.zeros((1, 1), mx.int32),
+            capture_layer_ids=[3, 0],
+        )
+        np.testing.assert_allclose(
+            np.asarray(output.logits)[index],
+            np.asarray(expected.logits)[0, -2:],
+            atol=3e-5,
+        )
+        for actual_hidden, expected_hidden in zip(
+            output.hidden_states, expected.hidden_states, strict=True
+        ):
+            np.testing.assert_allclose(
+                np.asarray(actual_hidden)[index],
+                np.asarray(expected_hidden)[0, -2:],
+                atol=3e-5,
+            )
+        expected_next = language(
+            mx.array([[5]]), cache=cache, rope_deltas=mx.zeros((1, 1), mx.int32)
+        )
+        np.testing.assert_allclose(
+            np.asarray(continuation.logits)[index],
+            np.asarray(expected_next.logits)[0],
+            atol=3e-5,
+        )
+
+
+@pytest.mark.parametrize(
+    "mask,verify,error",
+    [
+        ([[1, 1, 1, 1], [0, 2, 1, 1]], False, "binary"),
+        ([[1, 1, 1], [0, 1, 1]], False, "binary"),
+        ([[1, 1, 1, 1], [1, 0, 1, 0]], False, "contiguous"),
+        ([[1, 1, 1, 1], [0, 0, 0, 0]], False, "at least one"),
+        ([[1, 1, 1, 1], [0, 0, 1, 1]], True, "padded proposals"),
+    ],
+)
+def test_invalid_padding_fails_before_cache_mutation(mask, verify, error):
+    language = model().language_model
+    caches = language.make_cache()
+    original = list(caches)
+    with pytest.raises(ValueError, match=error):
+        language(
+            mx.array([[3, 4, 5, 6], [0, 0, 3, 4]]),
+            attention_mask=mx.array(mask),
+            cache=caches,
+            speculative_verify=verify,
+        )
+    assert all(before is after for before, after in zip(original, caches))
+    assert all(entry.empty() for entry in caches)
+    assert all(
+        entry.left_padding is None for entry in caches if isinstance(entry, ArraysCache)
+    )
+
+
+@pytest.mark.parametrize("mode", ["4x", "16x"])
+def test_official_processor_video_controls_and_interleaved_image_order(mode):
+    from mlx_vlm.models.minicpmv4_6.processing_minicpmv4_6 import (
+        MiniCPMVImageProcessor,
+        MiniCPMVVideoProcessor,
+    )
+    from mlx_vlm.models.minicpmv4_7 import MiniCPMV4_7Processor
+    from mlx_vlm.utils import process_inputs
+
+    model()
+    processor = MiniCPMV4_7Processor(
+        image_processor=MiniCPMVImageProcessor(scale_resolution=8, patch_size=2),
+        video_processor=MiniCPMVVideoProcessor(scale_resolution=8, patch_size=2),
+        tokenizer=Tokenizer(),
+    )
+    inputs = process_inputs(
+        processor,
+        prompts=["<|video_pad|>then<|image_pad|>"],
+        images=[Image.new("RGB", (8, 8), "red")],
+        videos=[[Image.new("RGB", (8, 8), "blue") for _ in range(4)]],
+        downsample_mode=mode,
+        max_slice_nums=1,
+        max_num_frames=2,
+    )
+    ids = inputs["input_ids"][0].tolist()
+    count = 4 if mode == "4x" else 1
+    assert ids.count(10) == count
+    assert ids.count(11) == 2 * count
+    assert ids.index(11) < ids.index(10)
+    assert len(inputs["tgt_sizes"][0]) == 3
+    assert inputs["downsample_mode"] == mode
+    assert processor.image_processor.downsample_mode == "16x"
+    assert processor.video_processor.downsample_mode == "16x"
+    assert processor.image_processor.max_slice_nums == 9
+    assert processor.video_processor.max_num_frames == 128
+    config = tiny_config()
+    config.update(
+        image_token_id=10,
+        video_token_id=11,
+        image_start_id=12,
+        image_end_id=13,
+        slice_start_id=14,
+        slice_end_id=15,
+        newline_id=20,
+    )
+    config["text_config"]["vocab_size"] = 512
+    target = Model(ModelConfig.from_dict(config))
+    features = target.get_input_embeddings(
+        mx.array(inputs["input_ids"]),
+        inputs["pixel_values"],
+        tgt_sizes=inputs["tgt_sizes"],
+        downsample_mode=mode,
+    )
+    assert features.inputs_embeds.shape == (1, len(ids), 16)
+    assert features.position_ids.shape == (3, 1, len(ids))
+
+
+def test_paired_dspark_policy_and_probability_errors():
+    helper = MiniCPMDSparkDraftModel(MiniCPMDSparkConfig.from_dict(helper_config()))
+    assert helper.prefer_requested_block_size
+    invalid = helper_config()
+    invalid["dflash_config"]["block_size_policy"] = "adaptive"
+    with pytest.raises(ValueError, match="fixed-block"):
+        MiniCPMDSparkConfig.from_dict(invalid)
+    invalid = helper_config()
+    invalid["target_model_type"] = "qwen3"
+    with pytest.raises(ValueError, match="explicitly paired"):
+        MiniCPMDSparkConfig.from_dict(invalid)
+    target = model()
+    helper.bind(target)
+    hidden = mx.zeros((1, 2, 32))
+    with pytest.raises(ValueError, match="finite and normalized"):
+        helper.propose_block(
+            4,
+            hidden,
+            helper.make_cache(),
+            3,
+            lambda logits: logits.argmax(-1),
+            proposal_probs=lambda logprobs: mx.zeros_like(logprobs),
+        )
 
 
 def test_real_native_parameter_order_keeps_fused_expert_mates_adjacent():
@@ -55,15 +352,15 @@ def test_real_omlx_capture_verifier_and_commit(mode, accepted, rotating):
     ids = mx.array([[3, 10] + [8] * count + [11, 4]])
     features = target.get_input_embeddings(
         ids,
-        mx.arange(192, dtype=mx.float32).reshape(1, 3, 2, 32) / 192,
-        target_sizes=mx.array([[4, 4]]),
+        [[mx.arange(192, dtype=mx.float32).reshape(3, 2, 32) / 192]],
+        tgt_sizes=[mx.array([[4, 4]])],
         downsample_mode=mode,
         mm_token_type_ids=(ids == 8).astype(mx.int32),
     )
     adapter.set_batch_rope_deltas(features.rope_deltas.reshape(-1))
 
     def prime():
-        cache = target.make_cache()
+        cache = target.language_model.make_cache()
         if rotating:
             cache = [
                 (
@@ -182,13 +479,11 @@ def test_real_verify_abort_restores_gdn_and_kv_for_next_request(rotating):
 
 @pytest.mark.parametrize("mode", ["4x", "16x"])
 def test_actual_omlx_jinja_processor_encoder_and_tool_parser(mode):
-    from mlx_vlm.models.minicpmv4_7 import Processor
-    from mlx_vlm.models.minicpmv4_7.processing_minicpmv4_7 import (
-        MiniCPMV4_7ImageProcessor,
-    )
+    from mlx_vlm.models.minicpmv4_6.processing_minicpmv4_6 import MiniCPMVImageProcessor
+    from mlx_vlm.models.minicpmv4_7 import MiniCPMV4_7Processor
 
     template = (
-        compat._VENDOR / "mlx_vlm/tests/fixtures/minicpmv4_7_chat_template.jinja"
+        Path(__file__).parent / "fixtures/minicpmv4_7_chat_template.jinja"
     ).read_text()
 
     class OfficialTokenizer(Tokenizer):
@@ -222,8 +517,8 @@ def test_actual_omlx_jinja_processor_encoder_and_tool_parser(mode):
     engine = VLMBatchedEngine(model_name="fixture")
     engine._vlm_model = target
     engine._model_type = "minicpmv4_7"
-    engine._processor = Processor(
-        image_processor=MiniCPMV4_7ImageProcessor(scale_resolution=8, patch_size=2),
+    engine._processor = MiniCPMV4_7Processor(
+        image_processor=MiniCPMVImageProcessor(scale_resolution=8, patch_size=2),
         tokenizer=OfficialTokenizer(),
     )
     engine._vision_cache = None
@@ -299,17 +594,14 @@ def generation_batch(temperature):
     target = model()
     adapter = VLMModelAdapter(target)
     adapter.set_batch_rope_deltas(mx.array([0]))
-    native = compat._helper_module()
-    helper = native.Model(native.ModelConfig.from_dict(helper_config()))
+    helper = MiniCPMDSparkDraftModel(MiniCPMDSparkConfig.from_dict(helper_config()))
     helper.bind(target)
     drafter = DSparkDrafter(helper, block_size=3, source_path="tiny-fixture")
     attach_drafter(target.language_model, drafter)
     bg.apply()
     sampler = make_sampler(temp=temperature, top_k=2 if temperature else 0)
     cache = adapter.make_cache()
-    prefill = adapter(
-        mx.array([[2, 3, 4]]), cache=cache, capture_layer_ids=[0, 1]
-    )
+    prefill = adapter(mx.array([[2, 3, 4]]), cache=cache, capture_layer_ids=[0, 1])
     drafter.seed_request("fixture", prefill.hidden_states)
     generator = BatchGenerator(
         adapter,
@@ -349,7 +641,7 @@ def test_real_omlx_generation_batch_with_native_dspark(temperature):
     assert all(output.finish_reason is None for output in responses[:-1])
     assert not adapter._minicpm_speculative_transactions
     if temperature == 0:
-        reference_cache = target.make_cache()
+        reference_cache = target.language_model.make_cache()
         tokens = mx.array([[2, 3, 4, 5]])
         reference = []
         for _ in range(7):
@@ -434,7 +726,9 @@ def test_real_omlx_dspark_greedy_batch_with_different_full_histories():
             _, outputs = generator.next()
             for output in outputs:
                 responses[output.uid].append(output)
-            if all(row and row[-1].finish_reason is not None for row in responses.values()):
+            if all(
+                row and row[-1].finish_reason is not None for row in responses.values()
+            ):
                 break
         assert propose.call_count > 1
         assert any(len(call.args[0]) == 2 for call in draft.call_args_list)
@@ -442,7 +736,7 @@ def test_real_omlx_dspark_greedy_batch_with_different_full_histories():
         (first_uid, [2, 3, 4, 5]),
         (second_uid, [2, 3, 4, 5, 6, 7]),
     ):
-        cache = target.make_cache()
+        cache = target.language_model.make_cache()
         tokens = mx.array([prompt])
         expected = []
         for _ in range(7):
@@ -461,8 +755,7 @@ def test_real_omlx_dspark_greedy_batch_with_different_full_histories():
 
 def test_real_helper_strict_load_without_tokenizer_and_native_q_handoff(tmp_path):
     config = helper_config()
-    native_module = compat._helper_module()
-    helper = native_module.Model(native_module.ModelConfig.from_dict(config))
+    helper = MiniCPMDSparkDraftModel(MiniCPMDSparkConfig.from_dict(config))
     config["omlx_source"] = {"repo_id": HELPER[0], "revision": HELPER[1]}
     (tmp_path / "config.json").write_text(json.dumps(config))
     mx.save_safetensors(
