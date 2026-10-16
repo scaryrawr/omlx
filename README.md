@@ -502,12 +502,15 @@ existing abort path applies rather than restarting without their media/head hist
 The existing `omlx.oq.quantize_oq_streaming()` Python API and admin oQ/oQe workflow accept floating-point
 sources and the native mixed ModelOpt NVFP4/FP8 source format (including NVIDIA's
 Super VL NVFP4 export). Per-expert global scales are folded before stacking,
-and Bolt's heterogeneous layer geometry is preserved. Existing MLX affine quants
-are serving inputs, not supported requantization sources. Exports remain
-multimodal: `text_only=True` is rejected before creating output. With
-`preserve_mtp=True`, the native head retains its source precision/quantization in an
-associated `mtp/` sidecar; it is not oQe-calibrated or converted to the target's
-oQ recipe. The official splitter can hold the complete head in memory.
+and Bolt's heterogeneous layer geometry is preserved. ModelOpt sensitivity
+measurement streams real source layers even when the full model fits in RAM.
+Existing MLX affine quants are serving inputs, not supported requantization
+sources. Exports remain multimodal: `text_only=True` is rejected before creating
+output. With `preserve_mtp=True`, the native head retains its source
+precision/quantization in an associated `mtp/` sidecar; it is not oQe-calibrated,
+converted to the target's oQ recipe, or included in its bit-allocation budget.
+Size estimates count the preserved sidecar once. The official splitter can hold
+the complete head in memory.
 For sources larger than available RAM, oQe automatically streams native decoder
 layers from the original checkpoint for calibration instead of using a lossy
 proxy. Explicit `stream_calibration=True` also selects this path for smaller

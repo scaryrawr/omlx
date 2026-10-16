@@ -443,7 +443,7 @@ def test_complete_tiny_quantization_strict_native_reload(
     from omlx import oq
     from omlx.oq import quantize_oq_streaming
 
-    if calibration != "basic":
+    if calibration != "basic" or modelopt:
         from mlx_lm import tokenizer_utils
 
         monkeypatch.setattr(tokenizer_utils, "load", lambda *_args: SimpleNamespace())
@@ -553,12 +553,23 @@ def test_complete_tiny_quantization_strict_native_reload(
             for name in index
         )
     output = tmp_path / "output"
+    streamed_scores = []
+    measure_streamed = oq._measure_sensitivity_streaming
+
+    def observed_streamed_sensitivity(*args, **kwargs):
+        scores = measure_streamed(*args, **kwargs)
+        streamed_scores.append(scores)
+        return scores
+
+    monkeypatch.setattr(
+        oq, "_measure_sensitivity_streaming", observed_streamed_sensitivity
+    )
     quantize_oq_streaming(
         str(source),
         str(output),
         4,
         sensitivity_map_override=(
-            None if calibration == "streamed" else {0: 1, 1: 1, 2: 1}
+            None if calibration == "streamed" or modelopt else {0: 1, 1: 1, 2: 1}
         ),
         preserve_mtp=preserve_mtp,
         enhanced=calibration != "basic",
@@ -567,6 +578,12 @@ def test_complete_tiny_quantization_strict_native_reload(
         imatrix_seq_length=64,
     )
     reloaded = load_model(output, lazy=False)
+    if modelopt and calibration != "streamed":
+        assert len(streamed_scores) == 1
+        assert set(streamed_scores[0]) == {0, 1, 2}
+        assert all(
+            np.isfinite(score) and score > 0 for score in streamed_scores[0].values()
+        )
     output_config = json.loads((output / "config.json").read_text())
     if calibration != "basic":
         report = json.loads((output / "oq_imatrix_report.json").read_text())
@@ -590,9 +607,26 @@ def test_complete_tiny_quantization_strict_native_reload(
     assert embeddings.shape == (1, 3, 128)
     assert bool(mx.all(mx.isfinite(embeddings)).item())
     if preserve_mtp:
+        budgeted_shapes = []
+        build_plan = oq._build_quant_plan
+
+        def observed_plan(shapes, *args, **kwargs):
+            budgeted_shapes.extend(shapes)
+            return build_plan(shapes, *args, **kwargs)
+
+        monkeypatch.setattr(oq, "_build_quant_plan", observed_plan)
         without_head = oq.estimate_bpw_and_size(str(source), 4)
         with_head = oq.estimate_bpw_and_size(str(source), 4, preserve_mtp=True)
-        assert with_head["output_size_bytes"] > without_head["output_size_bytes"]
+        head_bytes = sum(
+            value.nbytes for name, value in weights.items() if oq._is_mtp_tensor(name)
+        )
+        assert (
+            with_head["output_size_bytes"] - without_head["output_size_bytes"]
+            == head_bytes
+        )
+        assert budgeted_shapes and not any(
+            oq._is_mtp_tensor(name) for name in budgeted_shapes
+        )
     if preserve_mtp:
         from omlx.models.vlm import VLMModelAdapter
         from omlx.patches.nemotron_omni_quantization import native_mtp_sidecar

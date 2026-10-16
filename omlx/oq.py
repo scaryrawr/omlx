@@ -3677,6 +3677,13 @@ def estimate_bpw_and_size(
         if planned_logical:
             logical = planned_logical
 
+    if is_nemotron_omni(config.get("model_type")):
+        logical = {
+            name: metadata
+            for name, metadata in logical.items()
+            if not _is_mtp_tensor(name)
+        }
+
     def _source_quant_info(name):
         if plan_view is not None:
             return plan_view.source_quant_info(name)
@@ -6908,10 +6915,10 @@ def quantize_oq_streaming(
                 f"calibration sweep ({len(streamed_sensitivity_map)} layers)"
             )
             sensitivity_map = streamed_sensitivity_map
-        elif stream_imatrix:
+        elif stream_imatrix or is_nemotron_modelopt_source(config):
             # Streaming calibration is active but the fused sweep never ran
-            # (imatrix cache hit). Measure with a standalone streamed pass:
-            # still the real weights, still no proxy, no whole-model load.
+            # (imatrix cache hit), or packed ModelOpt modules need real-weight
+            # perturbation. Both use a standalone streamed pass, never a proxy.
             logger.info(
                 f"oQ{oq_level:g}: measuring sensitivity by streaming layers "
                 "from the source checkpoint (no calibration proxy)"
