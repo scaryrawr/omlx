@@ -506,11 +506,13 @@ and Bolt's heterogeneous layer geometry is preserved. ModelOpt sensitivity
 measurement streams real source layers even when the full model fits in RAM.
 Existing MLX affine quants are serving inputs, not supported requantization
 sources. Exports remain multimodal: `text_only=True` is rejected before creating
-output. With `preserve_mtp=True`, the native head retains its source
-precision/quantization in an associated `mtp/` sidecar; it is not oQe-calibrated,
-converted to the target's oQ recipe, or included in its bit-allocation budget.
-Size estimates count the preserved sidecar once. The official splitter can hold
-the complete head in memory.
+output. With `preserve_mtp=True`, the native head is exported to an associated
+`mtp/` sidecar using the official splitter's native format: ModelOpt FP8
+projections expand to floating point, while NVFP4 stays packed. The head is not
+oQe-calibrated, converted to the target's oQ recipe, or included in its
+bit-allocation budget. Size estimates count the exported sidecar
+once, including FP8 expansion and FP32 global scales. The official splitter can
+hold the complete head in memory.
 For sources larger than available RAM, oQe automatically streams native decoder
 layers from the original checkpoint for calibration instead of using a lossy
 proxy. Explicit `stream_calibration=True` also selects this path for smaller

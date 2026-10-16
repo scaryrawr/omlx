@@ -432,7 +432,7 @@ def test_cancelling_ineligible_native_late_join_unblocks_compatible_peer(
     "family", ["NemotronH_Nano_Omni_Reasoning_V3", "nemotron_h_omni", "bolt"]
 )
 @pytest.mark.parametrize("calibration", ["basic", "resident", "streamed"])
-@pytest.mark.parametrize("modelopt", [False, True])
+@pytest.mark.parametrize("modelopt", [False, True, "fp8_head"])
 def test_complete_tiny_quantization_strict_native_reload(
     tmp_path, family, calibration, modelopt, monkeypatch
 ):
@@ -529,15 +529,21 @@ def test_complete_tiny_quantization_strict_native_reload(
         )
         if modelopt:
             name = "mtp.layers.1.mixer.switch_mlp.fc1"
-            packed, scales = mx.quantize(
-                weights[name + ".weight"].astype(mx.bfloat16),
-                group_size=16,
-                bits=4,
-                mode="nvfp4",
-            )
-            weights[name + ".weight"] = packed.view(mx.uint8)
-            weights[name + ".weight_scale"] = scales
-            weights[name + ".weight_scale_2"] = mx.array([1.0, 2.0])
+            if modelopt == "fp8_head":
+                weights[name + ".weight"] = mx.full(
+                    weights[name + ".weight"].shape, 0x38, dtype=mx.uint8
+                )
+                weights[name + ".weight_scale"] = mx.array(0.01)
+            else:
+                packed, scales = mx.quantize(
+                    weights[name + ".weight"].astype(mx.bfloat16),
+                    group_size=16,
+                    bits=4,
+                    mode="nvfp4",
+                )
+                weights[name + ".weight"] = packed.view(mx.uint8)
+                weights[name + ".weight_scale"] = scales
+                weights[name + ".weight_scale_2"] = mx.array([1.0, 2.0], dtype=mx.bfloat16)
     mx.save_safetensors(str(source / "model.safetensors"), weights)
     if modelopt:
         index = oq._LazyTensorIndex([source / "model.safetensors"], config=config)
@@ -618,7 +624,9 @@ def test_complete_tiny_quantization_strict_native_reload(
         without_head = oq.estimate_bpw_and_size(str(source), 4)
         with_head = oq.estimate_bpw_and_size(str(source), 4, preserve_mtp=True)
         head_bytes = sum(
-            value.nbytes for name, value in weights.items() if oq._is_mtp_tensor(name)
+            value.nbytes
+            for shard in (output / "mtp").glob("*.safetensors")
+            for value in mx.load(str(shard)).values()
         )
         assert (
             with_head["output_size_bytes"] - without_head["output_size_bytes"]
@@ -662,7 +670,8 @@ def test_native_streamed_calibration_selected_only_when_needed(family):
     )
 
 
-def test_streamed_bolt_calibration_matches_resident(tmp_path, monkeypatch):
+@pytest.mark.parametrize("null_overrides", [False, True])
+def test_streamed_bolt_calibration_matches_resident(tmp_path, monkeypatch, null_overrides):
     from mlx.utils import tree_flatten
     from mlx_vlm.models.nemotron_h_nano_omni import Model, ModelConfig
 
@@ -682,7 +691,11 @@ def test_streamed_bolt_calibration_matches_resident(tmp_path, monkeypatch):
         moe_shared_expert_intermediate_size=128,
         block_configs=[
             {"block_type": "mamba"},
-            {"block_type": "moe", "n_routed_experts": 3, "num_experts_per_tok": 2},
+            {
+                "block_type": "moe",
+                "n_routed_experts": None if null_overrides else 3,
+                "num_experts_per_tok": None if null_overrides else 2,
+            },
             {"block_type": "attention"},
         ],
     )
@@ -734,8 +747,8 @@ def test_streamed_bolt_calibration_matches_resident(tmp_path, monkeypatch):
     assert metadata["sensitivity_map"] == pytest.approx(reference, abs=1e-6)
     assert metadata["requires_expert_counts"]
     plan = oq._oqe_calibration_batch_plan(config, requested_samples=32, seq_length=64)
-    assert plan["top_k"] == 2
-    assert plan["num_experts"] == 3
+    assert plan["top_k"] == (1 if null_overrides else 2)
+    assert plan["num_experts"] == (2 if null_overrides else 3)
 
 
 def test_nemotron_rejects_text_only_before_creating_output(tmp_path):

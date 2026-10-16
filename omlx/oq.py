@@ -3625,12 +3625,31 @@ def estimate_bpw_and_size(
     native_head_bytes = 0
     native_head_params = 0
     if preserve_mtp and is_nemotron_omni(config.get("model_type")):
+        modelopt_head = is_nemotron_modelopt_source(config)
         for name in idx._index:
             if name.startswith(("mtp.", "language_model.mtp.")) and not name.endswith(
                 (".input_scale", ".k_scale", ".v_scale")
             ):
+                storage_dtype = idx.source_dtype(name)
+                if modelopt_head:
+                    # Mirror the native splitter's FP8 expansion and NVFP4
+                    # global-scale promotion without loading head tensors.
+                    if name.endswith(".weight_scale"):
+                        if idx.source_shape(name + "_2") is None:
+                            continue
+                    elif name.endswith(".weight_scale_2"):
+                        storage_dtype = "F32"
+                    elif name.endswith(".weight"):
+                        prefix = name.removesuffix(".weight")
+                        if (
+                            idx.source_shape(prefix + ".weight_scale") is not None
+                            and idx.source_shape(prefix + ".weight_scale_2") is None
+                        ):
+                            storage_dtype = idx.source_dtype(prefix + ".weight_scale")
+                            if storage_dtype == "F32":
+                                storage_dtype = "BF16"
                 native_head_bytes += math.prod(idx.source_shape(name)) * idx._DTYPE_BYTES[
-                    idx.source_dtype(name)
+                    storage_dtype
                 ]
         native_head_params = sum(
             math.prod(shape)
@@ -4049,10 +4068,12 @@ def _oqe_calibration_batch_plan(
     if is_nemotron_omni(config.get("model_type")):
         blocks = (config.get("text_config") or {}).get("block_configs") or []
         num_experts = max(
-            [num_experts] + [int(block.get("n_routed_experts", 0)) for block in blocks]
+            [num_experts]
+            + [_nested_config_int(block, ("n_routed_experts",)) for block in blocks]
         )
         top_k = max(
-            [top_k] + [int(block.get("num_experts_per_tok", 0)) for block in blocks]
+            [top_k]
+            + [_nested_config_int(block, ("num_experts_per_tok",)) for block in blocks]
         )
     route_factor = max(1, top_k if num_experts > 0 else 1)
     sample_bytes = max(1, int(seq_length) * max(1, hidden_size) * 4 * route_factor)
