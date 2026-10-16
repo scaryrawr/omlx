@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin model-settings UI gates."""
 
 import json
@@ -110,6 +111,7 @@ def test_model_settings_feature_labels_use_i18n_keys():
     assert "{{ t('modal.model_settings.reasoning_parser') }}" in modal_html
     assert "{{ t('modal.model_settings.specprefill') }}" in modal_html
     assert "{{ t('modal.model_settings.dflash') }}" in modal_html
+    assert "{{ t('modal.model_settings.qwen_ane') }}" in modal_html
 
     assert ">Reasoning Parser</label>" not in modal_html
     assert ">SpecPrefill</span>" not in modal_html
@@ -132,6 +134,25 @@ def test_dflash_ui_omits_settings_removed_from_the_admin_api():
         assert field not in html
         assert field not in script
     assert 'value="ddtree"' not in html
+
+
+def test_minicpm_media_controls_are_editable_and_model_specific():
+    html = _model_settings_template()
+    section = _section(
+        html,
+        '<template x-if="modelSettings.is_minicpm_model">',
+        "<!-- Acceleration -->",
+    )
+    assert 'id="ms-media"' in section
+    assert 'x-model="modelSettings.mm_processor_kwargs.downsample_mode"' in section
+    assert 'x-model.number="modelSettings.mm_processor_kwargs.max_slice_nums"' in section
+    for mode in ("", "4x", "16x"):
+        assert f'<option value="{mode}">' in section
+    assert 'min="1" step="1"' in section
+    assert (
+        "('ms-media', t('modal.model_settings.minicpm_media'), "
+        '"modelSettings.is_minicpm_model")'
+    ) in html
 
 
 def test_model_settings_feature_i18n_keys_exist_in_every_locale():
@@ -171,6 +192,11 @@ def test_model_settings_feature_i18n_keys_exist_in_every_locale():
         "modal.model_settings.qwen_ane_tune_test",
         "modal.model_settings.qwen_ane_tune_throughput",
         "modal.model_settings.qwen_ane_tail_padding",
+        "modal.model_settings.minicpm_media",
+        "modal.model_settings.minicpm_downsample_mode",
+        "modal.model_settings.minicpm_downsample_mode_hint",
+        "modal.model_settings.minicpm_max_slice_nums",
+        "modal.model_settings.minicpm_max_slice_nums_hint",
     }
 
     for locale_path in sorted(i18n_dir.glob("*.json")):
@@ -559,6 +585,100 @@ function setup(fetch) {
     state.loadProfilesForModel = async () => {};
     return state;
 }
+
+test('MiniCPM uses fixed DSpark defaults without changing other families', async () => {
+    for (const [family, mode] of [['minicpmv4_7', 'dflash'], ['qwen3_5', 'adaptive']]) {
+        let payload;
+        const state = setup(async (url, options) => {
+            assert.equal(options.method, 'PUT');
+            payload = JSON.parse(options.body);
+            return {ok: true, json: async () => ({})};
+        });
+        state.selectedModel = {id: 'model-a', config_model_type: family};
+        const controls = family === 'minicpmv4_7' ? {downsample_mode: '4x', max_slice_nums: 36} : null;
+        state.modelSettings = state.buildModelSettingsState(state.selectedModel, {mm_processor_kwargs: controls});
+        assert.equal(state.modelSettings.dflash_verify_mode, mode);
+        state.modelSettings.dflash_enabled = true;
+        state.modelSettings.dflash_draft_model = '/paired/helper';
+        state.modelSettings.dflash_verify_mode = '';
+        state.loadModels = async () => {};
+        await state.saveModelSettings();
+        assert.equal(payload.dflash_verify_mode, mode);
+        assert.deepEqual(payload.mm_processor_kwargs, controls);
+        state.profileFields = {universal: [], model_specific: ['mm_processor_kwargs']};
+        const profile = JSON.parse(JSON.stringify(state.formValuesForProfile()));
+        assert.deepEqual(profile.mm_processor_kwargs, controls === null ? undefined : controls);
+        const explicit = state.buildModelSettingsState(state.selectedModel, {dflash_verify_mode: 'adaptive'});
+        assert.equal(explicit.dflash_verify_mode, 'adaptive');
+    }
+});
+
+test('MiniCPM media edits save without mutating stored settings', async () => {
+    let payload;
+    const state = setup(async (url, options) => {
+        payload = JSON.parse(options.body);
+        return {ok: true, json: async () => ({})};
+    });
+    state.selectedModel = {id: 'model-a', config_model_type: 'minicpmv4_7'};
+    const stored = {mm_processor_kwargs: {downsample_mode: '4x', max_slice_nums: 36}};
+    state.modelSettings = state.buildModelSettingsState(state.selectedModel, stored);
+    state.loadModels = async () => {};
+    state.profileFields = {universal: [], model_specific: ['mm_processor_kwargs']};
+
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '16x';
+    state.modelSettings.mm_processor_kwargs.max_slice_nums = 3;
+    await state.saveModelSettings();
+    assert.deepEqual(payload.mm_processor_kwargs, {downsample_mode: '16x', max_slice_nums: 3});
+    assert.deepEqual(stored.mm_processor_kwargs, {downsample_mode: '4x', max_slice_nums: 36});
+    const profile = state.formValuesForProfile();
+    assert.deepEqual(JSON.parse(JSON.stringify(profile.mm_processor_kwargs)), payload.mm_processor_kwargs);
+
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '';
+    state.modelSettings.mm_processor_kwargs.max_slice_nums = '';
+    await state.saveModelSettings();
+    assert.equal(payload.mm_processor_kwargs, null);
+    assert.deepEqual(JSON.parse(JSON.stringify(state.formValuesForProfile().mm_processor_kwargs)), {});
+    assert.equal(profile.mm_processor_kwargs.downsample_mode, '16x');
+    assert.equal(profile.mm_processor_kwargs.max_slice_nums, 3);
+
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '4x';
+    await state.saveModelSettings();
+    assert.deepEqual(payload.mm_processor_kwargs, {downsample_mode: '4x'});
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '';
+    state.modelSettings.mm_processor_kwargs.max_slice_nums = 1;
+    await state.saveModelSettings();
+    assert.deepEqual(payload.mm_processor_kwargs, {max_slice_nums: 1});
+});
+
+test('MiniCPM media controls restore applied profiles and preserve defaults', async () => {
+    let saved;
+    const applied = {active_profile_name: 'visual', mm_processor_kwargs: {downsample_mode: '16x', max_slice_nums: 7}};
+    const state = setup(async (url, options) => {
+        if (url.endsWith('/apply')) {
+            return {ok: true, json: async () => ({settings: applied})};
+        }
+        saved = JSON.parse(options.body);
+        return {ok: true, json: async () => ({profile: saved})};
+    });
+    state.selectedModel = {id: 'model-a', config_model_type: 'minicpmv4_7'};
+    state.models = [state.selectedModel];
+    state.profileFields = {universal: [], model_specific: ['mm_processor_kwargs']};
+    state.modelSettings = state.buildModelSettingsState(state.selectedModel, {});
+    assert.equal(state.modelSettings.mm_processor_kwargs.downsample_mode, '');
+    assert.equal(state.modelSettings.mm_processor_kwargs.max_slice_nums, null);
+    assert.deepEqual(JSON.parse(JSON.stringify(state.formValuesForProfile().mm_processor_kwargs)), {});
+    await state.applyProfileToForm({name: 'visual'});
+    assert.equal(state.modelSettings.mm_processor_kwargs.downsample_mode, '16x');
+    assert.equal(state.modelSettings.mm_processor_kwargs.max_slice_nums, 7);
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '4x';
+    state.modelSettings.mm_processor_kwargs.max_slice_nums = 2;
+    state.applyProfileToForm = async () => {};
+    state.newProfile = {display_name: 'Detail', api_name: 'detail'};
+    await state.createProfile();
+    assert.equal(state.profileError, '');
+    assert.deepEqual(saved.settings.mm_processor_kwargs, {downsample_mode: '4x', max_slice_nums: 2});
+    assert.deepEqual(applied.mm_processor_kwargs, {downsample_mode: '16x', max_slice_nums: 7});
+});
 
 test('Template apply uses server identity and effective settings', async () => {
     const requests = [];
