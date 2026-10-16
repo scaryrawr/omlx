@@ -71,4 +71,18 @@ mx::array affine_q8_qmm_t(
     int group_size = 64,
     mx::StreamOrDevice s = {});
 
+mx::array mxfp4_qmm_t(
+    const mx::array& x,
+    const mx::array& weight,
+    const mx::array& scales,
+    int variant = 8,
+    mx::StreamOrDevice s = {});
+
+mx::array mxfp8_qmm_t(
+    const mx::array& x,
+    const mx::array& weight,
+    const mx::array& scales,
+    int variant = 8,
+    mx::StreamOrDevice s = {});
+
 } // namespace omlx::quant_matmul

@@ -144,6 +144,7 @@ NB_MODULE(_ext, m) {
   m.def(
       "nax_qmm_runtime_active",
       &omlx::quant_matmul::nax_qmm_runtime_active);
+  m.attr("QMM_HAS_NARROW_AFFINE") = true;
   m.def(
       "ane_available",
       &omlx::quant_matmul::ane_available);
@@ -581,6 +582,22 @@ NB_MODULE(_ext, m) {
       "weight"_a,
       "bits"_a,
       "group_count"_a,
+      "stream"_a = nb::none());
+  m.def(
+      "mxfp4_qmm_t",
+      &omlx::quant_matmul::mxfp4_qmm_t,
+      "x"_a,
+      "weight"_a,
+      "scales"_a,
+      "variant"_a = 8,
+      "stream"_a = nb::none());
+  m.def(
+      "mxfp8_qmm_t",
+      &omlx::quant_matmul::mxfp8_qmm_t,
+      "x"_a,
+      "weight"_a,
+      "scales"_a,
+      "variant"_a = 8,
       "stream"_a = nb::none());
   m.def(
       "moe_weighted_sum",
