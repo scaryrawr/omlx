@@ -132,6 +132,7 @@ def _run(
     abort_error: _AbortError | None = None,
     abort_at: int | None = None,
     sparse_abort_error: _AbortError | None = None,
+    eval_cache_states: Any | None = None,
     exact_prefix_cache: _TieredExactPrefixCache | None = None,
     static_prefix_tokens: list[int] | None = None,
     promote_static_prefix_to_hot_cache: bool = True,
@@ -240,6 +241,7 @@ def _run(
             report_sparse_progress=report_sparse_progress,
             sync_and_clear_cache=lambda: trace["syncs"].append(stream),
             log=logger,
+            eval_cache_states=eval_cache_states,
             extract_cache_states=extract_cache_states,
             exact_prefix_cache=exact_prefix_cache,
             static_prefix_tokens=static_prefix_tokens,
@@ -280,6 +282,19 @@ def test_system_prefill_chunks_reports_checks_abort_and_uses_stream():
     assert len(trace["evaluations"]) == 4
     assert trace["streams"] == [trace["stream"]] * 5
     assert trace["syncs"] == [trace["stream"]] * 3
+
+
+def test_system_prefill_uses_supplied_cache_evaluator():
+    evaluations: list[Any] = []
+    _, _, trace = _run(
+        system_token_count=5,
+        conversation_token_count=8,
+        selected_indices=[0, 2, 6],
+        eval_cache_states=evaluations.append,
+    )
+
+    assert evaluations == [trace["prompt_cache"]] * 2
+    assert trace["evaluations"] == []
 
 
 @pytest.mark.parametrize(
