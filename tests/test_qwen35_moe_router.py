@@ -14,10 +14,47 @@ import mlx.nn as nn
 import numpy as np
 import pytest
 
-from omlx.patches.qwen35_moe_router import fused_router_topk, router_eligible
+from omlx.patches.qwen35_moe_router import (
+    apply_qwen35_moe_router_patch,
+    fused_router_topk,
+    router_eligible,
+)
 
 K = 8
 NE = 256
+
+
+def test_current_vlm_moe_fallback_uses_signature_without_target_verify():
+    """mlx-vlm removed target_verify from its MoE block API in 0.6.16."""
+    from mlx_vlm.models.qwen3_5_moe.config import TextConfig
+    from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
+    config = TextConfig(
+        model_type="qwen3_5_moe_text",
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        linear_num_value_heads=1,
+        linear_num_key_heads=1,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_conv_kernel_dim=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=4,
+        moe_intermediate_size=4,
+        rms_norm_eps=1e-6,
+        vocab_size=16,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+    )
+    block = Qwen3_5MoeSparseMoeBlock(config)
+    assert apply_qwen35_moe_router_patch()
+
+    output = block(mx.zeros((1, 1, 8), dtype=mx.float32))
+    mx.eval(output)
+
+    assert output.shape == (1, 1, 8)
 
 
 def _composed(p, top_k=K):
@@ -122,6 +159,61 @@ def _composed_combine(routed, scores, shared, gate):
     y = (routed * scores[..., None]).sum(axis=-2)
     shared = mx.sigmoid(gate) * shared
     return y + shared
+
+
+@pytest.mark.parametrize("length", [1, 4, 9])
+@pytest.mark.parametrize("verify", [False, True])
+def test_non_normalized_vlm_routing_preserves_selected_scores(
+    monkeypatch, length, verify
+):
+    from types import SimpleNamespace
+
+    from mlx_vlm.models.qwen3_5.speculative_verifier import Qwen3_5BatchInvariantForward
+    from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
+    from omlx.patches import qwen35_moe_router as router
+
+    assert router.apply_qwen35_moe_router_patch()
+    block = Qwen3_5MoeSparseMoeBlock(
+        SimpleNamespace(
+            hidden_size=64,
+            moe_intermediate_size=64,
+            shared_expert_intermediate_size=64,
+            num_experts=32,
+            num_experts_per_tok=8,
+            norm_topk_prob=False,
+        )
+    )
+    block.set_dtype(mx.bfloat16)
+    x = mx.random.normal((1, length, 64)).astype(mx.bfloat16)
+    verifier = Qwen3_5BatchInvariantForward()
+    linear = verifier._linear if verify else lambda layer, value: layer(value)
+    gates = mx.softmax(linear(block.gate, x), axis=-1, precise=True)
+    indices = mx.argpartition(gates, kth=-block.top_k, axis=-1)[..., -block.top_k :]
+    scores = mx.take_along_axis(gates, indices, axis=-1)
+    routed = (
+        verifier._switch_glu(block.switch_mlp, x, indices)
+        if verify
+        else block.switch_mlp(x, indices)
+    )
+    shared = (
+        verifier._feed_forward(block.shared_expert, x)
+        if verify
+        else block.shared_expert(x)
+    )
+    shared *= mx.sigmoid(linear(block.shared_expert_gate, x))
+    expected = (routed * scores[..., None]).sum(axis=-2) + shared
+    normalized = (
+        routed * (scores / scores.sum(axis=-1, keepdims=True))[..., None]
+    ).sum(axis=-2) + shared
+    assert not mx.array_equal(expected, normalized).item()
+    monkeypatch.setattr(
+        router,
+        "fused_router_topk",
+        lambda *args: pytest.fail("Normalized router used for norm_topk_prob=False"),
+    )
+    actual = verifier._feed_forward(block, x) if verify else block(x)
+    assert mx.array_equal(actual, expected).item()
 
 
 def _same_bits(a, b):
