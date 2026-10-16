@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import functools
 import math
-from typing import Callable, List, Sequence
+from collections.abc import Callable, Sequence
 
 import mlx.core as mx
 
@@ -136,7 +136,7 @@ def apply_xtc(
     logits: mx.array,
     xtc_probability: float,
     xtc_threshold: float,
-    xtc_special_tokens: List[int],
+    xtc_special_tokens: list[int],
 ) -> mx.array:
     """XTC sampling — with ``xtc_probability``, mask out all but the lowest
     above-threshold token to encourage diversity."""
@@ -206,7 +206,7 @@ def make_sampler(
     top_k: int = 0,
     xtc_probability: float = 0.0,
     xtc_threshold: float = 0.0,
-    xtc_special_tokens: List[int] = [],
+    xtc_special_tokens: list[int] = [],
 ) -> Callable[[mx.array], mx.array]:
     """Build a sampler callable matching ``mlx_lm.sample_utils.make_sampler``.
 

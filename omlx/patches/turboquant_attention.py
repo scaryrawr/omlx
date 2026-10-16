@@ -19,7 +19,6 @@ When TurboQuantKVCache is detected, routes attention to:
 
 import logging
 from functools import cache
-from typing import Optional
 
 import mlx.core as mx
 from mlx_lm.models.cache import create_causal_mask
@@ -790,7 +789,11 @@ def _patch_vlm_target_verify_attention() -> None:
         return
     if getattr(q35_lang, "_omlx_tq_target_verify_patched", False):
         return
-    original = getattr(q35_lang, "_qwen3_5_left_padded_attention", None)
+    helper_name = "_target_verify_left_padded_attention"
+    original = getattr(q35_lang, helper_name, None)
+    if original is None:
+        helper_name = "_qwen3_5_left_padded_attention"
+        original = getattr(q35_lang, helper_name, None)
     if original is None:
         return
 
@@ -830,8 +833,8 @@ def _patch_vlm_target_verify_attention() -> None:
         dk, dv = real_cache.dequantize(keys_state=keys, values_state=values)
         dk = dk.astype(queries.dtype)
         dv = dv.astype(queries.dtype)
-        L = queries.shape[2]
-        prefix_len = dk.shape[-2] - L
+        query_length = queries.shape[2]
+        prefix_len = dk.shape[-2] - query_length
         return mx.concatenate(
             [
                 sdpa(
@@ -846,12 +849,13 @@ def _patch_vlm_target_verify_attention() -> None:
                         else None
                     ),
                 )
-                for i in range(L)
+                for i in range(query_length)
             ],
             axis=2,
         )
 
-    q35_lang._qwen3_5_left_padded_attention = patched
+    setattr(q35_lang, helper_name, patched)
+    q35_lang._omlx_tq_target_verify_helper = helper_name
     q35_lang._omlx_tq_target_verify_original = original
     q35_lang._omlx_tq_target_verify_patched = True
 
@@ -887,8 +891,8 @@ def apply_turboquant_attention_patch() -> bool:
         values,
         cache,
         scale: float,
-        mask: Optional[mx.array],
-        sinks: Optional[mx.array] = None,
+        mask: mx.array | None,
+        sinks: mx.array | None = None,
     ) -> mx.array:
         from mlx_vlm.turboquant import TurboQuantKVCache as _TQCache
 
