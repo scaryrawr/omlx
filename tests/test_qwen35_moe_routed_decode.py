@@ -447,6 +447,18 @@ def test_block_without_gate_up_fusion_is_not_routed():
     assert routed.routed_decode_plan(block, x) is None
 
 
+@pytest.mark.parametrize("batch,length", [(1, 1), (2, 1), (1, 4)])
+def test_non_normalized_routing_rejects_cached_decode_and_window_plans(batch, length):
+    block = _block(1024, 320)
+    x = mx.random.normal((batch, length, 1024)).astype(mx.bfloat16)
+    assert routed.routed_decode_plan(block, x[:1, :1]) is not None
+    block.norm_topk_prob = False
+    assert routed.routed_decode_plan(block, x) is None
+    assert routed.routed_verify_window(block, x) is None
+    expected, actual = _pair(block, x)
+    assert _same_bits(expected, actual)
+
+
 def test_kernel_failure_falls_back_once(monkeypatch):
     block = _block(1024, 320)
     x = mx.random.normal((1, 1, 1024)).astype(mx.bfloat16)
