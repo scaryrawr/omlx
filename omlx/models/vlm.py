@@ -20,7 +20,7 @@ Architecture:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -87,6 +87,20 @@ def restore_bonsai_quantized_modules(model: nn.Module) -> int:
     return restored
 
 
+def rope_delta_to_float(value: Any) -> float:
+    """Normalize optional scalar or batched RoPE state for one request.
+
+    Empty arrays represent no position adjustment and therefore map to zero.
+    """
+    if hasattr(value, "reshape") and hasattr(value, "size"):
+        if value.size == 0:
+            return 0.0
+        value = value.reshape(-1)[0]
+    if hasattr(value, "item"):
+        value = value.item()
+    return float(value)
+
+
 class VLMModelAdapter(nn.Module):
     """
     Adapter wrapping a VLM's language_model for BatchGenerator compatibility.
@@ -116,16 +130,16 @@ class VLMModelAdapter(nn.Module):
         self._uses_mrope = self._detect_mrope(vlm_model)
 
         # Pending vision embeddings state (set before prefill, cleared after)
-        self._pending_embeds: Optional[mx.array] = None
-        self._pending_kwargs: Dict[str, Any] = {}
+        self._pending_embeds: mx.array | None = None
+        self._pending_kwargs: dict[str, Any] = {}
         self._embed_offset: int = 0
 
         # Per-request mRoPE state: UID → rope_delta mapping.
         # Populated by scheduler after VLM prefill, consumed during decode.
         # The _patched_generation_batch_step builds _batch_rope_deltas
         # from this dict + current batch UIDs before each step.
-        self._uid_rope_deltas: Dict[int, float] = {}
-        self._batch_rope_deltas: Optional[mx.array] = None
+        self._uid_rope_deltas: dict[int, float] = {}
+        self._batch_rope_deltas: mx.array | None = None
         # External/chunked text prefill owns a stronger position-shape proof
         # than the generic decode binder: the scheduler has already excluded
         # media embeddings and is advancing one request's scalar cache. Qwen4
@@ -141,10 +155,26 @@ class VLMModelAdapter(nn.Module):
         # call of the bound step and is cleared by the next bind.
         self._qwen4_step_text_positions = False
         # Full prompt ids for the next prefill call (see bind_prefill_prompt_ids).
-        self._prefill_prompt_ids: Optional[List[int]] = None
+        self._prefill_prompt_ids: list[int] | None = None
+        # Native-head MTP reuses mlx-lm's GenerationBatch. Embeddings-prefilled
+        # rows stay on standard decode because prompt-history priming skips
+        # inputs_embeds forwards.
+        self._native_mtp_disabled_uids: set[int] = set()
+        self._minicpm_speculative_transactions: list[Any] = []
+
+    def abort_speculative_forward(self) -> None:
+        """Restore any uncommitted native verify after a failed decode step."""
+        transactions = self._minicpm_speculative_transactions
+        self._minicpm_speculative_transactions = []
+        if transactions:
+            from mlx_vlm.speculative.cache_state import abort_speculative_round
+
+            for transaction in transactions:
+                abort_speculative_round(transaction)
 
     def release_resources(self) -> None:
         """Drop references to VLM-owned MLX arrays before engine teardown reclaim."""
+        self.abort_speculative_forward()
         if self._vlm_model is not None:
             try:
                 from ..patches.qwen35_ane_prefill import release_qwen35_ane_prefill
@@ -170,6 +200,7 @@ class VLMModelAdapter(nn.Module):
         self._batch_rope_deltas = None
         self._qwen4_text_prefill_positions = False
         self._qwen4_step_text_positions = False
+        self._native_mtp_disabled_uids.clear()
         self._language_model = None
         self._vlm_model = None
 
@@ -208,6 +239,13 @@ class VLMModelAdapter(nn.Module):
             gdn_states,
             accepted,
             block_size,
+        )
+
+    def speculative_verify_logits(self, inputs, cache, sampler):
+        return self._language_model.speculative_verify_logits(
+            inputs,
+            cache,
+            sampler,
         )
 
     # Runtime family patches use this marker to avoid installing an older,
@@ -258,7 +296,7 @@ class VLMModelAdapter(nn.Module):
             return self._language_model.args
         return self.config
 
-    def make_cache(self) -> List[Any]:
+    def make_cache(self) -> list[Any]:
         """
         Create KV cache using the language model's make_cache().
 
@@ -344,7 +382,7 @@ class VLMModelAdapter(nn.Module):
     def set_pending_embeddings(
         self,
         inputs_embeds: mx.array,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
+        extra_kwargs: dict[str, Any] | None = None,
         start_offset: int = 0,
     ) -> None:
         """
@@ -427,6 +465,7 @@ class VLMModelAdapter(nn.Module):
         """Remove rope_delta for a finished/aborted UID."""
         self._uid_rope_deltas.pop(uid, None)
         self._uid_text_positions.discard(uid)
+        self._native_mtp_disabled_uids.discard(uid)
 
     def mark_text_positions(self, uid: int) -> None:
         """Record the scheduler's text-only proof for ``uid`` (see set_step_rope_deltas)."""
@@ -441,6 +480,22 @@ class VLMModelAdapter(nn.Module):
         self._qwen4_step_text_positions = bool(
             len(uids) == 1 and uids[0] in self._uid_text_positions
         )
+
+    def set_native_mtp_request_eligible(self, uid: int, eligible: bool) -> None:
+        """Record whether a BatchGenerator row may use native-head MTP.
+
+        The scheduler calls this after ``insert()`` and before the first
+        decode step. Text-only rows are eligible; embeddings-prefilled rows
+        retain the same VLM cache but stay on standard autoregressive decode.
+        """
+        if eligible:
+            self._native_mtp_disabled_uids.discard(uid)
+        else:
+            self._native_mtp_disabled_uids.add(uid)
+
+    def native_mtp_allowed_for_uids(self, uids: list[int]) -> bool:
+        """Return False when any current row was prefixed with embeddings."""
+        return all(uid not in self._native_mtp_disabled_uids for uid in uids)
 
     def set_batch_rope_deltas(self, deltas: mx.array) -> None:
         """Set per-request rope_deltas for the current decode batch.
@@ -464,7 +519,7 @@ class VLMModelAdapter(nn.Module):
         self._qwen4_text_prefill_positions = True
         self._qwen4_step_text_positions = False
 
-    def _batch_rope_deltas_for_size(self, batch_size: int) -> Optional[mx.array]:
+    def _batch_rope_deltas_for_size(self, batch_size: int) -> mx.array | None:
         """Return rope deltas aligned to the current model input batch size."""
         if self._batch_rope_deltas is None:
             return None
@@ -541,11 +596,7 @@ class VLMModelAdapter(nn.Module):
         rd = getattr(self._language_model, "_rope_deltas", None)
         if rd is None:
             return 0.0
-        if isinstance(rd, mx.array):
-            return float(rd.reshape(-1)[0].item())
-        if hasattr(rd, "item"):
-            return float(rd.item())
-        return float(rd)
+        return rope_delta_to_float(rd)
 
     @property
     def has_pending_embeddings(self) -> bool:
@@ -579,7 +630,7 @@ class VLMModelAdapter(nn.Module):
         probe = getattr(self._language_model, "ple_gathers_ahead", None)
         return bool(probe()) if probe is not None else False
 
-    def bind_prefill_prompt_ids(self, prompt_ids: Optional[List[int]]) -> None:
+    def bind_prefill_prompt_ids(self, prompt_ids: list[int] | None) -> None:
         """Bind the full prompt ids of the request whose prefill call runs next.
 
         Unlimited-OCR fixes its R-SWA or DASH prompt boundary from
@@ -589,7 +640,7 @@ class VLMModelAdapter(nn.Module):
         """
         self._prefill_prompt_ids = prompt_ids
 
-    def _set_language_prompt_ids(self, cache: Optional[List[Any]]) -> None:
+    def _set_language_prompt_ids(self, cache: list[Any] | None) -> None:
         prompt_ids = self._prefill_prompt_ids
         self._prefill_prompt_ids = None
         if not hasattr(self._language_model, "_prompt_ids"):
@@ -617,7 +668,7 @@ class VLMModelAdapter(nn.Module):
     def __call__(
         self,
         input_ids: mx.array,
-        cache: Optional[List[Any]] = None,
+        cache: list[Any] | None = None,
         skip_lm_head: bool = False,
         **kwargs,
     ) -> Any:
@@ -652,15 +703,34 @@ class VLMModelAdapter(nn.Module):
         return_hidden = bool(kwargs.get("return_hidden", False)) or bool(
             kwargs.get("capture_layer_ids")
         )
-        if skip_lm_head:
-            # Scheduler prefill chunks discard their logits. Translate the
-            # shared cache-only contract into the official Qwen model hook so
-            # those chunks do not project every token over the full vocabulary.
-            if self.model_type == "qwen4_exp":
-                kwargs["skip_logits"] = True
+        minicpm_captures = None
+        minicpm_final_hidden = bool(kwargs.get("return_hidden", False))
+        if self.model_type == "minicpmv4_7" and return_hidden:
+            minicpm_captures = list(kwargs.get("capture_layer_ids") or [])
+            native_captures = set(minicpm_captures)
+            if minicpm_final_hidden:
+                native_captures.add(len(self.layers) - 1)
+            kwargs["capture_layer_ids"] = sorted(native_captures)
+            # Native return_hidden appends normalized hidden; oMLX's MTP head
+            # consumes the final layer's pre-norm capture instead.
+            kwargs["return_hidden"] = False
+        # Scheduler prefill chunks discard their logits. Translate the shared
+        # cache-only contract into the official Qwen model hook.
+        if skip_lm_head and self.model_type == "qwen4_exp":
+            kwargs["skip_logits"] = True
         inputs_embeds = kwargs.pop("inputs_embeds", None)
         vlm_extra = kwargs.pop("vlm_extra_kwargs", None) or {}
         vlm_extra.pop("_captured_rope_deltas", None)
+        if (
+            self.model_type == "minicpmv4_7"
+            and inputs_embeds is None
+            and self._pending_embeds is None
+            and cache is not None
+            and "rope_deltas" not in kwargs
+        ):
+            deltas = self._batch_rope_deltas_for_size(input_ids.shape[0])
+            if deltas is not None:
+                kwargs["rope_deltas"] = deltas.reshape(-1, 1)
 
         if inputs_embeds is not None:
             result = self._language_model(
@@ -748,6 +818,21 @@ class VLMModelAdapter(nn.Module):
                     self._vlm_model._set_position_state(input_ids)
                 result = self._language_model(input_ids, cache=cache, **kwargs)
 
+        if self.model_type == "minicpmv4_7" and getattr(result, "gdn_states", None) is not None:
+            self._minicpm_speculative_transactions.append(result.gdn_states)
+        if minicpm_captures is not None:
+            try:
+                by_layer = dict(
+                    zip(kwargs["capture_layer_ids"], result.hidden_states, strict=True)
+                )
+                result.hidden_states = [by_layer[layer] for layer in minicpm_captures]
+                if minicpm_final_hidden:
+                    result.hidden_states.append(by_layer[len(self.layers) - 1])
+            except BaseException:
+                from mlx_vlm.speculative.cache_state import abort_speculative_round
+
+                abort_speculative_round(result.gdn_states)
+                raise
         if return_hidden and hasattr(result, "logits"):
             return result
         if hasattr(result, "logits"):
@@ -757,7 +842,7 @@ class VLMModelAdapter(nn.Module):
     def _forward_with_embeddings(
         self,
         input_ids: mx.array,
-        cache: Optional[List[Any]] = None,
+        cache: list[Any] | None = None,
         **kwargs,
     ) -> Any:
         """Forward pass with pre-computed vision embeddings (prefill phase)."""
@@ -782,7 +867,7 @@ class VLMModelAdapter(nn.Module):
 
         return result
 
-    def get_input_embeddings(self, input_ids: mx.array, pixel_values: Optional[mx.array] = None, **kwargs) -> Any:
+    def get_input_embeddings(self, input_ids: mx.array, pixel_values: mx.array | None = None, **kwargs) -> Any:
         """
         Compute vision+text merged embeddings.
 
