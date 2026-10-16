@@ -179,12 +179,11 @@ def swap_platform_wheels(
     # Remove existing mlx/mlx-metal from site-packages
     for item in site_packages.iterdir():
         name = item.name.lower()
-        if name in ("mlx", "mlx_metal") or name.startswith(
-            ("mlx-", "mlx_metal-")
+        if item.is_dir() and (
+            name in ("mlx", "mlx_metal") or name.startswith(("mlx-", "mlx_metal-"))
         ):
-            if item.is_dir():
-                shutil.rmtree(item)
-                print(f"    Removed {item.name}")
+            shutil.rmtree(item)
+            print(f"    Removed {item.name}")
 
     # Install downloaded wheels into site-packages
     for whl in wheels_tmp.glob("*.whl"):
@@ -410,7 +409,7 @@ def _write_engine_commits(omlx_pkg_dir: Path):
     repo_urls = {
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
     }
 
@@ -579,7 +578,7 @@ def _create_resolved_toml(version_map: dict[str, str], base_toml: Path) -> Path:
     """
     content = base_toml.read_text()
 
-    for full_req, git_url in _parse_git_requirements(base_toml):
+    for full_req, _git_url in _parse_git_requirements(base_toml):
         pkg_name = full_req.split("@")[0].strip()
         whl = _find_wheel_for_package(pkg_name)
         if whl:
