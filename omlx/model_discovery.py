@@ -78,6 +78,9 @@ def model_unavailable_reason(config_model_type: str | None) -> str | None:
 
 # Known VLM (Vision-Language Model) types from mlx-vlm
 VLM_MODEL_TYPES = {
+    "nemotron_h_nano_omni",
+    "nemotronh_nano_omni_reasoning_v3",
+    "nemotron_h_omni",
     "deepseek_v41",
     "qwen2_vl",
     "qwen2_5_vl",
