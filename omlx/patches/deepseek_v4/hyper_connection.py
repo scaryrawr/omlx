@@ -1,4 +1,6 @@
 # Copyright © 2026 Apple Inc.
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: N806, UP006, UP035
 
 from typing import Tuple
 

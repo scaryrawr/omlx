@@ -1,7 +1,7 @@
-# Copyright (c) 2023 DeepSeek
-# SPDX-License-Identifier: MIT
-# ruff: noqa: N806, SIM114, UP006, UP007, UP035, UP045
-"""DeepSeek V4 chat encoding based on the official 0731 reference.
+# Copyright © 2025 Apple Inc.
+# SPDX-License-Identifier: Apache 2.0
+# ruff: noqa: E722, F401, N806, UP006, UP007, UP032, UP035, UP045
+"""DeepSeek V4 DSML chat template (derived from mlx-lm deepseek_v32).
 
 The encoding core is vendored from ``deepseek-ai/DeepSeek-V4-Flash-0731``.
 The small adapter at the end exposes mlx-lm's ``apply_chat_template`` API.
