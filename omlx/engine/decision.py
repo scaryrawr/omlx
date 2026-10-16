@@ -19,7 +19,7 @@ from typing import Any
 import mlx.core as mx
 
 from ..engine_core import get_mlx_executor
-from ..model_discovery import decision_kind
+from ..model_discovery import DecisionKind, decision_kind
 from ..models.clef import ClefModel
 from ..models.d1 import D1Model
 from ..models.d3 import D3Model
@@ -30,13 +30,13 @@ from .forward_fairness import ForwardFairnessGate
 
 logger = logging.getLogger(__name__)
 
-_MODEL_CLASSES = {
+DecisionModel = ClefModel | OpenJevModel | D3Model | D1Model
+_MODEL_CLASSES: dict[DecisionKind, type[DecisionModel]] = {
     "clef": ClefModel,
     "openjev": OpenJevModel,
     "d3": D3Model,
     "d1": D1Model,
 }
-DecisionModel = ClefModel | OpenJevModel | D3Model | D1Model
 
 
 class DecisionEngine(BaseNonStreamingEngine):
