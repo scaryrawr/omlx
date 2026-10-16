@@ -44,6 +44,11 @@ Each package has:
 
 ANE offload is off by default. See [Qwen ANE/GPU prefill](experimental/qwen35_ane_prefill.md).
 
+The fork's Qwen MXFP4/MXFP8 prefill wrappers are
+`quant_matmul.fast.mxfp4_qmm_t` and `mxfp8_qmm_t`. They share the
+`omlx_quant_matmul_kernels.metallib` library with the affine matmul kernels;
+there is no separate `qwen35_prefill` extension.
+
 Some kernels are not in this directory. Small JIT kernels (`mx.fast.metal_kernel`) live next to the model code in `omlx/patches`. They compile at runtime and need no build.
 
 ## Build

@@ -63,6 +63,9 @@ _EXT_HAS_NAX = _ext is not None and hasattr(_ext, "is_nax_available")
 # presence marks the new ABI.  Older builds only carry gs=64 kernels; callers
 # must keep gs!=64 layers on stock mlx (see qmm_supports_group_size).
 _EXT_HAS_QMM_GROUP_SIZE = _ext is not None and hasattr(_ext, "affine_q2_qmm_t")
+_EXT_HAS_NARROW_AFFINE = bool(
+    _ext is not None and getattr(_ext, "QMM_HAS_NARROW_AFFINE", False)
+)
 
 
 def _qmm_group_size_kwargs(group_size: int) -> dict:
@@ -79,6 +82,11 @@ def qmm_supports_group_size(group_size: int) -> bool:
     an old build would silently run the gs=64 kernel on gs=128 data.
     """
     return group_size == 64 or _EXT_HAS_QMM_GROUP_SIZE
+
+
+def qmm_supports_narrow_affine() -> bool:
+    """True if the extension contains the specialized 48-output qmm kernels."""
+    return _EXT_HAS_NARROW_AFFINE
 
 
 _NAX_ARCH_RE = re.compile(r"applegpu_g(\d+)([a-z])")
@@ -734,3 +742,41 @@ def __dir__() -> list[str]:
     if _ext is not None:
         names.update(dir(_ext))
     return sorted(names)
+
+
+def mxfp4_qmm_t(
+    x: mx.array,
+    weight: mx.array,
+    scales: mx.array,
+    variant: int = 8,
+    *,
+    stream=None,
+) -> mx.array:
+    if _ext is not None and hasattr(_ext, "mxfp4_qmm_t"):
+        return _ext.mxfp4_qmm_t(
+            x,
+            weight,
+            scales,
+            variant,
+            **_native_stream_kwargs(stream),
+        )
+    raise RuntimeError("mxfp4_qmm_t native kernel is unavailable")
+
+
+def mxfp8_qmm_t(
+    x: mx.array,
+    weight: mx.array,
+    scales: mx.array,
+    variant: int = 8,
+    *,
+    stream=None,
+) -> mx.array:
+    if _ext is not None and hasattr(_ext, "mxfp8_qmm_t"):
+        return _ext.mxfp8_qmm_t(
+            x,
+            weight,
+            scales,
+            variant,
+            **_native_stream_kwargs(stream),
+        )
+    raise RuntimeError("mxfp8_qmm_t native kernel is unavailable")
