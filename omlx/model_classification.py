@@ -1,6 +1,53 @@
 # SPDX-License-Identifier: Apache-2.0
 """Lightweight checkpoint classification shared by discovery and integrations."""
 
+NEMOTRON_OMNI_MODEL_TYPES = frozenset(
+    {"nemotron_h_nano_omni", "nemotronh_nano_omni_reasoning_v3", "nemotron_h_omni"}
+)
+
+
+def is_nemotron_omni(model_type: str | None) -> bool:
+    return (
+        isinstance(model_type, str) and model_type.lower() in NEMOTRON_OMNI_MODEL_TYPES
+    )
+
+
+def is_nemotron_modelopt_source(config: dict) -> bool:
+    quant = config.get("quantization_config") or {}
+    if not isinstance(quant, dict) or not is_nemotron_omni(config.get("model_type")):
+        return False
+    return (
+        quant.get("quant_method") in {"modelopt", "modelopt_mixed"}
+        or (
+            quant.get("quant_method") == "fp8"
+            and quant.get("moe_quant_algo") == "NVFP4"
+        )
+    ) and quant.get("quant_algo") in {"NVFP4", "W4A16_NVFP4", "MIXED_PRECISION"}
+
+
+def normalize_nemotron_config(config: dict) -> dict:
+    """Expose native aliases and layer geometry without importing an engine."""
+    if not is_nemotron_omni(config.get("model_type")):
+        return config
+    result = dict(config)
+    result["model_type"] = config["model_type"].lower()
+    text = dict(result.get("text_config") or result.pop("llm_config", None) or {})
+    result.pop("llm_config", None)
+    pattern = (
+        text.get("block_configs")
+        or text.get("hybrid_override_pattern")
+        or text.get("layers_block_type")
+    )
+    if pattern:
+        text["num_hidden_layers"] = len(pattern)
+    if result.get("vision_final_layernorm") is None:
+        result["vision_final_layernorm"] = (
+            int(text.get("num_nextn_predict_layers", 0) or 0) > 0
+        )
+    result["text_config"] = text
+    return result
+
+
 # Known embedding model types from mlx-embeddings
 EMBEDDING_MODEL_TYPES = {
     "embedding_gemma2",
