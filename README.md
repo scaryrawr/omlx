@@ -68,6 +68,8 @@ omlx start
 # Optional: MCP (Model Context Protocol) support, then restart to load it
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
 omlx restart
+
+# mlx-vlm image generation and editing support is included with oMLX.
 ```
 
 ### From Source
@@ -79,6 +81,10 @@ make install                # Editable install with the web UI and native custom
 # No full Xcode? make install-no-kernels installs without the kernels
 make mcp                    # Optional: MCP support, restart `omlx serve` to load it
 ```
+
+Image generation and editing use the core `mlx-vlm` dependency. The retained
+`image` extra is a no-op compatibility alias; source and released installs do
+not need it.
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4/M5).
 
@@ -98,6 +104,9 @@ Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/
 > ```bash
 > python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
 > ```
+
+Core installs include text, VLM, embedding, reranker, and mlx-vlm image
+generation/editing support. MCP remains optional via the `mcp` extra.
 
 ## Quickstart
 
@@ -122,7 +131,7 @@ omlx restart
 omlx serve --model-dir ~/models
 ```
 
-The server discovers LLMs, VLMs, embedding models, and rerankers from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
+The server discovers LLMs, VLMs, embedding models, rerankers, and image model manifests from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
 
 ### Homebrew Service
 
@@ -147,7 +156,8 @@ Logs are written to two locations:
 
 ## Features
 
-Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon.
+Supports text LLMs, vision-language models (VLM), OCR models, embeddings,
+rerankers, and mlx-vlm image generation/editing models on Apple Silicon.
 
 ### Admin Dashboard
 
@@ -173,7 +183,9 @@ checklist.
 
 ### Vision-Language Models
 
-Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; video needs OpenCV (`opencv-python-headless`). oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
+Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; the fork also accepts `input_video: {"data": "<base64>", "format": "mp4"}` and inline video file attachments. Video needs OpenCV (`opencv-python-headless`) and cannot be combined with images or audio in one native-video request. Remote video URLs and local file paths are rejected. oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
+
+Qwen3.8-Flash-Next (`qwen4_exp`) PLE SSD offloading supports dense/raw-FP8, affine, and native MXFP4 embedding shards, including mixed storage layouts. Native MXFP4 uses packed U32 weights and U8 scales (4 bits, group size 32, no biases). The mmap path reads and dequantizes only requested rows, keeping the full PLE table off the GPU without converting the checkpoint.
 
 ### Tiered KV Cache (Hot + Cold)
 
@@ -198,7 +210,7 @@ Runs smaller context models with Claude Code by reporting the model's real conte
 
 ### Multi-Model Serving
 
-Load LLMs, VLMs, embedding models, and rerankers within the same server. Models are managed through a combination of automatic and manual controls:
+Load LLMs, VLMs, embedding models, rerankers, and image models within the same server. Models are managed through a combination of automatic and manual controls:
 
 - **LRU eviction**: Least-recently-used models are evicted automatically when memory runs low.
 - **Manual load/unload**: Interactive status badges in the admin panel let you load or unload models on demand.
@@ -248,6 +260,45 @@ Set up OpenClaw, OpenCode, Codex, Hermes Agent, Copilot, Pi, Mistral Vibe, and D
 
 Install [Mistral Vibe](https://github.com/mistralai/mistral-vibe) 2.26.0 or newer with `uv tool install mistral-vibe`, then run `omlx launch vibe` to select a local model, or `omlx launch vibe --model <model-id>`. Vibe's provider, model, API-key reference and context window are configured for that process through its `VIBE_*` environment overrides. Existing `config.toml`, `VIBE_HOME`, tool permissions and cloud configuration are preserved. Pass Vibe arguments after `--`, for example `omlx launch vibe --model <model-id> -- --resume`.
 
+#### Codex model switching
+
+```bash
+omlx launch codex
+omlx launch codex_app
+# Optionally select the initial model; other models remain available:
+omlx launch codex --model your-model-id
+```
+
+Both integrations refresh a Codex model catalog from oMLX's available chat models,
+so you can switch models with the CLI's `/model` selector or the desktop app's
+model picker instead of selecting just one model before launch. Without `--model`,
+oMLX uses the saved Codex integration model when available, otherwise the
+oMLX default model (including its served alias). If neither is available,
+it falls back to the first chat model returned by the server (favorites first).
+The selected model starts loading in the background before Codex opens; launch
+does not wait for loading to finish. Warm-up request failures produce a warning
+without preventing launch, and normal inference can still load the model on demand.
+
+The catalog preserves served aliases and exposed profiles, includes unloaded
+models that oMLX can load on demand, and records each model's context window and
+text/image input support. Embedding, reranking, audio, and image-generation models
+are excluded when their type is available from the model status endpoint. If
+status is unavailable, the public model listing supplies context limits and input
+support defaults to text-only. Thinking models retain the existing high-effort
+default; additional reasoning effort levels are not inferred.
+
+Requires a Codex version supporting
+[`model_catalog_json`](https://developers.openai.com/codex/config-reference/#model_catalog_json).
+The catalog is loaded at startup: relaunch through oMLX after adding or removing
+models, changing aliases, or updating model settings. Restart an already-running
+desktop app to apply the refreshed configuration. The CLI uses process-scoped
+provider/catalog overrides without changing your `config.toml`; the desktop
+integration backs up and updates that file as before. A custom `CODEX_HOME` is
+respected, and oMLX's generated catalogs do not overwrite other catalog files.
+User-specified global context/reasoning overrides in CLI configuration can still
+take precedence over catalog metadata; the desktop integration clears these
+overrides so limits follow the selected model.
+
 ### Performance Benchmark
 
 One-click benchmarking from the admin panel. Measures prefill (PP) and text generation (TG) tokens per second, with partial prefix cache hit testing for realistic performance numbers.
@@ -276,6 +327,8 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
 | `POST /v1/systemone` | Typed decisions with decision models or chat models (TypeSafe System One) |
+| `POST /v1/images/generations` | Image generation |
+| `POST /v1/images/edits` | Image editing |
 | `GET /v1/models` | List available models |
 | `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`) |
 
@@ -324,6 +377,203 @@ Models are auto-detected by type. You can also download models directly from the
 | Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
 | Reranker | ModernBERT, XLM-RoBERTa |
 | Decision | Clef, Clef-Flash, OpenJev, Decision 3.0 (d3, d3-flash, d3-mini, d3-nano, d3-lite, d3-edge) |
+| Image | mlx-vlm models: Qwen Image 2.1/base/Turbo, FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+
+### MiniCPM-V 4.7
+
+`MiniCPM-V-4.7-35B-A3B` requires the complete native `minicpmv4_7`
+implementation; it cannot be aliased to MiniCPM 4.6. The paired
+`MiniCPM-V-4.7-35B-A3B-DSpark` checkpoint is a drafter, not an independently
+served chat model. Support uses the existing chat, Anthropic Messages and
+Responses APIs; no audio or image/video generation capability is implied.
+
+The model and torch-free processor come from official **mlx-vlm 0.7.8**, pinned
+to release commit `9790231827a890eade1a626643a6bc94a1317c72`. The former full
+vendored implementation and source-hash installation bridge have been removed.
+This release requires Python >=3.10, MLX >=0.32.3 and Transformers >=5.14;
+oMLX retains its existing MLX pin and Transformers upper bound.
+
+Small serving hooks in `omlx/patches/minicpm47.py` preserve request-local
+positions, padded-prefill behavior and the existing MiniCPM GDN normalization,
+including the official exact verifier. They also expose processor controls to
+mlx-vlm's signature-based input dispatcher and resolve legacy ViT-merger
+quantization paths through its per-model alias hook. The Qwen MTP constructor
+leaves foreign subclasses, including MiniCPM, responsible for their own heads.
+Vision packing uses the convolution's input dtype and the token embedding's
+floating output dtype, not packed quantized token-table storage.
+`omlx/speculative/minicpm_dspark.py` extends the official
+DSpark drafter with oMLX's proposal-probability/confidence transport and fixed
+paired-helper policy. The model, vision encoder, processor, checkpoint loading
+and speculative cache transactions remain upstream implementations.
+The official target uses normalized top-k routing; `norm_topk_prob=False`
+is not supported.
+
+Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_minicpm47.py tests/test_minicpm_pairing.py`
+for isolated, offline CPU compatibility checks. These exercise tiny strict
+HF/canonical/mixed-quantized checkpoints, processor/vision inputs, capture and
+cache rollback, and real oMLX greedy/sampled DSpark generation with cancellation
+and exception cleanup. Existing converted checkpoints and provenance checks
+are preserved; no reconversion or metadata changes are required.
+Tiny fixtures do not establish full-checkpoint or deployed GPU compatibility.
+
+The optional `mm_processor_kwargs` request field controls compression and
+slicing, separately from `chat_template_kwargs`:
+
+```json
+{
+  "mm_processor_kwargs": {
+    "downsample_mode": "4x",
+    "max_slice_nums": 36
+  }
+}
+```
+
+`downsample_mode` accepts `"4x"` or `"16x"`; `max_slice_nums` must be a positive
+integer. These controls can also be stored in per-model settings/profiles.
+In the admin UI, open **Model Settings > MiniCPM Media** to edit them.
+Choose **Default** for compression or clear the slicing limit to remove that
+override. Saving a MiniCPM profile with both controls unset records processor
+defaults explicitly rather than retaining previously applied media overrides.
+Non-null request values override model settings, then checkpoint/processor
+defaults. Omitted controls do not change existing defaults. The same effective
+compression mode is used for preprocessing, canvas positions and encoding.
+Advanced frame stacking (`stack_frames`) is deferred and rejected. Ordinary
+video retains the existing frame limit and can be combined with images.
+
+DSpark is explicitly opt-in through per-model `dflash_enabled: true` and
+`dflash_draft_model` pointing to its existing local paired checkpoint. The
+helper uses the target tokenizer and native sequential Markov proposals,
+proposal probabilities and confidence outputs. Verification is fixed-width,
+with at most eight proposals plus an anchor; confidence is observational, not
+an adaptive controller. Unsupported adaptive modes, sampled batches, stochastic
+XTC, constrained grammar decoding, sparse prefill, context-window truncation
+and private SSD drafter caching fail
+explicitly. Helper activation failures do not silently fall back to ordinary
+generation.
+
+Helper admission also checks source provenance, not just matching dimensions.
+Original Hugging Face local-directory downloads must retain their
+`.cache/huggingface/download/config.json.metadata`. Converted checkpoints
+may declare their source in `config.json`:
+`"omlx_source": {"repo_id": "...", "revision": "..."}`. The reviewed target
+source is `openbmb/MiniCPM-V-4.7-35B-A3B` at
+`4c7623a9326e0f74313bbc7292d852a9e3018a70`, and the helper source is
+`openbmb/MiniCPM-V-4.7-35B-A3B-DSpark` at
+`5facb75c251ffd524524a544c1f5fd97ba0d6c5c`.
+Conversion metadata is an explicit origin declaration, not a cryptographic
+certification of the trained tensors.
+
+DSpark requests re-prefill the complete prompt because ordinary KV prefix
+entries do not contain its target-layer capture history. Base serving without
+DSpark retains normal prefix-cache behavior. MiniCPM vision-feature caching is
+disabled until crop/position-equivalent reuse is proven. Original weights and
+configs are not rewritten; full checkpoint admission and installed-runtime
+validation require a separate memory-safe execution slot.
+
+### Image Model Manifests
+
+Image generation and editing use the core mlx-vlm dependency. Add an
+`omlx-image-model.json` manifest when a local image-model directory needs an
+explicit family or task declaration.
+
+Add an `omlx-image-model.json` file in a model subdirectory to expose an
+mlx-vlm image model through `/v1/images/generations` and/or `/v1/images/edits`:
+
+```json
+{
+  "backend": "mlx-vlm",
+  "base_model": "flux2-klein-4b",
+  "task": ["generation", "edit"],
+  "model_path": ".",
+  "default_steps": 28,
+  "default_guidance": 3.5,
+  "default_image_strength": 0.4,
+  "estimated_size": 4294967296
+}
+```
+
+`model_path`, defaults, and `estimated_size` are optional. When
+`estimated_size` is omitted, oMLX uses the local `model_path` size when
+available, otherwise a conservative family estimate for memory accounting.
+`quantize` is not a valid image manifest setting because mlx-vlm loads the
+checkpoint's native weight format directly.
+
+Supported `base_model` aliases include FLUX.2 Klein 4B/9B/base/KV variants
+(generation and multi-image edit), Mage-Flow base/aligned/turbo and their edit
+variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
+Ming-Image 0.1 Design (generation only), Ideogram 4 FP8, and Bonsai Ternary.
+The original `Ming-Image-0.1-Design` and quantized variants (such as
+`Ming-Image-0.1-Design-mxfp8`) are discovered without a manifest when placed
+under the model directory. Defaults are 1024×1024, 12 steps, and guidance 1.0;
+the output PNG retains its alpha channel. Z-Image
+and ERNIE-Image edit modes require
+exactly one source image; masks are not supported by the current mlx-vlm image
+families.
+
+Qwen Image **2.1 base and 2.1 Turbo** support generation and reference-image
+editing. Local multi-component checkpoints are detected from their 2.1
+pipeline/transformer/VAE configuration, even after renaming the directory;
+a Qwen-looking folder name alone is not sufficient. Older Qwen Image/Edit
+architectures are not included in this support. Explicit manifests can use
+`qwen-image-2.1` or `qwen-image-2.1-turbo`.
+
+The saved Turbo recipe has eight denoising steps and guidance 1.0. Schedule
+precedence is **request `sigmas` > checkpoint `sample_sigmas` > generated
+schedule from `steps`**. Setting only `steps`, including a manifest default,
+does not replace a saved checkpoint grid. Base checkpoints without saved
+grids keep 30 generation steps or 40 editing steps. Finite positive guidance
+overrides remain supported.
+
+Custom sigma grids are an API extension, not an Imagine editor. Supply a
+nonempty, finite, strictly descending JSON array in `(0, 1]`, without terminal
+zero; the scheduler applies the checkpoint's shift settings and appends the
+terminal zero. For multipart edits, encode the `sigmas` form field as a JSON
+array, for example `[1, 0.8, 0.4]`. Each response image includes the backend's
+effective `steps` and `guidance` when available, plus its actual output size.
+Imagine explains saved-grid precedence and displays the actual result steps.
+
+Qwen 2.1 editing conditions on all supplied reference images; the existing
+API/UI upload limits still apply. With automatic size, the backend selects
+the output aspect from the last resized reference. Qwen does not implement
+mask editing, `image_strength`, or an alternative `scheduler` selection;
+explicit unsupported options are rejected rather than ignored.
+
+The Qwen image compatibility patch temporarily backports a local mlx-vlm commit
+`9a200804c81b98fd420d1f8a064a6824cec76f4f`'s saved-grid,
+static-shift, effective-default/result, and nested processor-config fixes.
+It activates only for Qwen loads, refuses unknown upstream source shapes, and
+does nothing when the complete native fix is present. Remove the backport once
+oMLX's mlx-vlm pin contains the complete fix, retaining registry/API/UI wiring
+and regression tests. Full-checkpoint generation/edit validation and deployment
+are separate from weight-free tests and require a coordinated GPU memory
+budget; no checkpoint conversion or modification is needed.
+
+The source revision above is not yet published in the upstream repository.
+The checked-in hunks contain the exact before/after source and AST fingerprints,
+normalized across Python versions by omitting only empty type-parameter fields.
+Nonempty type parameters and other source changes still affect the fingerprint.
+The hunks can be verified without that local commit. Against a public
+`Blaizzy/mlx-vlm` checkout containing the original backport base
+`4f4634bb813c0298cb1467bed2e957526c71d0b4`, run:
+
+```bash
+uv run --python python3.12 python \
+  omlx/patches/mlx_vlm_qwen_image_compat/generate_backport.py \
+  --source-repo /path/to/mlx-vlm \
+  --verify-from-base
+```
+
+This reconstructs each target from the public base, verifies every hunk's unique
+context and the resulting AST fingerprint, and does not change any files.
+To regenerate the backport, a checkout containing the local source commit is
+required:
+
+```bash
+uv run --python python3.12 python \
+  omlx/patches/mlx_vlm_qwen_image_compat/generate_backport.py \
+  --source-repo /path/to/mlx-vlm \
+  --source-revision 9a200804c81b98fd420d1f8a064a6824cec76f4f
+```
 
 ## CLI Configuration
 
