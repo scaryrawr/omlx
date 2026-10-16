@@ -21,6 +21,7 @@ import time
 import weakref
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import islice
 from statistics import median
 from types import SimpleNamespace
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -342,15 +343,24 @@ def apply() -> bool:
                 gen_batch._omlx_mtp_activation_safe = (
                     _batch_generator_allows_mtp_activation(self)
                 )
-            if (
-                _generation_batch_has_active_mtp(gen_batch)
-                and not getattr(
+            native_full_prompt = (
+                getattr(
                     getattr(gen_batch, "model", None),
                     "_omlx_native_mtp_full_prompt",
                     False,
                 )
-                and not _singleton_mtp_handoff_ready(gen_batch)
-                and getattr(gen_batch, "_omlx_mtp_batch_state", None) is None
+                is True
+            )
+            if (
+                _generation_batch_has_active_mtp(gen_batch)
+                and (
+                    (native_full_prompt and _native_mtp_admission_blocked(self))
+                    or (
+                        not native_full_prompt
+                        and not _singleton_mtp_handoff_ready(gen_batch)
+                        and getattr(gen_batch, "_omlx_mtp_batch_state", None) is None
+                    )
+                )
             ):
                 old_completion_batch_size = getattr(
                     self,
@@ -358,7 +368,8 @@ def apply() -> bool:
                     None,
                 )
                 had_completion_batch_size = hasattr(self, "completion_batch_size")
-                # Drain singleton speculation before admitting a late join.
+                # Drain speculation before an unsafe join; native full-prompt
+                # cohorts retain their media-conditioned caches until finished.
                 self.completion_batch_size = 0
                 try:
                     return original_bg_next(self, *args, **kwargs)
@@ -541,6 +552,27 @@ def _batch_generator_allows_mtp_activation(batch_gen: Any) -> bool:
         )
     except Exception:
         return False
+
+
+def _native_mtp_admission_blocked(batch_gen: Any) -> bool:
+    """Keep MTP-ineligible rows outside an active native cohort."""
+    prompt_batch = batch_gen._prompt_batch
+    if len(prompt_batch) and not _mtp_common_eligible(prompt_batch):
+        return True
+    # Decode runs before admission and can finish any active row, so inspect
+    # the entire next prefill group, not just the currently free decode slots.
+    slots = max(0, batch_gen.prefill_batch_size - len(prompt_batch))
+    for sequence in islice(batch_gen._unprocessed_sequences, slots):
+        candidate = SimpleNamespace(
+            model=batch_gen.model,
+            uids=[sequence[0]],
+            samplers=[sequence[5]],
+            fallback_sampler=batch_gen.sampler,
+            logits_processors=[sequence[6]],
+        )
+        if not _mtp_common_eligible(candidate):
+            return True
+    return False
 
 
 def _generation_batch_has_active_mtp(gen_batch: Any) -> bool:

@@ -194,6 +194,240 @@ def test_native_mtp_batch_generator_serves_two_unequal_prompts(
         )
 
 
+@pytest.mark.parametrize("blocker", ["grammar", "xtc"])
+@pytest.mark.parametrize("media", ["text", "image", "video"])
+@pytest.mark.parametrize("active_rows", [1, 2])
+@pytest.mark.parametrize("joined_prompt", [[11], [11, 12, 13]])
+def test_native_mtp_ineligible_late_join_preserves_live_cache(
+    native_target, monkeypatch, blocker, media, active_rows, joined_prompt
+):
+    from mlx_lm.generate import BatchGenerator
+    from mlx_vlm.speculative.drafters.nemotron_h_mtp import Model, ModelConfig
+
+    from omlx import scheduler
+    from omlx.api.grammar import GrammarConstraintProcessor
+    from omlx.models.vlm import VLMModelAdapter
+    from omlx.patches.mlx_lm_mtp import batch_generator
+
+    class FixedTokenGrammar(GrammarConstraintProcessor):
+        def __init__(self):
+            self._pending = False
+            self.accepted = []
+
+        def __call__(self, tokens, logits):
+            self._pending = True
+            return mx.where(mx.arange(logits.shape[-1]) == 12, logits, -mx.inf)
+
+        def accept_token(self, token):
+            self._pending = False
+            self.accepted.append(token)
+
+    class XTCMarkedSampler:
+        """Deterministic sampling with XTC's MTP-ineligibility metadata."""
+
+        temp = 1.0
+        xtc_probability = 0.5
+
+        def __call__(self, logprobs):
+            return mx.argmax(logprobs, axis=-1)
+
+    assert batch_generator.apply()
+    assert scheduler.BatchGenerator is BatchGenerator
+    adapter = VLMModelAdapter(native_target)
+    adapter.enable_nemotron_mtp(
+        Model(ModelConfig(text_config=tiny_nemotron_config()["llm_config"])), depth=3
+    )
+    ids = [1, 2, 3]
+    embeddings = None
+    if media != "text":
+        ids = [1, 18, 3] if media == "image" else [1, 18, 18, 18, 3]
+        kwargs = (
+            {"pixel_values": mx.ones((1, 3, 32, 32))}
+            if media == "image"
+            else {"pixel_values_videos": mx.ones((6, 3, 32, 32))}
+        )
+        prepared = prepare_nemotron_prompt(native_target, mx.array([ids]), **kwargs)
+        ids = prepared.token_ids[0].tolist()
+        embeddings = prepared.inputs_embeds
+        adapter.set_pending_embeddings(embeddings)
+
+    verified_rows = []
+    verify = adapter.speculative_verify_logits
+
+    def observed_verify(inputs, cache, sampler):
+        verified_rows.append(inputs.shape[0])
+        return verify(inputs, cache, sampler)
+
+    monkeypatch.setattr(adapter, "speculative_verify_logits", observed_verify)
+    rebuilds = []
+    rebuild = batch_generator._rebuild_singleton_cache
+
+    def observed_rebuild(model):
+        rebuilds.append(model)
+        return rebuild(model)
+
+    monkeypatch.setattr(batch_generator, "_rebuild_singleton_cache", observed_rebuild)
+    generator = BatchGenerator(
+        adapter,
+        max_tokens=24,
+        prefill_step_size=2,
+        prefill_batch_size=1,
+        completion_batch_size=2,
+        sampler=lambda lp: mx.argmax(lp, axis=-1),
+    )
+    uid = generator.insert([ids])[0]
+    prompts = {uid: ids}
+    outputs = {uid: []}
+    terminal = {}
+    grammar = FixedTokenGrammar()
+    joined = None
+
+    def step():
+        responses = generator.next_generated()
+        for response in responses:
+            if response.uid == joined:
+                assert set(prompts) - {joined} <= set(terminal)
+            outputs[response.uid].append(response.token)
+            if response.finish_reason:
+                assert response.finish_reason == "length"
+                terminal[response.uid] = response.prompt_cache
+        return responses
+
+    try:
+        for _ in range(20):
+            step()
+            if batch_generator._generation_batch_has_active_mtp(
+                generator._generation_batch
+            ):
+                break
+        assert batch_generator._generation_batch_has_active_mtp(
+            generator._generation_batch
+        )
+        if active_rows == 2:
+            peer_prompt = [5, 6, 7, 8, 9]
+            peer = generator.insert([peer_prompt])[0]
+            prompts[peer] = peer_prompt
+            outputs[peer] = []
+            for _ in range(20):
+                step()
+                if 2 in verified_rows:
+                    break
+            assert 2 in verified_rows
+        assert not terminal
+        joined = generator.insert(
+            [joined_prompt],
+            logits_processors=[[grammar]] if blocker == "grammar" else None,
+            samplers=[XTCMarkedSampler()] if blocker == "xtc" else None,
+        )[0]
+        prompts[joined] = joined_prompt
+        outputs[joined] = []
+        for _ in range(100):
+            if not step():
+                break
+    finally:
+        generator.close()
+
+    assert set(terminal) == set(prompts)
+    assert not rebuilds
+    assert generator.completion_batch_size == 2
+    if blocker == "grammar":
+        assert grammar.accepted == outputs[joined] == [12] * 24
+    for row_uid, prompt in prompts.items():
+        cache = native_target.language_model.make_cache()
+        kwargs = {"inputs_embeds": embeddings} if row_uid == uid else {}
+        logits = native_target.language_model(
+            mx.array([prompt]), cache=cache, **kwargs
+        ).logits[:, -1]
+        expected = []
+        for _ in range(24):
+            token = (
+                12
+                if row_uid == joined and blocker == "grammar"
+                else int(mx.argmax(logits, axis=-1).item())
+            )
+            expected.append(token)
+            logits = native_target.language_model(
+                mx.array([[token]]), cache=cache
+            ).logits[:, -1]
+        assert outputs[row_uid] == expected
+        probe = mx.array([[21]])
+        np.testing.assert_allclose(
+            np.array(
+                native_target.language_model(probe, cache=terminal[row_uid]).logits
+            ),
+            np.array(native_target.language_model(probe, cache=cache).logits),
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+
+def test_cancelling_ineligible_native_late_join_unblocks_compatible_peer(
+    native_target, monkeypatch
+):
+    from mlx_lm.generate import BatchGenerator
+    from mlx_vlm.speculative.drafters.nemotron_h_mtp import Model, ModelConfig
+
+    from omlx import scheduler
+    from omlx.models.vlm import VLMModelAdapter
+    from omlx.patches.mlx_lm_mtp import batch_generator
+    from omlx.utils.sampling import make_sampler
+
+    assert batch_generator.apply()
+    assert scheduler.BatchGenerator is BatchGenerator
+    adapter = VLMModelAdapter(native_target)
+    adapter.enable_nemotron_mtp(
+        Model(ModelConfig(text_config=tiny_nemotron_config()["llm_config"])), depth=3
+    )
+    verified_rows = []
+    verify = adapter.speculative_verify_logits
+
+    def observed_verify(inputs, cache, sampler):
+        verified_rows.append(inputs.shape[0])
+        return verify(inputs, cache, sampler)
+
+    monkeypatch.setattr(adapter, "speculative_verify_logits", observed_verify)
+    generator = BatchGenerator(
+        adapter,
+        max_tokens=24,
+        prefill_step_size=2,
+        prefill_batch_size=1,
+        completion_batch_size=2,
+        sampler=lambda lp: mx.argmax(lp, axis=-1),
+    )
+    host = generator.insert([[1, 2, 3]])[0]
+    try:
+        for _ in range(20):
+            generator.next_generated()
+            if batch_generator._generation_batch_has_active_mtp(
+                generator._generation_batch
+            ):
+                break
+        assert batch_generator._generation_batch_has_active_mtp(
+            generator._generation_batch
+        )
+        cancelled = generator.insert(
+            [[11]], samplers=[make_sampler(temp=1.0, xtc_probability=0.5)]
+        )[0]
+        peer = generator.insert([[5, 6, 7]])[0]
+        assert all(r.uid == host for r in generator.next_generated())
+        assert [s[0] for s in generator._unprocessed_sequences] == [cancelled, peer]
+        generator.remove([cancelled])
+        finished = set()
+        for _ in range(100):
+            responses = generator.next_generated()
+            if not responses:
+                break
+            for response in responses:
+                assert response.uid != cancelled
+                if response.finish_reason:
+                    finished.add(response.uid)
+        assert finished == {host, peer}
+        assert 2 in verified_rows
+        assert generator.completion_batch_size == 2
+    finally:
+        generator.close()
+
+
 @pytest.mark.parametrize(
     "family", ["NemotronH_Nano_Omni_Reasoning_V3", "nemotron_h_omni", "bolt"]
 )

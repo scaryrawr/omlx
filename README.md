@@ -493,6 +493,9 @@ Enable **Lightning MTP**, not an external assistant-drafter setting, for Super V
 Each request owns its native full-prompt head initialization. Batched verification
 commits at the earliest mismatch, stop, or token-budget boundary across the
 cohort, using the native recurrent-cache rollback transaction.
+Grammar-constrained and XTC late joins wait for the active native MTP cohort to
+finish; compatible requests still join its batched verification. This preserves
+live media-conditioned caches and queued tokens without text-only replay.
 Native full-prompt MTP requests cannot be requeued under memory pressure; the
 existing abort path applies rather than restarting without their media/head history.
 
