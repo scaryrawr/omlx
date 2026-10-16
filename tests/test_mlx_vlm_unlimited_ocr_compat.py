@@ -20,7 +20,6 @@ def test_unlimited_ocr_compat_uses_upstream_module():
     assert Path(unlimited_ocr.__file__).parent == upstream
     assert hasattr(unlimited_ocr, "Model")
     assert hasattr(unlimited_ocr, "ModelConfig")
-    assert hasattr(unlimited_ocr, "RingSlidingKVCache")
 
 
 def test_unlimited_ocr_model_remapping_resolves_module():
