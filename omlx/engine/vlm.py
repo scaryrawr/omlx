@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
+import numpy as np
 
 from ..api.media_options import merge_mm_processor_kwargs
 from ..api.tool_calling import convert_tools_for_template
@@ -49,6 +50,7 @@ from ..api.utils import (
 )
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError, ModelUnavailableError
+from ..model_classification import is_nemotron_omni
 from ..model_discovery import model_unavailable_reason
 from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..models.vlm import VLMModelAdapter
@@ -162,15 +164,25 @@ def _report_native_vlm_mtp_readiness(
         if callable(get_mtp_module)
         else getattr(language_model, "mtp", None)
     )
+    if getattr(adapter, "_omlx_native_mtp_full_prompt", False):
+        mtp_head = adapter.mtp
     has_mtp_head = mtp_head is not None
     decode_enabled = bool(
         getattr(language_model, "_omlx_mtp_decode_enabled", False)
+        or getattr(adapter, "_omlx_mtp_decode_enabled", False)
     )
     adapter_ready = callable(getattr(adapter, "mtp_forward", None))
     ready = bool(
         has_mtp_weights and has_mtp_head and decode_enabled and adapter_ready
     )
     if ready:
+        if getattr(adapter, "_omlx_native_mtp_full_prompt", False):
+            logger.info(
+                "Native Nemotron MTP ready for %s (media-conditioned prompt history; "
+                "uniform batched draft+verify)",
+                model_name,
+            )
+            return True
         logger.info(
             "Native VLM MTP ready for %s (loaded native head; text-only "
             "requests use mlx-lm BatchGenerator draft+verify; vision requests "
@@ -227,6 +239,8 @@ def _read_config_model_type(model_path: str | Path) -> str | None:
     except Exception:
         return None
     model_type = data.get("model_type")
+    if is_nemotron_omni(model_type):
+        return model_type.lower()
     return model_type if isinstance(model_type, str) else None
 
 
@@ -2382,7 +2396,7 @@ class VLMBatchedEngine(BaseEngine):
             self._native_video = attach_native_video_processor(
                 self._processor, self._model_name
             )
-        elif self.model_type == "minicpmv4_7":
+        elif self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
             self._native_video = (
                 getattr(self._processor, "video_processor", None) is not None
             )
@@ -2723,6 +2737,30 @@ class VLMBatchedEngine(BaseEngine):
         # mlx-vlm models now handle per-sequence mx.array offsets natively
         # and batched decode is fixed, so no separate mlx-lm decode model needed.
         self._adapter = VLMModelAdapter(self._vlm_model)
+        if is_nemotron_omni(self.model_type) and getattr(
+            self._model_settings, "mtp_enabled", False
+        ):
+            from mlx_vlm.speculative.drafters.nemotron_h_mtp.split import (
+                NemotronHMTPSplitter,
+            )
+
+            from ..patches.mlx_lm_mtp import get_mtp_depth
+            from ..utils.model_loading import _checkpoint_has_mtp_weights
+
+            if _checkpoint_has_mtp_weights(self._model_name):
+                from ..patches.nemotron_omni_quantization import native_mtp_sidecar
+
+                source_config = json.loads(
+                    (Path(self._model_name) / "config.json").read_text()
+                )
+                sidecar = native_mtp_sidecar(self._model_name, source_config)
+                if sidecar is not None:
+                    from mlx_vlm.utils import load_model
+
+                    head = load_model(sidecar)
+                else:
+                    head = NemotronHMTPSplitter().load(Path(self._model_name))
+                self._adapter.enable_nemotron_mtp(head, depth=get_mtp_depth())
 
         warmup_started = time.perf_counter()
         warmed_up = await loop.run_in_executor(
@@ -3395,6 +3433,59 @@ class VLMBatchedEngine(BaseEngine):
         )
         if not model_type:
             raise ValueError("Missing VLM model_type for chat template formatting")
+
+        if is_nemotron_omni(model_type):
+            formatted_messages = []
+            media_counts = {"image": 0, "audio": 0, "video": 0}
+            for message in messages:
+                formatted = dict(message)
+                content = message.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for part in content:
+                        kind = part.get("type")
+                        if kind in {"image", "image_url", "input_image"}:
+                            parts.append({"type": "image"})
+                        elif kind in {"video", "video_url", "input_video"}:
+                            parts.append({"type": "video"})
+                        elif kind in {"audio", "input_audio"}:
+                            parts.append({"type": "audio"})
+                        elif kind == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                        else:
+                            raise InvalidRequestError(
+                                f"Unsupported Nemotron content type: {kind!r}.",
+                                field="messages",
+                            )
+                        if parts[-1]["type"] in media_counts:
+                            media_counts[parts[-1]["type"]] += 1
+                    formatted["content"] = parts
+                formatted_messages.append(formatted)
+            missing = []
+            for kind, expected in (
+                ("image", num_images), ("audio", num_audios), ("video", num_videos)
+            ):
+                if media_counts[kind] not in (0, expected):
+                    raise InvalidRequestError(
+                        f"Nemotron {kind} placeholders do not match the supplied media.",
+                        field="messages",
+                    )
+                if not media_counts[kind]:
+                    missing.extend({"type": kind} for _ in range(expected))
+            if missing:
+                for formatted in reversed(formatted_messages):
+                    if formatted.get("role") != "user":
+                        continue
+                    content = formatted.get("content", "")
+                    if isinstance(content, str):
+                        content = [{"type": "text", "text": content}]
+                    formatted["content"] = missing + content
+                    break
+                else:
+                    raise InvalidRequestError(
+                        "Nemotron media requires a user message.", field="messages"
+                    )
+            return formatted_messages, []
 
         if model_type == "deepseek_v41":
             if num_audios:
@@ -4361,6 +4452,15 @@ class VLMBatchedEngine(BaseEngine):
         num_videos = len(videos) if videos else 0
 
         model_type = self.model_type or _read_config_model_type(self._model_name) or ""
+        nemotron = is_nemotron_omni(model_type)
+        if (
+            nemotron
+            and num_audios
+            and getattr(self._vlm_model, "sound_encoder", None) is None
+        ):
+            raise InvalidRequestError(
+                "This Nemotron checkpoint has no sound encoder.", field="messages"
+            )
         processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
         if model_type == "minicpmv4_7" and num_audios:
             raise InvalidRequestError(
@@ -4397,12 +4497,36 @@ class VLMBatchedEngine(BaseEngine):
                 if feature_extractor is not None
                 else 16000
             )
+            if nemotron:
+                target_sample_rate = self._processor.audio_sampling_rate
             if not isinstance(target_sample_rate, (int, float)):
                 target_sample_rate = 16000
             audio = [
                 _load_audio(a, target_sample_rate) if not isinstance(a, tuple) else a
                 for a in audio
             ]
+            if nemotron:
+                normalized_audio = []
+                for item in audio:
+                    if isinstance(item, tuple):
+                        waveform, sample_rate = item
+                        waveform = np.asarray(waveform, dtype=np.float32)
+                        if waveform.ndim > 1:
+                            waveform = waveform.mean(axis=1)
+                        if sample_rate != target_sample_rate:
+                            from ..patches.mlx_audio_compat import (
+                                ensure_mlx_audio_resample_export,
+                            )
+
+                            ensure_mlx_audio_resample_export()
+                            from mlx_audio.utils import resample_audio
+
+                            waveform = resample_audio(
+                                waveform, sample_rate, target_sample_rate
+                            )
+                        item = np.asarray(waveform, dtype=np.float32)
+                    normalized_audio.append(item)
+                audio = normalized_audio
         # Validate multi-image support
         if num_images > 1 and model_type in SINGLE_IMAGE_ONLY_MODELS:
             raise ValueError(
@@ -4524,7 +4648,7 @@ class VLMBatchedEngine(BaseEngine):
         # Images with cached features and grids skip the image processor.
         fast_cached_features = None
         inputs = None
-        if num_audios == 0 and num_videos == 0:
+        if num_audios == 0 and num_videos == 0 and not nemotron:
             fast = self._try_build_cached_vision_inputs(prompt, images)
             if fast is not None:
                 fast_cached_features = fast.pop("cached_image_features", None)
@@ -4559,7 +4683,7 @@ class VLMBatchedEngine(BaseEngine):
                 **processor_options,
                 **(
                     {"max_frames": NATIVE_VIDEO_MAX_FRAMES}
-                    if num_videos and model_type == "minicpmv4_7"
+                    if num_videos and (model_type == "minicpmv4_7" or nemotron)
                     else {}
                 ),
             )
@@ -4693,7 +4817,8 @@ class VLMBatchedEngine(BaseEngine):
         # Check for any multimodal inputs. Most processors expose audio as
         # ``input_features``; MiMo's tokenizer produces discrete ``audio_codes``.
         has_audio = any(
-            key in extra_model_inputs for key in ("input_features", "audio_codes")
+            key in extra_model_inputs
+            for key in ("input_features", "audio_codes", "sound_clips")
         )
         has_video = (
             bool(num_videos)
@@ -4737,7 +4862,7 @@ class VLMBatchedEngine(BaseEngine):
                     self._cached_video_features(
                         image_hash, input_ids, extra_model_inputs
                     )
-                    if model_type != "minicpmv4_7"
+                    if model_type != "minicpmv4_7" and not nemotron
                     else None
                 )
                 if video_features is not None:
@@ -4874,9 +4999,22 @@ class VLMBatchedEngine(BaseEngine):
             # Pass attention_mask as 'mask' — mlx-vlm models (e.g. Gemma 3)
             # expect it as a positional/keyword arg named 'mask'.
             try:
-                embed_features = self._vlm_model.get_input_embeddings(
-                    input_ids, pixel_values, mask=attention_mask, **call_kwargs
-                )
+                if nemotron:
+                    from ..patches.nemotron_omni import prepare_nemotron_prompt
+
+                    prepared = prepare_nemotron_prompt(
+                        self._vlm_model,
+                        input_ids,
+                        pixel_values,
+                        mask=attention_mask,
+                        **call_kwargs,
+                    )
+                    token_ids = prepared.token_ids[0].tolist()
+                    embed_features = prepared
+                else:
+                    embed_features = self._vlm_model.get_input_embeddings(
+                        input_ids, pixel_values, mask=attention_mask, **call_kwargs
+                    )
             except TypeError:
                 # cached_image_features kwarg not supported — disable and retry
                 if "cached_image_features" in call_kwargs:
@@ -4896,6 +5034,11 @@ class VLMBatchedEngine(BaseEngine):
 
             # Convert InputEmbeddingsFeatures to dict for extra kwargs
             extra_kwargs = {}
+            if nemotron and has_video:
+                extra_kwargs["_omlx_pruned_video"] = True
+                extra_kwargs["_omlx_source_prompt_tokens"] = int(
+                    prepared.source_token_ids.shape[1]
+                )
             if hasattr(embed_features, "to_dict"):
                 feat_dict = embed_features.to_dict()
                 for k, v in feat_dict.items():
@@ -4935,6 +5078,15 @@ class VLMBatchedEngine(BaseEngine):
                 )
                 image_cache_key_start = image_cache_key_ranges[0][0]
                 image_hash = image_cache_key_ranges[-1][1]
+            elif nemotron and has_audio:
+                audio_hash = hashlib.sha256((image_hash or "").encode())
+                for clip in extra_model_inputs["sound_clips"]:
+                    waveform = np.ascontiguousarray(clip, dtype=np.float32)
+                    audio_hash.update(str(waveform.shape).encode())
+                    audio_hash.update(waveform.tobytes())
+                image_hash = audio_hash.hexdigest()
+                image_cache_key_start = 0
+                image_cache_key_ranges = [(0, image_hash)]
             elif has_audio and "input_features" in extra_model_inputs:
                 image_ranges = image_cache_key_ranges
                 if image_hash is not None and not image_ranges:
@@ -5557,7 +5709,7 @@ class VLMBatchedEngine(BaseEngine):
         template_tools = convert_tools_for_template(tools) if tools else None
         ct_kwargs = kwargs.get("chat_template_kwargs")
         partial = kwargs.get("is_partial")
-        if self.model_type == "minicpmv4_7":
+        if self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
             count = functools.partial(
                 self.count_chat_tokens,
                 messages,
@@ -5857,11 +6009,19 @@ class VLMBatchedEngine(BaseEngine):
             )
         # mlx-vlm's Qwen3-VL embedding path takes the grid of one modality per
         # call, so a request that mixes them would silently lose one.
-        if videos and (images or audio) and model_type != "minicpmv4_7":
+        if (
+            videos
+            and (images or (audio and not is_nemotron_omni(model_type)))
+            and model_type != "minicpmv4_7"
+        ):
             raise InvalidRequestError(
                 "Video input cannot be combined with image or audio input "
                 "in the same request.",
                 field="messages",
+            )
+        if is_nemotron_omni(model_type) and len(videos) > 1:
+            raise InvalidRequestError(
+                "Nemotron supports one video per request.", field="messages"
             )
         return media_messages, text_messages, images, audio, videos
 
@@ -5913,7 +6073,7 @@ class VLMBatchedEngine(BaseEngine):
                 video_files.append(write_video_data_uri(uri))
                 # Rejects undecodable or degenerate clips with a 400 before
                 # mlx-vlm samples them.
-                if self.model_type == "minicpmv4_7":
+                if self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
                     probe_video(video_files[-1][0])
                 else:
                     native_video_token_count(

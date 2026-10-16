@@ -368,7 +368,7 @@ Models are auto-detected by type. You can also download models directly from the
 | Type | Models |
 |------|--------|
 | LLM | Any model supported by [mlx-lm](https://github.com/ml-explore/mlx-lm) |
-| VLM | Qwen3.5 Series, GLM-4V, Pixtral, and other [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) models |
+| VLM | Qwen3.5 Series, GLM-4V, Pixtral, Nemotron Nano Omni / Super VL / Bolt, and other [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) models |
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
 | Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
 | Reranker | ModernBERT, XLM-RoBERTa |
@@ -383,10 +383,10 @@ implementation; it cannot be aliased to MiniCPM 4.6. The paired
 served chat model. Support uses the existing chat, Anthropic Messages and
 Responses APIs; no audio or image/video generation capability is implied.
 
-The model and torch-free processor come from official **mlx-vlm 0.7.8**, pinned
-to release commit `9790231827a890eade1a626643a6bc94a1317c72`. The former full
+The model and torch-free processor come from official **mlx-vlm**, pinned
+to commit `63fc97955c4e3dbe4eaad7c838d4d81701b783af` (after v0.7.8). The former full
 vendored implementation and source-hash installation bridge have been removed.
-This release requires Python >=3.10, MLX >=0.32.3 and Transformers >=5.14;
+This pin requires Python >=3.10, MLX >=0.32.4 and Transformers >=5.14;
 oMLX retains its existing MLX pin and Transformers upper bound.
 
 Small serving hooks in `omlx/patches/minicpm47.py` preserve request-local
@@ -465,6 +465,56 @@ DSpark retains normal prefix-cache behavior. MiniCPM vision-feature caching is
 disabled until crop/position-equivalent reuse is proven. Original weights and
 configs are not rewritten; full checkpoint admission and installed-runtime
 validation require a separate memory-safe execution slot.
+
+### Nemotron multimodal models
+
+Support uses the official implementation merged in
+[Blaizzy/mlx-vlm#2528](https://github.com/Blaizzy/mlx-vlm/pull/2528),
+not a vendored architecture. The dependency pin above includes that merge and
+requires MLX 0.32.4, which oMLX already pins.
+
+| Family | Serving inputs | Native Lightning MTP |
+|--------|----------------|----------------------|
+| Nemotron-3 Nano Omni | Text, images, video; audio when the checkpoint includes `sound_config` | Only when native head tensors and configuration are present |
+| Nemotron-3.5 Super VL | Text, images, video | Bundled head; singleton and batched verification |
+| Nemotron-3.5 Bolt | Text, images, video | No bundled head |
+
+These models use the existing chat, Messages, and Responses APIs. Image and
+video inputs must use separate requests; each request accepts one video.
+Native paired-frame processing, odd-frame duplication, and pruning are retained,
+with an oMLX limit of 64 sampled frames. Pruned token IDs and embeddings share
+one retained-position map. API prompt usage reports the original processor token
+count; scheduling and cache positions use the compacted length. Cross-request
+prefix reuse is disabled for pruned video and native MTP because a KV entry alone
+cannot restore their complete media/head history. Audio identities are included
+in cache keys even when clips have identical lengths.
+
+Enable **Lightning MTP**, not an external assistant-drafter setting, for Super VL.
+Each request owns its native full-prompt head initialization. Batched verification
+commits at the earliest mismatch, stop, or token-budget boundary across the
+cohort, using the native recurrent-cache rollback transaction.
+
+The existing `omlx.oq.quantize_oq_streaming()` Python API and admin oQ/oQe workflow accept floating-point
+sources and the native mixed ModelOpt NVFP4/FP8 source format (including NVIDIA's
+Super VL NVFP4 export). Per-expert global scales are folded before stacking,
+and Bolt's heterogeneous layer geometry is preserved. Existing MLX affine quants
+are serving inputs, not supported requantization sources. Exports remain
+multimodal: `text_only=True` is rejected before creating output. With
+`preserve_mtp=True`, the native head retains its source precision/quantization in an
+associated `mtp/` sidecar; it is not oQe-calibrated or converted to the target's
+oQ recipe. The official splitter can hold the complete head in memory.
+For sources larger than available RAM, oQe automatically streams native decoder
+layers from the original checkpoint for calibration instead of using a lossy
+proxy. Explicit `stream_calibration=True` also selects this path for smaller
+sources; heterogeneous Bolt layers retain their individual geometry and routing.
+Calibration uses the built-in text corpus; vision modules retain the weight-only
+oQ recipe rather than image/audio calibration. `oq_imatrix_report.json` records
+applied statistics and missing entries; this is not a quality claim.
+
+Coverage includes complete tiny native oQ/oQe checkpoint conversion, strict
+reload, mixed-source reconstruction, media alignment, and batched MTP lifecycle
+tests. It is not evidence of full-size checkpoint inference, conversion quality,
+or performance; those require separate model-specific validation.
 
 ### Image Model Manifests
 
