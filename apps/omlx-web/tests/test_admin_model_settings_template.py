@@ -695,6 +695,35 @@ test('Save sends only fields edited since the modal opened', async () => {
     });
 });
 
+test('MiniCPM media edits are compared with the original modal values', async () => {
+    let body;
+    const state = setup(async (url, options) => {
+        body = JSON.parse(options.body);
+        return {ok: true, json: async () => ({})};
+    });
+    state.loadModels = async () => {};
+    state.selectedModel = {id: 'model-a', config_model_type: 'minicpmv4_7'};
+    state.modelSettings = state.buildModelSettingsState(state.selectedModel, {
+        mm_processor_kwargs: {downsample_mode: '4x', max_slice_nums: 36},
+    });
+    state._modelSettingsBaseline = JSON.stringify(state.modelSettings);
+
+    await state.saveModelSettings();
+    assert.deepEqual(body, {mtp_fixed_depth: null});
+
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '16x';
+    await state.saveModelSettings();
+    assert.deepEqual(body, {
+        mm_processor_kwargs: {downsample_mode: '16x', max_slice_nums: 36},
+        mtp_fixed_depth: null,
+    });
+
+    state.modelSettings.mm_processor_kwargs.downsample_mode = '';
+    state.modelSettings.mm_processor_kwargs.max_slice_nums = '';
+    await state.saveModelSettings();
+    assert.deepEqual(body, {mm_processor_kwargs: null, mtp_fixed_depth: null});
+});
+
 test('Apply response cannot replace another model editor', async () => {
     let resolve;
     const state = setup(() => new Promise(r => {resolve=r;}));
