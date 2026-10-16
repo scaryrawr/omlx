@@ -26,7 +26,7 @@ from collections import deque
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -43,6 +43,7 @@ from pydantic import (
 from .. import gguf
 from .._version import __version__ as _omlx_version
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
+from ..api.media_options import MultimodalProcessorOptions
 from ..api.openai_models import _coerce_tool_call_arguments
 from ..api.utils import _try_parse_json
 from ..engine.splash import (
@@ -76,16 +77,16 @@ from ..model_profiles import (
 )
 from ..model_settings import (
     MAX_LIGHTNING_MTP_DRAFT_TOKENS,
+    MOE_OFFLOAD_MTP_MODEL_TYPES,
     ModelSettings,
     ane_prefill_backend,
     ane_prefill_fraction,
+    merge_chat_template_kwargs,
     resolve_qwen35_prefill_conflicts,
     resolve_vlm_mtp_conflicts,
     validate_ane_prefill,
-    validate_moe_expert_offload,
-    MOE_OFFLOAD_MTP_MODEL_TYPES,
-    merge_chat_template_kwargs,
     validate_kv_compression_settings,
+    validate_moe_expert_offload,
 )
 from ..patches.deepseek_v4.chat_template_v4 import REASONING_EFFORT_PROMPTS
 from ..patches.deepseek_v41.encoding import REASONING_EFFORT_MAPPINGS
@@ -378,6 +379,7 @@ class ModelSettingsRequest(BaseModel):
     force_sampling: bool | None = None
     max_tool_result_tokens: int | None = None
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
     forced_ct_kwargs: list[str] | None = None
     ttl_seconds: int | None = None
     index_cache_freq: int | None = None
@@ -1239,6 +1241,52 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
             "converter that preserves MTP weights."
         )
     return True, ""
+
+
+def _model_has_mtp_weight_tensors(model_dir) -> bool:
+    """Return True iff the model directory's weight files contain ``mtp.*`` keys.
+
+    Uses ``model.safetensors.index.json`` when present (cheap — only reads
+    the weight_map). Falls back to opening each ``*.safetensors`` and
+    checking its keys when no index is present (single-shard models).
+    Returns False on any error (we treat the model as incompatible rather
+    than risking a confusing load failure mid-inference).
+    """
+    import json
+    from pathlib import Path
+
+    try:
+        from safetensors import safe_open
+    except ImportError:
+        # Library should be installed via mlx-lm deps; if it's not we can't
+        # peek the weights. Stay conservative and assume incompatible.
+        return False
+
+    model_dir = Path(model_dir)
+
+    # Preferred path: read the index file's weight_map (no tensor data loaded).
+    index_path = model_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        try:
+            index = json.loads(index_path.read_text())
+            weight_map = index.get("weight_map", {})
+            return any("mtp." in key for key in weight_map)
+        except Exception:
+            return False
+
+    # Single-shard fallback: enumerate keys via safe_open metadata. We
+    # short-circuit on the first ``mtp.*`` key.
+    from ..utils.safetensors_shards import select_safetensors_weight_files
+
+    for path in select_safetensors_weight_files(model_dir):
+        try:
+            with safe_open(str(path), framework="numpy") as f:  # type: ignore[arg-type]
+                for key in f.keys():  # noqa: SIM118 - safe_open exposes keys()
+                    if "mtp." in key:
+                        return True
+        except Exception:
+            continue
+    return False
 
 
 def _apply_log_level_runtime(level: str) -> None:
@@ -2534,6 +2582,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "model_type": model_info.get("model_type", "llm"),
             "config_model_type": model_info.get("config_model_type", ""),
             "realtime_voice": bool(model_info.get("realtime_voice")),
+            "unavailable_reason": model_info.get("unavailable_reason"),
             # Native context window from the model's config.json — used by
             # the context bench UI to hide targets the model cannot reach.
             "model_context_length": model_info.get("model_context_length"),
@@ -2546,6 +2595,9 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "source_path": model_info.get("source_path"),
             "distributed": model_info.get("distributed", False),
             "cluster": model_info.get("cluster"),
+            "capabilities": model_info.get("capabilities", []),
+            "tasks": model_info.get("tasks", []),
+            "image_metadata": model_info.get("image_metadata"),
             "last_access": model_info.get("last_access"),
             "external_engines": external_engines,
             "dflash_compatible": compat_ok,
@@ -2910,6 +2962,7 @@ async def update_model_settings(
             "audio_tts",
             "audio_sts",
             "decision",
+            "image",
         }
         # Treat empty string as None (auto-detect)
         override_value = request.model_type_override or None
@@ -2934,6 +2987,7 @@ async def update_model_settings(
             "audio_tts": "audio_tts",
             "audio_sts": "audio_sts",
             "decision": "decision",
+            "image": "image",
         }
         if override_value:
             entry.model_type = override_value
@@ -3031,6 +3085,13 @@ async def update_model_settings(
         current_settings.cache_reasoning_output = request.cache_reasoning_output
     if "chat_template_kwargs" in sent:
         current_settings.chat_template_kwargs = request.chat_template_kwargs
+    if "mm_processor_kwargs" in sent:
+        if request.mm_processor_kwargs is not None:
+            current_settings.mm_processor_kwargs = (
+                request.mm_processor_kwargs.model_dump(exclude_none=True)
+            )
+        else:
+            current_settings.mm_processor_kwargs = None
     if "forced_ct_kwargs" in sent:
         current_settings.forced_ct_kwargs = request.forced_ct_kwargs
     if "ttl_seconds" in sent:
@@ -3623,9 +3684,21 @@ def _raise_if_alias_conflicts_exposed_profiles(
 
 
 def _validate_model_settings(entry, settings):
-    from ..model_settings import validate_moe_expert_offload
+    from ..model_settings import (
+        validate_minicpm_speculation,
+        validate_moe_expert_offload,
+    )
 
     try:
+        validate_minicpm_speculation(
+            settings, getattr(entry, "config_model_type", None)
+        )
+        if settings.get("mm_processor_kwargs") is not None:
+            if getattr(entry, "config_model_type", None) != "minicpmv4_7":
+                raise ValueError(
+                    "mm_processor_kwargs is only supported by MiniCPM-V 4.7."
+                )
+            MultimodalProcessorOptions.model_validate(settings["mm_processor_kwargs"])
         validate_moe_expert_offload(
             settings, model_type=getattr(entry, "config_model_type", None)
         )
@@ -4027,6 +4100,8 @@ async def _apply_settings_snapshot(
     mgr = _require_settings_manager()
     skipped: list[dict] = []
     if reset:
+        if _get_engine_pool is None:
+            raise HTTPException(status_code=503, detail="Engine pool not initialized")
         cleaned = _get_engine_pool().recommended_sampling_settings(entry)
         scope = set(ALL_FIELDS) & set(ModelSettingsRequest.model_fields)
     else:
@@ -6279,7 +6354,7 @@ def _get_engine_info() -> dict:
         "mlx": "https://github.com/ml-explore/mlx",
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/Blaizzy/mlx-embeddings",
+        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
     }
 
@@ -8004,10 +8079,10 @@ async def search_hf_models(
     mlx_only: bool = True,
     model_format: str | None = None,
     # Filtering
-    min_params: Optional[int] = None,
-    max_params: Optional[int] = None,
-    min_size: Optional[int] = None,  # bytes
-    max_size: Optional[int] = None,  # bytes
+    min_params: int | None = None,
+    max_params: int | None = None,
+    min_size: int | None = None,  # bytes
+    max_size: int | None = None,  # bytes
     # Sorting
     sort_by_size: bool = False,
     sort_ascending: bool = False,
@@ -8126,6 +8201,8 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     model_dirs = global_settings.get_effective_model_dirs()
 
+    from ..model_discovery import _is_model_dir
+
     def _add_model(
         model_path: Path,
         model_name: str,
@@ -8169,7 +8246,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
             if gguf.is_gguf_folder(subdir):
                 gguf_folders.append((subdir, subdir.name, "local"))
-            elif (subdir / "config.json").exists():
+            elif _is_model_dir(subdir):
                 # Level 1: direct model folder
                 _add_model(subdir, subdir.name)
             else:
@@ -8196,7 +8273,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                         continue
                     if gguf.is_gguf_folder(child):
                         gguf_folders.append((child, child.name, "local"))
-                    elif (child / "config.json").exists():
+                    elif _is_model_dir(child):
                         _add_model(
                             child, child.name, repo_id=f"{subdir.name}/{child.name}"
                         )
@@ -8256,7 +8333,9 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
 def _is_listed_model_folder(path: Path) -> bool:
     """A folder /api/hf/models lists whole: a checkpoint or a GGUF folder."""
-    return (path / "config.json").exists() or gguf.is_gguf_folder(path)
+    from ..model_discovery import _is_model_dir
+
+    return _is_model_dir(path) or gguf.is_gguf_folder(path)
 
 
 @router.delete("/api/hf/models/{model_name}")
@@ -8272,7 +8351,6 @@ async def delete_hf_model(
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     model_dirs = global_settings.get_effective_model_dirs()
-
     entry = engine_pool.get_entry(model_name) if engine_pool is not None else None
     if entry is not None and entry.model_format == "gguf":
         await _delete_gguf_model(entry, model_dirs, engine_pool)
