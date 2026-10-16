@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for per-engine thread isolation (issue #1248)."""
 
 import concurrent.futures
@@ -275,6 +276,10 @@ class TestPerEngineExecutor:
                 "omlx.engine_core._create_mlx_thread_stream",
                 side_effect=create_stream,
             ),
+            patch(
+                "omlx.engine_core.share_command_queue",
+                return_value=1,
+            ) as mock_share_queue,
             patch("omlx.engine_core._final_engine_thread_reclaim"),
         ):
             mock_registry.return_value.acquire.return_value = True
@@ -283,6 +288,7 @@ class TestPerEngineExecutor:
             try:
                 assert engine._mlx_stream is stream
                 assert engine.scheduler._stream is stream
+                mock_share_queue.assert_called_once_with(stream)
                 assert created_on
                 thread_id, thread_name = created_on[0]
                 assert thread_id != main_thread_id
