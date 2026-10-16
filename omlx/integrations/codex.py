@@ -15,13 +15,184 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from omlx.integrations.base import Integration, IntegrationContext, chat_model_ids
+from omlx.integrations.base import (
+    Integration,
+    IntegrationContext,
+    IntegrationModel,
+    chat_model_ids,
+)
+from omlx.model_classification import EMBEDDING_MODEL_TYPES, is_helper_config_model_type
 from omlx.utils.install import get_cli_command_prefix
 
-CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
+CODEX_CONFIG_PATH = (
+    Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+)
+
+_CODEX_INSTRUCTIONS = (
+    "You are a coding agent working in the user's local workspace. "
+    "Follow the user's instructions and applicable AGENTS.md files. "
+    "Inspect the workspace before making focused, maintainable changes. "
+    "Preserve unrelated work, verify changes with relevant tests, and report limitations."
+)
+
+
+def _is_reasoning_model(model_id: str, reasoning: bool | None) -> bool:
+    if reasoning is not None:
+        return reasoning
+    return bool(re.search(r"\b(thinking|o1|o3|r1)\b", model_id.lower()))
+
+
+def is_codex_chat_model(info: dict) -> bool:
+    """Exclude non-chat checkpoints even if the server reports a chat engine."""
+    config_type = info.get("config_model_type") or ""
+    normalized_type = config_type.lower().replace("-", "_")
+    return (
+        info.get("model_type") in (None, "llm", "vlm")
+        and info.get("engine_type") in (None, "batched", "vlm")
+        and not info.get("is_helper")
+        and not info.get("is_hidden")
+        and not info.get("unavailable_reason")
+        and not is_helper_config_model_type(config_type)
+        and normalized_type not in EMBEDDING_MODEL_TYPES
+    )
+
+
+def codex_model_catalog(
+    ctx: IntegrationContext,
+    model_ids: list[str] | None = None,
+    instructions: str = _CODEX_INSTRUCTIONS,
+) -> dict:
+    """Build Codex's ModelInfo catalog, not an OpenAI /v1/models response.
+
+    Keep capabilities conservative: thinking does not imply adjustable effort,
+    reasoning-summary generation, verbosity control, or server-side search.
+    """
+    if model_ids is not None:
+        known_models = {model.id: model for model in ctx.models}
+        models_from_status = []
+        for model_id in model_ids:
+            info = ctx.models_status_map.get(model_id, {})
+            models_from_status.append(
+                known_models.get(model_id)
+                or IntegrationModel(
+                    id=model_id,
+                    context_window=info.get("max_context_window"),
+                    model_type=info.get("model_type"),
+                    reasoning=info.get("reasoning"),
+                    reasoning_effort_options=tuple(
+                        level
+                        for level in info.get("reasoning_levels") or ()
+                        if level not in ("off", "on")
+                    ),
+                )
+            )
+        ctx = replace(ctx, models=tuple(models_from_status))
+    models = {
+        model.id: model
+        for model in ctx.models
+        if is_codex_chat_model(
+            {"model_type": model.model_type, **ctx.models_status_map.get(model.id, {})}
+        )
+    }
+    if (
+        ctx.model
+        and ctx.model not in models
+        and is_codex_chat_model(
+            {"model_type": ctx.model_type, **ctx.models_status_map.get(ctx.model, {})}
+        )
+    ):
+        models[ctx.model] = IntegrationModel(
+            id=ctx.model,
+            context_window=ctx.context_window,
+            model_type=ctx.model_type,
+            reasoning=ctx.reasoning,
+            reasoning_effort_options=ctx.reasoning_effort_options,
+            reasoning_effort_default=ctx.reasoning_effort_default,
+        )
+    ordered = sorted(models.values(), key=lambda model: model.id != ctx.model)
+    entries = []
+    for priority, model in enumerate(ordered):
+        reasoning = _is_reasoning_model(model.id, model.reasoning)
+        # Codex accepts a fixed effort enum. Do not invent levels from a
+        # thinking boolean, or advertise custom template values it cannot send.
+        efforts = (
+            [
+                effort
+                for effort in (
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    "ultra",
+                )
+                if effort in model.reasoning_effort_options
+            ]
+            if model.reasoning is not False
+            else []
+        )
+        default_effort = (
+            "medium" if "medium" in efforts else model.reasoning_effort_default
+        )
+        if efforts:
+            if default_effort not in efforts:
+                default_effort = efforts[0]
+            reasoning_levels = [
+                {"effort": effort, "description": f"Use {effort} reasoning effort"}
+                for effort in efforts
+            ]
+        else:
+            default_effort = "high" if reasoning else None
+            reasoning_levels = (
+                [{"effort": "high", "description": "Use model thinking"}]
+                if reasoning
+                else []
+            )
+        # Status can be unavailable for inference-only API keys. Do not let
+        # Codex's large GPT context default overstate an unknown local limit.
+        context_window = (
+            model.context_window
+            if model.context_window is not None and model.context_window > 0
+            else 32768
+        )
+        entries.append(
+            {
+                "slug": model.id,
+                "display_name": model.id,
+                "description": "Local model served by oMLX",
+                "visibility": "list",
+                "supported_in_api": True,
+                "priority": priority,
+                "base_instructions": instructions,
+                "shell_type": "shell_command",
+                "context_window": context_window,
+                "input_modalities": (
+                    ["text", "image"] if model.model_type == "vlm" else ["text"]
+                ),
+                "default_reasoning_level": default_effort,
+                "supported_reasoning_levels": reasoning_levels,
+                "supports_reasoning_summaries": False,
+                "supports_reasoning_summary_parameter": False,
+                "support_verbosity": False,
+                "supports_parallel_tool_calls": False,
+                "supports_search_tool": False,
+                "prefer_websockets": False,
+                "experimental_supported_tools": [],
+                "truncation_policy": {
+                    "mode": "tokens",
+                    "limit": min(10000, context_window // 4),
+                },
+            }
+        )
+    return {"models": entries}
+
 
 # A slug Codex does not know, so it renders its built-in instructions.
 _PROBE_MODEL = "omlx-instructions-probe"
@@ -66,6 +237,9 @@ def _provider_overrides(base_url: str) -> list[tuple[str, str]]:
         ("model_providers.omlx.name", json.dumps("oMLX")),
         ("model_providers.omlx.base_url", json.dumps(base_url)),
         ("model_providers.omlx.env_key", json.dumps("OMLX_API_KEY")),
+        ("model_providers.omlx.wire_api", json.dumps("responses")),
+        ("model_providers.omlx.requires_openai_auth", "false"),
+        ("model_providers.omlx.supports_websockets", "false"),
     ]
 
 
@@ -189,7 +363,11 @@ def codex_instructions(codex_bin: str | None, env: dict[str, str]) -> str:
 
 def resolve_codex_models(ctx: IntegrationContext) -> tuple[list[str], str]:
     """Return the catalog model ids and the model Codex starts with."""
-    model_ids = chat_model_ids(ctx)
+    model_ids = [
+        model_id
+        for model_id in chat_model_ids(ctx)
+        if is_codex_chat_model(ctx.models_status_map.get(model_id, {}))
+    ]
     if not model_ids:
         print("oMLX server reported no chat models. Load a model first.")
         sys.exit(1)
@@ -205,54 +383,6 @@ def resolve_codex_models(ctx: IntegrationContext) -> tuple[list[str], str]:
         default = served_id(ctx.default_model)
         model = default if default in model_ids else model_ids[0]
     return model_ids, model
-
-
-def codex_model_catalog(
-    ctx: IntegrationContext, model_ids: list[str], instructions: str
-) -> dict:
-    """Build ``model_catalog_json`` for the oMLX chat models.
-
-    Fields not read from the server match Codex's metadata for unknown models.
-    """
-    entries = []
-    for priority, model_id in enumerate(model_ids):
-        info = ctx.models_status_map.get(model_id, {})
-        # "off" and "on" toggle thinking; they are not effort levels.
-        efforts = [
-            level
-            for level in info.get("reasoning_levels") or ()
-            if level not in ("off", "on")
-        ]
-        entry = {
-            "slug": model_id,
-            "display_name": model_id,
-            "description": "Local model served by oMLX.",
-            "visibility": "list",
-            "supported_in_api": True,
-            "priority": priority,
-            "base_instructions": instructions,
-            "shell_type": "shell_command",
-            # No default level: Codex sends no effort until the user picks one.
-            "supported_reasoning_levels": [
-                {"effort": effort, "description": f"{effort} reasoning effort"}
-                for effort in efforts
-            ],
-            "support_verbosity": False,
-            "apply_patch_tool_type": None,
-            "truncation_policy": {"mode": "bytes", "limit": 10_000},
-            "experimental_supported_tools": [],
-            "include_apps_usage_instructions": False,
-        }
-        context_window = info.get("max_context_window")
-        if isinstance(context_window, int) and context_window > 0:
-            entry["context_window"] = context_window
-        model_type = info.get("model_type")
-        if model_type in ("llm", "vlm"):
-            entry["input_modalities"] = (
-                ["text", "image"] if model_type == "vlm" else ["text"]
-            )
-        entries.append(entry)
-    return {"models": entries}
 
 
 def write_codex_model_catalog(
@@ -278,21 +408,25 @@ def write_codex_model_catalog(
 
 
 def write_codex_config(
-    config_path: Path, ctx: IntegrationContext, catalog_path: Path
+    config_path: Path, ctx: IntegrationContext, catalog_path: Path | None = None
 ) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_content = ""
     if config_path.exists():
         # Create backup
-        timestamp = int(time.time())
+        timestamp = time.time_ns()
         backup = config_path.with_suffix(f".{timestamp}.bak")
-        try:
-            shutil.copy2(config_path, backup)
-            existing_content = config_path.read_text(encoding="utf-8")
-            print(f"Backup: {backup}")
-        except OSError as e:
-            print(f"Warning: could not create backup or read config: {e}")
+        shutil.copy2(config_path, backup)
+        existing_content = config_path.read_text(encoding="utf-8")
+        print(f"Backup: {backup}")
+
+    # Refuse to rewrite invalid TOML, and back up before changing the catalog.
+    tomllib.loads(existing_content)
+    if catalog_path is None:
+        catalog_path = write_codex_model_catalog(
+            config_path.parent, "codex-app", ctx, [ctx.model], _CODEX_INSTRUCTIONS
+        )
 
     # Parse existing config lines to preserve other settings
     lines = existing_content.splitlines()
@@ -300,23 +434,32 @@ def write_codex_config(
     in_any_section = False
     in_omlx_section = False
 
-    # Keys to override at the top level
+    # Model-specific limits and capabilities belong in the catalog so switching
+    # models does not retain the launch model's context or thinking settings.
     top_level_overrides = {
-        "model": f'"{ctx.model or "select-a-model"}"',
+        "model": json.dumps(ctx.model or "select-a-model", ensure_ascii=False),
         "model_provider": '"omlx"',
-        "model_catalog_json": json.dumps(str(catalog_path)),
+        "model_catalog_json": json.dumps(str(catalog_path), ensure_ascii=False),
     }
-
-    # Left by older launches; the catalog now sets effort per model.
-    managed_keys = {"model_reasoning_effort"}
+    managed_keys = {
+        "model_context_window",
+        "model_auto_compact_token_limit",
+        "model_reasoning_effort",
+        "model_reasoning_summary",
+        "model_supports_reasoning_summaries",
+    }
 
     seen_keys = set()
 
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
+        if stripped.startswith("["):
             in_any_section = True
-            in_omlx_section = stripped == "[model_providers.omlx]"
+            in_omlx_section = bool(
+                re.fullmatch(
+                    r"\[model_providers\.omlx(?:\.[^\]]+)?\]\s*(?:#.*)?", stripped
+                )
+            )
 
         # Handle top-level keys
         if not in_any_section and "=" in stripped:
@@ -342,10 +485,15 @@ def write_codex_config(
     # Append new oMLX provider section
     new_lines.append("\n[model_providers.omlx]")
     new_lines.append('name = "oMLX"')
-    new_lines.append(f'base_url = "{ctx.openai_base_url}"')
+    new_lines.append(f"base_url = {json.dumps(ctx.openai_base_url)}")
     new_lines.append('env_key = "OMLX_API_KEY"')
+    new_lines.append('wire_api = "responses"')
+    new_lines.append("requires_openai_auth = false")
+    new_lines.append("supports_websockets = false")
 
-    config_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    new_content = "\n".join(new_lines) + "\n"
+    tomllib.loads(new_content)
+    config_path.write_text(new_content, encoding="utf-8")
     print(f"Config updated: {config_path}")
 
 
