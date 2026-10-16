@@ -251,6 +251,7 @@ def test_block_drafter_captures_requested_layers_then_the_last():
     plain = lm(tokens, cache=lm.make_cache(), capture_layer_ids=[0, 1])
     observed = []
     drafter = SimpleNamespace(
+        kind="dflash",
         depth=3,
         target_layer_ids=[1, 0],
         scope_uids=None,

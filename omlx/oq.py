@@ -13,6 +13,7 @@ import contextlib
 import copy
 import functools
 import hashlib
+import importlib
 import inspect
 import json
 import logging
@@ -2014,7 +2015,9 @@ def validate_gemma4_assistant_pair(
     quantization run.
     """
     base_type = base_config.get("model_type")
-    expected = GEMMA4_ASSISTANT_TYPES.get(base_type)
+    expected = (
+        GEMMA4_ASSISTANT_TYPES.get(base_type) if isinstance(base_type, str) else None
+    )
     if expected is None:
         raise ValueError(
             "Assistant MTP combine requires a gemma4 base model "
@@ -4790,6 +4793,12 @@ def _build_model_sanitizer(
                     )
 
                     apply_mlx_vlm_inkling_compat_patch()
+                if model_type == "bailing_moe_v3_vl":
+                    from omlx.patches.mlx_vlm_bailing_moe_v3_vl_compat import (
+                        apply_mlx_vlm_bailing_moe_v3_vl_compat_patch,
+                    )
+
+                    apply_mlx_vlm_bailing_moe_v3_vl_compat_patch()
                 if model_type == "muse_glimmer":
                     from omlx.patches.mlx_vlm_muse_glimmer_compat import (
                         apply_mlx_vlm_muse_glimmer_compat_patch,
@@ -9888,10 +9897,13 @@ def _streamed_text_args(model_path, config, *, trust_remote_code: bool = False):
 
         layer_cls = Qwen4ExpDecoderLayer
     elif _stream_source_model_type(config) == "glm5_next":
-        from mlx_vlm.models.glm5_next.config import TextConfig
-        from mlx_vlm.models.glm5_next.language import Glm5NextDecoderLayer
+        g5_config = importlib.import_module("mlx_vlm.models.glm5_next.config")
+        g5_lang = importlib.import_module("mlx_vlm.models.glm5_next.language")
 
-        layer_cls = Glm5NextDecoderLayer
+        return (
+            g5_config.TextConfig.from_dict(config["text_config"]),
+            g5_lang.Glm5NextDecoderLayer,
+        )
     elif _is_muse_spark(config):
         # mlx-lm's decoder block; calibration_items maps oQ's tensors to it.
         args = muse_spark_layout.calibration_args(config)
@@ -10434,15 +10446,16 @@ def _collect_streamed_untied_lm_head(source, config, collector, working) -> int:
 
 
 def _collect_streamed_glm5_next_mtp(
-    source, config, collector, calib_data, working, ranges
+    source, config, collector: OQImatrixCollector, calib_data, working, ranges
 ) -> int:
     """Streamed counterpart of the glm5_next branch of _collect_mtp_head_imatrix."""
-    from mlx_vlm.models.glm5_next import language as g5_lang
     from mlx_vlm.models.glm5_next.config import TextConfig
 
     from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime
 
-    glm5_next_vlm_runtime.apply()
+    if not glm5_next_vlm_runtime.apply():
+        raise RuntimeError("GLM-5.3 streamed MTP calibration requires the runtime patch")
+    g5_lang = importlib.import_module("mlx_vlm.models.glm5_next.language")
     prefix = "language_model.mtp.0."
     plan = _streamed_source_plan(source, config, preserve_mtp=True)
     head = g5_lang.Glm5NextMTPBlock(TextConfig.from_dict(config["text_config"]))

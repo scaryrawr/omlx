@@ -261,7 +261,7 @@ def dense_equivalent_params(family: Family) -> float:
     """Dense size an MoE behaves like, in billions of parameters."""
     total = family.total_params / 1e9
     active = family.active_params / 1e9
-    return total**0.6 * active**0.4
+    return math.pow(total, 0.6) * math.pow(active, 0.4)
 
 
 def evaluate(
@@ -711,7 +711,10 @@ def _read_json(
         follow_redirects=True,
     )
     hf_raise_for_status(response)
-    return response.json()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"{repo_id}/{filename} must contain a JSON object")
+    return data
 
 
 def _ngram_table_bytes(

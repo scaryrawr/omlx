@@ -17,6 +17,7 @@ from omlx.patches.mlx_lm_mtp import (
     is_mtp_depth_fixed,
     prompt_priming,
 )
+from omlx.patches.bailing_hybrid.fp8 import convert_ling_fp8_weights
 
 from .activations import swiglu
 from .base import (
@@ -967,7 +968,7 @@ class Model(nn.Module):
                 weights[f"{prefix}.attention.embed_q.weight"] = wk
                 weights[f"{prefix}.attention.unembed_out.weight"] = wv
 
-        return self._convert_fp8_block_weights(weights)
+        return convert_ling_fp8_weights(weights, self.args.quantization_config)
 
     def _dequantize_fp8_block(self, weight_key, weight, scale):
         quantization_config = self.args.quantization_config or {}
@@ -1013,55 +1014,8 @@ class Model(nn.Module):
         return weight[..., :out_dim, :in_dim].astype(mx.bfloat16)
 
     def _convert_fp8_block_weights(self, weights):
-        """Convert Ling's published FP8 and MXFP4 tensor layouts for MLX.
-
-        Published FP8 checkpoints use a float32 ``weight_scale_inv`` grid,
-        normally with 128x128 blocks. Metal cannot multiply that layout
-        directly. Converting one stacked tensor at a time keeps peak memory
-        bounded while preserving the checkpoint's compact runtime footprint.
-
-        The mixed FP4 checkpoint stores routed experts as two packed E2M1
-        values per int8 byte with one E8M0 scale per 32 logical values. That is
-        MLX's native MXFP4 layout, so only reinterpret the packed bytes and
-        rename the scale sidecar instead of dequantizing the experts.
-        """
-        quantization_config = self.args.quantization_config or {}
-        scale_keys = [key for key in weights if key.endswith(".weight_scale_inv")]
-        for scale_key in scale_keys:
-            weight_key = scale_key[: -len("_scale_inv")]
-            if weight_key not in weights:
-                continue
-
-            source_weight = weights[weight_key]
-            is_routed_mxfp4 = (
-                quantization_config.get("routed_experts_quant_method") == "mxfp4"
-                and ".mlp.switch_mlp." in weight_key
-                and source_weight.dtype == mx.int8
-            )
-            if is_routed_mxfp4:
-                scale = weights.pop(scale_key)
-                packed = weights.pop(weight_key).view(mx.uint32)
-                base = weight_key[: -len("weight")]
-                weights[weight_key] = packed
-                weights[f"{base}scales"] = scale
-                mx.eval(packed, scale)
-                continue
-
-            if source_weight.dtype != mx.uint8:
-                continue
-
-            weight = self._dequantize_fp8_block(
-                weight_key, weights.pop(weight_key), weights.pop(scale_key)
-            )
-            quantized, scales, biases = mx.quantize(weight, group_size=64, bits=8)
-            weights[weight_key] = quantized
-            base = weight_key[: -len("weight")]
-            weights[f"{base}scales"] = scales
-            weights[f"{base}biases"] = biases
-            mx.eval(quantized, scales, biases)
-            mx.clear_cache()
-
-        return weights
+        """Backward-compatible wrapper for Ling's shared FP8 conversion."""
+        return convert_ling_fp8_weights(weights, self.args.quantization_config)
 
     @property
     def quant_predicate(self):
