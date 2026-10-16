@@ -3577,7 +3577,8 @@ def _emit_ragged_responses(
                 finish_reason = "stop"
             if finish_reason is not None:
                 terminal_prompt_cache = gen_batch.extract_cache(idx)
-                if getattr(gen_batch.model, "_omlx_native_mtp_full_prompt", False):
+                model = getattr(gen_batch, "model", None)
+                if getattr(model, "_omlx_native_mtp_full_prompt", False) is True:
                     from .uniform import terminal_cache
 
                     terminal_prompt_cache = terminal_cache(

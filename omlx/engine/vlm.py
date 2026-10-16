@@ -2757,9 +2757,15 @@ class VLMBatchedEngine(BaseEngine):
                 if sidecar is not None:
                     from mlx_vlm.utils import load_model
 
-                    head = load_model(sidecar)
+                    head = await loop.run_in_executor(
+                        get_mlx_executor(), load_model, sidecar
+                    )
                 else:
-                    head = NemotronHMTPSplitter().load(Path(self._model_name))
+                    head = await loop.run_in_executor(
+                        get_mlx_executor(),
+                        NemotronHMTPSplitter().load,
+                        Path(self._model_name),
+                    )
                 self._adapter.enable_nemotron_mtp(head, depth=get_mtp_depth())
 
         warmup_started = time.perf_counter()
@@ -6552,13 +6558,13 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         mm_processor_kwargs: dict | None = None,
     ) -> int:
-        """Count exact packed MiniCPM prompts; approximate other VLMs as text.
+        """Count packed MiniCPM/Nemotron prompts; approximate other VLMs as text.
 
-        MiniCPM preprocessing expands crop/frame markers without running its
-        vision encoder. Other families add visual tokens during encoding.
+        Their preprocessing expands media markers without running the vision
+        encoder. Other families add visual tokens during encoding.
         """
         processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
-        if self.model_type == "minicpmv4_7":
+        if self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
             token_ids, *_ = self._process_chat_messages(
                 messages,
                 tools,
@@ -6612,7 +6618,7 @@ class VLMBatchedEngine(BaseEngine):
         if add_generation_prompt is not None:
             ct_kwargs["add_generation_prompt"] = add_generation_prompt
         kwargs = {"chat_template_kwargs": ct_kwargs or None, "is_partial": is_partial}
-        if self.model_type == "minicpmv4_7":
+        if self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
             kwargs["_encode_vision"] = False
         loop = asyncio.get_running_loop()
         token_ids, *_ = await loop.run_in_executor(

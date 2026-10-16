@@ -10373,9 +10373,9 @@ class Scheduler:
             )
             if source_prompt_tokens is not None:
                 request.source_prompt_tokens = source_prompt_tokens
-        unpaired_native_history = bool(
-            getattr(self.model, "_omlx_native_mtp_full_prompt", False)
-            or (request.vlm_extra_kwargs or {}).get("_omlx_pruned_video", False)
+        unpaired_native_history = (
+            getattr(self.model, "_omlx_native_mtp_full_prompt", False) is True
+            or (request.vlm_extra_kwargs or {}).get("_omlx_pruned_video") is True
         )
         if unpaired_native_history:
             request.skip_cache_store = True
@@ -14726,6 +14726,8 @@ class Scheduler:
             return "specprefill"
         if _block_drafter_for(self.model) is not None:
             return "block drafter"
+        if getattr(self.model, "_omlx_native_mtp_full_prompt", False) is True:
+            return "native full-prompt MTP"
         if request_id in self._prefill_states:
             return None
         uid = self.request_id_to_uid.get(request_id)
@@ -14749,7 +14751,14 @@ class Scheduler:
         config = getattr(getattr(self.model, "_vlm_model", None), "config", None)
         media_ids = {
             int(value)
-            for name in ("image_token_id", "video_token_id", "audio_token_id")
+            for name in (
+                "image_token_id",
+                "video_token_id",
+                "audio_token_id",
+                "img_context_token_id",
+                "video_context_token_id",
+                "sound_context_token_id",
+            )
             if isinstance(value := getattr(config, name, None), int)
         }
         if not media_ids:

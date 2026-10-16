@@ -1064,3 +1064,169 @@ def test_pruned_media_full_and_chunked_head_priming_match(native_target):
         atol=1e-5,
         rtol=1e-5,
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("phase", ["prefill", "decode"])
+def test_native_full_prompt_mtp_cannot_memory_requeue(enabled, phase):
+    from omlx.request import Request, SamplingParams
+    from omlx.scheduler import Scheduler
+
+    request = Request("native", [1, 2], SamplingParams())
+    scheduler = SimpleNamespace(
+        model=SimpleNamespace(_omlx_native_mtp_full_prompt=enabled),
+        _MAX_MEMORY_REQUEUES=2,
+        _specprefill_active_request_id=None,
+        _prefill_states={"native": object()} if phase == "prefill" else {},
+        request_id_to_uid={"native": 1},
+    )
+    assert Scheduler._memory_requeue_blocker(scheduler, request) == (
+        "native full-prompt MTP" if enabled else None
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "image_token_id",
+        "video_token_id",
+        "audio_token_id",
+        "img_context_token_id",
+        "video_context_token_id",
+        "sound_context_token_id",
+    ],
+)
+def test_memory_requeue_recognizes_native_media_boundaries(field):
+    from omlx.scheduler import Scheduler
+
+    scheduler = SimpleNamespace(
+        model=SimpleNamespace(
+            _vlm_model=SimpleNamespace(config=SimpleNamespace(**{field: 18}))
+        )
+    )
+    assert Scheduler._media_token_end(scheduler, [1, 18, 18, 3]) == 3
+    assert Scheduler._media_token_end(scheduler, [1, 3]) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["image_url", "input_audio", "video_url"])
+async def test_native_preflight_counts_processor_expanded_media_tokens(media_type):
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import AsyncMock, Mock
+
+    from omlx.engine.vlm import VLMBatchedEngine
+
+    engine = VLMBatchedEngine("unused")
+    engine._loaded = True
+    engine._vlm_model = SimpleNamespace(
+        config=SimpleNamespace(model_type="nemotron_h_omni")
+    )
+    engine._processor = SimpleNamespace()
+    engine._tokenizer = SimpleNamespace(encode=lambda _text: [1])
+    engine._apply_chat_template = lambda *_args, **_kwargs: "text only"
+    engine._extract_request_media = lambda messages: ([], messages, [], [], [])
+    engine._process_chat_messages = Mock(
+        return_value=(list(range(501)), None, {}, None, 0, [])
+    )
+    engine._preflight_or_raise_with_eviction = AsyncMock()
+    messages = [{"role": "user", "content": [{"type": media_type}]}]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        engine._engine = SimpleNamespace(
+            _mlx_executor=executor, engine=SimpleNamespace(scheduler=object())
+        )
+        await engine.preflight_chat(messages, request_id="media")
+    assert (
+        engine._preflight_or_raise_with_eviction.call_args.kwargs["num_prompt_tokens"]
+        == 501
+    )
+    engine._process_chat_messages.assert_called_once()
+    assert engine._process_chat_messages.call_args.args[2]["_encode_vision"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_type",
+    ["nemotron_h_omni", "nemotron_h_nano_omni", "NemotronH_Nano_Omni_Reasoning_V3"],
+)
+async def test_native_tokenization_does_not_encode_or_prune_media(model_type):
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import Mock
+
+    from omlx.engine.vlm import VLMBatchedEngine
+
+    engine = VLMBatchedEngine("unused")
+    engine._loaded = True
+    engine._vlm_model = SimpleNamespace(config=SimpleNamespace(model_type=model_type))
+    engine._process_chat_messages = Mock(
+        return_value=([1, 18, 18, 18, 3], None, {}, None, 0, [])
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        engine._engine = SimpleNamespace(_mlx_executor=executor)
+        tokens = await engine.tokenize_chat([{"role": "user", "content": "media"}])
+    assert tokens == [1, 18, 18, 18, 3]
+    assert engine._process_chat_messages.call_args.args[2]["_encode_vision"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sidecar", [False, True])
+async def test_native_head_load_runs_on_mlx_executor(
+    native_target, tmp_path, monkeypatch, sidecar
+):
+    import threading
+
+    from mlx_vlm import utils
+    from mlx_vlm.speculative.drafters.nemotron_h_mtp.split import (
+        NemotronHMTPSplitter,
+    )
+
+    from omlx.engine.vlm import VLMBatchedEngine
+    from omlx.model_settings import ModelSettings
+    from omlx.models.vlm import VLMModelAdapter
+    from omlx.patches import nemotron_omni_quantization
+    from omlx.utils import model_loading
+
+    class HeadEnabledError(Exception):
+        pass
+
+    (tmp_path / "config.json").write_text(json.dumps(tiny_nemotron_config()))
+    mx.eval(native_target.parameters())
+    loop_thread = threading.get_ident()
+    head = object()
+    loads = []
+    expected_path = tmp_path / "head" if sidecar else tmp_path
+
+    def load_head(path):
+        assert threading.get_ident() != loop_thread
+        assert path == expected_path
+        loads.append(path)
+        return head
+
+    def enable_head(self, loaded, depth):
+        assert loaded is head and depth > 0
+        raise HeadEnabledError
+
+    processor = SimpleNamespace(tokenizer=SimpleNamespace(encode=lambda _text: [1]))
+    monkeypatch.setattr(
+        model_loading, "maybe_apply_pre_load_patches", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        model_loading,
+        "maybe_load_custom_quantization",
+        lambda *_a, **_kw: (native_target, processor),
+    )
+    monkeypatch.setattr(model_loading, "_checkpoint_has_mtp_weights", lambda _p: True)
+    monkeypatch.setattr(
+        nemotron_omni_quantization,
+        "native_mtp_sidecar",
+        lambda *_a: expected_path if sidecar else None,
+    )
+    monkeypatch.setattr(utils, "load_model", load_head)
+    monkeypatch.setattr(NemotronHMTPSplitter, "load", lambda _self, path: load_head(path))
+    monkeypatch.setattr(VLMModelAdapter, "enable_nemotron_mtp", enable_head)
+    engine = VLMBatchedEngine(
+        str(tmp_path),
+        model_settings=ModelSettings(mtp_enabled=True),
+    )
+    with pytest.raises(HeadEnabledError):
+        await engine.start()
+    assert loads == [expected_path]

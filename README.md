@@ -493,6 +493,8 @@ Enable **Lightning MTP**, not an external assistant-drafter setting, for Super V
 Each request owns its native full-prompt head initialization. Batched verification
 commits at the earliest mismatch, stop, or token-budget boundary across the
 cohort, using the native recurrent-cache rollback transaction.
+Native full-prompt MTP requests cannot be requeued under memory pressure; the
+existing abort path applies rather than restarting without their media/head history.
 
 The existing `omlx.oq.quantize_oq_streaming()` Python API and admin oQ/oQe workflow accept floating-point
 sources and the native mixed ModelOpt NVFP4/FP8 source format (including NVIDIA's
