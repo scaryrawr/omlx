@@ -174,6 +174,8 @@ def _build_engine_with_stub_scheduler(engine_cls, scheduler):
     engine._model_name = "test-model"
     engine._enable_thinking = None
     engine._prefill_eviction_callback = None
+    if isinstance(engine, VLMBatchedEngine):
+        engine._dflash_drafter = None
 
     tokenizer = MagicMock()
     tokenizer.apply_chat_template = MagicMock(return_value="hello world")

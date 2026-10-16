@@ -47,6 +47,7 @@ def _make_pool(entries: list) -> MagicMock:
     pool.check_ttl_expirations = AsyncMock()
     pool.shutdown = AsyncMock()
     pool.get_model_ids.return_value = [e.model_id for e in entries]
+    pool.get_active_model_aliases.return_value = {}
     pool.get_entry.side_effect = lambda mid: next(
         (e for e in entries if e.model_id == mid), None
     )

@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
+from omlx.api.media_options import MultimodalProcessorOptions
 from omlx.api.shared_models import IDPrefix, generate_id
 
 # =============================================================================
@@ -214,6 +215,13 @@ class ThinkingConfig(BaseModel):
     budget_tokens: int | None = None
 
 
+class OutputConfig(BaseModel):
+    """Anthropic output controls."""
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    format: dict[str, Any] | None = None
+
+
 # =============================================================================
 # Request
 # =============================================================================
@@ -235,8 +243,10 @@ class MessagesRequest(BaseModel):
     tools: list[AnthropicTool] | None = None
     tool_choice: ToolChoice | dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
+    output_config: OutputConfig | None = None
     # Chat template kwargs (e.g. enable_thinking, reasoning_effort)
     chat_template_kwargs: dict[str, Any] | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
 
 
 # =============================================================================
@@ -253,6 +263,8 @@ class TokenCountRequest(BaseModel):
     tools: list[AnthropicTool] | None = None
     tool_choice: ToolChoice | dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
+    output_config: OutputConfig | None = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
 
 
 class TokenCountResponse(BaseModel):
