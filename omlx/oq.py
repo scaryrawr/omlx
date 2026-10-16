@@ -52,6 +52,12 @@ try:
 except ImportError:
     muse_spark_layout = muse_spark_serving = None
 
+from omlx.model_classification import (
+    NEMOTRON_OMNI_MODEL_TYPES,
+    is_nemotron_modelopt_source,
+    is_nemotron_omni,
+    normalize_nemotron_config,
+)
 from omlx.model_discovery import (
     D3_DECISION_CONFIG,
     DECISION_SIDECAR_FILES,
@@ -633,6 +639,7 @@ def _is_token_embedding_tensor(path: str) -> bool:
             ".tok_embeddings.weight",
             ".word_embeddings.weight",
             ".wte.weight",
+            ".backbone.embeddings.weight",
         )
     )
 
@@ -676,15 +683,22 @@ def universal_quant_predicate(
     if indexer_override is not None:
         return indexer_override
 
-    tc = config.get("text_config", {})
+    tc = config.get("text_config") or config.get("llm_config") or {}
     num_layers = config.get("num_hidden_layers") or tc.get("num_hidden_layers", 32)
     num_experts = (
         config.get("num_local_experts")
         or tc.get("num_local_experts")
         or config.get("num_experts")
         or tc.get("num_experts", 0)
+        or tc.get("n_routed_experts", 0)
         or 0
     )
+    if is_nemotron_omni(config.get("model_type")) and tc.get("block_configs"):
+        layer_index = _extract_layer_index(path)
+        if 0 <= layer_index < len(tc["block_configs"]):
+            num_experts = (
+                tc["block_configs"][layer_index].get("n_routed_experts") or num_experts
+            )
     hidden_size = config.get("hidden_size") or tc.get("hidden_size", 0)
     is_moe = num_experts > 0
 
@@ -905,6 +919,7 @@ def _is_vision_tensor(name: str) -> bool:
             "visual.merger",
             "image_norm",
             "temporal_embed",
+            "mlp1.",
         )
     )
 
@@ -916,7 +931,7 @@ def _is_audio_tensor(name: str) -> bool:
     `embed_audio.*` (the projection from audio output to text hidden size,
     which is quantized like `embed_vision.embedding_projection`).
     """
-    return "audio_tower" in name
+    return any(part in name for part in ("audio_tower", "sound_encoder", "sound_projection"))
 
 
 def _is_moe_router(path: str) -> bool:
@@ -3705,6 +3720,8 @@ def validate_quantizable(config: dict) -> bool:
         return False
     if "quantization" in config:
         return False
+    if is_nemotron_modelopt_source(config):
+        return True
     if "quantization_config" in config:
         qc = config["quantization_config"]
         if isinstance(qc, dict):
@@ -3789,7 +3806,7 @@ def estimate_bpw_and_size(
     source = Path(model_path)
     config_path = source / "config.json"
     with open(config_path) as f:
-        config = json.load(f)
+        config = normalize_nemotron_config(json.load(f))
 
     weight_files = _source_weight_files(source)
     if not weight_files:
@@ -3861,6 +3878,40 @@ def estimate_bpw_and_size(
         config=config,
     )
     logical = idx.logical_metadata()
+    native_head_bytes = 0
+    native_head_params = 0
+    if preserve_mtp and is_nemotron_omni(config.get("model_type")):
+        modelopt_head = is_nemotron_modelopt_source(config)
+        for name in idx._index:
+            if name.startswith(("mtp.", "language_model.mtp.")) and not name.endswith(
+                (".input_scale", ".k_scale", ".v_scale")
+            ):
+                storage_dtype = idx.source_dtype(name)
+                if modelopt_head:
+                    # Mirror the native splitter's FP8 expansion and NVFP4
+                    # global-scale promotion without loading head tensors.
+                    if name.endswith(".weight_scale"):
+                        if idx.source_shape(name + "_2") is None:
+                            continue
+                    elif name.endswith(".weight_scale_2"):
+                        storage_dtype = "F32"
+                    elif name.endswith(".weight"):
+                        prefix = name.removesuffix(".weight")
+                        if (
+                            idx.source_shape(prefix + ".weight_scale") is not None
+                            and idx.source_shape(prefix + ".weight_scale_2") is None
+                        ):
+                            storage_dtype = idx.source_dtype(prefix + ".weight_scale")
+                            if storage_dtype == "F32":
+                                storage_dtype = "BF16"
+                native_head_bytes += math.prod(idx.source_shape(name)) * idx._DTYPE_BYTES[
+                    storage_dtype
+                ]
+        native_head_params = sum(
+            math.prod(shape)
+            for name, (shape, _) in logical.items()
+            if name.startswith(("mtp.", "language_model.mtp."))
+        )
 
     # Price on post-sanitize names when a streaming sanitize plan is
     # discoverable — the quantization loop itself decides on those names.
@@ -3881,6 +3932,8 @@ def estimate_bpw_and_size(
             if _plan:
                 plan_view = _DiscoveredPlan(_plan, idx)
     except Exception as e:
+        if is_nemotron_omni(config.get("model_type")):
+            raise RuntimeError("Nemotron estimate could not resolve native weights") from e
         logger.debug("bpw estimate: sanitize-plan discovery unavailable: %s", e)
 
     if plan_view is not None:
@@ -3898,6 +3951,13 @@ def estimate_bpw_and_size(
             planned_logical[out_name] = (shape, dtype)
         if planned_logical:
             logical = planned_logical
+
+    if is_nemotron_omni(config.get("model_type")):
+        logical = {
+            name: metadata
+            for name, metadata in logical.items()
+            if not _is_mtp_tensor(name)
+        }
 
     def _source_quant_info(name):
         if plan_view is not None:
@@ -4038,6 +4098,11 @@ def estimate_bpw_and_size(
 
     source_total = sum(sf.stat().st_size for sf in _source_weight_files(source))
     streaming_peak = int(source_total * 1.5) + 5 * 1024**3
+    if native_head_bytes:
+        total_output_bytes += native_head_bytes
+        effective_bpw = (effective_bpw * total_params + native_head_bytes * 8) / max(
+            total_params + native_head_params, 1
+        )
 
     return {
         "effective_bpw": round(effective_bpw, 2),
@@ -4256,6 +4321,16 @@ def _oqe_calibration_batch_plan(
         ("top_k_experts", "num_experts_per_tok", "moe_top_k", "top_k"),
         default=1,
     )
+    if is_nemotron_omni(config.get("model_type")):
+        blocks = (config.get("text_config") or {}).get("block_configs") or []
+        num_experts = max(
+            [num_experts]
+            + [_nested_config_int(block, ("n_routed_experts",)) for block in blocks]
+        )
+        top_k = max(
+            [top_k]
+            + [_nested_config_int(block, ("num_experts_per_tok",)) for block in blocks]
+        )
     route_factor = max(1, top_k if num_experts > 0 else 1)
     sample_bytes = max(1, int(seq_length) * max(1, hidden_size) * 4 * route_factor)
 
@@ -4517,6 +4592,7 @@ def _build_model_sanitizer(
     from omlx.utils.model_loading import normalize_qwen35_text_config
 
     normalize_qwen35_text_config(config)
+    config = normalize_nemotron_config(config)
     if _is_muse_spark(config):
         return muse_spark_layout.sanitizer(config, text_only=text_only)
     if config.get("model_type") == "flint":
@@ -4772,6 +4848,10 @@ def _build_model_sanitizer(
                 predicate = getattr(language, "cast_predicate", None)
                 if predicate is not None:
                     _vlm_sanitize._omlx_cast_predicate = predicate
+            if is_nemotron_omni(model_type):
+                from mlx_vlm.models.nemotron_h.language import Model as NemotronText
+
+                _vlm_sanitize._omlx_cast_predicate = NemotronText.cast_predicate.fget(None)
 
             logger.info(
                 f"Using mlx-vlm full sanitize chain for "
@@ -4780,6 +4860,8 @@ def _build_model_sanitizer(
             )
             return _vlm_sanitize
         except Exception as e:
+            if is_nemotron_omni(model_type):
+                raise RuntimeError("Native Nemotron sanitizer is unavailable") from e
             logger.warning(f"mlx-vlm sanitizer not available for a VLM config: {e}")
 
     try:
@@ -4991,7 +5073,13 @@ def _build_non_quantizable_set(config: dict) -> set:
     quantization. Returns empty set if the model class cannot be loaded.
     """
     try:
-        model_class, model_args_class = _get_classes(config)
+        if is_nemotron_omni(config.get("model_type")):
+            from mlx_vlm.utils import get_model_and_args
+
+            module, _ = get_model_and_args(normalize_nemotron_config(config))
+            model_class, model_args_class = module.Model, module.ModelConfig
+        else:
+            model_class, model_args_class = _get_classes(config)
         args = model_args_class.from_dict(config)
         model = model_class(args)
 
@@ -5010,6 +5098,8 @@ def _build_non_quantizable_set(config: dict) -> set:
             )
         return result
     except Exception as e:
+        if is_nemotron_omni(config.get("model_type")):
+            raise RuntimeError("Cannot establish native Nemotron quantization policy") from e
         logger.debug(f"Could not build non-quantizable set: {e}")
         return set()
 
@@ -6745,7 +6835,8 @@ def quantize_oq_streaming(
             oq_sensitivity_map.json or an explicit sensitivity_model_path
             still wins over both. None (default) auto-enables streaming when
             the source exceeds the RAM budget. The streamed sourcer supports
-            the MiniMax-M3 (minimax_m3_vl) and Qwen4-Exp (qwen4_exp) layouts,
+            MiniMax-M3, Qwen4-Exp, GLM-5.3, Muse Spark, and native Nemotron
+            multimodal layouts,
             so the auto rule stays on the RAM-safe proxy for every other
             model_type, and an explicit stream_calibration=True on an
             unsupported layout raises a ValueError up front instead of
@@ -6797,6 +6888,25 @@ def quantize_oq_streaming(
     config_path = source / "config.json"
     with open(config_path) as f:
         config = json.load(f)
+    config = normalize_nemotron_config(config)
+    native_nemotron = is_nemotron_omni(config.get("model_type"))
+    native_preserve_mtp = native_nemotron and preserve_mtp
+    if native_nemotron:
+        if text_only:
+            raise ValueError("Native Nemotron supports multimodal quantization exports only")
+        if not validate_quantizable(config):
+            raise ValueError(
+                "Nemotron conversion requires a floating-point or native ModelOpt source, "
+                "not an existing MLX quantization"
+            )
+        if native_preserve_mtp:
+            from .utils.model_loading import _checkpoint_has_mtp_weights
+
+            if not _checkpoint_has_mtp_weights(source):
+                raise ValueError("Preserve MTP requested but this Nemotron source has no head")
+        # The official target deliberately excludes the head. Preserve it
+        # independently in mlx-vlm's native split format, never as target keys.
+        preserve_mtp = False
     normalized_model_type = str(config.get("model_type", "")).lower().replace(
         "-", "_"
     )
@@ -7130,10 +7240,10 @@ def quantize_oq_streaming(
                 f"calibration sweep ({len(streamed_sensitivity_map)} layers)"
             )
             sensitivity_map = streamed_sensitivity_map
-        elif stream_imatrix:
+        elif stream_imatrix or is_nemotron_modelopt_source(config):
             # Streaming calibration is active but the fused sweep never ran
-            # (imatrix cache hit). Measure with a standalone streamed pass:
-            # still the real weights, still no proxy, no whole-model load.
+            # (imatrix cache hit), or packed ModelOpt modules need real-weight
+            # perturbation. Both use a standalone streamed pass, never a proxy.
             logger.info(
                 f"oQ{oq_level:g}: measuring sensitivity by streaming layers "
                 "from the source checkpoint (no calibration proxy)"
@@ -7274,6 +7384,8 @@ def quantize_oq_streaming(
                 f"{len(all_weights)} output tensors"
             )
         except Exception as e:
+            if native_nemotron:
+                raise RuntimeError("Native Nemotron streaming sanitize discovery failed") from e
             if _model_requires_proxy:
                 raise RuntimeError(
                     f"oQ{oq_level:g}: streaming sanitize-plan discovery "
@@ -7714,6 +7826,10 @@ def quantize_oq_streaming(
             "routed_expert_scales": True,
         }
     _apply_output_dtype(output_config, dtype)
+    if native_preserve_mtp:
+        from .patches.nemotron_omni_quantization import export_native_mtp
+
+        export_native_mtp(source, output, output_config)
     with open(output / "config.json", "w") as f:
         json.dump(output_config, f, indent=2, ensure_ascii=False)
     if imatrix_report is not None:
@@ -7752,7 +7868,14 @@ _OQE_MAX_SAMPLE_MULTIPLIER = 8
 _OQE_MAX_ADAPTIVE_SAMPLES = 1024
 _OQE_MIN_EXPERT_COUNT = 16
 _OQE_MIN_EXPERT_COUNT_PERCENTILE = 5
-_OQE_SWITCH_LINEAR_CLASSES = {"SwitchLinear", "QuantizedSwitchLinear"}
+# Include native NVFP4 expert wrappers with per-tensor/per-expert global scales.
+_OQE_SWITCH_LINEAR_CLASSES = {
+    "SwitchLinear",
+    "QuantizedSwitchLinear",
+    "ScaledSwitchLinear",
+    "NVFP4SwitchLinear",
+    "ScaledQuantizedSwitchLinear",
+}
 
 
 def _is_oqe_switch_module(module) -> bool:
@@ -8073,6 +8196,11 @@ def _find_model_layers(model):
         # EmbeddingGemma 2 keeps its text encoder directly on language_model.
         embed_fn = model.language_model.embed_tokens
         layers = model.language_model.layers
+    elif hasattr(model, "language_model") and hasattr(
+        model.language_model, "backbone"
+    ):
+        embed_fn = model.language_model.backbone.embeddings
+        layers = model.language_model.backbone.layers
     elif hasattr(model, "embed_tokens"):
         embed_fn = model.embed_tokens
         layers = model.layers
@@ -8361,6 +8489,8 @@ def _commit_layer_forward_aux(state, layer_idx: int, aux, fallback=None) -> None
 
 def _forward_layer_result(block, inputs, mask, position_ids, layer_idx=None):
     """Forward pass through a transformer layer, returning output and aux."""
+    if isinstance(position_ids, dict) and position_ids.get("kind") == "nemotron_h_omni":
+        return block(inputs, mask=mask, cache=None), None
     if (
         isinstance(position_ids, dict)
         and position_ids.get("kind") == _FLINT_LAYER_STATE_KIND
@@ -8633,6 +8763,15 @@ def _prepare_layer_inputs(model, layers, calib_data, inputs, *, noncausal=False)
     )
     if model_type == "flint":
         return inputs, [None] * len(layers), {"kind": _FLINT_LAYER_STATE_KIND}
+    if is_nemotron_omni(model_type):
+        from mlx_vlm.models.base import create_attention_mask as native_attention_mask
+
+        attention_mask = native_attention_mask(inputs, None)
+        return (
+            inputs,
+            [attention_mask if layer.block_type == "*" else None for layer in layers],
+            {"kind": "nemotron_h_omni"},
+        )
     gemma4_inputs = _prepare_gemma4_layer_inputs(model, layers, calib_data, inputs)
     if gemma4_inputs is not None:
         return gemma4_inputs
@@ -8768,7 +8907,9 @@ class OQImatrixCollector:
         # already-quantized checkpoints (e.g. deriving a recalibrated MTP
         # head from an oQ8 model when the bf16 source is gone).
         return (
-            cls in ("Linear", "QuantizedLinear", "QuantizedProjection")
+            cls in (
+                "Linear", "QuantizedLinear", "QuantizedProjection", "ScaledQuantizedLinear"
+            )
             and hasattr(module, "weight")
             and getattr(module.weight, "ndim", 0) == 2
         )
@@ -9486,7 +9627,13 @@ _STREAM_EMBED_KEY = "language_model.model.embed_tokens.weight"
 # _resolve_stream_calibration). Keep this in lockstep with the sourcer above.
 _STREAM_CALIBRATION_SUPPORTED_MODEL_TYPES = frozenset(
     {"minimax_m3_vl", "qwen4_exp", "glm5_next", "muse_spark", "flint"}
-)
+) | NEMOTRON_OMNI_MODEL_TYPES
+
+
+def _streamed_layer_prefix(config: dict) -> str:
+    if is_nemotron_omni(config.get("model_type")):
+        return "language_model.backbone.layers."
+    return _STREAM_TEXT_LAYER_PREFIX
 
 
 def _stream_calibration_supported(model_type: str | None) -> bool:
@@ -9507,6 +9654,12 @@ def _streamed_text_args(model_path, config, *, trust_remote_code: bool = False):
         from mlx_vlm.models.flint.language import DecoderLayer
 
         return ModelConfig.from_dict(config), DecoderLayer
+    if is_nemotron_omni(config.get("model_type")):
+        from mlx_vlm.models.nemotron_h.config import ModelConfig as TextConfig
+
+        from .patches.nemotron_omni_quantization import streamed_decoder_layer
+
+        return TextConfig.from_dict(config["text_config"]), streamed_decoder_layer
     if _stream_source_model_type(config) == "qwen4_exp":
         from mlx_vlm.models.qwen4_exp.config import TextConfig
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpDecoderLayer
@@ -9556,7 +9709,10 @@ def _streamed_source_plan(
     return _DiscoveredPlan(plan, lazy_index)
 
 
-def _streamed_layer_items(dp: "_DiscoveredPlan", layer_idx: int, skip_key=None) -> list:
+def _streamed_layer_items(
+    dp: "_DiscoveredPlan", layer_idx: int, skip_key=None, *,
+    layer_prefix: str = _STREAM_TEXT_LAYER_PREFIX,
+) -> list:
     """Pop every tensor of one text layer, keyed relative to the bare block.
 
     ``skip_key`` (relative-key predicate) filters BEFORE the pop: a skipped
@@ -9565,7 +9721,7 @@ def _streamed_layer_items(dp: "_DiscoveredPlan", layer_idx: int, skip_key=None) 
     self-sources — popping them first and discarding after would read the
     whole table every round and spike process memory by the table's size.
     """
-    prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
+    prefix = f"{layer_prefix}{layer_idx}."
     keys = sorted(k for k in dp if k.startswith(prefix))
     if not keys:
         raise KeyError(f"no checkpoint tensors for text layer {layer_idx}")
@@ -9645,7 +9801,9 @@ def _iter_streamed_layer_blocks(
         else None
     )
     for layer_idx in range(args.num_hidden_layers):
-        items = _streamed_layer_items(dp, layer_idx, skip_key=skip_key)
+        items = _streamed_layer_items(
+            dp, layer_idx, skip_key=skip_key, layer_prefix=_streamed_layer_prefix(config)
+        )
         if _is_muse_spark(config):
             items = muse_spark_layout.calibration_items(items, layer_idx, config)
         block = layer_cls(args, layer_idx)
@@ -9661,7 +9819,8 @@ def _iter_streamed_layer_blocks(
         del items
         mx.eval(block.parameters())
         is_moe = bool(
-            getattr(
+            getattr(block, "block_type", None) == "E"
+            or getattr(
                 block,
                 "is_moe_layer",
                 "SparseMoeBlock" in type(getattr(block, "mlp", None)).__name__,
@@ -9678,7 +9837,12 @@ def _iter_streamed_layer_blocks(
 def _streamed_embed_weight(source, config: dict):
     """Source the token embedding table (bf16 on disk) for the stage-0 pass."""
     dp = _streamed_source_plan(source, config)
-    weight = dp.pop(_STREAM_EMBED_KEY)
+    key = (
+        "language_model.backbone.embeddings.weight"
+        if is_nemotron_omni(config.get("model_type"))
+        else _STREAM_EMBED_KEY
+    )
+    weight = dp.pop(key)
     mx.eval(weight)
     return weight
 
@@ -9847,6 +10011,17 @@ class _StreamingNoModel:
     """
 
 
+def _nemotron_streamed_state(embedded):
+    from mlx_vlm.models.base import create_attention_mask as native_attention_mask
+
+    return {
+        "inputs": embedded,
+        "mask": native_attention_mask(embedded, None),
+        "position_ids": {"kind": "nemotron_h_omni"},
+        "scores": {},
+    }
+
+
 def _streamed_glm5_next_state(config: dict, embedded):
     """Streamed counterpart of the glm5_next branch of _prepare_layer_inputs."""
     text_config = config.get("text_config") or {}
@@ -9901,6 +10076,9 @@ def _streamed_sensitivity_state(
             "position_ids": {"kind": _FLINT_LAYER_STATE_KIND},
             "scores": {},
         }
+    if is_nemotron_omni(config.get("model_type")):
+        mx.eval(inputs)
+        return _nemotron_streamed_state(inputs)
     if _stream_source_model_type(config) == "glm5_next":
         inputs, attention_mask = _streamed_glm5_next_state(config, inputs)
         mx.eval(inputs)
@@ -9957,7 +10135,9 @@ def _streamed_sensitivity_layer(
     bug, and a silently missing score would skew the bit allocation.
     """
     layer_masks = state.get("layer_masks")
-    if state.get("block_driven_attention_mask"):
+    if is_nemotron_omni(config.get("model_type")):
+        layer_mask = state["mask"] if block.block_type == "*" else None
+    elif state.get("block_driven_attention_mask"):
         layer_mask = None if bool(getattr(block, "is_linear", False)) else state["mask"]
     elif layer_masks is not None:
         layer_mask = layer_masks[layer_idx]
@@ -10246,6 +10426,10 @@ def _collect_imatrix_streaming(
     elif _stream_source_model_type(config) == "flint":
         mask = None
         position_ids = {"kind": _FLINT_LAYER_STATE_KIND}
+    elif is_nemotron_omni(config.get("model_type")):
+        native_state = _nemotron_streamed_state(embedded[:1])
+        mask = native_state["mask"]
+        position_ids = native_state["position_ids"]
     else:
         # One causal mask and one position-id row serve every layer and every
         # micro-batch: both depend only on seq_length and the activation dtype.
@@ -10306,7 +10490,7 @@ def _collect_imatrix_streaming(
         for layer_idx, block, _is_moe in _iter_streamed_layer_blocks(
             source, config, trust_remote_code=trust_remote_code
         ):
-            prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
+            prefix = f"{_streamed_layer_prefix(config)}{layer_idx}."
             layer_installed = collector.install(block, name_prefix=prefix)
             if round_index == 0:
                 installed += layer_installed
@@ -10327,6 +10511,8 @@ def _collect_imatrix_streaming(
                     )
             if is_qwen4_exp:
                 layer_mask = q4_layer_masks[layer_idx]
+            elif is_nemotron_omni(config.get("model_type")):
+                layer_mask = mask if block.block_type == "*" else None
             elif is_glm5_next:
                 layer_mask = None if bool(getattr(block, "is_linear", False)) else mask
             else:

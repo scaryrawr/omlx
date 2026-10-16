@@ -1281,7 +1281,7 @@ def _has_mtp_heads(config: dict) -> bool:
         return True
     if int(config.get("num_nextn_predict_layers", 0) or 0) > 0:
         return True
-    text_cfg = config.get("text_config") or {}
+    text_cfg = config.get("text_config") or config.get("llm_config") or {}
     if int(text_cfg.get("mtp_num_hidden_layers", 0) or 0) > 0:
         return True
     if int(text_cfg.get("num_nextn_predict_layers", 0) or 0) > 0:
@@ -1514,6 +1514,15 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
     ``mtp/model_mtp.safetensors`` sidecar. If neither contains MTP weights,
     callers skip attaching the MTP module.
     """
+    from ..model_classification import is_nemotron_omni
+
+    config_path = Path(model_path) / "config.json"
+    if is_nemotron_omni(_config_model_type(model_path)):
+        config = json.loads(config_path.read_text())
+        if config.get("omlx_mtp") is not None:
+            from ..patches.nemotron_omni_quantization import native_mtp_sidecar
+
+            return native_mtp_sidecar(model_path, config) is not None
     if _checkpoint_qwen4_mtp_weight_prefix(model_path) is not None:
         return True
     prefixes = _MTP_WEIGHT_PREFIXES + _nextn_weight_prefixes(model_path)
@@ -1633,6 +1642,10 @@ def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:
         return False
     if not model_type:
         return False
+    from ..model_classification import is_nemotron_omni
+
+    if is_nemotron_omni(model_type):
+        return True
     return (
         model_type.startswith("qwen3_5")
         or model_type.startswith("qwen3_6")
