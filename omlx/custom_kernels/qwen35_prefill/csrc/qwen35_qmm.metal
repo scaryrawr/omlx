@@ -165,6 +165,8 @@ instantiate_qwen35_q_affine_variants(4);
 instantiate_qwen35_q_affine_variants(5);
 instantiate_qwen35_q_affine_variants(6);
 instantiate_qwen35_q_affine_variants(8);
+instantiate_qwen35_q_affine_qmm_t(4, bfloat16_t, 32, 64, 16);
+instantiate_qwen35_q_affine_qmm_t(5, bfloat16_t, 32, 64, 16);
 
 define_qwen35_q_affine_qmm128_t(2)
 define_qwen35_q_affine_qmm128_t(4)
