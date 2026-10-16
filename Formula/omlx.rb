@@ -133,6 +133,7 @@ class Omlx < Formula
       end
     end
 
+    # Install mlx-audio support into the same virtualenv.
     resource("mlx-audio").stage do
       system(*pip_install, ".[all]")
     end
