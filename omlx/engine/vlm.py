@@ -33,12 +33,14 @@ import inspect
 import json
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mlx.core as mx
 
+from ..api.media_options import merge_mm_processor_kwargs
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import (
     clean_special_tokens,
@@ -46,7 +48,8 @@ from ..api.utils import (
     remove_special_tokens_preserve_whitespace,
 )
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
-from ..exceptions import InvalidRequestError
+from ..exceptions import InvalidRequestError, ModelUnavailableError
+from ..model_discovery import model_unavailable_reason
 from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..models.vlm import VLMModelAdapter
 from ..patches.gemma4_audio import apply_gemma4_audio_patch
@@ -54,13 +57,15 @@ from ..patches.mlx_lm_mtp import drafter_target
 from ..patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
 from ..speculative.dflash import attach_drafter, detach_drafter
+from ..utils.generation_config import load_generation_config_token_ids
 from ..utils.image import (
+    compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
-    extract_images_from_messages,
     extract_media_from_messages,
 )
 from ..utils.video import (
+    NATIVE_VIDEO_MAX_FRAMES,
     NATIVE_VIDEO_MODEL_TYPES,
     attach_native_video_processor,
     estimate_native_video_tokens,
@@ -91,11 +96,12 @@ OCR_MODEL_TYPES = {
     "dots_ocr",
     "glm_ocr",
 }
+_DEEPSEEK_V4_EOS_TOKEN_IDS = {1, 128803, 128804}
 
 # OCR model types and their default markdown conversion prompts.
 # When an OCR model receives a generic user prompt with an image,
 # the prompt is automatically adjusted for markdown output.
-OCR_MODEL_PROMPTS: Dict[str, str] = {
+OCR_MODEL_PROMPTS: dict[str, str] = {
     "deepseekocr": "Convert the document to markdown.",
     "deepseekocr_2": "Convert the document to markdown.",
     # baidu/Unlimited-OCR upstream-documented single-page baseline. Multi-page
@@ -108,7 +114,7 @@ OCR_MODEL_PROMPTS: Dict[str, str] = {
 # Extra stop sequences for OCR models to prevent degeneration.
 # Many OCR models lack proper EOS handling and generate chat-turn
 # tokens (<|user|>, <|im_start|>, etc.) indefinitely after the OCR output.
-OCR_EXTRA_STOP_SEQUENCES: List[str] = [
+OCR_EXTRA_STOP_SEQUENCES: list[str] = [
     "<|user|>",
     "<|im_start|>",
     "<|im_end|>",
@@ -128,9 +134,66 @@ TOKENIZER_CHAT_TEMPLATE_MODEL_TYPES = {"gemma4", "gemma4_unified", "diffusion_ge
 
 DIFFUSION_PREFILL_STEP_SIZE = 2048
 
+
+def _warmup_bailing_moe_v3_vl(model: Any, token_id: int = 0) -> bool:
+    """Compile Ling VL's KDA prefill and decode graphs before serving."""
+    if getattr(model, "model_type", None) != "bailing_moe_v3_vl":
+        return False
+
+    cache = model.make_cache()
+    prefill = model(mx.full((1, 8), token_id, dtype=mx.int32), cache=cache)
+    mx.eval(prefill)
+    decode = model(mx.array([[token_id]], dtype=mx.int32), cache=cache)
+    mx.eval(decode)
+    return True
+
+
+def _report_native_vlm_mtp_readiness(
+    model_name: str,
+    adapter: Any,
+    *,
+    has_mtp_weights: bool,
+) -> bool:
+    """Log and return whether a loaded VLM can enter native-head MTP decode."""
+    language_model = getattr(adapter, "_language_model", None)
+    get_mtp_module = getattr(language_model, "get_mtp_module", None)
+    mtp_head = (
+        get_mtp_module()
+        if callable(get_mtp_module)
+        else getattr(language_model, "mtp", None)
+    )
+    has_mtp_head = mtp_head is not None
+    decode_enabled = bool(
+        getattr(language_model, "_omlx_mtp_decode_enabled", False)
+    )
+    adapter_ready = callable(getattr(adapter, "mtp_forward", None))
+    ready = bool(
+        has_mtp_weights and has_mtp_head and decode_enabled and adapter_ready
+    )
+    if ready:
+        logger.info(
+            "Native VLM MTP ready for %s (loaded native head; text-only "
+            "requests use mlx-lm BatchGenerator draft+verify; vision requests "
+            "use standard decode)",
+            model_name,
+        )
+    else:
+        logger.warning(
+            "Native VLM MTP requested for %s but readiness gate failed "
+            "(weights=%s, head=%s, decode_flag=%s, adapter=%s); standard "
+            "decode remains active",
+            model_name,
+            has_mtp_weights,
+            has_mtp_head,
+            decode_enabled,
+            adapter_ready,
+        )
+    return ready
+
+
 # Per-model OCR generation defaults from official configs.
 # Applied automatically when no explicit user override is provided.
-OCR_MODEL_GENERATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+OCR_MODEL_GENERATION_DEFAULTS: dict[str, dict[str, Any]] = {
     "glm_ocr": {
         "temperature": 0.0,
         "repetition_penalty": 1.1,
@@ -224,6 +287,47 @@ def _apply_minimax_m3_thinking_mode(
         template_kwargs["thinking_mode"] = "disabled"
 
 
+def _iter_token_ids(value: Any):
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        yield value
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, int) and not isinstance(item, bool):
+                yield item
+
+
+def _resolve_vlm_eos_token_ids(
+    model_path: Path,
+    eos_token_id: Any,
+) -> list[int] | int | None:
+    merged: list[int] = []
+    seen: set[int] = set()
+    preserve_sequence = isinstance(eos_token_id, (list, tuple, set)) and not isinstance(
+        eos_token_id,
+        (str, bytes, bytearray),
+    )
+
+    def add(value: Any) -> None:
+        for token_id in _iter_token_ids(value) or ():
+            if token_id not in seen:
+                seen.add(token_id)
+                merged.append(token_id)
+
+    add(eos_token_id)
+    generation_eos = load_generation_config_token_ids(model_path, "eos_token_id")
+    if generation_eos:
+        add(sorted(generation_eos))
+    if _read_config_model_type(model_path) == "deepseek_v4":
+        add(sorted(_DEEPSEEK_V4_EOS_TOKEN_IDS))
+
+    if not merged:
+        return None
+    return merged if preserve_sequence or len(merged) > 1 else merged[0]
+
+
 def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id: Any):
     from mlx_vlm.tokenizer_utils import load_tokenizer
     from mlx_vlm.utils import StoppingCriteria
@@ -234,10 +338,11 @@ def _attach_vlm_tokenizer_runtime(tokenizer: Any, model_path: Path, eos_token_id
     detokenizer_class = load_tokenizer(model_path, return_tokenizer=False)
     tokenizer.detokenizer = detokenizer_class(tokenizer)
 
-    final_eos_token_ids = (
+    final_eos_token_ids = _resolve_vlm_eos_token_ids(
+        model_path,
         eos_token_id
         or getattr(tokenizer, "eos_token_ids", None)
-        or getattr(tokenizer, "eos_token_id", None)
+        or getattr(tokenizer, "eos_token_id", None),
     )
     tokenizer.stopping_criteria = StoppingCriteria(final_eos_token_ids, tokenizer)
     return tokenizer
@@ -260,7 +365,10 @@ def _load_cohere2_moe_text_model(
         trust_remote_code=trust_remote_code,
     )
 
-    eos_token_id = getattr(getattr(model, "config", None), "eos_token_id", None)
+    eos_token_id = _resolve_vlm_eos_token_ids(
+        model_path,
+        getattr(getattr(model, "config", None), "eos_token_id", None),
+    )
     try:
         processor = load_processor(
             model_path,
@@ -1369,12 +1477,26 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
         yield
         return
 
+    import mlx_vlm.utils as _vu
     import safetensors
 
     from ..patches.mlx_vlm_qwen4_exp_compat.ple_load_resources import ple_load_resources
 
     original_safe_open = safetensors.safe_open
+    original_load_safetensors = _vu._load_safetensors
+    target_dir = model_dir.resolve()
     is_target_shard = _model_shard_matcher(model_dir)
+    mtp_sidecar = None
+    mtp_loaded = False
+    if model_type == "qwen4_exp" and (model_dir / "mtp" / "config.json").is_file():
+        from ..utils.model_loading import _qwen4_mtp_sidecar_path
+
+        candidate_sidecar = _qwen4_mtp_sidecar_path(model_dir)
+        if candidate_sidecar is not None:
+            from mlx_vlm.models.qwen4_exp.language import get_mtp_runtime
+
+            if get_mtp_runtime().checkpoint_prefix == "mtp/":
+                mtp_sidecar = candidate_sidecar
 
     class _SafeOpenMetadataWrapper:
         def __init__(self, inner):
@@ -1403,7 +1525,32 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
             return _SafeOpenMetadataWrapper(handle)
         return handle
 
+    def _patched_load_safetensors(path):
+        nonlocal mtp_loaded
+        weights = original_load_safetensors(path)
+        if mtp_sidecar is None or mtp_loaded:
+            return weights
+        try:
+            loaded_path = Path(path).resolve()
+        except TypeError:
+            return weights
+        if loaded_path.parent != target_dir:
+            return weights
+
+        sidecar_weights = {}
+        for sidecar_file in sorted(mtp_sidecar.glob("*.safetensors")):
+            sidecar_weights.update(original_load_safetensors(str(sidecar_file)))
+        weights.update({f"mtp.{key}": value for key, value in sidecar_weights.items()})
+        mtp_loaded = True
+        logger.info(
+            "Loaded %d Qwen4-Exp Lightning MTP tensors from %s",
+            len(sidecar_weights),
+            mtp_sidecar,
+        )
+        return weights
+
     safetensors.safe_open = _patched_safe_open
+    _vu._load_safetensors = _patched_load_safetensors
     try:
         logger.info(
             "%s pre-quantization sanitize active for %s",
@@ -1414,6 +1561,7 @@ def _force_qwen4_exp_sanitize_on_load(model_dir: Path):
             yield
     finally:
         safetensors.safe_open = original_safe_open
+        _vu._load_safetensors = original_load_safetensors
 
 
 @contextlib.contextmanager
@@ -1526,7 +1674,7 @@ _CACHED_INPUT_FAST_PREPARE_MODEL_TYPES = _QWEN_VISION_MODELS - {
 }
 
 
-def _grid_row(image_grid_thw: Any, i: int) -> Optional[List[int]]:
+def _grid_row(image_grid_thw: Any, i: int) -> list[int] | None:
     """Row ``i`` of an ``image_grid_thw`` tensor as ``[t, h, w]``, or None."""
     try:
         row = [int(v) for v in image_grid_thw[i]]
@@ -1642,8 +1790,12 @@ def _count_image_tokens(
 
 
 def _smart_resize_tokens(
-    h: int, w: int, patch_size: int, merge_size: int,
-    min_pixels: int, max_pixels: int,
+    h: int,
+    w: int,
+    patch_size: int,
+    merge_size: int,
+    min_pixels: int,
+    max_pixels: int,
 ) -> int:
     """Real merged-token count for one image of pixel size (h, w), mirroring
     the Qwen image processor's ``smart_resize`` -> grid_thw ->
@@ -1665,10 +1817,10 @@ def _smart_resize_tokens(
         beta = math.sqrt(min_pixels / (h * w))
         h_bar = math.ceil(h * beta / factor) * factor
         w_bar = math.ceil(w * beta / factor) * factor
-    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size ** 2)
+    return (h_bar // patch_size) * (w_bar // patch_size) // (merge_size**2)
 
 
-def _read_image_dims(part: dict) -> Optional[tuple]:
+def _read_image_dims(part: dict) -> tuple | None:
     """Best-effort, decode-free ``(width, height)`` for an OpenAI image part.
 
     Handles only ``data:`` base64 URIs. Returns ``None`` for anything else so
@@ -2081,6 +2233,12 @@ class VLMBatchedEngine(BaseEngine):
         if self._loaded:
             return
 
+        unavailable_reason = model_unavailable_reason(
+            _read_config_model_type(self._model_name)
+        )
+        if unavailable_reason is not None:
+            raise ModelUnavailableError(self._model_name, unavailable_reason)
+
         from mlx_vlm.utils import load as vlm_load
 
         from ..engine_core import AsyncEngineCore, EngineConfig
@@ -2101,6 +2259,8 @@ class VLMBatchedEngine(BaseEngine):
         except ValueError:
             raise
         except Exception as e:
+            if _read_config_model_type(self._model_name) == "minicpmv4_7":
+                raise
             logger.debug(f"pre-load patches skipped: {e}")
 
         # Load VLM model on the global MLX executor to avoid blocking the event loop
@@ -2222,6 +2382,11 @@ class VLMBatchedEngine(BaseEngine):
             self._native_video = attach_native_video_processor(
                 self._processor, self._model_name
             )
+        elif self.model_type == "minicpmv4_7":
+            self._native_video = (
+                getattr(self._processor, "video_processor", None) is not None
+            )
+            self._vision_cache_enabled = False
 
         if self.model_type == "unlimited-ocr":
             from ..utils.tokenizer import (
@@ -2559,6 +2724,32 @@ class VLMBatchedEngine(BaseEngine):
         # and batched decode is fixed, so no separate mlx-lm decode model needed.
         self._adapter = VLMModelAdapter(self._vlm_model)
 
+        warmup_started = time.perf_counter()
+        warmed_up = await loop.run_in_executor(
+            get_mlx_executor(),
+            _warmup_bailing_moe_v3_vl,
+            self._adapter,
+            getattr(self._tokenizer, "bos_token_id", None) or 0,
+        )
+        if warmed_up:
+            logger.info(
+                "Ling VL inference warmup completed in %.2fs",
+                time.perf_counter() - warmup_started,
+            )
+
+        # Native-head MTP uses this same adapter and mlx-lm BatchGenerator;
+        # it is distinct from the external ``vlm_mtp`` assistant drafter.
+        # Report readiness only after strict loading has proven that the head
+        # actually bound to the VLM language model.
+        if getattr(self._model_settings, "mtp_enabled", False):
+            from ..utils.model_loading import _checkpoint_has_mtp_weights
+
+            _report_native_vlm_mtp_readiness(
+                self._model_name,
+                self._adapter,
+                has_mtp_weights=_checkpoint_has_mtp_weights(self._model_name),
+            )
+
         # Create scheduler config
         scheduler_config = (
             copy.copy(self._scheduler_config)
@@ -2651,6 +2842,15 @@ class VLMBatchedEngine(BaseEngine):
 
         # Qwen3.5/3.6 verify-width GDN prework -> one fused Metal launch
         # (conv+SiLU+split+RMS+scale+conv-state), bit-exact to the chain.
+        try:
+            from ..patches.qwen35_gdn_decode import (
+                apply_qwen35_gdn_decode_patch,
+            )
+
+            apply_qwen35_gdn_decode_patch()
+        except Exception:
+            logger.debug("Qwen fused GDN decode patch not applied", exc_info=True)
+
         try:
             from ..patches.qwen35_gdn_prework import (
                 apply_qwen35_gdn_prework_patch,
@@ -2812,6 +3012,13 @@ class VLMBatchedEngine(BaseEngine):
                 apply_qwen35_ragged_decode_patch()
             except Exception:
                 logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
+
+        try:
+            from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+            CompiledMLPBlocks.install(self._vlm_model)
+        except Exception:
+            logger.debug("Qwen compiled MLP dispatch not installed", exc_info=True)
         scheduler.refresh_ssd_layer_signature()
 
         # SpecPrefill: load draft model and pass to scheduler
@@ -2932,7 +3139,9 @@ class VLMBatchedEngine(BaseEngine):
         layer captures and rollback here, before the drafter binds.
         """
         language_model = self._vlm_model.language_model
-        if not hasattr(language_model, "rollback_speculative_cache"):
+        if self.model_type != "minicpmv4_7" and not hasattr(
+            language_model, "rollback_speculative_cache"
+        ):
             drafter_target.apply(language_model)
         return self._vlm_model
 
@@ -2998,12 +3207,11 @@ class VLMBatchedEngine(BaseEngine):
             false_attrs=("_grammar_compiler_init_attempted",),
         )
 
-        if engine:
-            if hasattr(engine, "engine") and engine.engine is not None:
-                try:
-                    cancelled = await _close_engine_core(engine.engine)
-                except Exception as e:
-                    logger.warning(f"Error closing engine: {e}")
+        if engine and hasattr(engine, "engine") and engine.engine is not None:
+            try:
+                cancelled = await _close_engine_core(engine.engine)
+            except Exception as e:
+                logger.warning(f"Error closing engine: {e}")
         self._diffusion_cancel_events = set()
         self._diffusion_active_requests = 0
         logger.info("VLMBatchedEngine stopped")
@@ -3194,6 +3402,55 @@ class VLMBatchedEngine(BaseEngine):
             from ..patches.deepseek_v41.processing import format_messages
 
             return format_messages(messages, num_images)
+
+        if model_type == "minicpmv4_7":
+            formatted_messages = []
+            explicit_visuals = False
+            for message in messages:
+                formatted = dict(message)
+                content = formatted.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for part in content:
+                        kind = part.get("type")
+                        if kind in {"image", "image_url", "input_image"}:
+                            parts.append({"type": "image"})
+                            explicit_visuals = True
+                        elif kind in {"video", "video_url", "input_video"}:
+                            parts.append({"type": "video"})
+                            explicit_visuals = True
+                        elif kind == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                        else:
+                            raise InvalidRequestError(
+                                f"Unsupported MiniCPM content type: {kind!r}.",
+                                field="messages",
+                            )
+                    if formatted.get("role") == "system" and any(
+                        part["type"] != "text" for part in parts
+                    ):
+                        raise InvalidRequestError(
+                            "MiniCPM system messages cannot contain images or videos.",
+                            field="messages",
+                        )
+                    formatted["content"] = parts
+                formatted_messages.append(formatted)
+            if not explicit_visuals and (num_images or num_videos):
+                for formatted in formatted_messages:
+                    if formatted.get("role") == "user":
+                        content = formatted.get("content")
+                        text_parts = (
+                            content
+                            if isinstance(content, list)
+                            else [{"type": "text", "text": content or ""}]
+                        )
+                        formatted["content"] = [
+                            *({"type": "image"} for _ in range(num_images)),
+                            *({"type": "video"} for _ in range(num_videos)),
+                            *text_parts,
+                        ]
+                        break
+            return formatted_messages, []
 
         image_part_types = {"image", "image_url", "input_image"}
         audio_part_types = {"input_audio"}
@@ -3433,9 +3690,10 @@ class VLMBatchedEngine(BaseEngine):
 
         return formatted_messages, image_message_ranges
 
+
     def _compute_vision_features(
         self, pixel_values: Any, extra_model_inputs: dict
-    ) -> Optional[mx.array]:
+    ) -> mx.array | None:
         """Compute vision features for caching.
 
         Tries multiple strategies based on model architecture:
@@ -3512,7 +3770,10 @@ class VLMBatchedEngine(BaseEngine):
                             inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         )
                     ]
-                    if image_position_ids is not None and len(positional_parameters) >= 2:
+                    if (
+                        image_position_ids is not None
+                        and len(positional_parameters) >= 2
+                    ):
                         return model.encode_image(pixel_values, image_position_ids)
 
             return model.encode_image(pixel_values)
@@ -3567,10 +3828,10 @@ class VLMBatchedEngine(BaseEngine):
         self,
         pixel_values: Any,
         extra_model_inputs: dict,
-        cached_per_image: List[Any],
-        per_hashes: List[str],
-        image_token_count: Optional[int],
-    ) -> Optional[mx.array]:
+        cached_per_image: list[Any],
+        per_hashes: list[str],
+        image_token_count: int | None,
+    ) -> mx.array | None:
         """Encode only uncached images and combine with cached ones in order.
 
         Qwen-style towers attend within each image, so a subset encodes
@@ -3657,8 +3918,8 @@ class VLMBatchedEngine(BaseEngine):
     def _try_build_cached_vision_inputs(
         self,
         prompt: str,
-        images: List[Any],
-    ) -> Optional[Dict[str, Any]]:
+        images: list[Any],
+    ) -> dict[str, Any] | None:
         """Build ``prepare_inputs``-style inputs, preprocessing only cache misses.
 
         Splits the prompt on the vision marker, tokenizes the text chunks, and
@@ -3704,8 +3965,8 @@ class VLMBatchedEngine(BaseEngine):
                 return None
 
             per_hashes = compute_per_image_hashes(images)
-            feats: List[Optional[mx.array]] = []
-            grids: List[Optional[List[int]]] = []
+            feats: list[mx.array | None] = []
+            grids: list[list[int] | None] = []
             for h in per_hashes:
                 feat = self._vision_cache.get(h, self._model_name)
                 grid = self._vision_cache.get_grid(h, self._model_name)
@@ -3764,7 +4025,7 @@ class VLMBatchedEngine(BaseEngine):
                         grid=miss_grids[k],
                     )
 
-            token_ids: List[int] = []
+            token_ids: list[int] = []
             chunks = prompt.split(marker)
             for k, chunk in enumerate(chunks):
                 if chunk:
@@ -3808,7 +4069,7 @@ class VLMBatchedEngine(BaseEngine):
         features: mx.array,
         num_images: int,
         extra_model_inputs: dict,
-    ) -> Optional[List[mx.array]]:
+    ) -> list[mx.array] | None:
         """Split batched vision features into per-image tensors for caching.
 
         Returns a list of per-image feature tensors, or None if the model
@@ -3894,7 +4155,7 @@ class VLMBatchedEngine(BaseEngine):
         return None
 
     @staticmethod
-    def _as_int_list(value: Any) -> Optional[List[int]]:
+    def _as_int_list(value: Any) -> list[int] | None:
         if value is None:
             return None
         if hasattr(value, "tolist"):
@@ -3904,7 +4165,7 @@ class VLMBatchedEngine(BaseEngine):
         if not isinstance(value, (list, tuple)):
             return None
 
-        result: List[int] = []
+        result: list[int] = []
         for item in value:
             if hasattr(item, "tolist"):
                 item = item.tolist()
@@ -3919,7 +4180,7 @@ class VLMBatchedEngine(BaseEngine):
         return result
 
     @staticmethod
-    def _vision_feature_token_count(features: Any) -> Optional[int]:
+    def _vision_feature_token_count(features: Any) -> int | None:
         if isinstance(features, (list, tuple)):
             total = 0
             for feature in features:
@@ -3942,7 +4203,7 @@ class VLMBatchedEngine(BaseEngine):
 
     def _image_token_count(
         self, input_ids: Any, token_id_attr: str = "image_token_id"
-    ) -> Optional[int]:
+    ) -> int | None:
         config = getattr(self._vlm_model, "config", None)
         image_token_id = getattr(config, token_id_attr, None)
         if image_token_id is None:
@@ -3954,6 +4215,7 @@ class VLMBatchedEngine(BaseEngine):
         except Exception:
             logger.debug("Failed to count VLM image tokens", exc_info=True)
             return None
+
 
     def _cached_video_features(
         self, video_identity: str, input_ids: Any, extra_model_inputs: dict
@@ -3992,7 +4254,7 @@ class VLMBatchedEngine(BaseEngine):
         return features
 
     def _vision_features_match_image_tokens(
-        self, features: Any, image_token_count: Optional[int]
+        self, features: Any, image_token_count: int | None
     ) -> bool:
         if image_token_count is None:
             return True
@@ -4020,6 +4282,22 @@ class VLMBatchedEngine(BaseEngine):
             if extra_model_inputs.get(key) is not None
         }
 
+    def _mm_processor_kwargs(self, request_options: dict | None) -> dict:
+        options = merge_mm_processor_kwargs(
+            getattr(self._model_settings, "mm_processor_kwargs", None),
+            request_options,
+        )
+        if self.model_type != "minicpmv4_7":
+            if options:
+                raise InvalidRequestError(
+                    "mm_processor_kwargs is only supported by MiniCPM-V 4.7.",
+                    field="mm_processor_kwargs",
+                )
+            return {}
+        config = self._vlm_model.config
+        options.setdefault("downsample_mode", config.downsample_mode)
+        return options
+
     def _prepare_vision_inputs(
         self,
         messages: list[dict[str, Any]],
@@ -4030,13 +4308,15 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         videos: list[str] | None = None,
         video_hashes: list[str] | None = None,
-    ) -> Tuple[
-        List[int],
-        Optional[mx.array],
-        Optional[Dict[str, Any]],
-        Optional[str],
+        mm_processor_kwargs: dict | None = None,
+        encode_vision: bool = True,
+    ) -> tuple[
+        list[int],
+        mx.array | None,
+        dict[str, Any] | None,
+        str | None,
         int,
-        List[Tuple[int, str]],
+        list[tuple[int, str]],
     ]:
         """
         Run the full VLM preprocessing pipeline:
@@ -4081,6 +4361,12 @@ class VLMBatchedEngine(BaseEngine):
         num_videos = len(videos) if videos else 0
 
         model_type = self.model_type or _read_config_model_type(self._model_name) or ""
+        processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
+        if model_type == "minicpmv4_7" and num_audios:
+            raise InvalidRequestError(
+                "MiniCPM-V 4.7 supports text, image and video input, not audio.",
+                field="messages",
+            )
         if model_type == COHERE2_MOE_MODEL_TYPE and (
             num_images > 0 or num_audios > 0
         ):
@@ -4139,7 +4425,7 @@ class VLMBatchedEngine(BaseEngine):
         except Exception as e:
             # The upstream formatter has no video placeholders; falling back
             # would send frames the prompt never references.
-            if num_videos:
+            if num_videos or model_type == "minicpmv4_7":
                 raise
             logger.debug(
                 "Falling back to mlx-vlm apply_chat_template for VLM formatting: %s",
@@ -4270,6 +4556,12 @@ class VLMBatchedEngine(BaseEngine):
                 audio=audio if audio else None,
                 videos=videos if videos else None,
                 prompts=prompts,
+                **processor_options,
+                **(
+                    {"max_frames": NATIVE_VIDEO_MAX_FRAMES}
+                    if num_videos and model_type == "minicpmv4_7"
+                    else {}
+                ),
             )
 
         input_ids = inputs["input_ids"]
@@ -4278,8 +4570,8 @@ class VLMBatchedEngine(BaseEngine):
 
         token_ids = input_ids[0].tolist() if input_ids.ndim > 1 else input_ids.tolist()
         image_cache_key_start = 0
-        image_cache_key_ranges: list[Tuple[int, str]] = []
-        if image_message_ranges:
+        image_cache_key_ranges: list[tuple[int, str]] = []
+        if image_message_ranges and model_type != "minicpmv4_7":
             try:
                 image_starts = None
                 if (
@@ -4341,6 +4633,7 @@ class VLMBatchedEngine(BaseEngine):
                                 if images_consumed > 0
                                 else None
                             ),
+                            **processor_options,
                             prompts=(
                                 [prefix_prompt]
                                 if isinstance(prefix_prompt, str)
@@ -4392,18 +4685,26 @@ class VLMBatchedEngine(BaseEngine):
             )
             and v is not None
         }
+        if not encode_vision:
+            return token_ids, None, None, None, 0, []
+        if model_type == "minicpmv4_7":
+            extra_model_inputs["downsample_mode"] = processor_options["downsample_mode"]
 
         # Check for any multimodal inputs. Most processors expose audio as
         # ``input_features``; MiMo's tokenizer produces discrete ``audio_codes``.
         has_audio = any(
             key in extra_model_inputs for key in ("input_features", "audio_codes")
         )
-        has_video = extra_model_inputs.get("pixel_values_videos") is not None
+        has_video = (
+            bool(num_videos)
+            if model_type == "minicpmv4_7"
+            else extra_model_inputs.get("pixel_values_videos") is not None
+        )
         has_multimodal = (
             (pixel_values is not None and num_images > 0) or has_audio or has_video
         )
 
-        if has_multimodal:
+        if has_multimodal or model_type == "minicpmv4_7":
             # Build call kwargs from extra_model_inputs (includes input_features
             # for audio, image_grid_thw, etc.)
             call_kwargs = dict(extra_model_inputs)
@@ -4413,7 +4714,11 @@ class VLMBatchedEngine(BaseEngine):
             # Image-specific: compute hash and try vision feature cache
             image_hash = None
             image_token_count = None
-            if num_images > 0:
+            if model_type == "minicpmv4_7" and has_video:
+                image_hash = self._video_cache_identity(video_hashes or [])
+                if num_images:
+                    image_hash = f"{compute_image_hash(images)}:{image_hash}"
+            elif num_images > 0:
                 image_hash = compute_image_hash(images)
                 image_token_count = self._image_token_count(input_ids)
             elif has_video:
@@ -4428,14 +4733,19 @@ class VLMBatchedEngine(BaseEngine):
                 else:
                     image_cache_key_start = 0
                     image_hash = self._video_cache_identity(video_hashes or [])
-                video_features = self._cached_video_features(
-                    image_hash, input_ids, extra_model_inputs
+                video_features = (
+                    self._cached_video_features(
+                        image_hash, input_ids, extra_model_inputs
+                    )
+                    if model_type != "minicpmv4_7"
+                    else None
                 )
                 if video_features is not None:
                     call_kwargs["cached_image_features"] = video_features
 
             if (
                 num_images > 0
+                and model_type != "minicpmv4_7"
                 and self._vision_cache is not None
                 and self._vision_cache_enabled
                 # Fast path already assembled the combined features.
@@ -4602,6 +4912,13 @@ class VLMBatchedEngine(BaseEngine):
             _capture_vlm_position_state(
                 getattr(self._vlm_model, "language_model", None), extra_kwargs
             )
+            if model_type == "minicpmv4_7" and has_multimodal:
+                controls_hash = hashlib.sha256(
+                    json.dumps(processor_options, sort_keys=True).encode()
+                ).hexdigest()
+                image_hash = f"minicpm:{controls_hash}:{image_hash}"
+                image_cache_key_start = 0
+                image_cache_key_ranges = [(0, image_hash)]
 
             if model_type in {"mimo_v2", "mimo_v2_flash"} and has_audio:
                 from ..patches.mimo_v2.audio import audio_cache_key_ranges
@@ -4647,6 +4964,7 @@ class VLMBatchedEngine(BaseEngine):
         else:
             # Text-only (no images in this message)
             return token_ids, None, None, None, 0, []
+
 
     def _apply_chat_template(
         self,
@@ -4796,6 +5114,28 @@ class VLMBatchedEngine(BaseEngine):
             except Exception as e:
                 logger.debug(f"SpecPrefill: system_end calc failed: {e}")
 
+    def _validate_dspark_request(self, **kwargs) -> None:
+        if getattr(self._dflash_drafter, "kind", None) != "dspark":
+            return
+        if kwargs.get("specprefill"):
+            raise InvalidRequestError(
+                "DSpark requires full target context and cannot use SpecPrefill.",
+                field="specprefill",
+            )
+        if (
+            kwargs.get("xtc_probability", 0.0) > 0.0
+            and kwargs.get("temperature", 1.0) > 0.0
+        ):
+            raise InvalidRequestError(
+                "Sampled DSpark does not support stochastic XTC filtering.",
+                field="xtc_probability",
+            )
+        if kwargs.get("compiled_grammar") is not None:
+            raise InvalidRequestError(
+                "DSpark does not support constrained grammar decoding.",
+                field="structured_outputs",
+            )
+
     async def generate(
         self,
         prompt: str | list[int],
@@ -4811,12 +5151,13 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """Generate a complete response (non-streaming)."""
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(temperature=temperature, **kwargs)
 
         if self.is_diffusion_model:
             full_text = ""
@@ -4871,9 +5212,9 @@ class VLMBatchedEngine(BaseEngine):
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),
             logits_observer=kwargs.get("logits_observer"),
         )
@@ -4901,6 +5242,7 @@ class VLMBatchedEngine(BaseEngine):
 
         return GenerationOutput(
             text=text,
+            tokens=list(getattr(output, "output_token_ids", [])),
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             finish_reason=output.finish_reason,
@@ -4924,12 +5266,13 @@ class VLMBatchedEngine(BaseEngine):
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
         vlm_cache_key_start: int = 0,
-        vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        vlm_cache_key_ranges: list[tuple[int, str]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generation token by token."""
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(temperature=temperature, **kwargs)
 
         if self.is_diffusion_model:
             if (
@@ -4990,9 +5333,9 @@ class VLMBatchedEngine(BaseEngine):
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
             stop_token_ids=extra_stop_ids or None,
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),
             logits_observer=kwargs.get("logits_observer"),
         )
@@ -5031,6 +5374,7 @@ class VLMBatchedEngine(BaseEngine):
 
                 yield GenerationOutput(
                     text=text,
+                    tokens=list(getattr(output, "output_token_ids", [])),
                     new_text=output.new_text,
                     prompt_tokens=output.prompt_tokens,
                     completion_tokens=output.completion_tokens,
@@ -5186,6 +5530,9 @@ class VLMBatchedEngine(BaseEngine):
         miscalibrates the token count but also bypasses the actual
         tool-prompt rendering on the real chat path.
 
+        MiniCPM instead counts the real packed processor output on the MLX
+        executor, without running its vision encoder.
+
         Raises ``PrefillMemoryExceededError`` if the conservative estimate
         would exceed the configured memory ceiling. See
         ``BatchedEngine.preflight_chat`` for the upstream rationale
@@ -5194,11 +5541,15 @@ class VLMBatchedEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        self._validate_dspark_request(**kwargs)
         if self.is_diffusion_model:
-            _, _, audio = extract_images_from_messages(messages)
+            has_audio = any(
+                self._count_content_parts(msg.get("content"), {"input_audio"})
+                for msg in messages
+            )
             self._validate_diffusion_request(
                 tools=tools,
-                audio=audio if audio else None,
+                audio=[None] if has_audio else None,
                 stop=kwargs.get("stop"),
                 kwargs=kwargs,
             )
@@ -5206,6 +5557,28 @@ class VLMBatchedEngine(BaseEngine):
         template_tools = convert_tools_for_template(tools) if tools else None
         ct_kwargs = kwargs.get("chat_template_kwargs")
         partial = kwargs.get("is_partial")
+        if self.model_type == "minicpmv4_7":
+            count = functools.partial(
+                self.count_chat_tokens,
+                messages,
+                template_tools,
+                chat_template_kwargs=ct_kwargs,
+                is_partial=partial,
+                mm_processor_kwargs=kwargs.get("mm_processor_kwargs"),
+            )
+            num_tokens = await asyncio.get_running_loop().run_in_executor(
+                self._engine._mlx_executor, count
+            )
+            scheduler = getattr(getattr(self._engine, "engine", None), "scheduler", None)
+            if scheduler is None:
+                _warn_scheduler_unreachable_once(self, "preflight_chat")
+                return
+            await self._preflight_or_raise_with_eviction(
+                scheduler,
+                num_prompt_tokens=num_tokens,
+                request_id=request_id,
+            )
+            return
         # Strip image content-parts BEFORE templating. Modern HF chat
         # templates (Qwen2.5-VL, Gemma-Vision, Llama-3.2-Vision) render
         # ``image_url`` / ``image`` content parts as literal placeholder
@@ -5276,6 +5649,7 @@ class VLMBatchedEngine(BaseEngine):
             num_prompt_tokens=num_tokens,
             request_id=request_id,
         )
+
 
     async def preflight_completion(
         self,
@@ -5473,16 +5847,17 @@ class VLMBatchedEngine(BaseEngine):
         model_type = self.model_type or _read_config_model_type(self._model_name)
         if model_type in {"mimo_v2", "mimo_v2_flash"}:
             media_messages = expand_video_parts(messages)
-        if not getattr(self, "_native_video", False):
-            text_messages, images, audio = extract_images_from_messages(media_messages)
-            return media_messages, text_messages, images, audio, []
-
         text_messages, images, audio, videos = extract_media_from_messages(
             media_messages
         )
+        if videos and not getattr(self, "_native_video", False):
+            raise InvalidRequestError(
+                "Video input is not supported by this model.",
+                field="messages",
+            )
         # mlx-vlm's Qwen3-VL embedding path takes the grid of one modality per
         # call, so a request that mixes them would silently lose one.
-        if videos and (images or audio):
+        if videos and (images or audio) and model_type != "minicpmv4_7":
             raise InvalidRequestError(
                 "Video input cannot be combined with image or audio input "
                 "in the same request.",
@@ -5495,8 +5870,8 @@ class VLMBatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         tools: list[dict] | None,
         kwargs: dict,
-    ) -> Tuple[
-        str | list[int], Any, dict | None, str | None, int, List[Tuple[int, str]]
+    ) -> tuple[
+        str | list[int], Any, dict | None, str | None, int, list[tuple[int, str]]
     ]:
         """
         Process chat messages, extracting images and preparing VLM inputs.
@@ -5507,17 +5882,24 @@ class VLMBatchedEngine(BaseEngine):
         media_messages, text_messages, images, audio, videos = (
             self._extract_request_media(messages)
         )
-        model_type = self.model_type or _read_config_model_type(self._model_name)
-
         ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         partial = kwargs.pop("is_partial", None)
+        processor_options = self._mm_processor_kwargs(
+            kwargs.pop("mm_processor_kwargs", None)
+        )
+        preparation_kwargs = {}
+        if processor_options:
+            preparation_kwargs["mm_processor_kwargs"] = processor_options
+        if "_encode_vision" in kwargs:
+            preparation_kwargs["encode_vision"] = kwargs.pop("_encode_vision")
+        encode_vision = preparation_kwargs.get("encode_vision", True)
 
         # Keep VLM-capable models on one prompt-rendering path, even before the
         # first image arrives. Otherwise the conversation switches prompt families
         # on the first image-bearing turn and invalidates early prefix blocks.
         if images:
             vlm_messages = self._apply_ocr_prompt(media_messages)
-        elif videos or (audio and model_type in {"mimo_v2", "mimo_v2_flash"}):
+        elif videos or audio:
             vlm_messages = media_messages
         else:
             vlm_messages = text_messages
@@ -5531,9 +5913,12 @@ class VLMBatchedEngine(BaseEngine):
                 video_files.append(write_video_data_uri(uri))
                 # Rejects undecodable or degenerate clips with a 400 before
                 # mlx-vlm samples them.
-                native_video_token_count(
-                    probe_video(video_files[-1][0]), video_processor
-                )
+                if self.model_type == "minicpmv4_7":
+                    probe_video(video_files[-1][0])
+                else:
+                    native_video_token_count(
+                        probe_video(video_files[-1][0]), video_processor
+                    )
             video_kwargs = (
                 {
                     "videos": [str(path) for path, _ in video_files],
@@ -5557,12 +5942,21 @@ class VLMBatchedEngine(BaseEngine):
                 tools=template_tools,
                 is_partial=partial,
                 **video_kwargs,
+                **preparation_kwargs,
             )
         finally:
             for path, _ in video_files:
                 path.unlink(missing_ok=True)
 
-        if images or videos:
+        audio_hash = compute_audio_video_hash(audio, [])
+        if audio_hash is not None:
+            image_hash = (
+                f"av:{audio_hash}:{image_hash}" if image_hash else f"av:{audio_hash}"
+            )
+            image_cache_key_start = 0
+            image_cache_key_ranges = []
+
+        if encode_vision and (images or videos):
             # Free Metal intermediates from vision encoding.
             mx.synchronize()
             mx.clear_cache()
@@ -5575,6 +5969,7 @@ class VLMBatchedEngine(BaseEngine):
             image_cache_key_start,
             image_cache_key_ranges,
         )
+
 
     def _validate_diffusion_request(
         self,
@@ -5739,13 +6134,17 @@ class VLMBatchedEngine(BaseEngine):
         tools: list[dict] | None,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        text_messages, images, audio = extract_images_from_messages(messages)
+        has_audio = any(
+            self._count_content_parts(msg.get("content"), {"input_audio"})
+            for msg in messages
+        )
         self._validate_diffusion_request(
             tools=tools,
-            audio=audio if audio else None,
+            audio=[None] if has_audio else None,
             stop=kwargs.get("stop"),
             kwargs=kwargs,
         )
+        text_messages, images, _, _ = extract_media_from_messages(messages)
         chat_template_kwargs = kwargs.pop("chat_template_kwargs", None)
         diffusion_messages = messages if images else text_messages
         prompt = self._diffusion_apply_chat_template(
@@ -5991,12 +6390,26 @@ class VLMBatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         is_partial: bool | None = None,
+        mm_processor_kwargs: dict | None = None,
     ) -> int:
-        """Count prompt tokens for chat messages (text-only approximation).
+        """Count exact packed MiniCPM prompts; approximate other VLMs as text.
 
-        For VLM messages with images, this counts only the text tokens.
-        Image tokens are added during vision encoding and vary by model.
+        MiniCPM preprocessing expands crop/frame markers without running its
+        vision encoder. Other families add visual tokens during encoding.
         """
+        processor_options = self._mm_processor_kwargs(mm_processor_kwargs)
+        if self.model_type == "minicpmv4_7":
+            token_ids, *_ = self._process_chat_messages(
+                messages,
+                tools,
+                {
+                    "chat_template_kwargs": chat_template_kwargs,
+                    "is_partial": is_partial,
+                    "mm_processor_kwargs": processor_options,
+                    "_encode_vision": False,
+                },
+            )
+            return len(token_ids)
         # Extract text-only version for token counting through the same media
         # split as the real request, so video parts are not rejected here
         # before they reach the multimodal path.
@@ -6039,6 +6452,8 @@ class VLMBatchedEngine(BaseEngine):
         if add_generation_prompt is not None:
             ct_kwargs["add_generation_prompt"] = add_generation_prompt
         kwargs = {"chat_template_kwargs": ct_kwargs or None, "is_partial": is_partial}
+        if self.model_type == "minicpmv4_7":
+            kwargs["_encode_vision"] = False
         loop = asyncio.get_running_loop()
         token_ids, *_ = await loop.run_in_executor(
             self._engine._mlx_executor,
