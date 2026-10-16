@@ -22,6 +22,7 @@ import time
 import weakref
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import islice
 from statistics import median
 from types import SimpleNamespace
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -213,6 +214,22 @@ def apply() -> bool:
             return original_next(self, *args, **kwargs)
 
         def patched_extend(self, batch, *args, **kwargs):
+            if getattr(self.model, "_omlx_native_mtp_full_prompt", False):
+                states = {}
+                for owner in (self, batch):
+                    batch_state = getattr(owner, "_omlx_mtp_batch_state", None)
+                    if batch_state is not None:
+                        states.update(batch_state.states)
+                    state = getattr(owner, "_omlx_mtp_state", None)
+                    if _mtp_state_valid_for_batch(owner, state):
+                        states[state.uid] = state
+                result = original_extend(self, batch, *args, **kwargs)
+                for owner in (self, batch):
+                    _drop_mtp_state(owner, "native-extended")
+                    _drop_mtp_batch_state(owner, "native-extended")
+                if states:
+                    self._omlx_mtp_batch_state = _MtpBatchState(states=states)
+                return result
             # Reconcile before adding rows without MTP state so the drained
             # batch can feed its last tokens without replaying its history.
             if not _reconcile_mtp_batch_to_standard(self):
@@ -327,10 +344,24 @@ def apply() -> bool:
                 gen_batch._omlx_mtp_activation_safe = (
                     _batch_generator_allows_mtp_activation(self)
                 )
+            native_full_prompt = (
+                getattr(
+                    getattr(gen_batch, "model", None),
+                    "_omlx_native_mtp_full_prompt",
+                    False,
+                )
+                is True
+            )
             if (
                 _generation_batch_has_active_mtp(gen_batch)
-                and not _singleton_mtp_handoff_ready(gen_batch)
-                and getattr(gen_batch, "_omlx_mtp_batch_state", None) is None
+                and (
+                    (native_full_prompt and _native_mtp_admission_blocked(self))
+                    or (
+                        not native_full_prompt
+                        and not _singleton_mtp_handoff_ready(gen_batch)
+                        and getattr(gen_batch, "_omlx_mtp_batch_state", None) is None
+                    )
+                )
             ):
                 old_completion_batch_size = getattr(
                     self,
@@ -338,7 +369,8 @@ def apply() -> bool:
                     None,
                 )
                 had_completion_batch_size = hasattr(self, "completion_batch_size")
-                # Drain singleton speculation before admitting a late join.
+                # Drain speculation before an unsafe join; native full-prompt
+                # cohorts retain their media-conditioned caches until finished.
                 self.completion_batch_size = 0
                 try:
                     return original_bg_next(self, *args, **kwargs)
@@ -570,6 +602,27 @@ def _batch_generator_allows_mtp_activation(batch_gen: Any) -> bool:
         return False
 
 
+def _native_mtp_admission_blocked(batch_gen: Any) -> bool:
+    """Keep MTP-ineligible rows outside an active native cohort."""
+    prompt_batch = batch_gen._prompt_batch
+    if len(prompt_batch) and not _mtp_common_eligible(prompt_batch):
+        return True
+    # Decode runs before admission and can finish any active row, so inspect
+    # the entire next prefill group, not just the currently free decode slots.
+    slots = max(0, batch_gen.prefill_batch_size - len(prompt_batch))
+    for sequence in islice(batch_gen._unprocessed_sequences, slots):
+        candidate = SimpleNamespace(
+            model=batch_gen.model,
+            uids=[sequence[0]],
+            samplers=[sequence[5]],
+            fallback_sampler=batch_gen.sampler,
+            logits_processors=[sequence[6]],
+        )
+        if not _mtp_common_eligible(candidate):
+            return True
+    return False
+
+
 def _generation_batch_has_active_mtp(gen_batch: Any) -> bool:
     """True while a generation batch owns Lightning MTP cache state."""
     if gen_batch is None:
@@ -588,6 +641,10 @@ def _generation_batch_has_active_mtp(gen_batch: Any) -> bool:
 def _singleton_mtp_handoff_ready(gen_batch: Any) -> bool:
     """Allow a singleton handoff once at most one committed token is unstreamed."""
     if gen_batch is None:
+        return False
+    if getattr(
+        getattr(gen_batch, "model", None), "_omlx_native_mtp_full_prompt", False
+    ):
         return False
     if getattr(gen_batch, "_omlx_mtp_activation_safe", True):
         return False
@@ -3498,6 +3555,8 @@ def _post_init_mtp(gen_batch: Any, *, verify_result=None, priming_offset=None) -
             state.mtp_cache, state.hist_offset = primed
             state.head_history_primed = True
         else:
+            if getattr(gen_batch.model, "_omlx_native_mtp_full_prompt", False):
+                raise RuntimeError("Nemotron MTP activation lost its complete prompt seed")
             state.mtp_cache = gen_batch.model.make_mtp_cache()
         state.next_main = _ensure_uint32(next_main_tok)
         state.queue.append((int(main_tok.tolist()[0]), main_lp, "init"))
@@ -3700,7 +3759,7 @@ def _emit_ragged_responses(
             raise _MtpStepFallback(f"ragged emit: row uid={uid} produced no tokens")
         state = batch_state.states.get(uid)
         row_finished = False
-        for token_id, logprobs_1d, source in toks:
+        for position, (token_id, logprobs_1d, source) in enumerate(toks):
             if state is not None:
                 _bump_emit_stat(state, source)
             finish_reason: Optional[str] = None
@@ -3711,13 +3770,21 @@ def _emit_ragged_responses(
             if gen_batch._matchers[idx].advance(token_id):
                 finish_reason = "stop"
             if finish_reason is not None:
+                terminal_prompt_cache = gen_batch.extract_cache(idx)
+                model = getattr(gen_batch, "model", None)
+                if getattr(model, "_omlx_native_mtp_full_prompt", False) is True:
+                    from .uniform import terminal_cache
+
+                    terminal_prompt_cache = terminal_cache(
+                        gen_batch, idx, token_id, pending=position == len(toks) - 1
+                    )
                 responses.append(
                     Response(
                         uid=uid,
                         token=token_id,
                         logprobs=logprobs_1d,
                         finish_reason=finish_reason,
-                        prompt_cache=gen_batch.extract_cache(idx),
+                        prompt_cache=terminal_prompt_cache,
                         all_tokens=gen_batch.tokens[idx],
                     )
                 )
@@ -4317,6 +4384,19 @@ def _run_verify_cycle_chain(
     cycle's sync. Emits ``m + 1`` tokens per cycle (m = accepted drafts, plus
     bonus on full accept or the verify-position correction on reject).
     """
+    if getattr(gen_batch.model, "_omlx_native_mtp_full_prompt", False):
+        from .uniform import advance_uniform
+
+        replacements = {}
+        advance_uniform(
+            gen_batch,
+            int(state.drafts.shape[0]),
+            [(0, gen_batch, state)],
+            replacements,
+            cache=gen_batch.prompt_cache,
+        )
+        return
+
     import time
 
     import mlx.core as mx
@@ -5099,6 +5179,13 @@ def _emit_response(
 
     if finish_reason is not None:
         prompt_cache = gen_batch.extract_cache(0)
+        if getattr(gen_batch.model, "_omlx_native_mtp_full_prompt", False):
+            from .uniform import terminal_cache
+
+            state = getattr(gen_batch, "_omlx_mtp_state", None)
+            prompt_cache = terminal_cache(
+                gen_batch, 0, token_id, pending=state is not None and not state.queue
+            )
         all_tokens = gen_batch.tokens[0]
         response = Response(
             uid=gen_batch.uids[0],
