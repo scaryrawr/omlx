@@ -116,7 +116,8 @@ class Request:
         sampling_params: Parameters for generation
         arrival_time: When the request was received
         status: Current status of the request
-        num_prompt_tokens: Number of tokens in the prompt
+        num_prompt_tokens: Effective prompt length used by the model/cache
+        source_prompt_tokens: Original processor length before media compaction, if any
         num_computed_tokens: Number of tokens processed so far
         output_token_ids: Generated token ids
         output_text: Generated text (decoded)
@@ -131,6 +132,7 @@ class Request:
     # Set after tokenization
     prompt_token_ids: list[int] | None = None
     num_prompt_tokens: int = 0
+    source_prompt_tokens: int | None = None
 
     # Generation state
     status: RequestStatus = RequestStatus.WAITING
