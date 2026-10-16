@@ -1742,6 +1742,11 @@
                         if (g) out.guided_grammar = g;
                         continue;
                     }
+                    if (k === 'mm_processor_kwargs') {
+                        const options = this.mmProcessorOptions(ms);
+                        if (options || ms.is_minicpm_model) out[k] = options || {};
+                        continue;
+                    }
                     // Standard field: omit unset values entirely — the server
                     // treats absent universal keys as "reset to default" when
                     // the profile is applied (snapshot semantics).
@@ -2124,6 +2129,7 @@
             buildModelSettingsState(model, settings) {
                 const s = settings || {};
                 const isDiffusion = this.isDiffusionModel(model);
+                const isMiniCPM = model?.config_model_type === 'minicpmv4_7';
                 const ctKwargEntries = this.buildCtKwargEntries(
                     s.chat_template_kwargs,
                     s.forced_ct_kwargs,
@@ -2213,6 +2219,11 @@
                     qwen35_ane_prefill_cpu_threads: s.qwen35_ane_prefill_cpu_threads ?? 8,
                     qwen35_ane_prefill_cpu_shared_resource: s.qwen35_ane_prefill_cpu_shared_resource !== false,
                     specprefill_enabled: s.specprefill_enabled || false,
+                    mm_processor_kwargs: {
+                        downsample_mode: '',
+                        max_slice_nums: null,
+                        ...s.mm_processor_kwargs,
+                    },
                     specprefill_draft_model: s.specprefill_draft_model || '',
                     specprefill_keep_pct: s.specprefill_keep_pct ? String(s.specprefill_keep_pct) : '0.2',
                     specprefill_threshold: s.specprefill_threshold || null,
@@ -2223,7 +2234,8 @@
                     dflash_draft_quant_group_size: s.dflash_draft_quant_group_size || 64,
                     dflash_draft_window_size: s.dflash_draft_window_size ?? null,
                     dflash_block_size: s.dflash_block_size ?? null,
-                    dflash_verify_mode: s.dflash_verify_mode || 'adaptive',
+                    dflash_verify_mode: s.dflash_verify_mode || (isMiniCPM ? 'dflash' : 'adaptive'),
+                    is_minicpm_model: isMiniCPM,
                     dflash_compatible: model?.dflash_compatible !== false,
                     dflash_compatibility_reason: model?.dflash_compatibility_reason || '',
                     mtp_enabled: s.mtp_enabled || false,
@@ -2246,6 +2258,14 @@
                     embedding_audio_enabled: s.embedding_audio_enabled || false,
                     embedding_audio_max_seconds: s.embedding_audio_max_seconds ?? null,
                 };
+            },
+
+            mmProcessorOptions(ms = this.modelSettings) {
+                const options = { ...ms.mm_processor_kwargs };
+                for (const key of ['downsample_mode', 'max_slice_nums']) {
+                    if (options[key] == null || options[key] === '') delete options[key];
+                }
+                return Object.keys(options).length ? options : null;
             },
 
             moeExpertOffloadResidentInvalid() {
@@ -3328,8 +3348,9 @@
                         ? parseInt(ms.dflash_block_size)
                         : null,
                     dflash_verify_mode: ms.dflash_enabled
-                        ? (ms.dflash_verify_mode || 'adaptive')
+                        ? (ms.dflash_verify_mode || (ms.is_minicpm_model ? 'dflash' : 'adaptive'))
                         : null,
+                    mm_processor_kwargs: this.mmProcessorOptions(ms),
                     mtp_enabled: !!ms.mtp_enabled,
                     mtp_adaptive_max_depth: ms.mtp_enabled
                         ? parseInt(ms.mtp_adaptive_max_depth || '3')
@@ -3705,7 +3726,7 @@
                         this.modelSettings.dflash_draft_quant_group_size = null;
                         this.modelSettings.dflash_draft_window_size = null;
                         this.modelSettings.dflash_block_size = null;
-                        this.modelSettings.dflash_verify_mode = 'adaptive';
+                        this.modelSettings.dflash_verify_mode = this.modelSettings.is_minicpm_model ? 'dflash' : 'adaptive';
                         this.modelSettings.mtp_enabled = false;
                         this.modelSettings.mtp_adaptive_max_depth = '3';
                         this.modelSettings.trust_remote_code = false;
