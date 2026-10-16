@@ -112,6 +112,8 @@ class _PrimeCtx:
     extra_key_token_start: Optional[int] = None
     extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None
     snapshot_candidate: Any = None
+    native_prompt_tokens: list[Any] | None = None
+    native_prompt_hidden: list[Any] | None = None
 
 
 @dataclass
@@ -1014,6 +1016,8 @@ def _defer_decode_history(host):
     history is the same sequence of committed pairs.
     """
     ctx = _find_ctx(host)
+    if isinstance(ctx, _PrimeCtx) and ctx.native_prompt_hidden is not None:
+        return
     if (
         isinstance(ctx, _PrimeCtx)
         and ctx.deferred_pairs is None
@@ -1144,7 +1148,7 @@ def _capture_single(
             setattr(host, _PLAN_ATTR, plan)
         ctx = None
     if ctx is None:
-        if seq_len <= 1:
+        if seq_len <= 1 and not getattr(host, "_omlx_native_mtp_full_prompt", False):
             # A lone decode step cannot start a prompt timeline.
             return
         plan = _find_plan(host)
@@ -1163,6 +1167,20 @@ def _capture_single(
         if not ctx.mtp_cache:
             return
         setattr(host, _CTX_ATTR, ctx)
+
+    if getattr(host, "_omlx_native_mtp_full_prompt", False) and ctx.deferred_pairs is None:
+        if ctx.native_prompt_hidden is None:
+            if offset_after != seq_len:
+                raise RuntimeError("Native MTP requires complete uncached prompt history")
+            ctx.native_prompt_tokens = []
+            ctx.native_prompt_hidden = []
+        ctx.native_prompt_tokens.append(inputs)
+        ctx.native_prompt_hidden.append(normed)
+        ctx.folded += seq_len
+        ctx.pending_hidden = normed[:, -1:]
+        ctx.expected_offset = offset_after
+        mx.async_eval(normed)
+        return
 
     if ctx.pending_hidden is not None:
         if seq_len > 1:
@@ -1282,6 +1300,14 @@ def _take_primed(
             offset,
         )
         return None
+    if ctx.native_prompt_hidden is not None:
+        import mlx.core as mx
+
+        return model.prime_native_mtp(
+            mx.concatenate(ctx.native_prompt_tokens, axis=1),
+            mx.concatenate(ctx.native_prompt_hidden, axis=1),
+            main_tok,
+        )
     if ctx.deferred_pairs is not None:
         _flush_deferred_history(model, ctx)
     try:

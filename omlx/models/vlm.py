@@ -161,6 +161,30 @@ class VLMModelAdapter(nn.Module):
         # inputs_embeds forwards.
         self._native_mtp_disabled_uids: set[int] = set()
         self._minicpm_speculative_transactions: list[Any] = []
+        self._nemotron_mtp_head = None
+
+    def enable_nemotron_mtp(self, head, *, depth: int) -> None:
+        """Bind official head weights; request state owns every mutable cache."""
+        head.bind(self._vlm_model)
+        self._nemotron_mtp_head = head
+        self._omlx_mtp_decode_enabled = True
+        self._omlx_mtp_chain = True
+        self._omlx_mtp_multi_request = True
+        self._omlx_mtp_depth = depth
+        self._omlx_mtp_depth_fixed = True
+        self._omlx_mtp_head_hidden_normed = True
+        self._omlx_native_mtp_full_prompt = True
+
+    def prime_native_mtp(self, tokens, hidden, bonus):
+        import copy
+
+        head = copy.copy(self._nemotron_mtp_head)
+        head.reset(self._vlm_model)
+        head.prefill_from_target_hidden(
+            tokens, hidden, bonus, lambda logits: mx.argmax(logits, axis=-1), greedy=True
+        )
+        mx.eval([entry.state for entry in head._cache])
+        return head._cache, tokens.shape[1]
 
     def abort_speculative_forward(self) -> None:
         """Restore any uncommitted native verify after a failed decode step."""
@@ -201,12 +225,15 @@ class VLMModelAdapter(nn.Module):
         self._qwen4_text_prefill_positions = False
         self._qwen4_step_text_positions = False
         self._native_mtp_disabled_uids.clear()
+        self._nemotron_mtp_head = None
         self._language_model = None
         self._vlm_model = None
 
     @property
     def mtp(self):
         """Expose an attached Lightning MTP head, when the model provides one."""
+        if self._nemotron_mtp_head is not None:
+            return self._nemotron_mtp_head
         language_model = self._language_model
         getter = getattr(language_model, "get_mtp_module", None)
         if callable(getter):
@@ -221,6 +248,13 @@ class VLMModelAdapter(nn.Module):
         return_hidden: bool = False,
         logits_keep: int = 0,
     ):
+        if self._nemotron_mtp_head is not None:
+            head = self._nemotron_mtp_head
+            hidden, next_hidden = head._forward_hidden(
+                head._input_embed(next_token_ids), hidden_states, next_token_ids, mtp_cache
+            )
+            logits = head._lm_head_fn(hidden[:, -logits_keep:] if logits_keep else hidden)
+            return (logits, next_hidden) if return_hidden else logits
         return self._language_model.mtp_forward(
             hidden_states,
             next_token_ids,
@@ -230,6 +264,8 @@ class VLMModelAdapter(nn.Module):
         )
 
     def make_mtp_cache(self):
+        if self._nemotron_mtp_head is not None:
+            return self._nemotron_mtp_head.make_cache()
         make_cache = getattr(self._language_model, "make_mtp_cache", None)
         return make_cache() if callable(make_cache) else []
 
@@ -261,7 +297,7 @@ class VLMModelAdapter(nn.Module):
         ``layers``, flat ``blocks``. Covers all four mlx-vlm conventions.
         """
         lm = self._language_model
-        for parent in (getattr(lm, "model", None), lm):
+        for parent in (getattr(lm, "model", None), getattr(lm, "backbone", None), lm):
             if parent is None:
                 continue
             for attr in ("layers", "blocks"):
@@ -495,6 +531,8 @@ class VLMModelAdapter(nn.Module):
 
     def native_mtp_allowed_for_uids(self, uids: list[int]) -> bool:
         """Return False when any current row was prefixed with embeddings."""
+        if self._nemotron_mtp_head is not None:
+            return True
         return all(uid not in self._native_mtp_disabled_uids for uid in uids)
 
     def set_batch_rope_deltas(self, deltas: mx.array) -> None:
@@ -703,6 +741,11 @@ class VLMModelAdapter(nn.Module):
         return_hidden = bool(kwargs.get("return_hidden", False)) or bool(
             kwargs.get("capture_layer_ids")
         )
+        native_prompt_capture = (
+            getattr(self, "_omlx_native_mtp_full_prompt", False) and not return_hidden
+        )
+        if native_prompt_capture:
+            kwargs["return_hidden"] = True
         minicpm_captures = None
         minicpm_final_hidden = bool(kwargs.get("return_hidden", False))
         if self.model_type == "minicpmv4_7" and return_hidden:
@@ -721,6 +764,7 @@ class VLMModelAdapter(nn.Module):
         inputs_embeds = kwargs.pop("inputs_embeds", None)
         vlm_extra = kwargs.pop("vlm_extra_kwargs", None) or {}
         vlm_extra.pop("_captured_rope_deltas", None)
+        vlm_extra.pop("_omlx_pruned_video", None)
         if (
             self.model_type == "minicpmv4_7"
             and inputs_embeds is None
@@ -833,6 +877,12 @@ class VLMModelAdapter(nn.Module):
 
                 abort_speculative_round(result.gdn_states)
                 raise
+        if native_prompt_capture:
+            from ..patches.mlx_lm_mtp import prompt_priming
+
+            prompt_priming.maybe_capture(
+                self, input_ids, result.hidden_states[-1], cache
+            )
         if return_hidden and hasattr(result, "logits"):
             return result
         if hasattr(result, "logits"):
