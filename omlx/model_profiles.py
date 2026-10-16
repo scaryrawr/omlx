@@ -43,6 +43,7 @@ UNIVERSAL_PROFILE_FIELDS = (
 
 # Model-specific fields — eligible for per-model profiles only (never templates).
 MODEL_SPECIFIC_PROFILE_FIELDS = (
+    "mm_processor_kwargs",
     "turboquant_kv_enabled",
     "turboquant_kv_scheme",
     "turboquant_kv_bits",
@@ -237,7 +238,7 @@ class GlobalTemplate:
 
 def utcnow() -> datetime:
     """Return current UTC time (single-source helper for testability)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)  # noqa: UP017
 
 
 class InvalidProfileNameError(ValueError):
