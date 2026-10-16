@@ -127,10 +127,9 @@ def test_config_plumb_and_attach(runtime):
     assert model._omlx_mtp_decode_enabled
     assert model._omlx_mtp_chain
     assert model._omlx_mtp_head_prenorm
-    # No per-cycle clone and no row-wise batch path: provisional rows live
-    # on the persistent caches and the next fold trims them.
+    # No per-cycle clone: provisional rows live on the persistent caches and
+    # the next fold trims them.
     assert model._omlx_mtp_head_clone is False
-    assert model._omlx_mtp_rowwise_unsupported is True
     assert model._omlx_mtp_depth == 3  # clamped to the shipped block count
     assert all(
         hasattr(block.transformer_block.self_attn, "qkvr_proj")

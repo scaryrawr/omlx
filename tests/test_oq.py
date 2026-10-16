@@ -7443,6 +7443,34 @@ class TestQwen4ExpLayerWalk:
 
 @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
 class TestGlm5NextLayerWalk:
+    def test_streamed_decoder_uses_registered_model_classes(self, tmp_path):
+        from dataclasses import asdict
+
+        from omlx.oq import _streamed_text_args
+        from omlx.patches import mlx_vlm_glm5_next_compat
+        from tests.test_mlx_vlm_glm5_next_compat import _tiny_config
+
+        mlx_vlm_glm5_next_compat.apply_mlx_vlm_glm5_next_compat_patch()
+        from mlx_vlm.models.glm5_next.config import TextConfig
+        from mlx_vlm.models.glm5_next.language import Glm5NextDecoderLayer
+
+        config = asdict(_tiny_config())
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        args, layer_cls = _streamed_text_args(tmp_path, config)
+
+        assert isinstance(args, TextConfig)
+        assert layer_cls is Glm5NextDecoderLayer
+
+    def test_streamed_mtp_rejects_unavailable_runtime_patch(self, monkeypatch):
+        from omlx.oq import _collect_streamed_glm5_next_mtp
+        from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime
+
+        monkeypatch.setattr(glm5_next_vlm_runtime, "apply", lambda: False)
+        with pytest.raises(RuntimeError, match="requires the runtime patch"):
+            _collect_streamed_glm5_next_mtp(
+                None, {}, OQImatrixCollector(), None, [], []
+            )
+
     def test_cache_without_checkpoint_mtp_weights_is_reusable(self, tmp_path):
         from omlx.oq import OQImatrixData, _oqe_cache_missing_mtp_entries
 

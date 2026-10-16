@@ -38,6 +38,14 @@ class TestSelectChunks:
         selected = select_chunks(importance, keep_pct=1.0, chunk_size=32)
         assert selected.shape[0] == 64
 
+    def test_empty_importance_returns_empty_indices(self):
+        from omlx.patches.specprefill import select_chunks
+
+        selected = select_chunks(mx.array([]))
+
+        assert selected.shape == (0,)
+        assert selected.dtype == mx.int32
+
     def test_sorted_output(self):
         from omlx.patches.specprefill import select_chunks
 

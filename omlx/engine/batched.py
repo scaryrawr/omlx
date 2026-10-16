@@ -10,6 +10,7 @@ import asyncio
 import copy
 import functools
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -34,6 +35,22 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _warmup_bailing_hybrid(model: Any, token_id: int = 0) -> bool:
+    """Compile Ling's sorted-prefill and decode graphs before serving."""
+    args = getattr(model, "args", None)
+    if getattr(args, "model_type", None) != "bailing_hybrid":
+        return False
+
+    import mlx.core as mx
+
+    cache = model.make_cache()
+    prefill = model(mx.full((1, 8), token_id, dtype=mx.int32), cache=cache)
+    mx.eval(prefill)
+    decode = model(mx.array([[token_id]], dtype=mx.int32), cache=cache)
+    mx.eval(decode)
+    return True
 
 
 # Optional Harmony adapter import
@@ -494,6 +511,15 @@ class BatchedEngine(BaseEngine):
             except Exception:
                 logger.debug("Qwen FA-256 steel patch not applied", exc_info=True)
 
+        try:
+            from ..patches.qwen35_gdn_decode import (
+                apply_qwen35_gdn_decode_patch,
+            )
+
+            apply_qwen35_gdn_decode_patch()
+        except Exception:
+            logger.debug("Qwen fused GDN decode patch not applied", exc_info=True)
+
         # Qwen3.5/3.6 q4 prefill linears -> native qmm tile tuned for long
         # batches. Strictly gated in the patch; decode and unsupported linears
         # fall through.
@@ -701,6 +727,13 @@ class BatchedEngine(BaseEngine):
             except Exception:
                 logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
 
+        try:
+            from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
+
+            CompiledMLPBlocks.install(self._model)
+        except Exception:
+            logger.debug("Qwen compiled MLP dispatch not installed", exc_info=True)
+
         # Create engine config (copy to avoid mutating the shared instance)
         scheduler_config = (
             copy.copy(self._scheduler_config)
@@ -726,6 +759,19 @@ class BatchedEngine(BaseEngine):
             tokenizer=self._tokenizer,
             config=engine_config,
         )
+
+        warmup_started = time.perf_counter()
+        warmed_up = await loop.run_in_executor(
+            self._engine.engine._mlx_executor,
+            _warmup_bailing_hybrid,
+            self._model,
+            getattr(self._tokenizer, "bos_token_id", None) or 0,
+        )
+        if warmed_up:
+            logger.info(
+                "Ling inference warmup completed in %.2fs",
+                time.perf_counter() - warmup_started,
+            )
 
         await self._engine.engine.start()
 
@@ -1178,9 +1224,9 @@ class BatchedEngine(BaseEngine):
             presence_penalty=presence_penalty,
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),
             logits_observer=kwargs.get("logits_observer"),
         )
@@ -1265,9 +1311,9 @@ class BatchedEngine(BaseEngine):
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
             ignore_eos=bool(kwargs.get("ignore_eos", False)),
-            thinking_budget=kwargs.get("thinking_budget", None),
-            compiled_grammar=kwargs.get("compiled_grammar", None),
-            seed=kwargs.get("seed", None),
+            thinking_budget=kwargs.get("thinking_budget"),
+            compiled_grammar=kwargs.get("compiled_grammar"),
+            seed=kwargs.get("seed"),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),
             logits_observer=kwargs.get("logits_observer"),
         )
