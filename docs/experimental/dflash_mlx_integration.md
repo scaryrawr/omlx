@@ -17,8 +17,11 @@ oMLX runs DFlash inside its standard engines. `BatchedEngine` (mlx-lm text model
 | GLM-5.3 (`glm5_next`) | VLM | concurrent rows, block of at most 8 |
 | Gemma 4 (`gemma4`, `gemma4_unified`) | VLM | single row |
 | Muse Glimmer (`muse_glimmer`) | VLM | single row |
+| MiniCPM-V 4.7 (`minicpmv4_7`) with its paired DSpark helper | VLM | concurrent greedy rows; sampled single row |
 
 "Single row" means a request speculates while it decodes alone; a batch of two or more decodes normally, since rows that accept different counts would need a ragged rollback of sliding-window caches. MiMo V2 checkpoints with the omnimodal vision sidecar load on the VLM engine and run without DFlash; other model types also load without DFlash and log a warning. The gate lives in `omlx/utils/model_loading.py` (`dflash_batched_supported`, `dflash_compatibility`).
+
+MiniCPM uses `DSparkDrafter` through the same loader and scheduler, but keeps the native helper's proposal probabilities and full context. It requires an explicit local paired helper and fixed verification through `dflash_verify_mode="dflash"` or an unset mode. Adaptive verification, draft window overrides, SpecPrefill, and grammar constraints are unsupported. An incompatible helper fails the model load rather than silently disabling DSpark.
 
 ## Settings
 
@@ -48,6 +51,7 @@ Removed with the external engine: the dflash-mlx L1/L2 prefix caches (`dflash_in
 |---|---|
 | `omlx/speculative/dflash/__init__.py` | Load, bind and attach the drafter; block size and verify mode. |
 | `omlx/speculative/dflash/drafter.py` | `DFlashDrafter`: per-row context rings, cohorts, predraft, prefix-hit restore. |
+| `omlx/speculative/dspark_drafter.py`, `minicpm_pairing.py` | MiniCPM's native DSpark proposals, request-owned full context, and paired checkpoint validation. |
 | `omlx/speculative/dflash/variants.py` | Per-checkpoint pieces of the draft forward (Laguna fused QKV, gate and per-capture norms; Muse encoder; MiMo mask embedding; partial RoPE). |
 | `omlx/speculative/dflash/selection.py`, `kernels.py` | Proposal sampling, the DFlash2 candidate selector and its Metal kernels. |
 | `omlx/patches/mlx_lm_mtp/` | Lightning MTP verify, acceptance, rollback and depth controllers; `drafter_target.py` adds captures and rollback to plain-attention targets (Qwen3, Laguna, MiMo V2, Muse Glimmer). |
