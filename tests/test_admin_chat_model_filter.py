@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin chat model dropdown filtering."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -224,7 +225,8 @@ async def test_models_endpoints_omit_inactive_colliding_aliases():
         models = await list_models()
         status = await list_models_status()
 
-    assert [m.id for m in models.data] == ["chat-model", "raw-image-model"]
+    data = json.loads(bytes(models.body))["data"]
+    assert [m["id"] for m in data] == ["chat-model", "raw-image-model"]
     raw_image = next(m for m in status["models"] if m["id"] == "raw-image-model")
     assert "model_alias" not in raw_image
 

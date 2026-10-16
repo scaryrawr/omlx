@@ -293,6 +293,16 @@ def apply() -> bool:
             return result
 
         def scoped_next(self, *args, **kwargs):
+            model = getattr(self, "model", None)
+            uids = getattr(self, "uids", ())
+            drafter = _drafter_for(model) if model is not None else None
+            if getattr(drafter, "kind", None) == "dspark" and len(uids) > 1:
+                for idx in range(len(uids)):
+                    sampler = _row_value(getattr(self, "samplers", None), idx)
+                    if sampler is None:
+                        sampler = getattr(self, "fallback_sampler", None)
+                    if getattr(sampler, "temp", 0.0) != 0.0:
+                        raise ValueError("Batched sampled DSpark is not supported.")
             realign_rows = getattr(self, "_omlx_realign_rows", None)
             if callable(realign_rows):
                 realign_rows()
@@ -300,7 +310,12 @@ def apply() -> bool:
             model = getattr(self, "model", None)
             uids = getattr(self, "uids", ())
             with _prompt_priming.decode_scope(model, uids), _drafter_scope(model, uids):
-                return patched_next(self, *args, **kwargs)
+                try:
+                    return patched_next(self, *args, **kwargs)
+                finally:
+                    abort = getattr(type(model), "abort_speculative_forward", None)
+                    if callable(abort):
+                        abort(model)
 
         GenerationBatch.__init__ = patched_init
         GenerationBatch.next = scoped_next
@@ -636,6 +651,15 @@ def _mtp_common_eligible(gen_batch: Any) -> bool:
         return False
     uids = getattr(gen_batch, "uids", None)
     if uids is None or len(uids) == 0:
+        return False
+    native_mtp_allowed = getattr(
+        gen_batch.model, "native_mtp_allowed_for_uids", None
+    )
+    if (
+        drafter is None
+        and callable(native_mtp_allowed)
+        and not native_mtp_allowed(list(uids))
+    ):
         return False
     if _has_grammar_processors(gen_batch):
         return False
@@ -2219,6 +2243,10 @@ def _call_backbone_impl(
     MTP head's ``hidden_pre_norm`` is the same array with or without a
     capture request.
 
+    The exact-verifier convenience API returns only the last hidden state.
+    Layer captures use the model's capture-bearing ``return_hidden`` contract,
+    which must retain its architecture-specific verification and rollback.
+
     The first three entries:
 
     - mlx-lm path returns the 2-tuple ``(logits, hidden)``; ``gdn_states``
@@ -2244,6 +2272,11 @@ def _call_backbone_impl(
     # deepseek_v4 (see _exact_verify_host) run every projection and attention
     # row with one-row decode arithmetic, so greedy MTP output equals MTP-off.
     exact_verify = bool(n_confirmed and _exact_verify_host(model) is not None)
+    minicpm_verify = bool(
+        n_confirmed and getattr(model, "model_type", None) == "minicpmv4_7"
+    )
+    if minicpm_verify:
+        kwargs["speculative_verify"] = True
     _rollback_mod.set_undo_armed(True)
     # The affine verify qmm kernel is a Qwen-specific optimization. Keep the
     # DeepSeek target on its architecture-native quantized linear path.
@@ -2255,7 +2288,26 @@ def _call_backbone_impl(
     )
     _set_dspark_target_verify(model, exact_verify)
     try:
-        result = model(inputs, **kwargs)
+        verify_logits = getattr(model, "speculative_verify_logits", None)
+        language_model = getattr(model, "_language_model", None)
+        if language_model is not None and not callable(
+            getattr(language_model, "speculative_verify_logits", None)
+        ):
+            verify_logits = None
+        if (
+            n_confirmed
+            and not minicpm_verify
+            and not capture_layer_ids
+            and callable(verify_logits)
+        ):
+            hidden, _, rollback_state, logits = verify_logits(
+                inputs,
+                cache,
+                lambda value: value,
+            )
+            result = logits, hidden, rollback_state
+        else:
+            result = model(inputs, **kwargs)
     finally:
         if exact_verify:
             _set_dspark_target_verify(model, False)

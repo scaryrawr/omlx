@@ -1432,6 +1432,9 @@ class TestClaudeDesktopTierAliases:
         def __init__(self, model_ids):
             self._model_ids = model_ids
 
+        def get_active_model_aliases(self, settings_manager):
+            return {}
+
         def get_status(self):
             return {
                 "models": [
