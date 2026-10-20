@@ -28,6 +28,7 @@ class _FakeEntry:
         self.engine_type = engine_type
         self.model_type = model_type
         self.config_model_type = config_model_type
+        self.model_format = None
         self.engine = None
         self.is_pinned = False
         self.is_loading = False
@@ -105,10 +106,10 @@ def client(tmp_path, monkeypatch):
     state = _FakeServerState()
 
     # Patch the module-level getters
-    admin_routes._get_settings_manager = lambda: mgr
-    admin_routes._get_engine_pool = lambda: pool
-    admin_routes._get_server_state = lambda: state
-    admin_routes._get_global_settings = lambda: None
+    monkeypatch.setattr(admin_routes, "_get_settings_manager", lambda: mgr)
+    monkeypatch.setattr(admin_routes, "_get_engine_pool", lambda: pool)
+    monkeypatch.setattr(admin_routes, "_get_server_state", lambda: state)
+    monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: None)
 
     # Bypass auth
     async def _fake_require_admin():
@@ -923,6 +924,21 @@ class TestModelsResponseActiveProfile:
         assert r.json()["model_type"] == "image"
         assert r.json()["engine_type"] == "image"
         assert mgr.get_settings("model-a").model_type_override == "image"
+
+    def test_admin_model_type_override_rejects_gguf(self, client):
+        c, mgr = client
+        entry = admin_routes._get_engine_pool().get_entry("model-a")
+        entry.model_format = "gguf"
+
+        response = c.put(
+            "/admin/api/models/model-a/settings",
+            json={"model_type_override": "image"},
+        )
+
+        assert response.status_code == 400, response.text
+        assert "GGUF" in response.json()["detail"]
+        assert entry.model_type == "llm"
+        assert mgr.get_settings("model-a").model_type_override is None
 
 
 class TestActiveProfileDriftClearing:
