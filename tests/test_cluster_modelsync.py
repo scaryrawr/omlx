@@ -654,12 +654,36 @@ def test_allow_patterns_reject_inverted_range(tmp_path):
 # -- launch preflight -------------------------------------------------------------
 
 
-def test_preflight_uses_per_node_model_paths(monkeypatch):
-    from omlx.cluster.launch import _local_runtime_versions, preflight_remote_hosts
+@pytest.mark.parametrize(
+    ("local_ceiling", "remote_ceiling", "rejected_rank"),
+    [
+        (1024**4, 1024**4, None),
+        (22, 12, None),
+        (21, 12, 0),
+        (22, 11, 1),
+        (1, 12, 0),
+        (22, 1, 1),
+        (0, 12, 0),
+        (22, 0, 1),
+    ],
+)
+def test_preflight_uses_per_node_model_paths(
+    monkeypatch, local_ceiling, remote_ceiling, rejected_rank
+):
+    from omlx.cluster import memory_guard
+    from omlx.cluster.launch import (
+        DistributedLaunchError,
+        _local_runtime_versions,
+        preflight_remote_hosts,
+    )
     from omlx.cluster.models import CLUSTER_PROTOCOL_VERSION
 
     versions = _local_runtime_versions()
     calls = []
+    # Both nodes are synthetic; live local memory can fall to one byte under CI load.
+    monkeypatch.setattr(
+        memory_guard, "ceiling_breakdown", lambda tier: {"hard_limit": local_ceiling}
+    )
 
     def runner(argv, **kwargs):
         calls.append(argv)
@@ -672,7 +696,7 @@ def test_preflight_uses_per_node_model_paths(monkeypatch):
                     "cluster-protocol": CLUSTER_PROTOCOL_VERSION,
                     "python": platform.python_version(),
                     "model-exists": True,
-                    "admission-ceiling-bytes": 1024**4,
+                    "admission-ceiling-bytes": remote_ceiling,
                 }
             ),
             stderr="",
@@ -682,13 +706,29 @@ def test_preflight_uses_per_node_model_paths(monkeypatch):
         "/nonexistent/shared",
         path_map={"peer": "/Volumes/models/studio-copy"},
     )
-    result = preflight_remote_hosts(
-        deployment,
-        python_executable="/opt/omlx/bin/python",
-        runner=runner,
-    )
+    if rejected_rank is None:
+        result = preflight_remote_hosts(
+            deployment,
+            python_executable="/opt/omlx/bin/python",
+            runner=runner,
+        )
+        assert len(result) == 2
+        assert [item["admission_ceiling_bytes"] for item in result] == [
+            local_ceiling,
+            remote_ceiling,
+        ]
+    else:
+        node_id = deployment.hosts[rejected_rank].node_id
+        with pytest.raises(
+            DistributedLaunchError,
+            match=rf"no ranks were started.*rank {rejected_rank} \({node_id}\)",
+        ):
+            preflight_remote_hosts(
+                deployment,
+                python_executable="/opt/omlx/bin/python",
+                runner=runner,
+            )
 
-    assert len(result) == 2
     assert len(calls) == 1
     # The peer is probed at its own path, not the coordinator's.
     assert "/Volumes/models/studio-copy" in calls[0][-1]
