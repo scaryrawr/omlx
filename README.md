@@ -284,8 +284,12 @@ models that oMLX can load on demand, and records each model's context window and
 text/image input support. Embedding, reranking, audio, and image-generation models
 are excluded when their type is available from the model status endpoint. If
 status is unavailable, the public model listing supplies context limits and input
-support defaults to text-only. Thinking models retain the existing high-effort
-default; additional reasoning effort levels are not inferred.
+support defaults to text-only. Models with native reasoning-effort metadata
+advertise their supported levels. Models without it accept `low`, `medium`, and
+`high` as compatibility values; templates without effort controls ignore these
+values, and existing thinking defaults remain unchanged. This also lets Codex
+Desktop's low-effort background title generator prefer the launch-default model
+instead of loading another checkpoint solely for its effort metadata.
 
 Requires a Codex version supporting
 [`model_catalog_json`](https://developers.openai.com/codex/config-reference/#model_catalog_json).
