@@ -118,8 +118,8 @@ def codex_model_catalog(
     entries = []
     for priority, model in enumerate(ordered):
         reasoning = _is_reasoning_model(model.id, model.reasoning)
-        # Codex accepts a fixed effort enum. Do not invent levels from a
-        # thinking boolean, or advertise custom template values it cannot send.
+        # Keep native effort metadata within Codex's fixed effort enum;
+        # custom template values cannot be sent by its selector.
         efforts = (
             [
                 effort
@@ -147,6 +147,20 @@ def codex_model_catalog(
             reasoning_levels = [
                 {"effort": effort, "description": f"Use {effort} reasoning effort"}
                 for effort in efforts
+            ]
+        elif not model.reasoning_effort_options:
+            default_effort = "high" if reasoning else None
+            # Desktop title generation filters fallback models by low effort.
+            # Accepting the value does not imply a template changes its budget.
+            reasoning_levels = [
+                {
+                    "effort": effort,
+                    "description": (
+                        f"Request {effort} effort (ignored by templates "
+                        "without effort controls)"
+                    ),
+                }
+                for effort in ("low", "medium", "high")
             ]
         else:
             default_effort = "high" if reasoning else None
