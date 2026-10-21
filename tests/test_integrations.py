@@ -257,16 +257,84 @@ class TestCodexModelCatalog:
         assert models[0]["context_window"] == 131072
         assert models[0]["input_modalities"] == ["text", "image"]
         assert models[0]["default_reasoning_level"] == "high"
-        assert models[0]["supported_reasoning_levels"] == [
-            {"effort": "high", "description": "Use model thinking"}
-        ]
+        assert [
+            level["effort"] for level in models[0]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
         assert models[1]["context_window"] == 8192
         assert models[1]["input_modalities"] == ["text"]
-        assert models[1]["supported_reasoning_levels"] == []
+        assert [
+            level["effort"] for level in models[1]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
         assert models[1]["default_reasoning_level"] is None
         assert models[1]["truncation_policy"]["limit"] == 2048
         assert all(model["base_instructions"] for model in models)
         assert all(not model["prefer_websockets"] for model in models)
+
+    @pytest.mark.parametrize("listed", [True, False])
+    @pytest.mark.parametrize("reasoning", [True, False, None])
+    def test_models_without_native_efforts_advertise_compatibility_levels(
+        self, listed, reasoning
+    ):
+        metadata = {"reasoning": reasoning}
+        model = codex_model_catalog(
+            ctx(
+                model="custom-alias",
+                models=(
+                    (IntegrationModel("custom-alias", **metadata),) if listed else ()
+                ),
+                **metadata,
+            )
+        )["models"][0]
+
+        assert [level["effort"] for level in model["supported_reasoning_levels"]] == [
+            "low",
+            "medium",
+            "high",
+        ]
+        assert all(
+            "ignored by templates without effort controls" in level["description"]
+            for level in model["supported_reasoning_levels"]
+        )
+        assert model["default_reasoning_level"] == ("high" if reasoning else None)
+
+    @pytest.mark.parametrize(
+        "selected",
+        ["Qwen3.5-9B-oQ4e-mtp", "Qwen3.8-Flash-Next-oQ4e-mtp"],
+    )
+    def test_desktop_title_fallback_prefers_launch_default_over_other_models(
+        self, selected
+    ):
+        catalog = codex_model_catalog(
+            ctx(
+                model=selected,
+                models=(
+                    IntegrationModel(
+                        "Qwen3.8-Flash-Next-oQ4e-mtp",
+                        reasoning=True,
+                        reasoning_effort_options=("low", "medium", "xhigh"),
+                        reasoning_effort_default="xhigh",
+                    ),
+                    IntegrationModel("Qwen3.6-35B-A3B-oQ6e-mtp", reasoning=True),
+                    IntegrationModel("Qwen3.5-9B-oQ4e-mtp", reasoning=True),
+                ),
+            )
+        )
+
+        # Codex Desktop filters low-effort candidates before preferring the
+        # catalog default (priority zero), then falls back to the first match.
+        candidates = [
+            model
+            for model in catalog["models"]
+            if any(
+                level["effort"] == "low"
+                for level in model["supported_reasoning_levels"]
+            )
+        ]
+        title_model = next(
+            (model for model in candidates if model["priority"] == 0), candidates[0]
+        )
+        assert title_model["slug"] == selected
+        assert len(catalog["models"]) == 3
 
     @pytest.mark.parametrize("listed", [True, False])
     def test_qwen_native_efforts_default_to_medium(self, listed):
@@ -358,7 +426,11 @@ class TestCodexModelCatalog:
 
     def test_metadata_overrides_reasoning_name_heuristic(self):
         catalog = codex_model_catalog(ctx(model="deepseek-r1", reasoning=False))
-        assert catalog["models"][0]["supported_reasoning_levels"] == []
+        assert [
+            level["effort"]
+            for level in catalog["models"][0]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
+        assert catalog["models"][0]["default_reasoning_level"] is None
         assert catalog["models"][0]["context_window"] == 32768
         assert catalog["models"][0]["input_modalities"] == ["text"]
 
