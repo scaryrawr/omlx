@@ -903,7 +903,9 @@
                         ['pending', 'loading', 'quantizing', 'saving'].includes(t.status));
                     if (hasOqActive) this.startOQRefresh();
                 } else {
-                    this.stopUploadRefresh();
+                    if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                        this.stopUploadRefresh();
+                    }
                     this.stopHFRefresh();
                     this.stopMSRefresh();
                     this.stopOQRefresh();
