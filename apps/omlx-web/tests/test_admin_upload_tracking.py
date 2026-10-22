@@ -96,6 +96,24 @@ async function tick() {
     state.setModelsTab('uploader');
     await flush();
     assert.equal(timer().delay, 2000, 'repeat entry must not duplicate timers');
+    state.startStatsRefresh = () => {};
+    state.startLogRefresh = () => {};
+    state.$nextTick = () => {};
+    for (const tab of ['status', 'logs']) {
+        let finishNavigation;
+        state[tab === 'status' ? 'loadStats' : 'loadLogs'] =
+            () => new Promise(resolve => {finishNavigation = resolve;});
+        state.mainTab = tab;
+        const leaving = state.handleMainTabChange(tab);
+        await flush();
+        state.mainTab = 'models';
+        await state.handleMainTabChange('models');
+        assert.equal(timer().delay, 2000);
+        finishNavigation();
+        await leaving;
+        assert.equal(state._uploadRefreshEnabled, true, 'stale navigation cannot disable tracking');
+        assert.equal(timer().delay, 2000, 'returning before navigation completes keeps polling');
+    }
     respond = async () => ({ok: true, json: async () => ({
         tasks: [{...active, status: 'completed'}, {...queued, status: 'failed', error: 'failed'}],
     })});
