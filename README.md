@@ -383,6 +383,23 @@ Models are auto-detected by type. You can also download models directly from the
 | Decision | Clef, Clef-Flash, OpenJev, Decision 3.0 (d3, d3-flash, d3-mini, d3-nano, d3-lite, d3-edge) |
 | Image | mlx-vlm models: Qwen Image 2.1/base/Turbo, FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
 
+### Flint
+
+RecursiveSI Flint is a **text-only** MoE model served through the native
+mlx-vlm backend (`model_type: flint`), not an image/audio model. Its upstream
+implementation provides the learned attention sinks, selective RoPE,
+513-token sliding/full attention schedule, tokenizer and mixed KV-cache types.
+oMLX uses its existing reasoning and GLM-style XML tool-call parsing.
+
+The mlx-vlm pin includes native Flint support at
+`a549bc778716e45b66d1caf6c746f60d93310d6e` (v0.7.10).
+oQe can calibrate directly on the original BF16 checkpoint one decoder layer
+at a time, including routed/shared experts and the normalized FP32 output-head
+input. Larger checkpoints automatically select this streamed path; the Python
+API also accepts `stream_calibration=True` explicitly. It does not require a
+lossy calibration proxy or a full BF16 model allocation. See
+[oQ Quantization](docs/oQ_Quantization.md) for resource and coverage constraints.
+
 ### MiniCPM-V 4.7
 
 `MiniCPM-V-4.7-35B-A3B` requires the complete native `minicpmv4_7`
@@ -392,7 +409,7 @@ served chat model. Support uses the existing chat, Anthropic Messages and
 Responses APIs; no audio or image/video generation capability is implied.
 
 The model and torch-free processor come from official **mlx-vlm**, pinned
-to commit `63fc97955c4e3dbe4eaad7c838d4d81701b783af` (after v0.7.8). The former full
+to commit `a549bc778716e45b66d1caf6c746f60d93310d6e` (v0.7.10). The former full
 vendored implementation and source-hash installation bridge have been removed.
 This pin requires Python >=3.10, MLX >=0.32.4 and Transformers >=5.14;
 oMLX retains its existing MLX pin and Transformers upper bound.

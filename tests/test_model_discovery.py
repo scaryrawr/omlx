@@ -444,6 +444,17 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "vlm"
 
+    @pytest.mark.parametrize("quantized", [False, True])
+    def test_detect_flint_as_native_text_vlm(self, tmp_path, quantized):
+        config = {
+            "model_type": "flint",
+            "architectures": ["FlintForCausalLM"],
+        }
+        if quantized:
+            config["quantization"] = {"bits": 4, "group_size": 64}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(tmp_path) == "vlm"
+
     def test_detect_unlimited_ocr_as_vlm(self, tmp_path):
         """baidu/Unlimited-OCR is served by mlx-vlm (dashed model_type)."""
         config = {

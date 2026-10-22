@@ -93,10 +93,50 @@ Sample selection uses a fixed seed, so repeated runs on the same model see the s
 
 ## Memory and disk
 
-Writing the quantized model needs little memory because tensors are read and written one at a time. Calibration needs the model in memory:
+Writing the quantized model reads and writes tensors incrementally. Calibration
+usually needs the model in memory:
 
 - If the model does not fit in about 75% of the available memory, oQ makes a temporary 4-bit copy on disk, calibrates on that copy and deletes it afterwards. This needs extra free disk space while it runs.
-- MiniMax M3 and Qwen4-Exp models calibrate one layer at a time instead.
+- Supported streamed families, including Flint, MiniMax M3 and Qwen4-Exp,
+  calibrate one native decoder layer at a time instead of building that proxy.
+
+### Flint original-BF16 calibration
+
+Flint uses its native per-layer sliding/full attention masks in both resident
+and streamed calibration. Its untied output head captures inputs after the
+final RMSNorm and FP32 cast. Shared and routed expert projections are included.
+The imatrix cache records a Flint-specific layer-walk version so incompatible
+older statistics are not reused.
+
+For an explicitly proxy-free run through `quantize_oq_streaming()`, set
+`oq_level=4` or `oq_level=6`, `enhanced=True`, `stream_calibration=True`,
+`auto_proxy_sensitivity=False` and `imatrix_strict=True`. Keep the original
+checkpoint as the source and use a fresh output directory. Sensitivity is
+measured with temporary quantize/dequantize passes on original BF16 layers;
+the export is mixed-bit oQe with importance-weighted refinement, not uniform
+4-bit or 6-bit quantization. Compatible BF16 imatrix statistics can be reused
+across output levels. Sensitivity scores depend on the target level, so an
+imatrix cache hit still requires a new sensitivity measurement at that level.
+
+Calibration equivalence is not inference chunking equivalence. A native
+quantized Flint checkpoint can produce different final-position logits for
+single-pass and chunked cached prefill. The cause has not been isolated;
+shape-dependent kernels, attention and cache paths are possible contributors.
+Neither a matching next token nor an arbitrary relative-logit-error threshold
+establishes unchanged probabilities, answer quality or absence of a cache bug.
+
+Streaming still needs memory for a decoder layer, saved/perturbed weights,
+activation boundaries, expert statistics and captures. It is not a hard
+process-memory cap. Measure a bounded source-layer pilot and monitor live
+memory, swap and disk before running a large conversion.
+
+Strict imatrix coverage checks required tensor entries; it does **not** promise
+sufficient expert sampling. Inspect `oq_imatrix_report.json` separately:
+`collection.collection_sufficient` and `collection.coverage_sufficient` must
+be true, with no zero-count experts and an expert-count fifth percentile of at
+least 16. The adaptive limit is 1,024 samples by default. Do not treat an
+insufficient run as a validated oQe artifact. Calibration coverage alone is not
+a model-quality evaluation.
 
 ## Supported models
 
