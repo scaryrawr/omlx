@@ -250,6 +250,10 @@ Search and download models from HuggingFace directly in the admin dashboard, in 
   <img src="docs/images/downloader_omlx.png" alt="oMLX Model Downloader" width="720">
 </p>
 
+### Model Upload Tracking
+
+Open **Models > Uploader** to view the upload queue, including jobs started before a page refresh or from another client. Tracking does not require revalidating your HuggingFace token. The queue refreshes automatically while the Uploader tab is open; **Refresh uploads** requests a fresh status without restarting an upload. If refresh fails, the last-known tasks remain visible with a warning. The animated upload indicator shows activity, not a byte percentage; pending jobs wait for the current upload to finish.
+
 ### Integrations
 
 Set up OpenClaw, OpenCode, Codex, Hermes Agent, Copilot, Pi, Mistral Vibe, and DeepSeek Harness directly from the admin dashboard with a single click. No manual config editing required.

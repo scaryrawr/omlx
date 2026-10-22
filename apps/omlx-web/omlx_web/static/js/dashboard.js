@@ -619,9 +619,13 @@
             uploadAllModels: [],
             uploadOqModelsLoaded: false,
             uploadTasks: [],
+            uploadTasksLoading: false,
+            uploadTasksLoaded: false,
+            uploadTasksError: '',
             uploadError: '',
             uploadSuccess: '',
             _uploadRefreshTimer: null,
+            _uploadRefreshEnabled: false,
             // Upload modal
             uploadModalOpen: false,
             uploadModalModelPath: '',
@@ -841,6 +845,7 @@
 
                 window.addEventListener('popstate', () => {
                     this.applyTabStateFromUrl();
+                    this.refreshUploadTab();
                     this.settingsScrollToHash();
                 });
 
@@ -883,6 +888,7 @@
                     if (this.modelsTab === 'quantizer') {
                         loads.push(this.loadOQModels());
                     }
+                    loads.push(this.refreshUploadTab());
                     if (this.msInitialized && this.msAvailable) {
                         loads.push(this.loadMSTasks());
                     }
@@ -897,6 +903,7 @@
                         ['pending', 'loading', 'quantizing', 'saving'].includes(t.status));
                     if (hasOqActive) this.startOQRefresh();
                 } else {
+                    this.stopUploadRefresh();
                     this.stopHFRefresh();
                     this.stopMSRefresh();
                     this.stopOQRefresh();
@@ -1138,10 +1145,7 @@
                 if (tab === 'quantizer') {
                     this.loadOQModels();
                 }
-                if (tab === 'uploader') {
-                    if (!this.uploadOqModelsLoaded) this.loadUploadOqModels();
-                    this.loadUploadTasks();
-                }
+                this.refreshUploadTab();
                 if (tab === 'downloader' && this.downloaderSource === 'recommended') {
                     this.loadRecommendations();
                 }
@@ -7662,20 +7666,46 @@
                 }
             },
 
+            async refreshUploadTab() {
+                if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                    this.stopUploadRefresh();
+                    return;
+                }
+                this.startUploadRefresh();
+                const loads = [this.loadUploadTasks()];
+                if (!this.uploadOqModelsLoaded) loads.push(this.loadUploadOqModels());
+                await Promise.all(loads);
+            },
+
             async loadUploadTasks() {
+                if (this.uploadTasksLoading) return;
+                this.uploadTasksLoading = true;
+                if (this._uploadRefreshTimer !== null) {
+                    clearTimeout(this._uploadRefreshTimer);
+                    this._uploadRefreshTimer = null;
+                }
                 try {
                     const response = await fetch('/admin/api/upload/tasks');
-                    if (response.ok) {
-                        const data = await response.json();
-                        this.uploadTasks = data.tasks || [];
-                        const hasActive = this.uploadTasks.some(t =>
-                            ['pending', 'uploading'].includes(t.status));
-                        if (!hasActive) {
-                            this.stopUploadRefresh();
-                        }
+                    if (!response.ok) {
+                        this.uploadTasksError = `${window.t('models.uploader.queue_error')} (HTTP ${response.status})`;
+                        return;
                     }
+                    const data = await response.json();
+                    if (!data || !Array.isArray(data.tasks) || !data.tasks.every(task =>
+                        task && typeof task.task_id === 'string' &&
+                        typeof task.model_name === 'string' &&
+                        ['pending', 'uploading', 'completed', 'failed', 'cancelled'].includes(task.status))) {
+                        throw new Error('Invalid upload task response');
+                    }
+                    this.uploadTasks = data.tasks;
+                    this.uploadTasksLoaded = true;
+                    this.uploadTasksError = '';
                 } catch (err) {
+                    this.uploadTasksError = window.t('models.uploader.queue_error');
                     console.error('Failed to load upload tasks:', err);
+                } finally {
+                    this.uploadTasksLoading = false;
+                    if (this._uploadRefreshEnabled) this.startUploadRefresh();
                 }
             },
 
@@ -7698,15 +7728,25 @@
             },
 
             startUploadRefresh() {
-                this.stopUploadRefresh();
-                this._uploadRefreshTimer = setInterval(() => {
-                    this.loadUploadTasks();
-                }, 2000);
+                if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                    this.stopUploadRefresh();
+                    return;
+                }
+                this._uploadRefreshEnabled = true;
+                if (this._uploadRefreshTimer !== null || this.uploadTasksLoading) return;
+                const hasActive = this.uploadTasks.some(task =>
+                    ['pending', 'uploading'].includes(task.status));
+                const delay = hasActive && !this.uploadTasksError ? 2000 : 6000;
+                this._uploadRefreshTimer = setTimeout(async () => {
+                    this._uploadRefreshTimer = null;
+                    await this.loadUploadTasks();
+                }, delay);
             },
 
             stopUploadRefresh() {
-                if (this._uploadRefreshTimer) {
-                    clearInterval(this._uploadRefreshTimer);
+                this._uploadRefreshEnabled = false;
+                if (this._uploadRefreshTimer !== null) {
+                    clearTimeout(this._uploadRefreshTimer);
                     this._uploadRefreshTimer = null;
                 }
             },
