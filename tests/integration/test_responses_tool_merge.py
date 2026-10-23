@@ -112,7 +112,11 @@ class RecordingEngine(BaseEngine):
         yield MockGenerationOutput(text="Hello world.")
 
     def count_chat_tokens(self, messages, tools=None, chat_template_kwargs=None, **kwargs) -> int:
-        prompt = self._tokenizer.apply_chat_template(messages, tokenize=False)
+        template_kwargs = dict(chat_template_kwargs or {})
+        template_kwargs["tokenize"] = False
+        if tools:
+            template_kwargs["tools"] = tools
+        prompt = self._tokenizer.apply_chat_template(messages, **template_kwargs)
         return len(self._tokenizer.encode(prompt))
 
     async def chat(self, messages, **kwargs) -> MockGenerationOutput:
