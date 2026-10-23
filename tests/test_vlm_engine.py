@@ -248,6 +248,7 @@ class TestVLMStreamingCleanup:
             finished=True,
             finish_reason="length",
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
             first_token_at=None,
         )
