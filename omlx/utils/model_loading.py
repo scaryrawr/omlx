@@ -966,20 +966,20 @@ def maybe_apply_pre_load_patches(
         mtp_requested = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
         )
-        has_mtp_weights = (
-            _checkpoint_has_mtp_weights(model_name) if for_vlm else None
-        )
         # A VLM config can retain mtp_num_hidden_layers after conversion
         # stripped the actual head tensors. Keep the construction-time decode
         # flag off unless both the user toggle and persisted native head agree;
         # the independent attach flag below still binds real heads when decode
         # is disabled so strict mlx-vlm loading remains lossless.
         mtp_enabled = (
-            bool(mtp_requested and minimax_dspark) or _native_vlm_mtp_eligible(
-                config,
-                model_type,
-                model_settings,
-                has_mtp_weights=bool(has_mtp_weights),
+            (
+                bool(mtp_requested and minimax_dspark)
+                or _native_vlm_mtp_eligible(
+                    config,
+                    model_type,
+                    model_settings,
+                    has_mtp_weights=bool(has_mtp_weights),
+                )
             )
             if for_vlm
             else mtp_requested
@@ -1498,7 +1498,6 @@ _DFLASH_BATCHED_MODEL_TYPES = {
         "gemma4",
         "gemma4_unified",
         "muse_glimmer",
-        "minicpmv4_7",
     ),
     "batched": (
         "qwen3_5",
