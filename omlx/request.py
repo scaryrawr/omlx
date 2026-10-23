@@ -332,9 +332,9 @@ class TokenLogprob:
 
     token_id: int
     text: str
-    token_bytes: List[int]
+    token_bytes: list[int]
     logprob: float
-    top: List["TokenLogprob"] = field(default_factory=list)
+    top: list["TokenLogprob"] = field(default_factory=list)
 
 
 @dataclass
