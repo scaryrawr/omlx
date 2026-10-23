@@ -501,6 +501,36 @@ class TestVlmMtpPreLoadDispatch:
         runtime_mock.assert_not_called()
         assert calls == []
 
+    @pytest.mark.parametrize("model_type", ["minimax_m3", "minimax_m3_vl"])
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_minimax_bundled_dspark_does_not_require_native_mtp_weights(
+        self, tmp_path, monkeypatch, model_type, enabled
+    ):
+        self._stub_patches(monkeypatch)
+        monkeypatch.setitem(
+            sys.modules, "omlx.patches.mlx_vlm_minimax_m3_compat", MagicMock()
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "omlx.patches.minimax_m3_dspark",
+            types.SimpleNamespace(bundled_dspark_path=lambda _: tmp_path / "dspark"),
+        )
+        path = _write_config(
+            tmp_path, json.dumps({"model_type": model_type, "text_config": {}})
+        )
+        _write_mtp_index(tmp_path, has_mtp=False)
+
+        maybe_apply_pre_load_patches(
+            path,
+            model_settings=types.SimpleNamespace(mtp_enabled=enabled),
+            for_vlm=True,
+        )
+
+        lm_patch = sys.modules["omlx.patches.mlx_lm_mtp"]
+        lm_patch.set_mtp_active.assert_called_with(enabled)
+        vlm_patch = sys.modules["omlx.patches.mlx_vlm_mtp"]
+        vlm_patch.set_mtp_attach_enabled.assert_called_once_with(False)
+
     def test_gemma4_merged_assistant_dispatch(self, tmp_path, monkeypatch):
         # Gemma 4 merged-assistant checkpoints (assistant weights under
         # language_model.mtp.* + text_config.mtp_assistant_config) route
