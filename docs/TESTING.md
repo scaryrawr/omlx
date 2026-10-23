@@ -2,6 +2,16 @@
 
 Server tests live in `tests/` and must not depend on `apps/`: after the full run, CI deletes `apps/`, collects the server tests again, and starts `omlx serve` to check the API-only fallback. Web UI tests live in `apps/omlx-web/tests/` and the macOS app's Python tests in `apps/omlx-mac/Tests/python/`. A plain `pytest` runs all three through `testpaths`. The standalone dashboard script tests are the `apps/omlx-web/tests/*.test.cjs` files except `network_auth_ui.test.cjs`, which `test_admin_network_auth_ui.py` runs with its input.
 
+# Live chat compatibility smoke
+
+Against an isolated server, run
+`OMLX_BASE_URL=http://127.0.0.1:18080 OMLX_TEST_MODEL=Qwen3.5-9B-oQ4e-mtp uv run --python python3.12 pytest tests/integration/test_live_tool_calling.py -m integration`.
+The selected model must appear in `/v1/models`. Cases cover streaming and
+non-streaming tool-call round trips, token usage, chat logprobs and top alternatives,
+and chat-backed decision readouts. Enable native MTP in the isolated model settings
+to exercise multi-token verification too. Keep the server's base path and `HOME`
+isolated so startup cannot overwrite the running service's cluster shim.
+
 # Qwen3.5 text-only checkpoint tests
 
 Run `python -m pytest -q tests/test_oq.py -k Qwen35TextCheckpoint` to check

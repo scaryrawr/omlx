@@ -9,6 +9,7 @@ OMLX_API_KEY is optional. The selected model must be listed by /v1/models.
 """
 
 import json
+import math
 import os
 
 import httpx
@@ -46,6 +47,7 @@ def _completion(client, payload):
     message = {"role": "assistant", "content": "", "tool_calls": []}
     finish_reason = None
     usage = None
+    logprobs = []
     done = False
     with client.stream("POST", "/v1/chat/completions", json=payload) as response:
         response.raise_for_status()
@@ -64,6 +66,8 @@ def _completion(client, payload):
                 assert choice["index"] == 0
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
+                if choice.get("logprobs"):
+                    logprobs.extend(choice["logprobs"]["content"] or [])
                 delta = choice["delta"]
                 message["content"] += delta.get("content") or ""
                 for call in delta.get("tool_calls", []):
@@ -86,9 +90,47 @@ def _completion(client, payload):
                     target["function"]["arguments"] += function.get("arguments") or ""
     assert done, "Stream ended without [DONE]"
     return {
-        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "choices": [
+            {
+                "message": message,
+                "finish_reason": finish_reason,
+                "logprobs": {"content": logprobs},
+            }
+        ],
         "usage": usage,
     }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_live_chat_logprobs(live_server, stream):
+    client, model = live_server
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with only the word hello."}],
+        "temperature": 0,
+        "max_tokens": 16,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "logprobs": True,
+        "top_logprobs": 3,
+        "stream": stream,
+    }
+    if stream:
+        payload["stream_options"] = {"include_usage": True}
+    response = _completion(client, payload)
+    choice = response["choices"][0]
+    assert choice["finish_reason"] == "stop", response
+    assert choice["message"]["content"], response
+    entries = choice["logprobs"]["content"]
+    assert entries, response
+    for entry in entries:
+        assert isinstance(entry["token"], str)
+        assert math.isfinite(entry["logprob"]) and entry["logprob"] <= 0
+        assert all(isinstance(byte, int) and 0 <= byte <= 255 for byte in entry["bytes"])
+        assert len(entry["top_logprobs"]) == 3
+        for alternative in entry["top_logprobs"]:
+            assert math.isfinite(alternative["logprob"])
+            assert alternative["logprob"] <= 0
+    assert response["usage"]["completion_tokens"] > 0
 
 
 @pytest.mark.parametrize("stream", [False, True])

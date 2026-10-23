@@ -94,10 +94,18 @@ Sample selection uses a fixed seed, so repeated runs on the same model see the s
 
 ## Memory and disk
 
-Writing the quantized model needs little memory because tensors are read and written one at a time. Calibration needs the model in memory:
+Writing the quantized model reads and writes tensors incrementally. Calibration
+usually needs the model in memory:
 
 - If the model does not fit in about 75% of the available memory, oQ makes a temporary 4-bit copy on disk, calibrates on that copy and deletes it afterwards. This needs extra free disk space while it runs.
-- MiniMax M3 and Qwen4-Exp models calibrate one layer at a time instead.
+- Supported streamed families, including Flint, MiniMax M3 and Qwen4-Exp,
+  calibrate one native decoder layer at a time instead of building that proxy.
+
+Streaming still needs memory for a decoder layer, saved/perturbed weights,
+activation boundaries and expert statistics; it is not a hard process-memory
+cap. Inspect `oq_imatrix_report.json` for collection and expert coverage before
+treating a conversion as validated. Calibration coverage alone is not a
+model-quality evaluation.
 
 ## Supported models
 
