@@ -2340,8 +2340,12 @@ def _call_backbone_impl(
     try:
         verify_logits = getattr(model, "speculative_verify_logits", None)
         language_model = getattr(model, "_language_model", None)
-        if language_model is not None and not callable(
-            getattr(language_model, "speculative_verify_logits", None)
+        # mRoPE adapters bind per-request positions in their forward path.
+        if language_model is not None and (
+            getattr(model, "_uses_mrope", False) is True
+            or not callable(
+                getattr(language_model, "speculative_verify_logits", None)
+            )
         ):
             verify_logits = None
         if (
