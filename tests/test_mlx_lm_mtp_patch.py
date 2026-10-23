@@ -2217,6 +2217,39 @@ class TestRowExactVerifyGate:
 
 
 class TestBackboneCaptureDispatch:
+    @pytest.mark.parametrize("capture_ids", [None, []])
+    def test_mrope_adapter_verification_keeps_position_binding(self, capture_ids):
+        from mlx_vlm.models.base import LanguageModelOutput
+
+        values = mx.zeros((1, 3, 4))
+        rollback = object()
+        calls = []
+
+        class Target:
+            def speculative_verify_logits(self, *args):
+                pytest.fail("Direct verifier bypassed adapter position binding")
+
+            def __call__(self, inputs, **kwargs):
+                calls.append(kwargs)
+                return LanguageModelOutput(
+                    logits=values,
+                    hidden_states=[values],
+                    gdn_states=rollback,
+                )
+
+        model = _adapter(Target())
+        model._uses_mrope = True
+        model.set_batch_rope_deltas(mx.array([7.0]))
+        cache = [SimpleNamespace(offset=14)]
+        actual = bg._call_backbone_captured(
+            model, mx.array([[1, 2, 3]]), cache, 1, capture_ids
+        )
+
+        assert actual == (values, values, rollback, None)
+        assert len(calls) == 1
+        assert calls[0]["n_confirmed"] == 1
+        assert calls[0]["position_ids"].tolist() == [[[21, 22, 23]]] * 3
+
     @pytest.mark.parametrize("adapter", [False, True])
     @pytest.mark.parametrize("n_confirmed", [0, 1])
     def test_backbone_capture_uses_capture_bearing_verification(
