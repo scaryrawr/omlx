@@ -1905,14 +1905,26 @@
                         </div>
 
                         <!-- Upload Queue -->
-                        <div x-show="uploadTasks.length > 0" x-cloak>
+                        <div>
                             <div class="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
-                                <div class="px-4 sm:px-6 py-4 border-b border-neutral-100">
+                                <div class="px-4 sm:px-6 py-4 border-b border-neutral-100 flex items-center justify-between">
                                     <h4 class="text-sm font-semibold text-neutral-900 flex items-center gap-2">
                                         <i data-lucide="list" class="w-4 h-4 text-neutral-400"></i>
                                         <span x-text="window.t('models.uploader.queue_section')"></span>
                                     </h4>
+                                    <button @click="loadUploadTasks()" :disabled="uploadTasksLoading"
+                                            class="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-700 disabled:opacity-50"
+                                            x-text="window.t('models.uploader.queue_refresh')"></button>
                                 </div>
+                                <p x-show="uploadTasksLoading && !uploadTasksLoaded" role="status"
+                                   class="px-4 sm:px-6 py-4 text-sm text-neutral-500"
+                                   x-text="window.t('models.uploader.queue_loading')"></p>
+                                <p x-show="uploadTasksError" x-cloak role="alert"
+                                   class="px-4 sm:px-6 py-4 text-sm text-red-600"
+                                   x-text="uploadTasksError"></p>
+                                <p x-show="uploadTasksLoaded && !uploadTasksLoading && !uploadTasksError && uploadTasks.length === 0" x-cloak
+                                   class="px-4 sm:px-6 py-4 text-sm text-neutral-500"
+                                   x-text="window.t('models.uploader.queue_empty')"></p>
                                 <template x-for="task in uploadTasks" :key="task.task_id">
                                     <div class="px-4 sm:px-6 py-4 border-b border-neutral-50 last:border-b-0">
                                         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
@@ -1953,13 +1965,14 @@
                                                 </button>
                                             </div>
                                         </div>
-                                        <!-- Progress bar (for uploading) -->
+                                        <!-- The upload API does not report byte-level progress. -->
                                         <div x-show="task.status === 'uploading' || task.status === 'pending'" class="mt-2">
                                             <div class="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden">
-                                                <div class="h-full rounded-full transition-all duration-500"
-                                                     :class="task.status === 'pending' ? 'bg-amber-400 animate-pulse' : 'bg-blue-500'"
-                                                     :style="'width: ' + (task.status === 'pending' ? 100 : Math.max(task.progress, 5)) + '%'"></div>
+                                                <div class="h-full w-full rounded-full animate-pulse"
+                                                     :class="task.status === 'pending' ? 'bg-amber-400' : 'bg-blue-500'"></div>
                                             </div>
+                                            <p x-show="task.status === 'uploading'" class="mt-1 text-xs text-neutral-400"
+                                               x-text="window.t('models.uploader.queue_activity')"></p>
                                         </div>
                                         <!-- Error message -->
                                         <div x-show="task.status === 'failed' && task.error" x-cloak
