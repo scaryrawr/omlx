@@ -303,7 +303,7 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
         # with the head's last layer into one capture request.
         requested = list(kwargs.pop("capture_layer_ids", None) or [])
         exact_verify = getattr(self, "speculative_verify_logits", None)
-        if requested and "_EXACT_SPECULATIVE_VERIFIER" in getattr(
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
             exact_verify, "__globals__", {}
         ):
             kwargs["speculative_verify"] = True
