@@ -244,21 +244,33 @@ def test_model_settings_disable_other_cache_and_speculative_paths(benchmark):
     assert settings.turboquant_kv_enabled is False
 
 
-def test_vlm_stream_projects_terminal_output_token_ids():
+@pytest.mark.parametrize("with_logprobs", [False, True])
+def test_vlm_stream_projects_terminal_output_token_ids(with_logprobs):
     from omlx.engine.vlm import VLMBatchedEngine
+    from omlx.request import RequestOutput, TokenLogprob
 
     engine = VLMBatchedEngine("model")
     engine._loaded = True
     engine._vlm_model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_8"))
     core = SimpleNamespace()
+    token_logprobs = [
+        TokenLogprob(token_id=token_id, text=text, token_bytes=[ord(text)], logprob=-0.1)
+        for token_id, text in zip([20, 21, 22], "abc")
+    ]
+    first_logprobs = token_logprobs[:1] if with_logprobs else None
+    final_logprobs = token_logprobs[1:] if with_logprobs else None
 
     async def add_request(**_kwargs):
+        assert _kwargs["sampling_params"].logprobs is with_logprobs
         return "request"
 
     async def stream_outputs(_request_id):
-        yield SimpleNamespace(
+        assert _request_id == "request"
+        yield RequestOutput(
+            request_id=_request_id,
             output_text="a",
             new_text="a",
+            new_token_ids=[20],
             output_token_ids=[],
             prompt_tokens=2,
             completion_tokens=1,
@@ -266,10 +278,13 @@ def test_vlm_stream_projects_terminal_output_token_ids():
             finish_reason=None,
             tool_calls=None,
             cached_tokens=0,
+            logprobs=first_logprobs,
         )
-        yield SimpleNamespace(
+        yield RequestOutput(
+            request_id=_request_id,
             output_text="abc",
             new_text="bc",
+            new_token_ids=[21, 22],
             output_token_ids=[20, 21, 22],
             prompt_tokens=2,
             completion_tokens=3,
@@ -277,6 +292,7 @@ def test_vlm_stream_projects_terminal_output_token_ids():
             finish_reason="length",
             tool_calls=None,
             cached_tokens=0,
+            logprobs=final_logprobs,
         )
 
     async def abort_request(_request_id):
@@ -288,11 +304,22 @@ def test_vlm_stream_projects_terminal_output_token_ids():
     engine._engine = core
 
     async def collect():
-        return [output async for output in engine.stream_generate([10, 11])]
+        return [
+            output
+            async for output in engine.stream_generate([10, 11], logprobs=with_logprobs)
+        ]
 
     outputs = asyncio.run(collect())
+    assert len(outputs) == 2
     assert outputs[0].tokens == []
     assert outputs[-1].tokens == [20, 21, 22]
+    assert [output.new_text for output in outputs] == ["a", "bc"]
+    assert [output.text for output in outputs] == ["a", "abc"]
+    assert [output.prompt_tokens for output in outputs] == [2, 2]
+    assert [output.completion_tokens for output in outputs] == [1, 3]
+    assert [output.finished for output in outputs] == [False, True]
+    assert [output.finish_reason for output in outputs] == [None, "length"]
+    assert [output.logprobs for output in outputs] == [first_logprobs, final_logprobs]
 
 
 def test_main_keeps_stdout_as_json(benchmark, monkeypatch, capsys):
