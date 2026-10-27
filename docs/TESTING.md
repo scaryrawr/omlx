@@ -12,6 +12,11 @@ and chat-backed decision readouts. Enable native MTP in the isolated model setti
 to exercise multi-token verification too. Keep the server's base path and `HOME`
 isolated so startup cannot overwrite the running service's cluster shim.
 
+Run `uv run --python python3.12 pytest tests/integration/test_responses_tool_merge.py`
+for mocked protocol checks. The Anthropic cases verify that generation and token
+counting share the same tools, thinking, reasoning effort, and multimodal
+processor options, and that template errors remain visible on both endpoints.
+
 # Qwen3.5 text-only checkpoint tests
 
 Run `python -m pytest -q tests/test_oq.py -k Qwen35TextCheckpoint` to check
