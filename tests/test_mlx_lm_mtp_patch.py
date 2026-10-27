@@ -5120,6 +5120,38 @@ def _assert_exact_capture_cache(actual, expected, *, atol=0):
         assert getattr(left, "_speculation", None) is None
 
 
+@pytest.mark.parametrize("family", ["dense", "moe"])
+def test_mrope_mtp_verify_without_drafter_keeps_exact_transaction(family):
+    from mlx_vlm.speculative.cache_state import SpeculativeCacheTransaction
+
+    mx.random.seed(946)
+    model = _exact_capture_qwen(family, bits=4)
+    model._uses_mrope = True
+    model.set_batch_rope_deltas(mx.array([7.0]))
+    cache = model._language_model.make_cache()
+    mx.eval(model(mx.array([[3, 4, 5]]), cache=cache))
+    reference = copy.deepcopy(cache)
+    inputs = mx.array([[6, 7, 8, 9]])
+    result = bg._call_backbone(model, inputs, cache, n_confirmed=1)
+    transaction = result[2]
+    assert isinstance(transaction, SpeculativeCacheTransaction)
+    try:
+        mx.eval(result[0], result[1])
+        assert bg._chain_rollback(model, cache, 0, 3, transaction)
+        committed = bg._call_backbone(
+            model, inputs[:, :1], reference, n_confirmed=1
+        )
+        committed[2].commit(1)
+        _assert_exact_capture_cache(cache, reference, atol=1e-6)
+        next_input = mx.array([[10]])
+        actual = model(next_input, cache=cache)
+        expected = model(next_input, cache=reference)
+        assert mx.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+        assert mx.array_equal(mx.argmax(actual, -1), mx.argmax(expected, -1))
+    finally:
+        transaction.abort()
+
+
 @pytest.mark.parametrize(
     "family,layers,capture_ids,bits",
     [
