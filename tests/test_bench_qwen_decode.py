@@ -265,6 +265,7 @@ def test_vlm_stream_projects_terminal_output_token_ids():
             finished=False,
             finish_reason=None,
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
         )
         yield SimpleNamespace(
@@ -276,6 +277,7 @@ def test_vlm_stream_projects_terminal_output_token_ids():
             finished=True,
             finish_reason="length",
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
         )
 
