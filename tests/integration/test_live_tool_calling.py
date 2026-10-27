@@ -241,3 +241,71 @@ def test_live_chat_decision_readout(live_server, endpoint):
     assert len(probabilities) == 2
     assert all(0 <= probability <= 1 for probability in probabilities)
     assert sum(probabilities) == pytest.approx(1, abs=0.0002)
+
+
+def test_live_anthropic_tool_call_round_trip(live_server):
+    client, model = live_server
+    payload = {
+        "model": model,
+        "system": (
+            "Use multiply for arithmetic. After receiving the tool result, "
+            "answer with only the numeric result."
+        ),
+        "messages": [{"role": "user", "content": "What is 6 multiplied by 7?"}],
+        "tools": [
+            {
+                "name": "multiply",
+                "description": "Multiply two integers.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                    "required": ["a", "b"],
+                    "additionalProperties": False,
+                },
+            }
+        ],
+        "tool_choice": {"type": "any"},
+        "thinking": {"type": "disabled"},
+        "output_config": {"effort": "low"},
+        "temperature": 0,
+        "max_tokens": 128,
+    }
+    count_response = client.post(
+        "/v1/messages/count_tokens",
+        json={key: value for key, value in payload.items() if key != "max_tokens"},
+    )
+    count_response.raise_for_status()
+    response = client.post("/v1/messages", json=payload)
+    response.raise_for_status()
+    body = response.json()
+    assert body["stop_reason"] == "tool_use", body
+    assert body["usage"]["input_tokens"] == count_response.json()["input_tokens"]
+    assert body["usage"]["output_tokens"] > 0
+    (call,) = [block for block in body["content"] if block["type"] == "tool_use"]
+    assert call["id"]
+    assert call["name"] == "multiply"
+    assert call["input"] == {"a": 6, "b": 7}
+
+    payload["messages"].extend(
+        [
+            {"role": "assistant", "content": body["content"]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": call["id"], "content": "42"}
+                ],
+            },
+        ]
+    )
+    payload["tool_choice"] = {"type": "none"}
+    response = client.post("/v1/messages", json=payload)
+    response.raise_for_status()
+    body = response.json()
+    assert body["stop_reason"] == "end_turn", body
+    assert any(
+        block["type"] == "text" and "42" in block["text"] for block in body["content"]
+    ), body
+    assert not any(block["type"] == "tool_use" for block in body["content"]), body

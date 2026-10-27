@@ -78,7 +78,7 @@ class RecordingEngine(BaseEngine):
         self._model_type = "llama"
         self._grammar_compiler = grammar_compiler
         self.recorded_chat_kwargs: List[Dict[str, Any]] = []
-        self.recorded_count_calls: List[Dict[str, Any]] = []
+        self.recorded_count_calls: list[dict[str, Any]] = []
         self.started = False
 
     @property
@@ -475,6 +475,47 @@ class TestAnthropicCountTokensMatchesMessages:
                 count_call["chat_template_kwargs"]["enable_thinking"]
                 is (thinking["type"] == "enabled")
             )
+
+    def test_reasoning_effort_reaches_both_prompts(self, client_with_mcp, engine):
+        body = {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "output_config": {"effort": "high"},
+        }
+
+        response = client_with_mcp.post("/v1/messages", json={**body, "max_tokens": 16})
+        assert response.status_code == 200
+        response = client_with_mcp.post("/v1/messages/count_tokens", json=body)
+        assert response.status_code == 200
+
+        messages_call, count_call = engine.recorded_count_calls
+        assert count_call == messages_call
+        assert count_call["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert engine.recorded_chat_kwargs[-1]["chat_template_kwargs"] == (
+            count_call["chat_template_kwargs"]
+        )
+
+    def test_multimodal_options_reach_both_prompts(self, client_with_mcp, engine):
+        from types import SimpleNamespace
+
+        engine._model_type = "minicpmv4_7"
+        engine._engine = SimpleNamespace(_mlx_executor=None)
+        options = {"downsample_mode": "16x", "max_slice_nums": 2}
+        body = {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "mm_processor_kwargs": options,
+        }
+
+        response = client_with_mcp.post("/v1/messages", json={**body, "max_tokens": 16})
+        assert response.status_code == 200
+        response = client_with_mcp.post("/v1/messages/count_tokens", json=body)
+        assert response.status_code == 200
+
+        messages_call, count_call = engine.recorded_count_calls
+        assert count_call == messages_call
+        assert count_call["mm_processor_kwargs"] == options
+        assert engine.recorded_chat_kwargs[-1]["mm_processor_kwargs"] == options
 
     def test_template_error_is_400_on_both(self, client_with_mcp, engine, monkeypatch):
         # count_tokens used to fall back to "role: content" lines here and

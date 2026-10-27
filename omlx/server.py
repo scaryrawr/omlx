@@ -7982,7 +7982,7 @@ class _AnthropicPrompt:
     messages: list[dict]
     tools: list[dict] | None
     chat_template_kwargs: dict
-    mm_processor_kwargs: dict | None
+    mm_processor_kwargs: dict[str, str | int]
     is_partial: bool
     native_reasoning: bool
     thinking_budget: int | None
