@@ -567,15 +567,8 @@ class TestLaunchCommandFunction:
         assert catalog["text-model"].context_window == 8192
         assert catalog["text-model"].reasoning is False
         assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer saved-key"}
-        if expected_model == "vision-alias":
-            mock_model_load.assert_called_once_with(
-                "http://127.0.0.1:8000/v1/models/raw-vision-id/load",
-                headers={"Authorization": "Bearer saved-key"},
-                params={"wait": "false"},
-                timeout=3,
-            )
-        else:
-            mock_model_load.assert_not_called()
+        # Auto-selected defaults are not warmed; text-model is already loaded.
+        mock_model_load.assert_not_called()
 
     @pytest.mark.parametrize("tool", ["codex", "codex_app"])
     @pytest.mark.parametrize("load_failure", [None, "http", "timeout"])
