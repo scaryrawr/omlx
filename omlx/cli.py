@@ -744,8 +744,12 @@ def launch_command(args, extra_args: list[str] | None = None):
         ),
     )
 
-    if native_model_picker and not (
-        model_info.get("loaded") or model_info.get("is_loading")
+    # Only warm a model the user explicitly requested; an auto-selected
+    # default may never be used once the user switches models inside Codex.
+    if (
+        native_model_picker
+        and args.model
+        and not (model_info.get("loaded") or model_info.get("is_loading"))
     ):
         load_model_id = model_info.get("source_model_id") or model_info.get("id") or model
         try:
