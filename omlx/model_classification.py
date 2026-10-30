@@ -48,7 +48,7 @@ def normalize_nemotron_config(config: dict) -> dict:
     return result
 
 
-# Known embedding model types from mlx-embeddings
+# Known embedding model types served by mlx-vlm or oMLX native loaders
 EMBEDDING_MODEL_TYPES = {
     "embedding_gemma2",
     "bert",

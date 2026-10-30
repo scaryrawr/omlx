@@ -37,23 +37,23 @@ def test_engine_info_reports_mlx_vlm_version(monkeypatch):
     }
 
 
-def test_parse_commits_uses_mlx_embeddings_source_repo(tmp_path):
+def test_parse_commits_uses_pinned_source_repo(tmp_path):
     """Fallback commit links should point at the pinned package source repo."""
     pyproject = tmp_path / "pyproject.toml"
     sha = "71329b8a18f02273279ca766afb66ed0665a97f9"
     pyproject.write_text(
         "[project]\n"
         "dependencies = [\n"
-        f'  "mlx-embeddings @ git+https://github.com/scaryrawr/mlx-embeddings@{sha}",\n'
+        f'  "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@{sha}",\n'
         "]\n"
     )
     packages = {
-        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
+        "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
     }
 
     commits = admin_routes._parse_commits_from_pyproject(pyproject, packages)
 
-    assert commits["mlx-embeddings"] == {
+    assert commits["mlx-vlm"] == {
         "commit": sha,
-        "url": f"https://github.com/scaryrawr/mlx-embeddings/commit/{sha}",
+        "url": f"https://github.com/Blaizzy/mlx-vlm/commit/{sha}",
     }

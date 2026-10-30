@@ -6330,7 +6330,6 @@ def _get_engine_info() -> dict:
         "mlx": "https://github.com/ml-explore/mlx",
         "mlx-lm": "https://github.com/ml-explore/mlx-lm",
         "mlx-vlm": "https://github.com/Blaizzy/mlx-vlm",
-        "mlx-embeddings": "https://github.com/scaryrawr/mlx-embeddings",
         "mlx-audio": "https://github.com/Blaizzy/mlx-audio",
     }
 
