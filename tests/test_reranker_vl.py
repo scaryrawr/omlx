@@ -157,7 +157,6 @@ class TestVLRerankScoring:
         return model
 
     def test_rerank_vl_sorts_mlx_vlm_scores(self, tmp_path):
-        """_rerank_vl sorts mlx-vlm score_documents() output into RerankOutput."""
         model = self._vl_model(tmp_path)
         with patch(
             "omlx.models.reranker.score_documents",
@@ -179,7 +178,6 @@ class TestVLRerankScoring:
         ]
 
     def test_rerank_vl_with_image_documents(self, tmp_path):
-        """_rerank_vl threads decoded images through _build_vl_item."""
         model = self._vl_model(tmp_path)
         fake_img = object()
         with (

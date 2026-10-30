@@ -556,14 +556,12 @@ class _WordTokenizer:
         }
 
 
-def _text_embeds_model(embeds, config=None, **attrs):
+def _text_embeds_model(embeds, config=None):
     outputs = SimpleNamespace(
         text_embeds=mx.array(embeds), pooler_output=None, last_hidden_state=None
     )
     model = MagicMock(return_value=outputs, spec=["__call__"])
     model.config = config if config is not None else SimpleNamespace()
-    for name, value in attrs.items():
-        setattr(model, name, value)
     return model
 
 
@@ -581,7 +579,6 @@ class TestEmbeddingCompileFallback:
     """Tests for embedding compile path fallback behavior."""
 
     def test_compiled_path_fallback_on_failure(self):
-        """embed() falls back to the eager forward when the compiled path raises."""
         model = _eager_model(_WordTokenizer(), _text_embeds_model([[0.1, 0.2, 0.3]]))
         model._is_compiled = True
         model._compiled_embed = MagicMock(side_effect=RuntimeError("compile fail"))
@@ -592,7 +589,6 @@ class TestEmbeddingCompileFallback:
         assert result.embeddings[0] == pytest.approx([0.1, 0.2, 0.3], abs=1e-5)
 
     def test_eager_forward_receives_the_attention_mask(self):
-        """The eager path passes the tokenizer mask to the model."""
         model = _eager_model(
             _WordTokenizer(), _text_embeds_model([[0.5, 0.6], [0.1, 0.2]])
         )
@@ -617,7 +613,6 @@ class TestEmbeddingCompileFallback:
         assert tokenizer.calls[-1]["max_length"] == 40960
 
     def test_eager_usage_counts_tokens_left_after_truncation(self):
-        """Usage counts the tokens that survive truncation."""
         model = _eager_model(
             _WordTokenizer(), _text_embeds_model([[0.5, 0.6], [0.1, 0.2]])
         )
@@ -669,9 +664,9 @@ class TestEmbeddingCompileFallback:
             _text_embeds_model(
                 [[0.5, 0.6]],
                 SimpleNamespace(max_position_embeddings=8194),
-                max_input_length=8192,
             ),
         )
+        model.model.max_input_length = 8192
 
         model.embed(["test"])
         model.embed(["test"], max_length=1024)
@@ -707,7 +702,6 @@ class TestEmbeddingCompileFallback:
         assert result.embeddings[0] == pytest.approx([0.1, 0.2], abs=1e-5)
 
     def test_custom_processor_eager_path_calls_the_model(self):
-        """Custom embedding processors feed their prepared inputs to the model."""
         import mlx.core as mx
 
         from omlx.models.embedding import MLXEmbeddingModel
