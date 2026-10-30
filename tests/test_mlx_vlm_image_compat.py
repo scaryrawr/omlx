@@ -113,6 +113,38 @@ def image_apis():
     return image, edit_image
 
 
+@pytest.mark.parametrize("name", ["Qwen-Image-2.1-Turbo", "custom-checkpoint"])
+def test_native_generation_loader_prefers_supported_checkpoint_metadata(
+    image_apis, monkeypatch, tmp_path, name
+):
+    from mlx_vlm.models.mage_flow.model import MageFlowImageGenerationModel
+
+    image, _ = image_apis
+    root = tmp_path / name
+    for component in ("transformer", "vae", "text_encoder"):
+        directory = root / component
+        directory.mkdir(parents=True)
+        (directory / "config.json").write_text("{}")
+        (directory / "model.safetensors").write_bytes(b"weights")
+    (root / "text_encoder" / "tokenizer.json").write_text("{}")
+    (root / "model_index.json").write_text('{"_class_name":"MageFlowPipeline"}')
+    (root / "mlx_mage_flow.json").write_text('{"variant":"mage-flow-turbo"}')
+    calls = []
+    model = object()
+
+    def from_model_id(cls, model_id, **kwargs):
+        calls.append((model_id, kwargs))
+        return model
+
+    monkeypatch.setattr(
+        MageFlowImageGenerationModel, "from_model_id", classmethod(from_model_id)
+    )
+
+    assert image.is_image_generation_model(str(root))
+    assert image.load_image_model(str(root), task="generate") is model
+    assert calls == [(str(root), {"model_path": root})]
+
+
 @pytest.mark.parametrize(
     ("alias", "generation_name", "edit_name"),
     [
