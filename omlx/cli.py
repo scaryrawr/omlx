@@ -581,9 +581,8 @@ def launch_command(args, extra_args: list[str] | None = None):
     except Exception:
         pass
 
-    # Codex uses its native model selector, backed by a launch-time catalog.
-    # Other integrations retain the picker unless they resolve models server-side.
-    native_model_picker = tool_name in ("codex", "codex_app")
+    # These integrations use their native selector with a launch-time catalog.
+    native_model_picker = tool_name in ("codex", "codex_app", "copilot")
     model = args.model
     if not model and not integration.requires_model_selection:
         # The integration registers the server's whole model catalog, so
@@ -613,7 +612,10 @@ def launch_command(args, extra_args: list[str] | None = None):
         except (requests.RequestException, ValueError, KeyError) as exc:
             if native_model_picker and model:
                 print(f"Warning: could not list oMLX models: {exc}")
-                print("Only the requested model will be available in Codex.")
+                print(
+                    f"Only the requested model will be available in "
+                    f"{integration.display_name}."
+                )
             models_info_list = []
 
     if native_model_picker:
@@ -623,7 +625,12 @@ def launch_command(args, extra_args: list[str] | None = None):
             )
             sys.exit(1)
         if not model and models_info_list:
-            saved_model = _optional_str(settings.integrations.codex_model)
+            settings_name = (
+                "codex_model" if tool_name == "codex_app" else f"{tool_name}_model"
+            )
+            saved_model = _optional_str(
+                getattr(settings.integrations, settings_name, None)
+            )
             available_ids = {info["id"] for info in models_info_list}
             default_alias = _optional_str(
                 models_status_map.get(default_model or "", {}).get("model_alias")
@@ -636,7 +643,10 @@ def launch_command(args, extra_args: list[str] | None = None):
                 ),
                 models_info_list[0]["id"],
             )
-            print(f"Using model: {model} (switch models inside Codex)")
+            print(
+                f"Using model: {model} "
+                f"(switch models inside {integration.display_name})"
+            )
     elif not model and (cli_opus_model or cli_sonnet_model or cli_haiku_model):
         model = cli_sonnet_model or cli_opus_model or cli_haiku_model or ""
     elif not model and models_info_list:
@@ -750,7 +760,7 @@ def launch_command(args, extra_args: list[str] | None = None):
     )
 
     # Only warm a model the user explicitly requested; an auto-selected
-    # default may never be used once the user switches models inside Codex.
+    # default may never be used once the user switches models in the client.
     if (
         native_model_picker
         and args.model

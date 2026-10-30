@@ -428,7 +428,7 @@ class TestLaunchCommandFunction:
         with patch("requests.post") as post:
             yield post
 
-    @pytest.mark.parametrize("tool", ["codex", "codex_app"])
+    @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot"])
     @pytest.mark.parametrize(
         ("requested_model", "saved_model", "default_model", "expected_model"),
         [
@@ -517,7 +517,9 @@ class TestLaunchCommandFunction:
         settings = SimpleNamespace(
             server=SimpleNamespace(host="127.0.0.1", port=8000),
             auth=SimpleNamespace(api_key="saved-key"),
-            integrations=SimpleNamespace(codex_model=saved_model),
+            integrations=SimpleNamespace(
+                codex_model=saved_model, copilot_model=saved_model
+            ),
             claude_code=None,
         )
         args = argparse.Namespace(
@@ -570,7 +572,7 @@ class TestLaunchCommandFunction:
         # Auto-selected defaults are not warmed; text-model is already loaded.
         mock_model_load.assert_not_called()
 
-    @pytest.mark.parametrize("tool", ["codex", "codex_app"])
+    @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot"])
     @pytest.mark.parametrize("load_failure", [None, "http", "timeout"])
     def test_codex_warms_selected_profile_before_launch(
         self, tool, load_failure, mock_model_load, capsys
@@ -635,7 +637,7 @@ class TestLaunchCommandFunction:
             load_failure is not None
         )
 
-    @pytest.mark.parametrize("tool", ["codex", "codex_app"])
+    @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot"])
     def test_codex_model_listing_failure_keeps_explicit_model(self, tool, capsys):
         import requests
 
