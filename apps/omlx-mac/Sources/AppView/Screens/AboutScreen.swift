@@ -205,13 +205,6 @@ private struct CreditsSection: View {
             url: URL(string: "https://github.com/Blaizzy/mlx-vlm")!
         ),
         Credit(
-            name: "mlx-embeddings",
-            role: String(localized: "about.credits.mlx_embeddings.role",
-                         defaultValue: "Embedding + reranker models on MLX",
-                         comment: "About screen Credits row: role/description for the mlx-embeddings project"),
-            url: URL(string: "https://github.com/Blaizzy/mlx-embeddings")!
-        ),
-        Credit(
             name: "mlx-audio",
             role: String(localized: "about.credits.mlx_audio.role",
                          defaultValue: "Audio (STT / TTS / STS) models on MLX",
