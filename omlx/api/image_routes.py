@@ -10,9 +10,9 @@ import http.client
 import ipaddress
 import json
 import logging
-import os
 import socket
 import ssl
+import tempfile
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -48,8 +48,6 @@ MAX_IMAGE_DOWNLOAD_BYTES = MAX_IMAGE_INPUT_BYTES
 IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 20.0
 IMAGE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 5.0
 MAX_IMAGE_REDIRECTS = 3
-_IMAGE_TMPDIR_ENV = "OMLX_IMAGE_TMPDIR"
-_DEFAULT_IMAGE_TMPDIR = ".omlx_image_inputs"
 
 _IMAGE_SUFFIX_BY_MIME = {
     "image/png": ".png",
@@ -153,7 +151,6 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 
 def _get_engine_pool():
-    """Return the active EnginePool from server state."""
     from omlx.server import _server_state
 
     pool = _server_state.engine_pool
@@ -170,7 +167,6 @@ def _require_image_dependency() -> None:
 
 
 def _resolve_model(model_id: str) -> str:
-    """Resolve aliases the same way the server's other v1 routes do."""
     from omlx.server import resolve_model_id
 
     return resolve_model_id(model_id) or model_id
@@ -223,12 +219,6 @@ def _entry_for_model(pool: Any, model_id: str) -> Any | None:
 
 
 def _validate_image_entry(entry: Any | None, model_id: str, task: str) -> bool:
-    """Validate discovered model metadata when available.
-
-    Returns True when discovery metadata positively identifies the model as an
-    image model. Tests may provide duck-typed fake engines without importing
-    MLX or mlx-vlm, so final engine validation remains duck-typed too.
-    """
     if entry is None:
         return False
 
@@ -242,10 +232,6 @@ def _validate_image_entry(entry: Any | None, model_id: str, task: str) -> bool:
         )
 
     tasks = _normalize_task_names(getattr(entry, "tasks", None))
-    if not tasks:
-        metadata = getattr(entry, "image_metadata", None)
-        if isinstance(metadata, dict):
-            tasks = _normalize_task_names(metadata.get("tasks"))
     if tasks and task not in tasks:
         raise HTTPException(
             status_code=400,
@@ -283,10 +269,7 @@ def _validate_image_engine(
     method_name = "generate" if task == "generation" else "edit"
     has_task_method = callable(getattr(engine, method_name, None))
     looks_like_image = (
-        entry_is_image
-        or type(engine).__name__ == "ImageEngine"
-        or bool(stats_tasks)
-        or stats.get("backend") == "mlx-vlm"
+        entry_is_image or bool(stats_tasks) or stats.get("backend") == "mlx-vlm"
     )
     if not looks_like_image or not has_task_method:
         raise HTTPException(
@@ -342,46 +325,6 @@ async def _load_image_engine(model: str, task: str) -> tuple[str, Any, Any]:
     return resolved_model, engine, pool
 
 
-def _image_tmpdir() -> Path:
-    configured = os.environ.get(_IMAGE_TMPDIR_ENV)
-    root = (
-        Path(configured).expanduser()
-        if configured
-        else Path.cwd() / _DEFAULT_IMAGE_TMPDIR
-    )
-    resolved_root = root.resolve()
-    if configured:
-        for forbidden in (Path("/tmp").resolve(), Path("/var/tmp").resolve()):
-            if resolved_root == forbidden or forbidden in resolved_root.parents:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"{_IMAGE_TMPDIR_ENV} must not point inside a system "
-                        "temporary directory"
-                    ),
-                )
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not root.is_dir():
-        raise HTTPException(
-            status_code=500,
-            detail=f"{_IMAGE_TMPDIR_ENV} path is not a directory",
-        )
-    try:
-        os.chmod(root, 0o700)
-        mode = root.stat().st_mode & 0o777
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to secure image temporary directory: {exc}",
-        ) from exc
-    if mode != 0o700:
-        raise HTTPException(
-            status_code=500,
-            detail="Image temporary directory must have mode 0700",
-        )
-    return root
-
-
 def _safe_suffix(filename: str | None = None, content_type: str | None = None) -> str:
     if content_type:
         suffix = _IMAGE_SUFFIX_BY_MIME.get(content_type.split(";")[0].strip().lower())
@@ -413,7 +356,7 @@ def _validate_image_bytes(data: bytes) -> None:
         ) from exc
 
 
-def _write_image_bytes(data: bytes, suffix: str) -> str:
+def _write_image_bytes(data: bytes, suffix: str, temp_dir: Path) -> str:
     if len(data) > MAX_IMAGE_INPUT_BYTES:
         raise HTTPException(
             status_code=413,
@@ -421,21 +364,10 @@ def _write_image_bytes(data: bytes, suffix: str) -> str:
         )
     _validate_image_bytes(data)
 
-    path = _image_tmpdir() / f"{uuid.uuid4().hex}{suffix}"
+    path = temp_dir / f"{uuid.uuid4().hex}{suffix}"
     with path.open("xb") as handle:
         handle.write(data)
     return str(path)
-
-
-def _cleanup_paths(paths: Iterable[str | None]) -> None:
-    for raw_path in paths:
-        if not raw_path:
-            continue
-        path = Path(raw_path)
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning("Failed to remove image temp file %s: %s", path, exc)
 
 
 async def _read_upload(file: UploadFile | StarletteUploadFile) -> bytes:
@@ -675,7 +607,7 @@ def _download_http_image(url: str) -> tuple[bytes, str]:
         ) from exc
 
 
-async def _image_reference_to_path(reference: ImageReference) -> str:
+async def _image_reference_to_path(reference: ImageReference, temp_dir: Path) -> str:
     if reference.file_id is not None:
         raise HTTPException(
             status_code=400,
@@ -696,7 +628,7 @@ async def _image_reference_to_path(reference: ImageReference) -> str:
             status_code=400,
             detail="image_url must be a data URI or HTTP/HTTPS URL",
         )
-    return _write_image_bytes(data, suffix)
+    return _write_image_bytes(data, suffix, temp_dir)
 
 
 def _reject_unsupported_lora(
@@ -724,6 +656,15 @@ def _reject_unsupported_streaming(
         )
 
 
+def _validate_image_size(
+    request: ImageGenerationRequest | ImageEditRequest | ImageMultipartEditRequest,
+) -> None:
+    try:
+        request.parsed_size()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _reject_unsupported_response_format(
     request: ImageGenerationRequest | ImageEditRequest | ImageMultipartEditRequest,
 ) -> None:
@@ -745,11 +686,9 @@ def _request_engine_kwargs(
     return kwargs
 
 
-def _seed_for_output(seed: int | None, n: int, index: int) -> int | None:
+def _seed_for_output(seed: int | None, index: int) -> int | None:
     if seed is not None:
         return int(seed) + index
-    if n > 1:
-        return index
     return None
 
 
@@ -814,7 +753,7 @@ async def _run_generation(
             request.prompt,
             width=width,
             height=height,
-            seed=_seed_for_output(request.seed, request.n, index),
+            seed=_seed_for_output(request.seed, index),
             steps=request.steps,
             guidance=request.guidance,
             output_format=request.output_format,
@@ -846,7 +785,7 @@ async def _run_edit(
             mask_path=mask_path,
             width=width,
             height=height,
-            seed=_seed_for_output(request.seed, request.n, index),
+            seed=_seed_for_output(request.seed, index),
             steps=request.steps,
             guidance=request.guidance,
             output_format=request.output_format,
@@ -912,7 +851,7 @@ def _multipart_request_from_form(form: Any) -> ImageMultipartEditRequest:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
 
-async def _upload_to_path(value: object, field_name: str) -> str:
+async def _upload_to_path(value: object, field_name: str, temp_dir: Path) -> str:
     if not _is_upload(value):
         raise HTTPException(
             status_code=400, detail=f"'{field_name}' must be a file upload"
@@ -925,6 +864,7 @@ async def _upload_to_path(value: object, field_name: str) -> str:
             filename=getattr(upload, "filename", None),
             content_type=getattr(upload, "content_type", None),
         ),
+        temp_dir,
     )
 
 
@@ -934,6 +874,7 @@ async def create_image_generation(request: ImageGenerationRequest) -> ImageRespo
     _reject_unsupported_lora(request)
     _reject_unsupported_streaming(request)
     _reject_unsupported_response_format(request)
+    _validate_image_size(request)
     _require_image_dependency()
     resolved_model, engine, pool = await _load_image_engine(request.model, "generation")
     try:
@@ -980,36 +921,36 @@ async def _create_json_image_edit(request: Request) -> ImageResponse:
             status_code=400,
             detail="mask is not supported by mlx-vlm image models",
         )
+    _validate_image_size(edit_request)
     _require_image_dependency()
 
-    image_paths: list[str] = []
-    mask_path: str | None = None
-    try:
-        for reference in edit_request.images:
-            image_paths.append(await _image_reference_to_path(reference))
-        resolved_model, engine, pool = await _load_image_engine(
-            edit_request.model, "edit"
-        )
+    with tempfile.TemporaryDirectory(prefix="omlx-image-") as temp_dir:
+        image_dir = Path(temp_dir)
+        image_paths: list[str] = []
         try:
-            return await _run_edit(
-                resolved_model,
-                engine,
-                edit_request,
-                image_paths=image_paths,
-                mask_path=mask_path,
+            for reference in edit_request.images:
+                image_paths.append(await _image_reference_to_path(reference, image_dir))
+            resolved_model, engine, pool = await _load_image_engine(
+                edit_request.model, "edit"
             )
-        finally:
-            await pool.release_engine(resolved_model)
-    except HTTPException:
-        raise
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        _cleanup_paths([*image_paths, mask_path])
+            try:
+                return await _run_edit(
+                    resolved_model,
+                    engine,
+                    edit_request,
+                    image_paths=image_paths,
+                    mask_path=None,
+                )
+            finally:
+                await pool.release_engine(resolved_model)
+        except HTTPException:
+            raise
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 async def _create_multipart_image_edit(request: Request) -> ImageResponse:
@@ -1035,33 +976,33 @@ async def _create_multipart_image_edit(request: Request) -> ImageResponse:
             status_code=400,
             detail="mask is not supported by mlx-vlm image models",
         )
+    _validate_image_size(edit_request)
     _require_image_dependency()
 
-    image_paths: list[str] = []
-    mask_path: str | None = None
-    try:
-        for upload in uploads:
-            image_paths.append(await _upload_to_path(upload, "image"))
-        resolved_model, engine, pool = await _load_image_engine(
-            edit_request.model, "edit"
-        )
+    with tempfile.TemporaryDirectory(prefix="omlx-image-") as temp_dir:
+        image_dir = Path(temp_dir)
+        image_paths: list[str] = []
         try:
-            return await _run_edit(
-                resolved_model,
-                engine,
-                edit_request,
-                image_paths=image_paths,
-                mask_path=mask_path,
+            for upload in uploads:
+                image_paths.append(await _upload_to_path(upload, "image", image_dir))
+            resolved_model, engine, pool = await _load_image_engine(
+                edit_request.model, "edit"
             )
-        finally:
-            await pool.release_engine(resolved_model)
-    except HTTPException:
-        raise
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        _cleanup_paths([*image_paths, mask_path])
+            try:
+                return await _run_edit(
+                    resolved_model,
+                    engine,
+                    edit_request,
+                    image_paths=image_paths,
+                    mask_path=None,
+                )
+            finally:
+                await pool.release_engine(resolved_model)
+        except HTTPException:
+            raise
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc

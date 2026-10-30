@@ -1,8 +1,7 @@
 # mlx-vlm image compatibility
 
-The pinned mlx-vlm version includes native Z-Image and ERNIE-Image generation
-and img2img support. oMLX no longer vendors either model package.
+oMLX delegates image model detection, per-model sampling defaults and input
+validation to mlx-vlm.
 
-The small runtime wrappers preserve oMLX's nullable request-default behavior.
-They also force native Z-Image tokenizer loading to remain local with
+This patch only forces the native Z-Image tokenizer to load locally with
 `trust_remote_code=False`, preserving oMLX's safe model-loading default.

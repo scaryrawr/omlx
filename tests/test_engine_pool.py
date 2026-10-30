@@ -594,15 +594,11 @@ class TestEnginePoolErrors:
         assert pool.get_entry("model-a") is None
         assert pool.get_entry("model-a") is None
 
-    def test_image_engine_missing_mlx_vlm_raises_model_loading_error(self, tmp_path):
+    def test_image_engine_missing_mlx_vlm_raises_model_loading_error(
+        self, tmp_path, write_z_image_checkpoint
+    ):
         """Image engine load fails fast when mlx-vlm is unavailable."""
-        model_dir = tmp_path / "Z-Image-Turbo-mxfp8"
-        model_dir.mkdir()
-        (model_dir / "tokenizer.json").write_text("{}")
-        (model_dir / "transformer").mkdir()
-        (model_dir / "transformer" / "0.safetensors").write_text("weights")
-        (model_dir / "vae").mkdir()
-        (model_dir / "vae" / "0.safetensors").write_text("weights")
+        write_z_image_checkpoint(tmp_path / "Z-Image-Turbo-mxfp8")
 
         pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(tmp_path))

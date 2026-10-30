@@ -105,6 +105,7 @@ def test_parse_image_size_helper():
     assert parse_image_size("auto") == (None, None)
     assert parse_image_size("1024x768") == (1024, 768)
     assert parse_image_size(" 1536 X 1024 ") == (1536, 1024)
+    assert parse_image_size("2048x2048") == (2048, 2048)
     assert ImageGenerationRequest(
         prompt="a fox",
         model="image-model",
@@ -115,6 +116,8 @@ def test_parse_image_size_helper():
         parse_image_size("wide")
     with pytest.raises(ValueError, match="positive"):
         parse_image_size("0x512")
+    with pytest.raises(ValueError, match="size area"):
+        parse_image_size("2049x2048")
 
 
 def test_edit_request_accepts_file_id_and_image_url_refs():

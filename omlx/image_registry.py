@@ -317,63 +317,6 @@ IMAGE_DEFAULT_ESTIMATED_SIZES = {
     for alias in _aliases(spec.base_model, *spec.discovery_aliases)
 }
 
-# Defaults documented by mlx-vlm model configurations. Request values and
-# manifest defaults always override these family defaults.
-IMAGE_DEFAULTS: dict[str, dict[str, int | float]] = {
-    "qwen-image-2-1": {"default_steps": 30, "default_guidance": 1.0},
-    "qwen-image-2-1-turbo": {"default_steps": 8, "default_guidance": 1.0},
-    "flux2-klein-4b": {"default_steps": 4, "default_guidance": 1.0},
-    "flux2-klein-9b": {"default_steps": 4, "default_guidance": 1.0},
-    "flux2-klein-base-4b": {"default_steps": 4, "default_guidance": 1.0},
-    "flux2-klein-base-9b": {"default_steps": 4, "default_guidance": 1.0},
-    "flux2-klein-9b-kv": {"default_steps": 4, "default_guidance": 1.0},
-    "mage-flow-base": {"default_steps": 30, "default_guidance": 5.0},
-    "mage-flow": {"default_steps": 20, "default_guidance": 5.0},
-    "mage-flow-turbo": {"default_steps": 4, "default_guidance": 1.0},
-    "mage-flow-edit-base": {"default_steps": 30, "default_guidance": 5.0},
-    "mage-flow-edit": {"default_steps": 30, "default_guidance": 5.0},
-    "mage-flow-edit-turbo": {"default_steps": 4, "default_guidance": 1.0},
-    "ming-image-0-1-design": {"default_steps": 12, "default_guidance": 1.0},
-    "z-image": {
-        "default_steps": 50,
-        "default_guidance": 4.0,
-        "default_image_strength": 0.6,
-    },
-    "z-image-turbo": {
-        "default_steps": 9,
-        "default_guidance": 0.0,
-        "default_image_strength": 0.6,
-    },
-    "ernie-image": {
-        "default_steps": 50,
-        "default_guidance": 4.0,
-        "default_image_strength": 0.6,
-    },
-    "ernie-image-turbo": {
-        "default_steps": 8,
-        "default_guidance": 1.0,
-        "default_image_strength": 0.6,
-    },
-}
-
-IMAGE_TASK_DEFAULTS: dict[tuple[str, ImageTask], dict[str, int | float]] = {
-    ("qwen-image-2-1", "edit"): {"default_steps": 40},
-    # The Z-Image Turbo adapter uses eight denoising steps for img2img while
-    # its text-to-image configuration uses nine.
-    ("z-image-turbo", "edit"): {"default_steps": 8},
-}
-
-
-def get_image_defaults(
-    base_model: str, task: ImageTask | None = None
-) -> dict[str, int | float]:
-    """Return family and optional task-specific defaults for an image alias."""
-    canonical = _canonical_base_model(base_model)
-    defaults = dict(IMAGE_DEFAULTS.get(canonical, {}))
-    if task is not None:
-        defaults.update(IMAGE_TASK_DEFAULTS.get((canonical, task), {}))
-    return defaults
-
 
 def _matches_image_model_prefix(normalized_name: str, alias: str) -> bool:
     if normalized_name == alias or normalized_name.startswith(f"{alias}-"):
