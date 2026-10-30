@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import tempfile
 import threading
-from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,8 +101,6 @@ def image_client(monkeypatch):
     app = FastAPI()
     app.include_router(image_routes.router)
 
-    temp_dir = Path(".omlx_image_inputs_test")
-    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(temp_dir))
     monkeypatch.setattr(
         image_routes, "_resolve_model", lambda model: "resolved-image-model"
     )
@@ -113,17 +109,38 @@ def image_client(monkeypatch):
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
 
-    for path in temp_dir.glob("*"):
-        path.unlink()
-    with suppress(OSError):
-        temp_dir.rmdir()
-
 
 def _install_pool(monkeypatch, tasks: list[str]) -> FakeImageEngine:
     engine = FakeImageEngine(tasks)
     pool = FakePool(engine, tasks)
     monkeypatch.setattr(image_routes, "_get_engine_pool", lambda: pool)
     return engine
+
+
+@pytest.mark.parametrize("task", ["generation", "edit"])
+@pytest.mark.parametrize("seed", [None, 0])
+def test_batch_preserves_optional_seed(image_client, monkeypatch, task, seed):
+    engine = _install_pool(monkeypatch, [task])
+    fields = {"model": "alias", "prompt": "a square", "n": 2}
+    if seed is not None:
+        fields["seed"] = seed
+
+    if task == "generation":
+        response = image_client.post("/v1/images/generations", json=fields)
+        calls = engine.generate_calls
+    else:
+        response = image_client.post(
+            "/v1/images/edits",
+            data=fields,
+            files={"image": ("input.png", _png_bytes(), "image/png")},
+        )
+        calls = engine.edit_calls
+
+    assert response.status_code == 200
+    assert len(response.json()["data"]) == 2
+    assert [call["seed"] for call in calls] == (
+        [None, None] if seed is None else [seed, seed + 1]
+    )
 
 
 def test_generation_forwards_sigmas_and_reports_backend_effective_recipe(
@@ -231,7 +248,6 @@ async def test_cancelled_edit_keeps_inputs_and_pool_lease_until_worker_exits(
     monkeypatch.setattr(
         image_routes, "_resolve_model", lambda _: "resolved-image-model"
     )
-    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(tmp_path / "inputs"))
 
     async def payload():
         return {
@@ -513,7 +529,7 @@ def test_json_edit_missing_mlx_vlm_returns_503_before_download_or_engine_pool(
             "its required mlx-vlm dependency."
         )
 
-    async def image_reference_to_path(reference):
+    async def image_reference_to_path(reference, temp_dir):
         nonlocal path_conversion_touched
         path_conversion_touched = True
         raise AssertionError("image refs should not be converted")
@@ -579,7 +595,7 @@ def test_json_edit_rejects_mask_before_image_fetch_or_engine_load(
 def test_json_edit_rejects_url_response_format_before_image_fetch(
     image_client, monkeypatch
 ):
-    def image_reference_to_path(_reference):
+    def image_reference_to_path(_reference, _temp_dir):
         raise AssertionError("image references should not be resolved")
 
     def get_engine_pool():
@@ -836,38 +852,86 @@ def test_get_pinned_response_closes_connection_on_setup_error(monkeypatch):
     assert instances[0].closed is True
 
 
-def test_default_image_tmpdir_allows_cwd_under_system_tmp(monkeypatch):
-    monkeypatch.delenv("OMLX_IMAGE_TMPDIR", raising=False)
-    with tempfile.TemporaryDirectory(dir=Path("/tmp").resolve()) as tmp:
-        monkeypatch.chdir(tmp)
-        path = image_routes._image_tmpdir()
-
-        assert path == Path(tmp) / ".omlx_image_inputs"
-        assert path.is_dir()
-
-
-def test_configured_image_tmpdir_rejects_system_tmp(monkeypatch):
-    with tempfile.TemporaryDirectory(dir=Path("/tmp").resolve()) as tmp:
-        monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(Path(tmp) / "images"))
-
-        with pytest.raises(HTTPException) as exc_info:
-            image_routes._image_tmpdir()
-
-    assert exc_info.value.status_code == 500
-    assert "system temporary directory" in exc_info.value.detail
-
-
-def test_default_image_tmpdir_secures_existing_directory(monkeypatch, tmp_path):
-    monkeypatch.delenv("OMLX_IMAGE_TMPDIR", raising=False)
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("worker_fails", [False, True])
+def test_edits_use_private_request_directories_and_remove_them(
+    image_client, monkeypatch, tmp_path, multipart, worker_fails
+):
     monkeypatch.chdir(tmp_path)
-    image_dir = tmp_path / ".omlx_image_inputs"
-    image_dir.mkdir(mode=0o777)
-    image_dir.chmod(0o777)
+    engine = _install_pool(monkeypatch, ["edit"])
+    directories = []
+    original_edit = engine.edit
 
-    path = image_routes._image_tmpdir()
+    async def edit(prompt, image_paths, **kwargs):
+        directories.append(Path(image_paths[0]).parent)
+        assert directories[-1].stat().st_mode & 0o777 == 0o700
+        assert all(Path(path).parent == directories[-1] for path in image_paths)
+        result = await original_edit(prompt, image_paths, **kwargs)
+        if worker_fails:
+            raise ValueError("edit failed")
+        return result
 
-    assert path == image_dir
-    assert path.stat().st_mode & 0o777 == 0o700
+    monkeypatch.setattr(engine, "edit", edit)
+    for _ in range(2):
+        if multipart:
+            response = image_client.post(
+                "/v1/images/edits",
+                data={"model": "alias", "prompt": "edit"},
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+            )
+        else:
+            response = image_client.post(
+                "/v1/images/edits",
+                json={
+                    "model": "alias",
+                    "prompt": "edit",
+                    "images": [
+                        {
+                            "image_url": "data:image/png;base64,"
+                            + base64.b64encode(_png_bytes()).decode("ascii"),
+                        }
+                    ],
+                },
+            )
+        assert response.status_code == (400 if worker_fails else 200)
+        assert not directories[-1].exists()
+        assert engine.pool.in_use == 0
+        engine.seen_paths.clear()
+
+    assert directories[0] != directories[1]
+    assert not (tmp_path / ".omlx_image_inputs").exists()
+
+
+@pytest.mark.parametrize("endpoint", ["generations", "json-edits", "multipart-edits"])
+@pytest.mark.parametrize("size", ["2049x2048", "wide"])
+def test_invalid_output_size_is_rejected_before_loading(
+    image_client, monkeypatch, endpoint, size
+):
+    engine = _install_pool(monkeypatch, ["generation", "edit"])
+    payload = {"model": "alias", "prompt": "a fox", "size": size}
+    if endpoint == "multipart-edits":
+        response = image_client.post(
+            "/v1/images/edits",
+            data=payload,
+            files={"image": ("input.png", b"not an image", "image/png")},
+        )
+    else:
+        if endpoint == "json-edits":
+            payload["images"] = [{"image_url": "https://example.com/input.png"}]
+        response = image_client.post(
+            (
+                "/v1/images/edits"
+                if endpoint == "json-edits"
+                else "/v1/images/generations"
+            ),
+            json=payload,
+        )
+    assert response.status_code == 400
+    expected_error = "size area" if size == "2049x2048" else "WIDTHxHEIGHT"
+    assert expected_error in response.json()["detail"]
+    assert engine.pool.get_engine_calls == []
+    assert engine.generate_calls == []
+    assert engine.edit_calls == []
 
 
 def test_validate_image_bytes_rejects_excessive_pixels(monkeypatch):
@@ -939,7 +1003,7 @@ def test_multipart_edit_missing_mlx_vlm_returns_503_before_file_processing_or_en
             "its required mlx-vlm dependency."
         )
 
-    async def upload_to_path(value, field_name):
+    async def upload_to_path(value, field_name, temp_dir):
         nonlocal upload_touched
         upload_touched = True
         raise AssertionError("uploads should not be converted")
@@ -1050,7 +1114,7 @@ def test_multipart_edit_rejects_mask_before_upload_processing(
 def test_multipart_edit_rejects_url_response_format_before_upload_processing(
     image_client, monkeypatch
 ):
-    def upload_to_path(_value, _field_name):
+    def upload_to_path(_value, _field_name, _temp_dir):
         raise AssertionError("uploads should not be processed")
 
     def get_engine_pool():
