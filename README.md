@@ -303,6 +303,23 @@ desktop app to apply the refreshed configuration. The CLI uses process-scoped
 provider/catalog overrides without changing your `config.toml`; the desktop
 integration backs up and updates that file as before. A custom `CODEX_HOME` is
 respected, and oMLX's generated catalogs do not overwrite other catalog files.
+
+#### Copilot CLI model switching
+
+Run `omlx launch copilot` or `omlx launch copilot --model your-model-id`.
+Like Codex, Copilot starts with the saved integration model, the oMLX default,
+or the first available chat model, and its `/model` picker can switch among
+the server's chat models. The launch-time provider registry includes per-model
+context limits, image support and available reasoning-effort levels; relaunch
+to refresh it after model changes. Explicitly selected models start loading in
+the background. When a context limit is unavailable, the registry uses a
+32,768-token fallback; this does not increase a model's actual capacity.
+
+oMLX runs Copilot in offline mode with a private temporary `providers.json`
+using the Responses API. It does not modify your existing provider registry;
+that registry is not available in the oMLX-launched session. The temporary file
+contains the server's bearer token and is removed when Copilot exits normally.
+This requires a Copilot CLI version supporting `COPILOT_PROVIDERS_CONFIG`.
 User-specified global context/reasoning overrides in CLI configuration can still
 take precedence over catalog metadata; the desktop integration clears these
 overrides so limits follow the selected model.

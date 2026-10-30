@@ -1,15 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
 """GitHub Copilot CLI integration."""
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import tempfile
+from pathlib import Path
 
-from omlx.integrations.base import Integration, IntegrationContext
+from omlx.integrations.base import Integration, IntegrationContext, IntegrationModel
+from omlx.integrations.codex import is_codex_chat_model
 from omlx.utils.install import get_cli_command_prefix
 
 
+def copilot_provider_config(ctx: IntegrationContext) -> dict:
+    """Build a process-scoped provider registry for available chat models."""
+    models = {
+        model.id: model
+        for model in ctx.models
+        if is_codex_chat_model(
+            {"model_type": model.model_type, **ctx.models_status_map.get(model.id, {})}
+        )
+    }
+    if ctx.model and ctx.model not in models and is_codex_chat_model(
+        {"model_type": ctx.model_type, **ctx.models_status_map.get(ctx.model, {})}
+    ):
+        models[ctx.model] = IntegrationModel(
+            id=ctx.model,
+            context_window=ctx.context_window,
+            model_type=ctx.model_type,
+            reasoning=ctx.reasoning,
+            reasoning_effort_options=ctx.reasoning_effort_options,
+        )
+
+    entries = []
+    for model in models.values():
+        status = ctx.models_status_map.get(model.id, {})
+        context_window = model.context_window
+        if not isinstance(context_window, int) or not 0 < context_window <= 4294967295:
+            context_window = 32768
+        supports: dict[str, bool | list[str]] = {"vision": model.model_type == "vlm"}
+        entry: dict[str, object] = {
+            "id": model.id,
+            "provider": "omlx",
+            "maxPromptTokens": context_window,
+            "maxContextWindowTokens": context_window,
+            "capabilities": {"supports": supports},
+        }
+        max_tokens = status.get("max_tokens")
+        if model.id == ctx.model and ctx.max_tokens is not None:
+            max_tokens = ctx.max_tokens
+        if isinstance(max_tokens, int) and 0 < max_tokens <= 4294967295:
+            entry["maxOutputTokens"] = max_tokens
+        efforts = [
+            effort
+            for effort in model.reasoning_effort_options
+            if effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+        ]
+        if efforts and model.reasoning is not False:
+            supports["reasoning_effort"] = efforts
+        entries.append(entry)
+
+    return {
+        "providers": [
+            {
+                "name": "omlx",
+                "type": "openai",
+                "baseUrl": ctx.openai_base_url,
+                "wireApi": "responses",
+                "bearerToken": ctx.auth_token,
+            }
+        ],
+        "models": entries,
+    }
+
+
 class CopilotIntegration(Integration):
-    """Copilot integration using custom provider BYOK offline mode."""
+    """Copilot integration using a private provider registry in offline mode."""
 
     def __init__(self):
         super().__init__(
@@ -21,34 +89,31 @@ class CopilotIntegration(Integration):
         )
 
     def get_command(self, ctx: IntegrationContext) -> str:
-        return (
-            f"{get_cli_command_prefix()} launch copilot "
-            f"--model {ctx.model or 'select-a-model'}"
-        )
+        command = f"{get_cli_command_prefix()} launch copilot"
+        return f"{command} --model {ctx.model}" if ctx.model else command
 
     def launch(self, ctx: IntegrationContext) -> None:
         env = self._scrubbed_env()
-        env["COPILOT_PROVIDER_BASE_URL"] = ctx.openai_base_url
-        env["COPILOT_PROVIDER_TYPE"] = "openai"
+        for key in list(env):
+            if key.startswith("COPILOT_PROVIDER_") or key == "COPILOT_MODEL":
+                del env[key]
         env["COPILOT_OFFLINE"] = "true"
 
-        # Copilot CLI appears to have issues with the completions endpoint, responses appears to work as expected.
-        env["COPILOT_PROVIDER_WIRE_API"] = "responses"
-        env["COPILOT_PROVIDER_BEARER_TOKEN"] = ctx.auth_token
-
+        args = ["copilot"]
         if ctx.model:
-            env["COPILOT_MODEL"] = ctx.model
-            env["COPILOT_PROVIDER_MODEL_ID"] = ctx.model
-            env["COPILOT_PROVIDER_WIRE_MODEL"] = ctx.model
+            args.extend(["--model", f"omlx/{ctx.model}"])
+        args.extend(ctx.extra_args)
 
-        if ctx.context_window:
-            env["COPILOT_PROVIDER_MAX_PROMPT_TOKENS"] = str(ctx.context_window)
-        if ctx.max_tokens:
-            env["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] = str(ctx.max_tokens)
-
-        print(f"Launching Copilot CLI with model {ctx.model}...")
-        if ctx.context_window:
-            print(f"Max prompt tokens: {ctx.context_window:,}")
-        if ctx.max_tokens:
-            print(f"Max output tokens: {ctx.max_tokens:,}")
-        os.execvpe("copilot", ["copilot", *ctx.extra_args], env)
+        # The registry contains a literal bearer token; retain it only while
+        # the CLI and its subagents may need to read it.
+        with tempfile.TemporaryDirectory(prefix="omlx-copilot-") as directory:
+            config_path = Path(directory) / "providers.json"
+            fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as config:
+                json.dump(copilot_provider_config(ctx), config, ensure_ascii=False)
+            env["COPILOT_PROVIDERS_CONFIG"] = str(config_path)
+            result = subprocess.run(args, env=env, check=False)
+        if result.returncode:
+            raise SystemExit(
+                128 - result.returncode if result.returncode < 0 else result.returncode
+            )
