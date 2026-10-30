@@ -2322,6 +2322,32 @@ class TestMlxVlmEmbeddingLoading:
         load_model.assert_not_called()
         load_processor.assert_not_called()
 
+    def test_declared_pooling_config_is_preserved_for_mlx_vlm(self, tmp_path):
+        pooling_config = {
+            "pooling_mode_max_tokens": True,
+            "include_prompt": True,
+            "word_embedding_dimension": 4,
+        }
+        pooling_dir = tmp_path / "1_Pooling"
+        pooling_dir.mkdir()
+        (pooling_dir / "config.json").write_text(json.dumps(pooling_config))
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "lfm2"}))
+        loaded = SimpleNamespace(config=SimpleNamespace(hidden_size=4))
+        processor = SimpleNamespace(tokenizer=object())
+        model = MLXEmbeddingModel(str(tmp_path))
+
+        with (
+            patch(
+                "omlx.models.embedding.load_embedding_model", return_value=loaded
+            ),
+            patch("omlx.models.embedding.load_processor", return_value=processor),
+            patch.object(model, "_try_compile", return_value=False),
+        ):
+            model.load()
+
+        assert model._pooling_mode == "max"
+        assert loaded.pooling_config == pooling_config
+
 
 class TestMlxVlmEmbeddingGemma2:
     """EmbeddingGemma 2 loads through mlx-vlm with an image input adapter."""
@@ -2632,6 +2658,16 @@ class TestSiglipEmbedding:
         np.testing.assert_allclose(
             np.array(output.embeddings), np.array(expected), atol=1e-5
         )
+
+    def test_untruncated_input_cannot_exceed_the_position_table(self, tmp_path):
+        model, _, _ = self._load(tmp_path)
+        model._is_compiled = False
+        model._forward = MagicMock()
+
+        with pytest.raises(ValueError, match="position table limit of 8"):
+            model.embed(["one two three four five six seven eight"], truncation=False)
+
+        model._forward.assert_not_called()
 
     def test_image_inputs_are_rejected(self, tmp_path):
         model, _, _ = self._load(tmp_path)

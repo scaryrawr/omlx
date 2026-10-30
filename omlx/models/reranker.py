@@ -41,13 +41,15 @@ from .base_model import ENCODER_BATCH_TOKEN_BUDGET, token_budget_batches
 logger = logging.getLogger(__name__)
 
 
-def _classifier_scores(outputs: Any) -> mx.array:
-    """Return activated per-label scores from a sequence classifier output."""
+def _classifier_scores(outputs: Any, is_regression: bool = False) -> mx.array:
+    """Return classifier scores, preserving raw logits for regression heads."""
     pooled = getattr(outputs, "pooler_output", None)
     if pooled is not None:
         return pooled
     logits = getattr(outputs, "logits", None)
     if logits is not None:
+        if is_regression:
+            return logits
         if logits.shape[-1] > 1:
             return mx.softmax(logits, axis=-1)
         return mx.sigmoid(logits)
@@ -131,6 +133,7 @@ class MLXRerankerModel:
         self.processor = None
         self._loaded = False
         self._num_labels: int | None = None
+        self._is_regression = False
         self._is_causal_lm = False
         self._is_jina_reranker = False
         self._is_vl_reranker = False
@@ -831,9 +834,20 @@ class MLXRerankerModel:
                     model_path=model_path,
                     trust_remote_code=self.trust_remote_code,
                 )
-                self._num_labels = int(
-                    config.get("num_labels") or len(config.get("id2label", {})) or 1
+                pipeline_config = config.get("pipeline_config")
+                binary_sigmoid = isinstance(pipeline_config, dict) and bool(
+                    pipeline_config.get("binary_sigmoid")
                 )
+                self._is_regression = bool(config.get("is_regression"))
+                id2label = config.get("id2label")
+                if self._is_regression or binary_sigmoid:
+                    self._num_labels = 1
+                else:
+                    self._num_labels = int(
+                        config.get("num_labels")
+                        or (len(id2label) if isinstance(id2label, dict) else 0)
+                        or 1
+                    )
                 # The public reranker loader rejects multi-label classifiers.
                 self.model = load_encoder_model(
                     model_path,
@@ -898,7 +912,9 @@ class MLXRerankerModel:
         try:
 
             def _compiled_seq_logits(inputs):
-                return _classifier_scores(base_model(**inputs))
+                return _classifier_scores(
+                    base_model(**inputs), is_regression=self._is_regression
+                )
 
             # NOTE: use default compile mode. shapeless=True can fail shape
             # inference for some linear ops in embedding/reranker stacks.
@@ -930,6 +946,7 @@ class MLXRerankerModel:
         self.processor = None
         self._loaded = False
         self._num_labels = None
+        self._is_regression = False
         self._is_causal_lm = False
         self._is_jina_reranker = False
         self._is_vl_reranker = False
@@ -1381,7 +1398,8 @@ class MLXRerankerModel:
         if not callable(self.model):
             raise ValueError("SequenceClassification model is not initialized.")
         return _classifier_scores(
-            self.model(input_ids=input_ids, attention_mask=attention_mask)
+            self.model(input_ids=input_ids, attention_mask=attention_mask),
+            is_regression=self._is_regression,
         )
 
     def _rerank_seq_classification(

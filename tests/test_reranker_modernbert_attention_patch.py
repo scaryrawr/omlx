@@ -93,6 +93,59 @@ def test_modernbert_checkpoint_preserves_labels_activation_and_trust(
     )
 
 
+@pytest.mark.parametrize(
+    ("flags", "id2label", "expected_labels", "is_regression"),
+    [
+        ({"is_regression": True}, {"0": "LABEL_0", "1": "LABEL_1"}, 1, True),
+        (
+            {"pipeline_config": {"binary_sigmoid": True}},
+            {"0": "LABEL_0", "1": "LABEL_1"},
+            1,
+            False,
+        ),
+        ({}, None, 1, False),
+    ],
+)
+@pytest.mark.parametrize("compiled", [False, True])
+def test_modernbert_single_output_flags_and_regression_scores(
+    tmp_path, flags, id2label, expected_labels, is_regression, compiled
+):
+    config = {
+        "architectures": ["ModernBertForSequenceClassification"],
+        "model_type": "modernbert",
+        "vocab_size": 32,
+        "hidden_size": 8,
+        "num_hidden_layers": 1,
+        "intermediate_size": 16,
+        "num_attention_heads": 2,
+        "id2label": id2label,
+        **flags,
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    reference = SequenceClassificationModel(
+        ModelConfig.from_dict({**config, "num_labels": expected_labels})
+    )
+    mx.save_safetensors(
+        str(tmp_path / "model.safetensors"), dict(tree_flatten(reference.parameters()))
+    )
+    with patch.object(reranker_module, "load_processor", return_value=object()):
+        model = MLXRerankerModel(str(tmp_path))
+        model.load()
+
+    assert model.num_labels == expected_labels
+    assert model._is_regression is is_regression
+    model._is_compiled = compiled
+    ids = mx.array([[1, 2, 3]])
+    mask = mx.ones_like(ids)
+    logits = reference(ids, attention_mask=mask).logits
+    expected = logits if is_regression else mx.sigmoid(logits)
+    np.testing.assert_allclose(
+        np.array(model._seq_classification_logits(ids, mask)),
+        np.array(expected),
+        atol=1e-6,
+    )
+
+
 def test_modernbert_custom_model_code_is_rejected_before_loading(tmp_path):
     (tmp_path / "config.json").write_text(
         json.dumps(

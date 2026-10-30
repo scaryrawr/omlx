@@ -219,6 +219,7 @@ class MLXEmbeddingModel:
         self._pad_to_max_length = False
         self._pooling_mode: str | None = None
         self._pooling_source: str = "not resolved"
+        self._pooling_config: dict[str, Any] | None = None
         self._media_processor = None
         self._supports_audio = False
 
@@ -320,6 +321,7 @@ class MLXEmbeddingModel:
                 return mode
         for key, mode in (
             ("pooling_mode_cls_token", "cls"),
+            ("pooling_mode_max_tokens", "max"),
             ("pooling_mode_lasttoken", "lasttoken"),
             ("pooling_mode_mean_tokens", "mean"),
         ):
@@ -341,9 +343,12 @@ class MLXEmbeddingModel:
             try:
                 with open(cfg_path) as fh:
                     cfg = json.load(fh)
-                mode = self._pooling_mode_from_config(cfg)
-                if mode:
-                    return mode, str(cfg_path.relative_to(model_path))
+                if isinstance(cfg, dict):
+                    self._pooling_config = cfg
+                    mode = self._pooling_mode_from_config(cfg)
+                    if mode:
+                        return mode, str(cfg_path.relative_to(model_path))
+                    return None, str(cfg_path.relative_to(model_path))
             except (OSError, ValueError) as e:
                 logger.debug(f"Could not read pooling config for {self.model_name}: {e}")
 
@@ -483,7 +488,9 @@ class MLXEmbeddingModel:
             config["audio_config"] = None
         logger.info(f"Loading embedding model via mlx-vlm: {self.model_name}")
         model = load_embedding_model(model_path, config=config)
-        if self._pooling_mode:
+        if self._pooling_config is not None:
+            model.pooling_config = self._pooling_config
+        elif self._pooling_mode:
             model.pooling_config = {"pooling_mode": self._pooling_mode}
         patch_modernbert_attention(model)
         self._promote_bf16_to_fp16(model)
@@ -790,14 +797,16 @@ class MLXEmbeddingModel:
             return_tensors="np",
         )
         if self._pad_to_max_length:
-            encoded = self._pad_to_position_table(encoded, processor)
+            encoded = self._pad_to_position_table(encoded, processor, truncation)
         return {
             key: mx.array(encoded[key])
             for key in ("input_ids", "attention_mask", "token_type_ids")
             if key in encoded
         }
 
-    def _pad_to_position_table(self, encoded, processor) -> dict[str, np.ndarray]:
+    def _pad_to_position_table(
+        self, encoded, processor, truncation: bool
+    ) -> dict[str, np.ndarray]:
         """Right-pad to the full position table after request truncation.
 
         SigLIP pools the last position and ignores the attention mask, so its
@@ -813,6 +822,14 @@ class MLXEmbeddingModel:
         for key, values in encoded.items():
             values = np.asarray(values)
             extra = target - values.shape[-1]
+            if extra < 0:
+                if not truncation:
+                    raise ValueError(
+                        f"SigLIP input length {values.shape[-1]} exceeds its "
+                        f"position table limit of {target} with truncation disabled"
+                    )
+                values = values[:, :target]
+                extra = 0
             if key in pad_values and extra > 0:
                 values = np.pad(
                     values, ((0, 0), (0, extra)), constant_values=pad_values[key]
