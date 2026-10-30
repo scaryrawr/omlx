@@ -4,6 +4,8 @@
 import json
 import os
 import plistlib
+import select
+import signal
 import subprocess
 import sys
 import tomllib
@@ -2657,6 +2659,57 @@ class TestCopilotIntegration:
         ):
             CopilotIntegration().launch(ctx(model="model"))
         assert not paths[0].exists()
+
+    @pytest.mark.skipif(os.name == "nt", reason="requires POSIX process groups")
+    def test_ctrl_c_keeps_copilot_and_registry_alive(self, tmp_path):
+        executable = tmp_path / "copilot"
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "import os, signal, sys\n"
+            "from pathlib import Path\n"
+            "def interrupted(signum, frame):\n"
+            "    print('interrupted', flush=True)\n"
+            "signal.signal(signal.SIGINT, interrupted)\n"
+            "print(os.environ['COPILOT_PROVIDERS_CONFIG'], flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('registry exists:', Path(os.environ['COPILOT_PROVIDERS_CONFIG']).exists(), flush=True)\n"
+        )
+        executable.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f"{tmp_path}{os.pathsep}{env.get('PATH', '')}"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from omlx.integrations.base import IntegrationContext; "
+                "from omlx.integrations.copilot import CopilotIntegration; "
+                "CopilotIntegration().launch(IntegrationContext("
+                "host='127.0.0.1', port=8000, model='model'))",
+            ],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert select.select([proc.stdout], [], [], 10)[0], "Copilot did not start"
+            registry = Path(proc.stdout.readline().strip())
+            assert registry.is_file()
+            os.killpg(proc.pid, signal.SIGINT)
+            assert select.select([proc.stdout], [], [], 10)[0], "Copilot did not receive Ctrl+C"
+            assert proc.stdout.readline().strip() == "interrupted"
+            assert proc.poll() is None
+            assert registry.is_file()
+            stdout, stderr = proc.communicate("exit\n", timeout=10)
+            assert proc.returncode == 0, stderr
+            assert "registry exists: True" in stdout
+            assert not registry.exists()
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
 
 
 class TestIntegrationSettings:

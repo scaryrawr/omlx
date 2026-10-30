@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,6 +13,10 @@ from pathlib import Path
 from omlx.integrations.base import Integration, IntegrationContext, IntegrationModel
 from omlx.integrations.codex import is_codex_chat_model
 from omlx.utils.install import get_cli_command_prefix
+
+
+def _ignore_interrupt(signum, frame):
+    pass
 
 
 def copilot_provider_config(ctx: IntegrationContext) -> dict:
@@ -112,7 +117,13 @@ class CopilotIntegration(Integration):
             with os.fdopen(fd, "w", encoding="utf-8") as config:
                 json.dump(copilot_provider_config(ctx), config, ensure_ascii=False)
             env["COPILOT_PROVIDERS_CONFIG"] = str(config_path)
-            result = subprocess.run(args, env=env, check=False)
+            # A caught handler resets on exec, so Copilot receives SIGINT while
+            # the launcher waits without treating Ctrl+C as its own interrupt.
+            previous_handler = signal.signal(signal.SIGINT, _ignore_interrupt)
+            try:
+                result = subprocess.run(args, env=env, check=False)
+            finally:
+                signal.signal(signal.SIGINT, previous_handler)
         if result.returncode:
             raise SystemExit(
                 128 - result.returncode if result.returncode < 0 else result.returncode
