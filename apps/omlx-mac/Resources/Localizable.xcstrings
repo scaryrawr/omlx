@@ -2056,30 +2056,6 @@
         }
       }
     },
-    "about.credits.mlx_embeddings.role" : {
-      "comment" : "About screen Credits row: role/description for the mlx-embeddings project",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Embedding + reranker models on MLX"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Модели эмбеддингов и реранкеров на MLX"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "MLX 上的 Embedding + 重排序模型"
-          }
-        }
-      }
-    },
     "about.credits.mlx_lm.role" : {
       "comment" : "About screen Credits row: role/description for the mlx-lm project",
       "extractionState" : "manual",

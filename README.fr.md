@@ -404,5 +404,4 @@ Les contributions sont les bienvenues ! Voir le [Guide de contribution](docs/CON
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) — inférence de modèles vision-langage sur Apple Silicon
 - [vllm-mlx](https://github.com/waybarrios/vllm-mlx) — oMLX a démarré à partir de vllm-mlx v0.1.0 et a considérablement évolué avec le service multi-modèles, le cache KV à plusieurs niveaux, le support VLM avec cache paginé complet, un panneau d'admin, et une app dans la barre de menus macOS
 - [venvstacks](https://venvstacks.lmstudio.ai) — couches d'environnements Python portables pour le bundle de l'app macOS
-- [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) — support des modèles d'embedding sur Apple Silicon
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) — décodage spéculatif par diffusion par blocs sur Apple Silicon
