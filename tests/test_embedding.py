@@ -2322,7 +2322,10 @@ class TestMlxVlmEmbeddingLoading:
         load_model.assert_not_called()
         load_processor.assert_not_called()
 
-    def test_declared_pooling_config_is_preserved_for_mlx_vlm(self, tmp_path):
+    @pytest.mark.parametrize("from_hub", [False, True])
+    def test_declared_pooling_config_is_preserved_for_mlx_vlm(
+        self, tmp_path, from_hub
+    ):
         pooling_config = {
             "pooling_mode_max_tokens": True,
             "include_prompt": True,
@@ -2334,9 +2337,12 @@ class TestMlxVlmEmbeddingLoading:
         (tmp_path / "config.json").write_text(json.dumps({"model_type": "lfm2"}))
         loaded = SimpleNamespace(config=SimpleNamespace(hidden_size=4))
         processor = SimpleNamespace(tokenizer=object())
-        model = MLXEmbeddingModel(str(tmp_path))
+        model = MLXEmbeddingModel(
+            "mlx-community/test-embedding" if from_hub else str(tmp_path)
+        )
 
         with (
+            patch("mlx_vlm.utils.snapshot_download", return_value=str(tmp_path)),
             patch(
                 "omlx.models.embedding.load_embedding_model", return_value=loaded
             ),

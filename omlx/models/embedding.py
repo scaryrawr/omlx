@@ -332,7 +332,9 @@ class MLXEmbeddingModel:
                 return mode
         return None
 
-    def _resolve_pooling_mode(self) -> tuple[str | None, str]:
+    def _resolve_pooling_mode(
+        self, model_path: Path | None = None
+    ) -> tuple[str | None, str]:
         """Resolve the pooling mode and report where it came from.
 
         Returns ``(mode, source)``. ``source`` is logged at load time so an
@@ -340,7 +342,9 @@ class MLXEmbeddingModel:
         the code -- silent pooling changes are exactly what makes retrieval
         quality drift unnoticed.
         """
-        model_path = Path(self.model_name)
+        if model_path is None:
+            model_path = Path(self.model_name)
+        self._pooling_config = None
         cfg_path = self._pooling_config_path(model_path)
         if cfg_path is not None:
             try:
@@ -462,7 +466,8 @@ class MLXEmbeddingModel:
             self._compiled_embed = None
             logger.info(
                 f"Embedding model loaded natively: {self.model_name} "
-                f"(arch={arch}, hidden_size={config.hidden_size})"
+                f"(arch={arch}, hidden_size={config.hidden_size}, "
+                f"pooling={self._pooling_mode}, source={self._pooling_source})"
             )
             return True
 
@@ -473,6 +478,7 @@ class MLXEmbeddingModel:
     def _load_mlx_vlm(self) -> None:
         """Load any embedding family mlx-vlm implements."""
         model_path = get_model_path(self.model_name)
+        self._pooling_mode, self._pooling_source = self._resolve_pooling_mode(model_path)
         config = load_config(model_path)
         ensure_model_code_trusted(
             config,
@@ -525,7 +531,8 @@ class MLXEmbeddingModel:
         logger.info(
             f"Embedding model loaded via mlx-vlm: {self.model_name} "
             f"(model_type={model_type}, dimensions={self._hidden_size}, "
-            f"compiled={self._is_compiled})"
+            f"compiled={self._is_compiled}, pooling={self._pooling_mode}, "
+            f"source={self._pooling_source})"
         )
 
     @staticmethod
@@ -548,12 +555,6 @@ class MLXEmbeddingModel:
             return
 
         self._pooling_mode, self._pooling_source = self._resolve_pooling_mode()
-        if self._pooling_mode:
-            logger.info(
-                f"Embedding pooling for {self.model_name}: "
-                f"{self._pooling_mode} (source: {self._pooling_source})"
-            )
-
         if self._load_native():
             return
 
