@@ -256,14 +256,13 @@ EMBEDDING_ARCHITECTURES = {
     "ModernBertForMaskedLM",
     "Qwen3ForTextEmbedding",
     "SiglipModel",
-    "SiglipVisionModel",
     "SiglipTextModel",
     "EmbeddingGemma2Model",  # via mlx-vlm; has vision_config, checked before VLM
 }
 
 # Supported reranker architectures
 SUPPORTED_RERANKER_ARCHITECTURES = {
-    "ModernBertForSequenceClassification",  # via mlx-embeddings
+    "ModernBertForSequenceClassification",  # via mlx-vlm
     "XLMRobertaForSequenceClassification",  # omlx native implementation
     "JinaForRanking",  # Jina v3 listwise reranker
 }
@@ -287,7 +286,7 @@ CAUSAL_LM_EMBEDDING_ARCHITECTURES = {
 
 # Multimodal (VLM-based) reranker architectures.
 # These share an architecture with VLM chat models but are fine-tuned for
-# reranking. Loaded via mlx-embeddings' model.process() API. Distinguished
+# reranking. Scored via mlx-vlm's reranking helpers. Distinguished
 # from VLM chat by directory name heuristic.
 MULTIMODAL_RERANKER_ARCHITECTURES = {
     "Qwen3VLForConditionalGeneration",  # Qwen3-VL-Reranker
