@@ -2423,6 +2423,31 @@ class TestMlxVlmEmbeddingGemma2:
         )
         processor.apply_chat_template.assert_not_called()
 
+    @pytest.mark.parametrize("model_type", ["embedding_gemma2", "Embedding-Gemma2"])
+    def test_text_only_checkpoint_without_audio_config_loads(
+        self, tmp_path, model_type
+    ):
+        config = {k: v for k, v in self._CONFIG.items() if k != "audio_config"}
+        model = EmbeddingGemma2(EmbeddingGemma2Config.from_dict(config))
+        weights = {
+            name: np.array(value) for name, value in tree_flatten(model.parameters())
+        }
+        save_file(weights, str(tmp_path / "model.safetensors"))
+        (tmp_path / "config.json").write_text(
+            json.dumps({**config, "model_type": model_type})
+        )
+
+        loaded, tokenizer, _ = self._load(tmp_path)
+        output = loaded.embed(["one two three"])
+
+        assert loaded.model.audio_tower is None
+        inputs = tokenizer(["one two three"], return_tensors="mlx", max_length=8192)
+        np.testing.assert_allclose(
+            np.array(output.embeddings),
+            np.array(model(**inputs).text_embeds),
+            atol=1e-5,
+        )
+
     def test_image_batch_skips_compiled_path(self, model_dir):
         model, _, processor = self._load(model_dir)
         prepared = {
@@ -2598,6 +2623,21 @@ class TestSiglipEmbedding:
             np.array(output.embeddings), np.array(expected), atol=1e-5
         )
         assert output.total_tokens == int(tokens["attention_mask"].sum())
+
+    def test_shorter_limit_truncates_but_still_pads_to_the_table(self, tmp_path):
+        model, siglip, tokenizer = self._load(tmp_path)
+        texts = ["a red", "blue"]
+
+        output = model.embed(texts, max_length=4)
+
+        assert [(c["padding"], c["max_length"]) for c in tokenizer.calls] == [
+            ("max_length", 4)
+        ]
+        full_table = tokenizer(texts, max_length=8)["input_ids"]
+        expected = siglip(mx.array(full_table)).text_embeds
+        np.testing.assert_allclose(
+            np.array(output.embeddings), np.array(expected), atol=1e-5
+        )
 
     def test_image_inputs_are_rejected(self, tmp_path):
         model, _, _ = self._load(tmp_path)

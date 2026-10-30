@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
+import numpy as np
 from mlx.utils import tree_flatten, tree_map
 from mlx_vlm.embedding_loader import load_embedding_model
 from mlx_vlm.utils import get_model_path, load_audio, load_config, load_processor
@@ -470,13 +471,15 @@ class MLXEmbeddingModel:
             model_path=model_path,
             trust_remote_code=self.trust_remote_code,
         )
-        model_type = _EMBEDDING_MODEL_TYPE_OVERRIDES.get(
-            config.get("model_type"), config.get("model_type")
-        )
+        # Checkpoints may spell model types with hyphens (gemma3-text), but
+        # mlx-vlm resolves model modules by underscore names.
+        model_type = str(config.get("model_type", "")).lower().replace("-", "_")
+        model_type = _EMBEDDING_MODEL_TYPE_OVERRIDES.get(model_type, model_type)
         config["model_type"] = model_type
         # The audio tower is resident even for text-only requests, so it loads
         # only when the model's embedding_audio_enabled setting asks for it.
-        if not self.audio_enabled and config.get("audio_config") is not None:
+        # mlx-vlm defaults a missing audio_config to {}, which builds the tower.
+        if not self.audio_enabled:
             config["audio_config"] = None
         logger.info(f"Loading embedding model via mlx-vlm: {self.model_name}")
         model = load_embedding_model(model_path, config=config)
@@ -786,11 +789,36 @@ class MLXEmbeddingModel:
             return_attention_mask=True,
             return_tensors="np",
         )
+        if self._pad_to_max_length:
+            encoded = self._pad_to_position_table(encoded, processor)
         return {
             key: mx.array(encoded[key])
             for key in ("input_ids", "attention_mask", "token_type_ids")
             if key in encoded
         }
+
+    def _pad_to_position_table(self, encoded, processor) -> dict[str, np.ndarray]:
+        """Right-pad to the full position table after request truncation.
+
+        SigLIP pools the last position and ignores the attention mask, so its
+        embedding is only correct when padded to the length it was trained on.
+        """
+        target = self.model.max_input_length
+        pad_values = {
+            "input_ids": getattr(processor, "pad_token_id", None) or 0,
+            "attention_mask": 0,
+            "token_type_ids": 0,
+        }
+        padded = {}
+        for key, values in encoded.items():
+            values = np.asarray(values)
+            extra = target - values.shape[-1]
+            if key in pad_values and extra > 0:
+                values = np.pad(
+                    values, ((0, 0), (0, extra)), constant_values=pad_values[key]
+                )
+            padded[key] = values
+        return padded
 
     def _forward(self, inputs: dict[str, Any]):
         """Run the mlx-vlm model on prepared inputs.
