@@ -553,55 +553,63 @@ def _validate_positive_int(value: object, field_name: str) -> int | None:
     return int(value)
 
 
-def _has_local_image_layout(model_path: Path) -> bool:
-    """Detect known local mlx-vlm image layouts without assuming component names.
+def detect_image_tasks(model_path: Path) -> list[str]:
+    if _infer_qwen_image_metadata(model_path) is not None:
+        from .patches.mlx_vlm_qwen_image_compat import apply_qwen_image_compat_patch
 
-    Tokenizer artifacts may live at the model root, in a ``tokenizer/``
-    subdirectory, or nested in a component directory such as ``text_encoder/``
-    (used by Mage-Flow community checkpoints).
-    """
-    tokenizer_markers = ("tokenizer.json", "tokenizer_config.json")
-    has_tokenizer = (model_path / "tokenizer").is_dir() or any(
-        (model_path / marker).exists() for marker in tokenizer_markers
-    )
-    if not has_tokenizer:
-        try:
-            for child in model_path.iterdir():
-                if child.is_dir() and any(
-                    (child / marker).is_file() for marker in tokenizer_markers
-                ):
-                    has_tokenizer = True
-                    break
-        except OSError:
-            pass
-    if not has_tokenizer:
-        return False
-
-    weight_parents = {
-        path.parent for path in model_path.rglob("*.safetensors") if path.is_file()
-    }
-    return len(weight_parents) >= 2
+        apply_qwen_image_compat_patch()
+    try:
+        from mlx_vlm.generate.edit_image import is_image_edit_model
+        from mlx_vlm.generate.image import is_image_generation_model
+    except ImportError:
+        return []
+    path = str(model_path)
+    try:
+        tasks = []
+        if is_image_generation_model(path):
+            tasks.append("generation")
+        if is_image_edit_model(path):
+            tasks.append("edit")
+        return tasks
+    except Exception as exc:
+        logger.warning("Could not inspect image model at %s: %s", model_path, exc)
+        return []
 
 
 def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
-    """Infer an mlx-vlm image manifest from known local model layouts."""
+    tasks = detect_image_tasks(model_path)
+    if not tasks:
+        return None
     qwen_metadata = _infer_qwen_image_metadata(model_path)
     spec = (
         get_image_model_spec(str(qwen_metadata["base_model"]))
         if qwen_metadata is not None
         else infer_image_model_spec_from_name(model_path.name)
     )
-    if spec is None:
-        return None
-    if spec.base_model.startswith("qwen-image-") and qwen_metadata is None:
-        return None
-    if not _has_local_image_layout(model_path):
-        return None
+    base_model = spec.base_model if spec is not None else model_path.name
+    if qwen_metadata is None:
+        try:
+            with (model_path / "model_index.json").open() as file:
+                index = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            index = {}
+        qwen_pipeline = isinstance(index, dict) and (
+            str(index.get("_class_name", "")).startswith("QwenImage")
+            or index.get("transformer")
+            == ["diffusers", "QwenImage21Transformer2DModel"]
+        )
+        if qwen_pipeline:
+            return None
+        if spec and spec.base_model.startswith("qwen-image-"):
+            base_model = (
+                str(index.get("_class_name") or "mlx-vlm")
+                if isinstance(index, dict)
+                else "mlx-vlm"
+            )
 
-    tasks = list(spec.tasks)
     metadata: dict[str, object] = {
         "backend": "mlx-vlm",
-        "base_model": spec.base_model,
+        "base_model": base_model,
         "model_path": ".",
         "tasks": tasks,
         "capabilities": tasks,
@@ -611,7 +619,7 @@ def _infer_image_manifest(model_path: Path) -> ImageModelManifest | None:
         metadata.update(qwen_metadata)
     return ImageModelManifest(
         backend="mlx-vlm",
-        base_model=spec.base_model,
+        base_model=base_model,
         tasks=tasks,
         metadata=metadata,
         model_path=".",
