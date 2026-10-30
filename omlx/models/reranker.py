@@ -35,7 +35,10 @@ from ..model_discovery import (
 from ..patches.modernbert_attention import patch_modernbert_attention
 from ..patches.qwen3_sliding_window import apply_qwen3_sliding_window_patch
 from ..utils.image import load_image
-from ..utils.model_loading import ensure_model_code_trusted
+from ..utils.model_loading import (
+    ensure_model_code_trusted,
+    normalize_encoder_quantization_config,
+)
 from .base_model import ENCODER_BATCH_TOKEN_BUDGET, token_budget_batches
 
 logger = logging.getLogger(__name__)
@@ -849,6 +852,7 @@ class MLXRerankerModel:
                         or 1
                     )
                 # The public reranker loader rejects multi-label classifiers.
+                normalize_encoder_quantization_config(config)
                 self.model = load_encoder_model(
                     model_path,
                     model_remapping=SEQUENCE_CLASSIFIER_MODEL_REMAPPING,

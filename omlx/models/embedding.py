@@ -23,7 +23,10 @@ from mlx_vlm.utils import get_model_path, load_audio, load_config, load_processo
 
 from ..patches.modernbert_attention import patch_modernbert_attention
 from ..utils.image import _decode_input_audio_data, load_image, validate_image_data_uri
-from ..utils.model_loading import ensure_model_code_trusted
+from ..utils.model_loading import (
+    ensure_model_code_trusted,
+    normalize_encoder_quantization_config,
+)
 from .base_model import (
     ENCODER_BATCH_TOKEN_BUDGET,
     last_token_pool,
@@ -486,6 +489,7 @@ class MLXEmbeddingModel:
         # mlx-vlm defaults a missing audio_config to {}, which builds the tower.
         if not self.audio_enabled:
             config["audio_config"] = None
+        normalize_encoder_quantization_config(config)
         logger.info(f"Loading embedding model via mlx-vlm: {self.model_name}")
         model = load_embedding_model(model_path, config=config)
         if self._pooling_config is not None:
