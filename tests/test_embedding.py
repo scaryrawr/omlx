@@ -2284,6 +2284,51 @@ class TestEmbeddingDtype:
         assert not self._promoted(tmp_path / name, **config)
 
 
+class TestMlxVlmEmbeddingLoading:
+    @pytest.mark.parametrize("trust_remote_code", [False, True])
+    def test_hub_id_resolves_before_loading_and_preserves_trust(
+        self, tmp_path, trust_remote_code
+    ):
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "modernbert"}))
+        loaded = SimpleNamespace(config=SimpleNamespace(hidden_size=4))
+        processor = SimpleNamespace(tokenizer=object())
+        model = MLXEmbeddingModel(
+            "mlx-community/test-embedding", trust_remote_code=trust_remote_code
+        )
+        with (
+            patch("mlx_vlm.utils.snapshot_download", return_value=str(tmp_path)) as hub,
+            patch(
+                "omlx.models.embedding.load_embedding_model", return_value=loaded
+            ) as load_model,
+            patch(
+                "omlx.models.embedding.load_processor", return_value=processor
+            ) as load_processor,
+            patch.object(model, "_try_compile", return_value=False),
+        ):
+            model.load()
+
+        assert hub.call_args.kwargs["repo_id"] == "mlx-community/test-embedding"
+        assert load_model.call_args.args == (tmp_path,)
+        load_processor.assert_called_once_with(
+            tmp_path, add_detokenizer=False, trust_remote_code=trust_remote_code
+        )
+        assert model.processor is processor.tokenizer
+
+    def test_custom_model_code_is_rejected_before_weights_or_processor(self, tmp_path):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "modernbert", "model_file": "custom.py"})
+        )
+        model = MLXEmbeddingModel(str(tmp_path))
+        with (
+            patch("omlx.models.embedding.load_embedding_model") as load_model,
+            patch("omlx.models.embedding.load_processor") as load_processor,
+            pytest.raises(ValueError, match="Enable Trust Remote Code"),
+        ):
+            model.load()
+        load_model.assert_not_called()
+        load_processor.assert_not_called()
+
+
 class TestMlxVlmEmbeddingGemma2:
     """EmbeddingGemma 2 loads through mlx-vlm with an image input adapter."""
 
@@ -2358,7 +2403,9 @@ class TestMlxVlmEmbeddingGemma2:
             "omlx.models.embedding.load_processor", return_value=processor
         ) as load_processor:
             model.load()
-        load_processor.assert_called_once_with(model_dir, add_detokenizer=False)
+        load_processor.assert_called_once_with(
+            model_dir, add_detokenizer=False, trust_remote_code=False
+        )
         return model, tokenizer, processor
 
     def test_text_embeddings_match_model_and_clamp_length(self, model_dir):

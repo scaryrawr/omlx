@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import Any, Tuple
 
 import mlx.core as mx
-from mlx_vlm.reranker_loader import load_reranker
+from mlx_vlm.encoder_loader import load_encoder_model
+from mlx_vlm.reranker_loader import SEQUENCE_CLASSIFIER_MODEL_REMAPPING, load_reranker
 from mlx_vlm.server.reranking import RerankItem, ensure_chat_template, score_documents
-from mlx_vlm.utils import load_config
+from mlx_vlm.utils import get_model_path, load_config, load_processor
 
 from ..model_discovery import (
     _TOKENIZER_MAX_LENGTH_SENTINEL,
@@ -34,22 +35,21 @@ from ..model_discovery import (
 from ..patches.modernbert_attention import patch_modernbert_attention
 from ..patches.qwen3_sliding_window import apply_qwen3_sliding_window_patch
 from ..utils.image import load_image
+from ..utils.model_loading import ensure_model_code_trusted
 from .base_model import ENCODER_BATCH_TOKEN_BUDGET, token_budget_batches
 
 logger = logging.getLogger(__name__)
 
 
 def _classifier_scores(outputs: Any) -> mx.array:
-    """Return activated per-label scores from a sequence classifier output.
-
-    The native XLM-RoBERTa head activates into pooler_output. mlx-vlm heads
-    return one raw relevance logit per pair.
-    """
+    """Return activated per-label scores from a sequence classifier output."""
     pooled = getattr(outputs, "pooler_output", None)
     if pooled is not None:
         return pooled
     logits = getattr(outputs, "logits", None)
     if logits is not None:
+        if logits.shape[-1] > 1:
+            return mx.softmax(logits, axis=-1)
         return mx.sigmoid(logits)
     raise ValueError(
         "Model output contains neither pooler_output nor logits. "
@@ -796,9 +796,17 @@ class MLXRerankerModel:
 
         try:
             if arch in MULTIMODAL_RERANKER_ARCHITECTURES:
-                self.model, self.processor = load_reranker(self.model_name)
-                ensure_chat_template(self.processor, self.model_name)
-                self._vl_config = load_config(self.model_name)
+                model_path = get_model_path(self.model_name)
+                self._vl_config = load_config(model_path)
+                ensure_model_code_trusted(
+                    self._vl_config,
+                    model_path=model_path,
+                    trust_remote_code=self.trust_remote_code,
+                )
+                self.model, self.processor = load_reranker(
+                    model_path, trust_remote_code=self.trust_remote_code
+                )
+                ensure_chat_template(self.processor, model_path)
                 self._is_vl_reranker = True
                 self._num_labels = 1
             elif arch == "JinaForRanking":
@@ -816,10 +824,31 @@ class MLXRerankerModel:
                 self.model, self.processor = self._load_xlm_roberta()
                 self._num_labels = getattr(self.model.config, "num_labels", None)
             else:
-                self.model, self.processor = load_reranker(self.model_name)
+                model_path = get_model_path(self.model_name)
+                config = load_config(model_path)
+                ensure_model_code_trusted(
+                    config,
+                    model_path=model_path,
+                    trust_remote_code=self.trust_remote_code,
+                )
+                self._num_labels = int(
+                    config.get("num_labels") or len(config.get("id2label", {})) or 1
+                )
+                # The public reranker loader rejects multi-label classifiers.
+                self.model = load_encoder_model(
+                    model_path,
+                    model_remapping=SEQUENCE_CLASSIFIER_MODEL_REMAPPING,
+                    model_class_name="SequenceClassificationModel",
+                    config=config,
+                    config_overrides={"num_labels": self._num_labels},
+                )
+                self.processor = load_processor(
+                    model_path,
+                    add_detokenizer=False,
+                    trust_remote_code=self.trust_remote_code,
+                )
                 self.processor = getattr(self.processor, "tokenizer", self.processor)
                 patch_modernbert_attention(self.model)
-                self._num_labels = 1
 
             # Try mx.compile for persistent Metal kernel caching
             self._is_compiled = self._try_compile()

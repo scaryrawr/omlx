@@ -105,6 +105,47 @@ class TestVLItemBuilder:
 
 
 class TestVLRerankScoring:
+    @pytest.mark.parametrize("trust_remote_code", [False, True])
+    def test_loader_preserves_remote_code_setting(self, tmp_path, trust_remote_code):
+        tmp_path = tmp_path / "qwen3-vl-reranker"
+        tmp_path.mkdir()
+        config = {
+            "architectures": ["Qwen3VLForConditionalGeneration"],
+            "model_type": "qwen3_vl",
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        processor = MagicMock()
+        with (
+            patch(
+                "omlx.models.reranker.load_reranker",
+                return_value=(object(), processor),
+            ) as load,
+            patch("omlx.models.reranker.ensure_chat_template"),
+        ):
+            model = MLXRerankerModel(str(tmp_path), trust_remote_code=trust_remote_code)
+            model.load()
+        load.assert_called_once_with(tmp_path, trust_remote_code=trust_remote_code)
+        assert model._vl_config == config
+
+    def test_untrusted_custom_architecture_is_rejected_before_loading(self, tmp_path):
+        tmp_path = tmp_path / "qwen3-vl-reranker"
+        tmp_path.mkdir()
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "architectures": ["Qwen3VLForConditionalGeneration"],
+                    "model_type": "qwen3_vl",
+                    "model_file": "custom.py",
+                }
+            )
+        )
+        with (
+            patch("omlx.models.reranker.load_reranker") as load,
+            pytest.raises(ValueError, match="Enable Trust Remote Code"),
+        ):
+            MLXRerankerModel(str(tmp_path)).load()
+        load.assert_not_called()
+
     @staticmethod
     def _vl_model(tmp_path):
         model = MLXRerankerModel(str(tmp_path))

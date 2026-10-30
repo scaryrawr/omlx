@@ -18,10 +18,11 @@ from typing import Any
 import mlx.core as mx
 from mlx.utils import tree_flatten, tree_map
 from mlx_vlm.embedding_loader import load_embedding_model
-from mlx_vlm.utils import load_audio, load_config, load_processor
+from mlx_vlm.utils import get_model_path, load_audio, load_config, load_processor
 
 from ..patches.modernbert_attention import patch_modernbert_attention
 from ..utils.image import _decode_input_audio_data, load_image, validate_image_data_uri
+from ..utils.model_loading import ensure_model_code_trusted
 from .base_model import (
     ENCODER_BATCH_TOKEN_BUDGET,
     last_token_pool,
@@ -462,8 +463,13 @@ class MLXEmbeddingModel:
 
     def _load_mlx_vlm(self) -> None:
         """Load any embedding family mlx-vlm implements."""
-        model_path = Path(self.model_name)
+        model_path = get_model_path(self.model_name)
         config = load_config(model_path)
+        ensure_model_code_trusted(
+            config,
+            model_path=model_path,
+            trust_remote_code=self.trust_remote_code,
+        )
         model_type = _EMBEDDING_MODEL_TYPE_OVERRIDES.get(
             config.get("model_type"), config.get("model_type")
         )
@@ -478,7 +484,11 @@ class MLXEmbeddingModel:
             model.pooling_config = {"pooling_mode": self._pooling_mode}
         patch_modernbert_attention(model)
         self._promote_bf16_to_fp16(model)
-        processor = load_processor(model_path, add_detokenizer=False)
+        processor = load_processor(
+            model_path,
+            add_detokenizer=False,
+            trust_remote_code=self.trust_remote_code,
+        )
 
         self.model = model
         # Text requests use the tokenizer path. Multimodal processors take
