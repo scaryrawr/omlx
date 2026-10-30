@@ -564,14 +564,26 @@ reload, mixed-source reconstruction, media alignment, and batched MTP lifecycle
 tests. It is not evidence of full-size checkpoint inference, conversion quality,
 or performance; those require separate model-specific validation.
 
-### Image Model Manifests
+### Image model discovery and manifests
 
-Image generation and editing use the core mlx-vlm dependency. Add an
-`omlx-image-model.json` manifest when a local image-model directory needs an
-explicit family or task declaration.
+Image generation and editing use the core mlx-vlm dependency. oMLX asks
+mlx-vlm whether each local diffusion checkpoint supports generation, editing,
+or both. Checkpoint metadata can identify models in renamed directories.
+The fork's alias registry does not restrict which families or tasks can be
+discovered.
 
-Add an `omlx-image-model.json` file in a model subdirectory to expose an
-mlx-vlm image model through `/v1/images/generations` and/or `/v1/images/edits`:
+Requests override manifest sampling defaults. Otherwise mlx-vlm resolves
+sampling defaults from the loaded model. oMLX does not patch mlx-vlm request
+dataclasses or keep a separate family sampling-default table.
+With `size=auto`, generation uses mlx-vlm's default request size of 512×512;
+editing leaves size selection to the model. Explicit output sizes cannot
+exceed 4,194,304 pixels. Edit inputs use a private OS temporary directory
+per request, removed after inference or after a cancelled worker finishes.
+
+The fork retains `omlx-image-model.json` for explicit family or task
+declarations and per-checkpoint defaults. Add it in a model subdirectory
+to expose an mlx-vlm image model through `/v1/images/generations` or
+`/v1/images/edits`:
 
 ```json
 {
@@ -598,7 +610,7 @@ variants, Z-Image and Z-Image Turbo, ERNIE-Image and ERNIE-Image Turbo,
 Ming-Image 0.1 Design (generation only), Ideogram 4 FP8, and Bonsai Ternary.
 The original `Ming-Image-0.1-Design` and quantized variants (such as
 `Ming-Image-0.1-Design-mxfp8`) are discovered without a manifest when placed
-under the model directory. Defaults are 1024×1024, 12 steps, and guidance 1.0;
+under the model directory. Native sampling defaults are 12 steps and guidance 1.0;
 the output PNG retains its alpha channel. Z-Image
 and ERNIE-Image edit modes require
 exactly one source image; masks are not supported by the current mlx-vlm image
@@ -635,7 +647,8 @@ explicit unsupported options are rejected rather than ignored.
 The Qwen image compatibility patch temporarily backports a local mlx-vlm commit
 `9a200804c81b98fd420d1f8a064a6824cec76f4f`'s saved-grid,
 static-shift, effective-default/result, and nested processor-config fixes.
-It activates only for Qwen loads, refuses unknown upstream source shapes, and
+It activates for recognized Qwen checkpoints before discovery probes or loading,
+refuses unknown upstream source shapes, and
 does nothing when the complete native fix is present. Remove the backport once
 oMLX's mlx-vlm pin contains the complete fix, retaining registry/API/UI wiring
 and regression tests. Full-checkpoint generation/edit validation and deployment

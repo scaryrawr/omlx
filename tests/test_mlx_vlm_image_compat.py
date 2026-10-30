@@ -11,9 +11,96 @@ from types import SimpleNamespace
 import pytest
 
 from omlx.patches.mlx_vlm_image_compat import (
-    _resolve_generation_request,
     apply_mlx_vlm_image_compat_patch,
 )
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_steps", "expected_guidance"),
+    [("mage-flow", 4, 1.0), ("z-image", 9, 0.0), ("ming-image", 12, 1.0)],
+)
+@pytest.mark.parametrize("overrides", ["backend", "manifest", "request"])
+async def test_engine_uses_native_sampling_with_manifest_and_request_precedence(
+    image_apis,
+    monkeypatch,
+    tmp_path,
+    family,
+    expected_steps,
+    expected_guidance,
+    overrides,
+):
+    import mlx.core as mx
+
+    import omlx.engine.image as engine_module
+    from omlx.engine.image import ImageEngine
+
+    image, edit_image = image_apis
+    calls = []
+
+    def generate_array(prompt, **kwargs):
+        calls.append(kwargs)
+        return mx.zeros((2, 2, 3), dtype=mx.uint8)
+
+    pipeline = SimpleNamespace(
+        model_path=tmp_path,
+        generate_array=generate_array,
+        count_prompt_tokens=lambda prompt: 0,
+        quantization_config=None,
+    )
+    if family == "mage-flow":
+        from mlx_vlm.models.mage_flow.config import get_variant
+        from mlx_vlm.models.mage_flow.model import MageFlowImageGenerationModel
+
+        pipeline.variant = get_variant("mage-flow-turbo")
+        model = MageFlowImageGenerationModel(pipeline, "local-model")
+    elif family == "z-image":
+        from mlx_vlm.models.z_image.model import ZImageGenerationModel
+
+        pipeline.config = SimpleNamespace(
+            variant="turbo", default_steps=9, default_guidance=0.0
+        )
+        model = ZImageGenerationModel(pipeline, "local-model")
+    else:
+        from mlx_vlm.models.ming_image.model import MingImageGenerationModel
+
+        pipeline.config = SimpleNamespace(default_steps=12, default_guidance=1.0)
+        model = MingImageGenerationModel(pipeline, "local-model")
+
+    monkeypatch.setattr(
+        engine_module,
+        "_image_api",
+        lambda: SimpleNamespace(
+            load_image_model=lambda *args, **kwargs: model,
+            generate_image=image.generate_image,
+            ImageGenerationRequest=image.ImageGenerationRequest,
+            ImageEditRequest=edit_image.ImageEditRequest,
+        ),
+    )
+    metadata = {"backend": "mlx-vlm", "base_model": family}
+    if overrides != "backend":
+        metadata.update(default_steps=7, default_guidance=0.75)
+        expected_steps, expected_guidance = 7, 0.75
+    request = {}
+    if overrides == "request":
+        request = {"steps": 3, "guidance": 0.5}
+        expected_steps, expected_guidance = 3, 0.5
+    engine = ImageEngine(
+        model_name="local-model",
+        model_path=str(tmp_path),
+        image_metadata=metadata,
+        tasks=["generation"],
+    )
+    await engine.start()
+    try:
+        result = await engine.generate("a fox", **request)
+        assert calls[-1]["steps"] == expected_steps
+        assert calls[-1]["guidance"] == expected_guidance
+        assert calls[-1]["width"] == calls[-1]["height"] == 512
+        assert result.metadata["steps"] == expected_steps
+        assert result.metadata["guidance"] == expected_guidance
+        assert result.image.size == (2, 2)
+    finally:
+        await engine.stop()
 
 
 @pytest.fixture(scope="module")
@@ -24,6 +111,38 @@ def image_apis():
     edit_image = importlib.import_module("mlx_vlm.generate.edit_image")
 
     return image, edit_image
+
+
+@pytest.mark.parametrize("name", ["Qwen-Image-2.1-Turbo", "custom-checkpoint"])
+def test_native_generation_loader_prefers_supported_checkpoint_metadata(
+    image_apis, monkeypatch, tmp_path, name
+):
+    from mlx_vlm.models.mage_flow.model import MageFlowImageGenerationModel
+
+    image, _ = image_apis
+    root = tmp_path / name
+    for component in ("transformer", "vae", "text_encoder"):
+        directory = root / component
+        directory.mkdir(parents=True)
+        (directory / "config.json").write_text("{}")
+        (directory / "model.safetensors").write_bytes(b"weights")
+    (root / "text_encoder" / "tokenizer.json").write_text("{}")
+    (root / "model_index.json").write_text('{"_class_name":"MageFlowPipeline"}')
+    (root / "mlx_mage_flow.json").write_text('{"variant":"mage-flow-turbo"}')
+    calls = []
+    model = object()
+
+    def from_model_id(cls, model_id, **kwargs):
+        calls.append((model_id, kwargs))
+        return model
+
+    monkeypatch.setattr(
+        MageFlowImageGenerationModel, "from_model_id", classmethod(from_model_id)
+    )
+
+    assert image.is_image_generation_model(str(root))
+    assert image.load_image_model(str(root), task="generate") is model
+    assert calls == [(str(root), {"model_path": root})]
 
 
 @pytest.mark.parametrize(
@@ -53,6 +172,29 @@ def test_z_image_uses_native_mlx_vlm_package(image_apis):
     assert "omlx/patches" not in str(z_image.__file__)
 
 
+@pytest.mark.parametrize("family", ["z-image", "ernie-image"])
+def test_native_single_source_models_reject_multiple_references(image_apis, family):
+    _, edit_image = image_apis
+    if family == "z-image":
+        from mlx_vlm.models.z_image.model import ZImageEditModel
+        from mlx_vlm.models.z_image.pipeline import ZImagePipeline
+
+        pipeline = object.__new__(ZImagePipeline)
+        pipeline.config = SimpleNamespace(
+            variant="turbo", default_steps=9, default_guidance=0.0
+        )
+        model = ZImageEditModel(pipeline, "local-model")
+    else:
+        from mlx_vlm.models.ernie_image.model import ErnieImageEditModel
+
+        model = ErnieImageEditModel(SimpleNamespace(), "local-model")
+    request = edit_image.ImageEditRequest(
+        prompt="combine", image_paths=("first.png", "second.png")
+    )
+    with pytest.raises(ValueError, match="exactly one source image"):
+        edit_image.edit_image(model, request)
+
+
 def test_ernie_image_uses_native_mlx_vlm_package(image_apis):
     import mlx_vlm.models.ernie_image as ernie_image
 
@@ -76,19 +218,12 @@ def test_ming_image_registers_generation_only_and_uses_native_package(image_apis
     ming.pipeline = SimpleNamespace(
         config=SimpleNamespace(default_steps=12, default_guidance=1.0)
     )
-    assert ming.default_steps == 12
-    assert ming.default_guidance == 1.0
-    assert ming.default_width == 1024
-    assert ming.default_height == 1024
+    assert ming.default_sampling.steps == 12
+    assert ming.default_sampling.guidance == 1.0
 
     request = image.ImageGenerationRequest(prompt="a poster")
-    resolved = _resolve_generation_request(image, ming, request)
-    assert (resolved.width, resolved.height, resolved.steps, resolved.guidance) == (
-        1024,
-        1024,
-        12,
-        1.0,
-    )
+    assert request.width == request.height == 512
+    assert request.steps is request.guidance is None
 
 
 def test_unlimited_ocr_uses_native_mlx_vlm_support():
@@ -142,7 +277,7 @@ def test_z_image_tokenizer_disables_remote_code(image_apis, monkeypatch):
     assert received["trust_remote_code"] is False
 
 
-def test_existing_image_families_receive_backported_default_properties(image_apis):
+def test_existing_image_families_provide_native_sampling_defaults(image_apis):
     from mlx_vlm.models.flux2.model import (
         Flux2ImageEditModel,
         Flux2ImageGenerationModel,
@@ -161,24 +296,21 @@ def test_existing_image_families_receive_backported_default_properties(image_api
         ZImageGenerationModel,
         ZImageEditModel,
     ):
-        assert isinstance(model_class.default_steps, property)
-        assert isinstance(model_class.default_guidance, property)
+        assert isinstance(model_class.default_sampling, property)
 
     z_generation = object.__new__(ZImageGenerationModel)
     z_generation.pipeline = SimpleNamespace(
         config=SimpleNamespace(default_steps=9, default_guidance=0.0)
     )
-    assert z_generation.default_steps == 9
-    assert z_generation.default_guidance == 0.0
-    assert z_generation.default_width == 1024
-    assert z_generation.default_height == 1024
+    assert z_generation.default_sampling.steps == 9
+    assert z_generation.default_sampling.guidance == 0.0
 
     z_edit = object.__new__(ZImageEditModel)
     z_edit.pipeline = SimpleNamespace(
         config=SimpleNamespace(variant="turbo", default_guidance=0.0)
     )
-    assert z_edit.default_steps == 8
-    assert z_edit.default_guidance == 0.0
+    assert z_edit.default_sampling.steps == 8
+    assert z_edit.default_sampling.guidance == 0.0
 
 
 @pytest.mark.parametrize("alias", ["z-image", "ernie-image-turbo"])
@@ -213,7 +345,7 @@ def test_generic_loader_dispatches_image_families_without_weights(
     assert image.load_image_model(alias, task="edit") is edit_sentinel
 
 
-def test_generic_api_resolves_nullable_request_defaults(image_apis):
+def test_generic_api_preserves_native_requests_for_model_default_resolution(image_apis):
     image, edit_image = image_apis
 
     @dataclass
@@ -239,13 +371,14 @@ def test_generic_api_resolves_nullable_request_defaults(image_apis):
         seed=1,
     )
     assert generation_request.steps is None
-    assert generation_request.width is None
-    assert generation_request.height is None
+    assert generation_request.width == 512
+    assert generation_request.height == 512
     assert generation_request.guidance is None
     generation_result = image.generate_image(GenerationModel(), generation_request)
-    assert generation_result.steps == 11
-    assert generation_result.guidance == 2.5
-    assert generation_result.width == 768
+    assert generation_result is generation_request
+    assert generation_result.steps is None
+    assert generation_result.guidance is None
+    assert generation_result.width == 512
     assert generation_result.height == 512
 
     edit_request = edit_image.ImageEditRequest(
@@ -256,8 +389,9 @@ def test_generic_api_resolves_nullable_request_defaults(image_apis):
     assert edit_request.steps is None
     assert edit_request.guidance is None
     edit_result = edit_image.edit_image(EditModel(), edit_request)
-    assert edit_result.steps == 9
-    assert edit_result.guidance == 1.5
+    assert edit_result is edit_request
+    assert edit_result.steps is None
+    assert edit_result.guidance is None
 
 
 @pytest.mark.parametrize(
