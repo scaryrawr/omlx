@@ -17,10 +17,8 @@ import mlx.core as mx
 
 from ..engine_core import get_mlx_executor
 from ..image_registry import (
-    get_image_defaults,
     get_image_model_reference,
     get_image_model_spec,
-    image_edit_accepts_multiple_inputs,
     normalize_image_alias,
 )
 from ..utils.optional_deps import MLX_VLM_MISSING_MESSAGE
@@ -193,8 +191,10 @@ class ImageEngine(BaseNonStreamingEngine):
             raise ValueError(
                 f"Image model {self._model_id} declares no supported tasks"
             )
-        for task in self._tasks:
-            self._resolve_spec(task)
+        if self._is_qwen_image() and (
+            self._image_metadata.get("default_image_strength") is not None
+        ):
+            raise ValueError("Qwen Image 2.1 does not support default_image_strength")
 
         logger.info(
             "Starting mlx-vlm image engine: model=%s, base_model=%s, tasks=%s",
@@ -248,9 +248,7 @@ class ImageEngine(BaseNonStreamingEngine):
         self._ensure_started()
         self._ensure_task_supported("generation")
         self._reject_quantize(kwargs)
-        self._validate_qwen_options(
-            kwargs, self._resolve_guidance(guidance, "generation")
-        )
+        self._validate_qwen_options(kwargs, self._resolve_guidance(guidance))
 
         activity_id = self._begin_activity(
             "generating image",
@@ -265,15 +263,19 @@ class ImageEngine(BaseNonStreamingEngine):
                     model_path_override=model_path_override,
                 )
                 api = _image_api()
+                size = {
+                    name: int(value)
+                    for name, value in (("width", width), ("height", height))
+                    if value is not None
+                }
                 request = api.ImageGenerationRequest(
                     prompt=prompt,
-                    seed=0 if seed is None else int(seed),
-                    steps=self._resolve_steps(steps, "generation"),
-                    width=None if width is None else int(width),
-                    height=None if height is None else int(height),
-                    guidance=self._resolve_guidance(guidance, "generation"),
+                    seed=None if seed is None else int(seed),
+                    steps=self._resolve_steps(steps),
+                    guidance=self._resolve_guidance(guidance),
                     output_format="png",
                     extra=self._request_extra(kwargs),
+                    **size,
                 )
                 raw_result = await self._run_api_call(
                     api.generate_image,
@@ -307,17 +309,11 @@ class ImageEngine(BaseNonStreamingEngine):
         self._ensure_started()
         self._ensure_task_supported("edit")
         self._reject_quantize(kwargs)
-        self._validate_qwen_options(kwargs, self._resolve_guidance(guidance, "edit"))
+        self._validate_qwen_options(kwargs, self._resolve_guidance(guidance))
         if not image_paths:
             raise ValueError("edit requires at least one input image path")
         if mask_path is not None:
             raise ValueError("mlx-vlm image models do not support masks")
-        if (
-            not image_edit_accepts_multiple_inputs(self.base_model)
-            and len(image_paths) != 1
-        ):
-            raise ValueError(f"{self.base_model} edit supports exactly one input image")
-
         activity_id = self._begin_activity(
             "editing image",
             detail="Editing image",
@@ -333,16 +329,15 @@ class ImageEngine(BaseNonStreamingEngine):
                 api = _image_api()
                 image_strength = self._resolve_image_strength(
                     kwargs.pop("image_strength", None),
-                    "edit",
                 )
                 request = api.ImageEditRequest(
                     prompt=prompt,
                     image_paths=tuple(image_paths),
-                    seed=0 if seed is None else int(seed),
-                    steps=self._resolve_steps(steps, "edit"),
+                    seed=None if seed is None else int(seed),
+                    steps=self._resolve_steps(steps),
                     width=None if width is None else int(width),
                     height=None if height is None else int(height),
-                    guidance=self._resolve_guidance(guidance, "edit"),
+                    guidance=self._resolve_guidance(guidance),
                     output_format="png",
                     extra=self._request_extra(
                         kwargs,
@@ -420,19 +415,6 @@ class ImageEngine(BaseNonStreamingEngine):
                 f"Image model {self._model_id} does not support task {task!r}"
             )
 
-    def _resolve_spec(self, task: ImageTask):
-        spec = get_image_model_spec(self.base_model)
-        if spec is None or task not in spec.tasks:
-            raise ValueError(
-                f"Unsupported mlx-vlm image base_model {self.base_model!r} "
-                f"for task {task!r}"
-            )
-        if spec.base_model.startswith("qwen-image-2-1") and (
-            self._image_metadata.get("default_image_strength") is not None
-        ):
-            raise ValueError("Qwen Image 2.1 does not support default_image_strength")
-        return spec
-
     def _resolve_model_reference(self, override: object = None) -> str:
         value = self._image_metadata.get("model_path") if override is None else override
         root = Path(self._model_path).expanduser()
@@ -472,47 +454,23 @@ class ImageEngine(BaseNonStreamingEngine):
             model_reference=self._resolve_model_reference(model_path_override),
         )
 
-    def _resolve_steps(self, steps: int | None, task: ImageTask) -> int | None:
+    def _resolve_steps(self, steps: int | None) -> int | None:
         if steps is not None:
             return int(steps)
-        manifest_steps = _coerce_int(
-            self._image_metadata.get("default_steps"), "default_steps"
-        )
-        if manifest_steps is not None:
-            return manifest_steps
-        return _coerce_int(
-            get_image_defaults(self.base_model, task).get("default_steps"),
-            "default_steps",
-        )
+        return _coerce_int(self._image_metadata.get("default_steps"), "default_steps")
 
-    def _resolve_guidance(
-        self, guidance: float | None, task: ImageTask
-    ) -> float | None:
+    def _resolve_guidance(self, guidance: float | None) -> float | None:
         if guidance is not None:
             return float(guidance)
-        manifest_guidance = _coerce_float(
+        return _coerce_float(
             self._image_metadata.get("default_guidance"), "default_guidance"
         )
-        if manifest_guidance is not None:
-            return manifest_guidance
-        return _coerce_float(
-            get_image_defaults(self.base_model, task).get("default_guidance"),
-            "default_guidance",
-        )
 
-    def _resolve_image_strength(
-        self, image_strength: object, task: ImageTask
-    ) -> float | None:
+    def _resolve_image_strength(self, image_strength: object) -> float | None:
         if image_strength is not None:
             return _coerce_float(image_strength, "image_strength")
-        manifest_strength = _coerce_float(
-            self._image_metadata.get("default_image_strength"),
-            "default_image_strength",
-        )
-        if manifest_strength is not None:
-            return manifest_strength
         return _coerce_float(
-            get_image_defaults(self.base_model, task).get("default_image_strength"),
+            self._image_metadata.get("default_image_strength"),
             "default_image_strength",
         )
 
@@ -543,7 +501,6 @@ class ImageEngine(BaseNonStreamingEngine):
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(get_mlx_executor(), _cleanup_mlx_cache)
 
-            self._resolve_spec(task)
             api = _image_api()
             loader_task = "generate" if task == "generation" else "edit"
 
