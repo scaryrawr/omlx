@@ -2354,6 +2354,39 @@ class TestMlxVlmEmbeddingLoading:
         assert model._pooling_mode == "max"
         assert loaded.pooling_config == pooling_config
 
+    @pytest.mark.parametrize(
+        ("declared", "expected"),
+        [(" Last_Token ", "lasttoken"), ("CLS", "cls"), ("MAX", "max")],
+    )
+    def test_pooling_mode_alias_is_canonical_for_mlx_vlm(
+        self, tmp_path, declared, expected
+    ):
+        from mlx_vlm.models.pooling import pool_by_config
+
+        pooling_config = {"pooling_mode": declared, "include_prompt": True}
+        pooling_dir = tmp_path / "1_Pooling"
+        pooling_dir.mkdir()
+        (pooling_dir / "config.json").write_text(json.dumps(pooling_config))
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "lfm2"}))
+        loaded = SimpleNamespace(config=SimpleNamespace(hidden_size=4))
+        processor = SimpleNamespace(tokenizer=object())
+        model = MLXEmbeddingModel(str(tmp_path))
+
+        with (
+            patch(
+                "omlx.models.embedding.load_embedding_model", return_value=loaded
+            ),
+            patch("omlx.models.embedding.load_processor", return_value=processor),
+            patch.object(model, "_try_compile", return_value=False),
+        ):
+            model.load()
+
+        assert model._pooling_mode == expected
+        assert loaded.pooling_config["pooling_mode"] == expected
+        assert loaded.pooling_config["include_prompt"] is True
+        hidden = mx.arange(12, dtype=mx.float32).reshape(1, 3, 4)
+        pool_by_config(hidden, mx.ones((1, 3)), loaded.pooling_config)
+
 
 class TestMlxVlmEmbeddingGemma2:
     """EmbeddingGemma 2 loads through mlx-vlm with an image input adapter."""

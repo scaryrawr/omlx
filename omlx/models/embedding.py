@@ -316,6 +316,7 @@ class MLXEmbeddingModel:
             alias = {
                 "cls": "cls",
                 "mean": "mean",
+                "max": "max",
                 "lasttoken": "lasttoken",
                 "last_token": "lasttoken",
             }
@@ -499,7 +500,11 @@ class MLXEmbeddingModel:
         logger.info(f"Loading embedding model via mlx-vlm: {self.model_name}")
         model = load_embedding_model(model_path, config=config)
         if self._pooling_config is not None:
-            model.pooling_config = self._pooling_config
+            pooling_config = dict(self._pooling_config)
+            # mlx-vlm matches string modes exactly, while omlx accepts aliases.
+            if isinstance(pooling_config.get("pooling_mode"), str) and self._pooling_mode:
+                pooling_config["pooling_mode"] = self._pooling_mode
+            model.pooling_config = pooling_config
         elif self._pooling_mode:
             model.pooling_config = {"pooling_mode": self._pooling_mode}
         patch_modernbert_attention(model)
