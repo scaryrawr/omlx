@@ -399,10 +399,12 @@ Models are auto-detected by type. You can also download models directly from the
 | LLM | Any model supported by [mlx-lm](https://github.com/ml-explore/mlx-lm) |
 | VLM | Qwen3.5 Series, GLM-4V, Pixtral, Nemotron Nano Omni / Super VL / Bolt, and other [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) models |
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
-| Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
-| Reranker | ModernBERT, XLM-RoBERTa |
+| Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma, EmbeddingGemma 2, Qwen3-Embedding, Qwen3-VL-Embedding, SigLIP (text only) via [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) or native loaders |
+| Reranker | ModernBERT, XLM-RoBERTa, Qwen3-Reranker, Qwen3-VL-Reranker |
 | Decision | Clef, Clef-Flash, OpenJev, Decision 3.0 (d3, d3-flash, d3-mini, d3-nano, d3-lite, d3-edge) |
 | Image | mlx-vlm models: Qwen Image 2.1/base/Turbo, FLUX.2 Klein, Mage-Flow, Ming-Image 0.1 Design, ERNIE-Image, Z-Image, Ideogram 4, Bonsai |
+
+Embedding and reranker models load through mlx-vlm; the separate mlx-embeddings dependency is gone. NomicBERT checkpoints are no longer supported. SigLIP serves text embeddings only and rejects image inputs. Qwen3-VL-Embedding rejects inputs longer than 8192 tokens instead of truncating them.
 
 ### Flint
 
@@ -823,7 +825,6 @@ Contributions are welcome! See [Contributing Guide](docs/CONTRIBUTING.md) for de
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Vision-language model inference on Apple Silicon
 - [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLX started from vllm-mlx v0.1.0 and evolved significantly with multi-model serving, tiered KV caching, VLM with full paged cache support, an admin panel, and a macOS menu bar app
 - [venvstacks](https://venvstacks.lmstudio.ai) - Portable Python environment layering for the macOS app bundle
-- [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Embedding model support for Apple Silicon
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Block diffusion speculative decoding on Apple Silicon
 - [MTPLX](https://github.com/youssofal/mtplx) - Lightning MTP's verify-shape Metal kernels are powered by MTPLX by Youssof Altoukhi, which also inspired the depth-k pipeline
 - [mlx-serve](https://github.com/ddalcu/mlx-serve) - The fused GDN verify prework kernel is adapted from mlx-serve's port of the mlxfast-challenge qwen35_packed_gdn_prework kernel, and Qwen4's fused GDN decode and prefill kernels are adapted from mlx-serve's MIT-licensed `transformer.zig`; Qwen4 QSA's 128-bit K/V staging is adapted from mlx-serve's MIT-licensed `msv_attn_p256` kernel
