@@ -8,7 +8,6 @@ import json
 import pytest
 
 from omlx.image_registry import (
-    get_image_defaults,
     get_image_model_reference,
     get_image_model_spec,
     image_edit_accepts_multiple_inputs,
@@ -16,7 +15,9 @@ from omlx.image_registry import (
 )
 from omlx.model_discovery import (
     _load_image_manifest,
+    detect_image_tasks,
     detect_model_type,
+    discover_models,
     estimate_image_model_size,
 )
 
@@ -38,10 +39,13 @@ def _qwen21_layout(tmp_path, name="renamed-image-model", *, sigmas=None):
     if sigmas is not None:
         index["sample_sigmas"] = sigmas
     (model_dir / "model_index.json").write_text(json.dumps(index))
-    for component in ("transformer", "vae"):
+    for component in ("transformer", "vae", "text_encoder"):
         directory = model_dir / component
         directory.mkdir()
         (directory / "model.safetensors").write_bytes(b"weights")
+        (directory / "config.json").write_text("{}")
+    (model_dir / "processor").mkdir()
+    (model_dir / "processor" / "tokenizer.json").write_text("{}")
     (model_dir / "transformer" / "config.json").write_text(
         json.dumps(
             {
@@ -120,68 +124,53 @@ def test_qwen21_explicit_manifest_keeps_effective_recipe_metadata(tmp_path):
     assert manifest.metadata["checkpoint_steps"] == 8
 
 
-def test_qwen21_aliases_defaults_and_runtime_identity():
+def test_qwen21_aliases_and_runtime_identity():
     for alias in ("qwen-image-2.1-turbo", "Qwen/Qwen-Image-2.1-Turbo"):
-        assert get_image_defaults(alias) == {
-            "default_steps": 8,
-            "default_guidance": 1.0,
-        }
         assert get_image_model_reference(alias) == "Qwen/Qwen-Image-2.1-Turbo"
-    assert get_image_defaults("qwen-image-2.1", "generation")["default_steps"] == 30
-    assert get_image_defaults("qwen-image-2.1", "edit")["default_steps"] == 40
     assert get_image_model_spec("qwen-image-edit") is None
 
 
 @pytest.mark.parametrize(
-    ("alias", "base_model", "tasks", "defaults"),
+    ("alias", "base_model", "tasks"),
     [
         (
             "microsoft/Mage-Flow-Base",
             "mage-flow-base",
             ("generation",),
-            {"default_steps": 30, "default_guidance": 5.0},
         ),
         (
             "Mage-Flow-Aligned",
             "mage-flow",
             ("generation",),
-            {"default_steps": 20, "default_guidance": 5.0},
         ),
         (
             "Mage-Flow-Turbo",
             "mage-flow-turbo",
             ("generation",),
-            {"default_steps": 4, "default_guidance": 1.0},
         ),
         (
             "Mage-Flow-Edit-Base",
             "mage-flow-edit-base",
             ("edit",),
-            {"default_steps": 30, "default_guidance": 5.0},
         ),
         (
             "Mage-Flow-Edit-Aligned",
             "mage-flow-edit",
             ("edit",),
-            {"default_steps": 30, "default_guidance": 5.0},
         ),
         (
             "Mage-Flow-Edit-Turbo",
             "mage-flow-edit-turbo",
             ("edit",),
-            {"default_steps": 4, "default_guidance": 1.0},
         ),
     ],
 )
-def test_mage_flow_aliases_expose_expected_tasks_and_defaults(
-    alias, base_model, tasks, defaults
-):
+def test_mage_flow_aliases_expose_metadata_hints(alias, base_model, tasks):
     spec = get_image_model_spec(alias)
 
     assert spec is not None
     assert spec.base_model == base_model
     assert spec.tasks == tasks
-    assert get_image_defaults(alias) == defaults
     assert image_edit_accepts_multiple_inputs(alias) is (tasks == ("edit",))
 
 
@@ -204,20 +193,9 @@ def test_supported_image_names_infer_registry_specs(name, base_model, tasks):
     assert spec.tasks == tasks
 
 
-def test_z_image_turbo_has_task_specific_img2img_steps():
-    assert get_image_defaults("z-image-turbo")["default_steps"] == 9
-    assert get_image_defaults("z-image-turbo", "edit")["default_steps"] == 8
-
-
 def test_local_mage_edit_layout_is_discovered_as_mlx_vlm_image(tmp_path):
     model_dir = tmp_path / "Mage-Flow-Edit-Turbo"
-    model_dir.mkdir()
-    (model_dir / "tokenizer").mkdir()
-    (model_dir / "tokenizer" / "tokenizer.json").write_text("{}")
-    for component in ("transformer", "vae"):
-        component_dir = model_dir / component
-        component_dir.mkdir()
-        (component_dir / "model.safetensors").write_bytes(b"weights")
+    _write_mage_checkpoint(model_dir)
 
     manifest = _load_image_manifest(model_dir)
 
@@ -243,10 +221,18 @@ def test_local_ming_layout_is_discovered_as_generation_only(
     tokenizer_dir = model_dir / "mllm"
     tokenizer_dir.mkdir(parents=True)
     (tokenizer_dir / "tokenizer.json").write_text("{}")
+    (tokenizer_dir / "config.json").write_text(
+        json.dumps({"architectures": ["BailingMMForConditionalGeneration"]})
+    )
     for component in ("transformer", "vae"):
         component_dir = model_dir / component
         component_dir.mkdir()
         (component_dir / weight_file).write_bytes(b"weights")
+        (component_dir / "config.json").write_text(
+            json.dumps({"_class_name": "DiffusionTransformer"})
+            if component == "transformer"
+            else "{}"
+        )
 
     manifest = _load_image_manifest(model_dir)
 
@@ -270,15 +256,7 @@ def test_local_ming_layout_is_discovered_as_generation_only(
 def test_mage_flow_text_encoder_tokenizer_layout_is_discovered(tmp_path, name, tasks):
     """Mage-Flow community checkpoints keep tokenizer files in ``text_encoder/``."""
     model_dir = tmp_path / name
-    text_encoder = model_dir / "text_encoder"
-    text_encoder.mkdir(parents=True)
-    (text_encoder / "tokenizer.json").write_text("{}")
-    (text_encoder / "tokenizer_config.json").write_text("{}")
-    for component in ("transformer", "vae"):
-        component_dir = model_dir / component
-        component_dir.mkdir()
-        (component_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
-    (model_dir / "model_index.json").write_text("{}")
+    _write_mage_checkpoint(model_dir)
 
     manifest = _load_image_manifest(model_dir)
 
@@ -287,6 +265,80 @@ def test_mage_flow_text_encoder_tokenizer_layout_is_discovered(tmp_path, name, t
     assert manifest.tasks == tasks
     assert manifest.metadata["model_path"] == "."
     assert detect_model_type(model_dir) == "image"
+
+
+def _write_mage_checkpoint(model_dir):
+    text_encoder = model_dir / "text_encoder"
+    text_encoder.mkdir(parents=True)
+    (text_encoder / "tokenizer.json").write_text("{}")
+    (text_encoder / "tokenizer_config.json").write_text("{}")
+    for component in ("transformer", "vae"):
+        component_dir = model_dir / component
+        component_dir.mkdir()
+    for component in ("transformer", "vae", "text_encoder"):
+        component_dir = model_dir / component
+        (component_dir / "config.json").write_text("{}")
+        (component_dir / "diffusion_pytorch_model.safetensors").write_bytes(b"weights")
+    (model_dir / "model_index.json").write_text('{"_class_name": "MageFlowPipeline"}')
+
+
+@pytest.mark.parametrize(
+    ("variant", "tasks"),
+    [
+        ("mage-flow-turbo", ["generation"]),
+        ("mage-flow-edit-turbo", ["edit"]),
+    ],
+)
+def test_backend_recipe_overrides_folder_name_and_registry_tasks(
+    tmp_path, variant, tasks
+):
+    model_dir = tmp_path / (
+        "Mage-Flow-Edit-Turbo" if tasks == ["generation"] else "Mage-Flow-Turbo"
+    )
+    _write_mage_checkpoint(model_dir)
+    (model_dir / "mlx_mage_flow.json").write_text(json.dumps({"variant": variant}))
+
+    assert detect_image_tasks(model_dir) == tasks
+    model = discover_models(tmp_path)[model_dir.name]
+    assert model.model_type == model.engine_type == "image"
+    assert model.tasks == model.capabilities == tasks
+
+
+def test_renamed_checkpoint_tasks_do_not_require_registry_alias(tmp_path):
+    model_dir = tmp_path / "my-custom-checkpoint"
+    _write_mage_checkpoint(model_dir)
+    (model_dir / "mlx_mage_flow.json").write_text(
+        json.dumps({"variant": "mage-flow-edit-turbo"})
+    )
+    (model_dir / "transformer" / "config.json").write_text(
+        '{"_class_name": "MageFlowTransformer2DModel"}'
+    )
+
+    assert infer_image_model_spec_from_name(model_dir.name) is None
+    model = discover_models(tmp_path)[model_dir.name]
+    assert model.model_type == model.engine_type == "image"
+    assert model.tasks == model.capabilities == ["edit"]
+
+
+def test_qwen_folder_name_does_not_hide_supported_mage_checkpoint(tmp_path):
+    model_dir = tmp_path / "Qwen-Image-2.1-Turbo"
+    _write_mage_checkpoint(model_dir)
+    (model_dir / "mlx_mage_flow.json").write_text(
+        json.dumps({"variant": "mage-flow-edit-turbo"})
+    )
+
+    assert detect_image_tasks(model_dir) == ["edit"]
+    model = discover_models(tmp_path)[model_dir.name]
+    assert model.tasks == model.capabilities == ["edit"]
+    assert model.image_metadata["base_model"] == "MageFlowPipeline"
+
+
+def test_incomplete_named_checkpoint_is_not_discovered(tmp_path):
+    model_dir = tmp_path / "Mage-Flow-Edit-Turbo"
+    _write_mage_checkpoint(model_dir)
+    (model_dir / "text_encoder" / "config.json").unlink()
+    assert detect_image_tasks(model_dir) == []
+    assert model_dir.name not in discover_models(tmp_path)
 
 
 def test_manifest_keeps_quantize_for_clear_engine_validation(tmp_path):

@@ -1,8 +1,13 @@
 # mlx-vlm image compatibility
 
-The pinned mlx-vlm version includes native Z-Image and ERNIE-Image generation
-and img2img support. oMLX no longer vendors either model package.
+oMLX delegates image model detection, per-model sampling defaults and input
+validation to mlx-vlm.
 
-The small runtime wrappers preserve oMLX's nullable request-default behavior.
-They also force native Z-Image tokenizer loading to remain local with
+The tokenizer patch forces the native Z-Image tokenizer to load locally with
 `trust_remote_code=False`, preserving oMLX's safe model-loading default.
+
+Local generation loading checks supported checkpoint metadata before folder
+aliases, matching mlx-vlm's capability probe. The pinned loader otherwise
+checks aliases first and can select Qwen for a renamed Mage-Flow checkpoint.
+Remote references and checkpoints without a supported metadata match still
+use the native loader.

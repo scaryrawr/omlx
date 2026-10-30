@@ -18,6 +18,7 @@ from omlx.utils.optional_deps import MLX_VLM_MISSING_MESSAGE
 
 class _FakeImageGenerationRequest:
     def __init__(self, **kwargs: Any) -> None:
+        self.width = self.height = 512
         self.__dict__.update(kwargs)
 
 
@@ -77,6 +78,21 @@ def fake_mlx_vlm(monkeypatch):
         image_module.mx, "clear_cache", lambda: cleanup_calls.append("clear_cache")
     )
     return SimpleNamespace(api=api, cleanup_calls=cleanup_calls)
+
+
+@pytest.mark.parametrize("task", ["generation", "edit"])
+@pytest.mark.parametrize("seed", [None, 0, 123])
+async def test_requests_preserve_optional_seed(fake_mlx_vlm, task, seed):
+    engine = ImageEngine(model_name="image-model", tasks=[task])
+    await engine.start()
+    kwargs = {} if seed is None else {"seed": seed}
+
+    if task == "generation":
+        await engine.generate("a cat", **kwargs)
+    else:
+        await engine.edit("a cat", image_paths=["input.png"], **kwargs)
+
+    assert fake_mlx_vlm.api.models[-1].calls[-1][1].seed == seed
 
 
 async def test_generate_loads_local_manifest_path_with_request_defaults(
@@ -167,7 +183,7 @@ async def test_qwen21_generates_edits_and_switches_one_variant(
     edit = await engine.edit("combine", ["first.png", "second.png"])
     request = fake_mlx_vlm.api.models[-1].calls[-1][1]
     assert request.image_paths == ("first.png", "second.png")
-    assert request.steps == (8 if "turbo" in base_model else 40)
+    assert request.steps is None
     assert "strength" not in request.extra
     assert edit.metadata["input_image_count"] == 2
     assert len(engine._models) == 1
@@ -228,20 +244,18 @@ async def test_image_cancellation_drains_worker_before_unlock_and_cleanup(
 
 
 @pytest.mark.parametrize(
-    ("base_model", "expected_steps", "expected_guidance"),
+    "base_model",
     [
-        ("flux2-klein-4b", 4, 1.0),
-        ("mage-flow-base", 30, 5.0),
-        ("mage-flow", 20, 5.0),
-        ("mage-flow-turbo", 4, 1.0),
-        ("z-image-turbo", 9, 0.0),
-        ("ernie-image-turbo", 8, 1.0),
-        ("ming-image-0.1-design", 12, 1.0),
+        "flux2-klein-4b",
+        "mage-flow-base",
+        "mage-flow",
+        "mage-flow-turbo",
+        "z-image-turbo",
+        "ernie-image-turbo",
+        "ming-image-0.1-design",
     ],
 )
-async def test_generation_uses_family_defaults(
-    fake_mlx_vlm, base_model, expected_steps, expected_guidance
-):
+async def test_generation_leaves_family_defaults_to_backend(fake_mlx_vlm, base_model):
     engine = ImageEngine(
         model_name=base_model,
         image_metadata={"backend": "mlx-vlm", "base_model": base_model},
@@ -249,13 +263,12 @@ async def test_generation_uses_family_defaults(
     )
 
     await engine.start()
-    result = await engine.generate("a cat")
+    await engine.generate("a cat")
 
     _, request = fake_mlx_vlm.api.models[-1].calls[-1]
-    assert request.steps == expected_steps
-    assert request.guidance == expected_guidance
-    assert result.metadata["steps"] == expected_steps
-    assert result.metadata["guidance"] == expected_guidance
+    assert request.steps is None
+    assert request.guidance is None
+    assert request.width == request.height == 512
 
 
 async def test_request_defaults_override_manifest_and_family_defaults(fake_mlx_vlm):
@@ -317,7 +330,7 @@ async def test_edit_routes_multiple_mage_inputs_and_strength_aliases(fake_mlx_vl
 
 
 @pytest.mark.parametrize("base_model", ["z-image-turbo", "ernie-image-turbo"])
-async def test_edit_uses_family_image_strength_default(fake_mlx_vlm, base_model):
+async def test_edit_leaves_family_defaults_to_backend(fake_mlx_vlm, base_model):
     engine = ImageEngine(
         model_name=base_model,
         image_metadata={"backend": "mlx-vlm", "base_model": base_model},
@@ -328,9 +341,9 @@ async def test_edit_uses_family_image_strength_default(fake_mlx_vlm, base_model)
     await engine.edit("make it brighter", image_paths=["input.png"])
 
     _, request = fake_mlx_vlm.api.models[-1].calls[-1]
-    assert request.extra["image_strength"] == 0.6
-    assert request.extra["strength"] == 0.6
-    assert request.steps == 8
+    assert request.extra == {}
+    assert request.steps is None
+    assert request.guidance is None
 
 
 async def test_manifest_image_strength_overrides_family_default(fake_mlx_vlm):
@@ -350,21 +363,6 @@ async def test_manifest_image_strength_overrides_family_default(fake_mlx_vlm):
     _, request = fake_mlx_vlm.api.models[-1].calls[-1]
     assert request.extra["image_strength"] == 0.4
     assert request.extra["strength"] == 0.4
-
-
-@pytest.mark.parametrize("base_model", ["z-image", "z-image-turbo", "ernie-image"])
-async def test_single_source_edit_families_reject_multiple_images(
-    fake_mlx_vlm, base_model
-):
-    engine = ImageEngine(
-        model_name=base_model,
-        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
-        tasks=["edit"],
-    )
-    await engine.start()
-
-    with pytest.raises(ValueError, match="exactly one input image"):
-        await engine.edit("combine", image_paths=["a.png", "b.png"])
 
 
 async def test_all_current_image_families_reject_masks(fake_mlx_vlm):
@@ -493,7 +491,7 @@ async def test_quantize_is_rejected_in_manifest_and_request(fake_mlx_vlm):
         await engine.generate("a cat", quantize=4)
 
 
-async def test_start_rejects_unsupported_backend_or_model(fake_mlx_vlm):
+async def test_start_rejects_unsupported_backend(fake_mlx_vlm):
     bad_backend = ImageEngine(
         model_name="unsupported",
         image_metadata={"backend": "other", "base_model": "flux2-klein-4b"},
@@ -502,13 +500,28 @@ async def test_start_rejects_unsupported_backend_or_model(fake_mlx_vlm):
     with pytest.raises(ValueError, match="Unsupported image backend"):
         await bad_backend.start()
 
-    bad_model = ImageEngine(
-        model_name="unsupported",
-        image_metadata={"backend": "mlx-vlm", "base_model": "schnell"},
-        tasks=["generation"],
+
+@pytest.mark.parametrize("base_model", ["new-image-family", "mage-flow-turbo"])
+async def test_discovered_tasks_are_not_limited_by_fork_registry(
+    fake_mlx_vlm, tmp_path, base_model
+):
+    engine = ImageEngine(
+        model_name="new-image-family",
+        model_path=str(tmp_path),
+        image_metadata={"backend": "mlx-vlm", "base_model": base_model},
+        tasks=["generation", "edit"],
     )
-    with pytest.raises(ValueError, match="Unsupported mlx-vlm image base_model"):
-        await bad_model.start()
+    await engine.start()
+    await engine.generate("a fox")
+    await engine.edit("combine", ["first.png", "second.png"])
+    assert fake_mlx_vlm.api.loads == [
+        (str(tmp_path), "generate"),
+        (str(tmp_path), "edit"),
+    ]
+    request = fake_mlx_vlm.api.models[-1].calls[-1][1]
+    assert request.image_paths == ("first.png", "second.png")
+    assert request.steps is None
+    assert request.guidance is None
 
 
 @pytest.mark.parametrize(

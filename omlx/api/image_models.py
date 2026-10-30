@@ -18,6 +18,7 @@ from .shared_models import get_unix_timestamp
 
 ImageOutputFormat = Literal["png", "jpeg", "webp"]
 ImageResponseFormat = Literal["b64_json", "url"]
+MAX_IMAGE_OUTPUT_PIXELS = 4 * 1024 * 1024
 
 
 def parse_image_size(size: str | None) -> tuple[int | None, int | None]:
@@ -44,6 +45,8 @@ def parse_image_size(size: str | None) -> tuple[int | None, int | None]:
 
     if width <= 0 or height <= 0:
         raise ValueError("size dimensions must be positive")
+    if width * height > MAX_IMAGE_OUTPUT_PIXELS:
+        raise ValueError(f"size area must not exceed {MAX_IMAGE_OUTPUT_PIXELS} pixels")
     return width, height
 
 

@@ -207,7 +207,6 @@ def test_qwen_engine_routes_execute_saved_recipe_without_weights(
 
     api = replace(api, load_image_model=load)
     monkeypatch.setattr("omlx.engine.image._image_api", lambda: api)
-    monkeypatch.setenv("OMLX_IMAGE_TMPDIR", str(tmp_path / "inputs"))
     engine = ImageEngine(
         model_name="tiny-qwen",
         model_path=str(checkpoint),
