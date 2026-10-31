@@ -1708,7 +1708,15 @@ def run_route(layer, x2, route: str, *, sums=None):
         )
     if route == "mma":
         return vk_qmm_mma(*args, group_size=layer.group_size, bits=layer.bits)
-    return vk_qmm(*args, bits=layer.bits, group_size=layer.group_size)
+    return vk_qmm(
+        x2,
+        layer.weight,
+        layer.scales,
+        layer.biases if layer.biases is not None else layer.scales,
+        bits=layer.bits,
+        group_size=layer.group_size,
+        mode=getattr(layer, "mode", "affine"),
+    )
 
 
 def takes_verify_route(layer, rows: int, dtype) -> bool:

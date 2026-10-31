@@ -50,6 +50,22 @@ def test_verify_qmm_matches_quantized_linear(mode, rows):
 
 
 @pytest.mark.parametrize("mode", ["mxfp4", "mxfp8"])
+def test_verify_run_route_matches_mxfp_quantized_linear(mode):
+    bits = 4 if mode == "mxfp4" else 8
+    quantized = nn.QuantizedLinear.from_linear(
+        nn.Linear(256, 128, bias=False), group_size=32, bits=bits, mode=mode
+    )
+    inputs = mx.random.normal((3, 256), dtype=mx.bfloat16)
+    expected = quantized(inputs)
+    actual = qwen35_verify_qmm.run_route(quantized, inputs, "vk")
+    mx.eval(expected, actual)
+    error = mx.max(
+        mx.abs(expected.astype(mx.float32) - actual.astype(mx.float32))
+    ).item()
+    assert error <= 1.0
+
+
+@pytest.mark.parametrize("mode", ["mxfp4", "mxfp8"])
 def test_verify_qmm_mxfp_lm_head_tile_matches_quantized_linear(mode):
     bits = 4 if mode == "mxfp4" else 8
     linear = nn.Linear(64, 100000, bias=False)
