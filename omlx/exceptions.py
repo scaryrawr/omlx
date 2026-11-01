@@ -379,6 +379,18 @@ class InvalidRequestError(APIError):
         self.field = field
 
 
+class UnsupportedKokoroLanguageError(InvalidRequestError):
+    """Kokoro's selected language requires the optional eSpeak backend."""
+
+    def __init__(self, language: str):
+        self.language = language
+        super().__init__(
+            f"Kokoro's {language} language path requires eSpeak. "
+            "Use Qwen3-TTS for this language.",
+            field="language",
+        )
+
+
 class RateLimitError(APIError):
     """Request was rate limited."""
 

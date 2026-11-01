@@ -2,8 +2,9 @@
 """
 MLX Embedding Model wrapper.
 
-This module loads XLM-RoBERTa, BERT, and Qwen2-decoder embedding models with
-native omlx implementations and every other embedding model through mlx-vlm.
+This module loads Qwen2-decoder embedding models with a native omlx
+implementation and every other embedding model (including XLM-RoBERTa and
+BERT) through mlx-vlm.
 """
 
 import gc
@@ -375,9 +376,11 @@ class MLXEmbeddingModel:
 
     def _load_native(self) -> bool:
         """
-        Try to load using native omlx implementations (xlm_roberta, bert).
+        Try to load using the native omlx Qwen2-decoder implementation.
 
-        Returns True if native loading succeeded, False otherwise.
+        Returns True if native loading succeeded, False otherwise. Encoder
+        families such as XLM-RoBERTa/BERT are served by mlx-vlm's own MIT
+        implementations, so they are intentionally absent from this table.
         """
         from transformers import AutoTokenizer
 
@@ -398,9 +401,6 @@ class MLXEmbeddingModel:
         arch = architectures[0] if architectures else ""
 
         native_arch_modules = {
-            "XLMRobertaModel": "xlm_roberta",
-            "BertModel": "xlm_roberta",
-            "BertForMaskedLM": "xlm_roberta",
             "Qwen2ForCausalLM": "qwen2_embedding",
         }
         module_name = native_arch_modules.get(arch)
@@ -526,6 +526,21 @@ class MLXEmbeddingModel:
                 processor, family, self.audio_max_seconds
             )
         self._supports_audio = getattr(model, "audio_tower", None) is not None
+        # Encoder checkpoints keep every position inside their learned table
+        # (RoBERTa counts positions from pad_token_id + 1). Absolute position
+        # tables read out of range without an error, so cap the input length.
+        if not hasattr(model, "max_input_length"):
+            max_position_embeddings = getattr(
+                model.config, "max_position_embeddings", None
+            )
+            if isinstance(max_position_embeddings, int):
+                pad_token_id = getattr(model.config, "pad_token_id", None)
+                position_offset = (
+                    pad_token_id + 1
+                    if isinstance(pad_token_id, int) and model_type != "bert"
+                    else 0
+                )
+                model.max_input_length = max_position_embeddings - position_offset
         self._pad_to_max_length = model_type in _PAD_TO_MAX_LENGTH_MODEL_TYPES
         if self._pad_to_max_length:
             model.max_input_length = model.config.text_config.max_position_embeddings

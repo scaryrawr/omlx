@@ -1312,11 +1312,18 @@ class TestEmbeddingIntegration:
             pytest.skip(f"Could not load model: {e}")
 
 
-class TestNativeEmbeddingLoading:
-    """Tests for native embedding model loading (without mlx-vlm)."""
+class TestEncoderEmbeddingLoading:
+    """XLM-RoBERTa/BERT embedding checkpoints load through mlx-vlm.
 
-    class MockNativeTokenizer:
-        """Minimal tokenizer used only by native-loading tests."""
+    These encoder families used to ship as a vendored copy inside omlx; they
+    now resolve to mlx-vlm's own implementations, so the guarantees that used
+    to live in the vendored module (tokenizer contract, L2-normalized pooled
+    vectors, position-table safety, token-budget batching, weight validation)
+    are asserted against the mlx-vlm path here instead.
+    """
+
+    class MockEncoderTokenizer:
+        """Minimal tokenizer used by the encoder-path tests."""
 
         def __init__(self, vocab_size: int = 30522):
             self.vocab_size = max(vocab_size, 16)
@@ -1336,9 +1343,10 @@ class TestNativeEmbeddingLoading:
             padding=True,
             truncation=True,
             max_length=512,
+            return_attention_mask=True,
             return_tensors="np",
         ):
-            del truncation, return_tensors
+            del truncation, return_attention_mask, return_tensors
             encoded = [
                 self.encode(text, add_special_tokens=True)[:max_length]
                 for text in texts
@@ -1352,465 +1360,173 @@ class TestNativeEmbeddingLoading:
                 attention_mask.append([1] * len(ids) + [0] * pad_len)
             return {"input_ids": input_ids, "attention_mask": attention_mask}
 
-    def _write_full_native_checkpoint(self, tmp_path, config):
-        """Write a complete native checkpoint for a small embedding model."""
+    _XLM_ROBERTA_CONFIG = {
+        "model_type": "xlm-roberta",
+        "architectures": ["XLMRobertaModel"],
+        "hidden_size": 32,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 4,
+        "intermediate_size": 64,
+        "vocab_size": 128,
+        "max_position_embeddings": 40,
+        "pad_token_id": 1,
+    }
+
+    _BERT_CONFIG = {
+        "model_type": "bert",
+        "architectures": ["BertModel"],
+        "hidden_size": 32,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 4,
+        "intermediate_size": 64,
+        "vocab_size": 128,
+        "max_position_embeddings": 64,
+        "pad_token_id": 0,
+    }
+
+    def _write_checkpoint(self, tmp_path, config):
+        """Write a complete tiny checkpoint for an mlx-vlm encoder family."""
         from mlx.utils import tree_flatten
         from safetensors.numpy import save_file
 
-        from omlx.models.xlm_roberta import Model, ModelArgs
-
-        model_config = ModelArgs(**config)
-        model = Model(model_config)
+        model_type = str(config["model_type"]).replace("-", "_")
+        module = __import__(
+            f"mlx_vlm.models.{model_type}.{model_type}", fromlist=["Model"]
+        )
+        config_cls = __import__(
+            f"mlx_vlm.models.{model_type}.config", fromlist=["ModelConfig"]
+        ).ModelConfig
+        model = module.Model(config_cls.from_dict(config))
         weights = {
             name: np.array(value) for name, value in tree_flatten(model.parameters())
         }
         save_file(weights, str(tmp_path / "model.safetensors"))
 
-    def test_load_native_bert_model(self, tmp_path):
-        """Test native loading of BERT embedding model."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from safetensors.numpy import save_file
-
-        # Create minimal BERT model structure
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 384,
-            "num_hidden_layers": 6,
-            "vocab_size": 30522,
-            "num_attention_heads": 12,
-            "intermediate_size": 1536,
-            "max_position_embeddings": 512,
-            "hidden_dropout_prob": 0.1,
-            "attention_probs_dropout_prob": 0.1,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-
-        vocab_size = 30522
-        save_file(
-            {"embeddings.word_embeddings.weight": np.zeros((1, 1), dtype=np.float32)},
-            str(tmp_path / "model.safetensors"),
-        )
-
+    def _load(self, tmp_path, config):
         from omlx.models.embedding import MLXEmbeddingModel
 
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=vocab_size)
-        with (
-            patch(
-                "transformers.AutoTokenizer.from_pretrained",
-                return_value=tokenizer,
-            ) as mock_from_pretrained,
-            patch(
-                "omlx.models.embedding.MLXEmbeddingModel._validate_native_weights",
-                return_value=None,
-            ) as mock_validate_weights,
-            patch(
-                "omlx.models.xlm_roberta.Model.load_weights",
-                return_value=None,
-            ) as mock_load_weights,
-        ):
-            result = model._load_native()
-
-        assert result is True
-        assert model._loaded is True
-        assert model._using_native is True
-        mock_from_pretrained.assert_called()
-        mock_validate_weights.assert_called_once()
-        assert mock_load_weights.call_args.kwargs["strict"] is False
-
-    def test_load_native_xlm_roberta_model(self, tmp_path):
-        """Test native loading of XLMRoBERTa embedding model."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from safetensors.numpy import save_file
-
-        config = {
-            "model_type": "xlm-roberta",
-            "architectures": ["XLMRobertaModel"],
-            "hidden_size": 768,
-            "num_hidden_layers": 12,
-            "vocab_size": 250002,
-            "num_attention_heads": 12,
-            "intermediate_size": 3072,
-            "max_position_embeddings": 514,
-            "attention_probs_dropout_prob": 0.1,
-            "hidden_dropout_prob": 0.1,
-            "pad_token_id": 1,
-        }
         (tmp_path / "config.json").write_text(json.dumps(config))
-
-        vocab_size = 250002
-        save_file(
-            {"embeddings.word_embeddings.weight": np.zeros((1, 1), dtype=np.float32)},
-            str(tmp_path / "model.safetensors"),
-        )
-
-        from omlx.models.embedding import MLXEmbeddingModel
+        self._write_checkpoint(tmp_path, config)
 
         model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=vocab_size)
-        with (
-            patch(
-                "transformers.AutoTokenizer.from_pretrained",
-                return_value=tokenizer,
-            ) as mock_from_pretrained,
-            patch(
-                "omlx.models.embedding.MLXEmbeddingModel._validate_native_weights",
-                return_value=None,
-            ) as mock_validate_weights,
-            patch(
-                "omlx.models.xlm_roberta.Model.load_weights",
-                return_value=None,
-            ) as mock_load_weights,
-        ):
-            result = model._load_native()
-
-        assert result is True
-        assert model._loaded is True
-        assert model._using_native is True
-        mock_from_pretrained.assert_called()
-        mock_validate_weights.assert_called_once()
-        assert mock_load_weights.call_args.kwargs["strict"] is False
-
-    def test_load_native_supports_bfloat16_safetensors(self, tmp_path):
-        """Native embedding load must not route bf16 safetensors through NumPy."""
-        import mlx.core as mx
-
-        config = {
-            "model_type": "xlm-roberta",
-            "architectures": ["XLMRobertaModel"],
-            "hidden_size": 4,
-            "num_hidden_layers": 1,
-            "vocab_size": 16,
-            "num_attention_heads": 1,
-            "intermediate_size": 8,
-            "max_position_embeddings": 8,
-            "attention_probs_dropout_prob": 0.0,
-            "hidden_dropout_prob": 0.0,
-            "pad_token_id": 1,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-        mx.save_safetensors(
-            str(tmp_path / "model.safetensors"),
-            {"embeddings.word_embeddings.weight": mx.ones((16, 4), dtype=mx.bfloat16)},
-        )
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=config["vocab_size"])
-        with (
-            patch(
-                "transformers.AutoTokenizer.from_pretrained",
-                return_value=tokenizer,
-            ),
-            patch(
-                "omlx.models.embedding.MLXEmbeddingModel._validate_native_weights",
-                return_value=None,
-            ) as mock_validate_weights,
-            patch(
-                "omlx.models.xlm_roberta.Model.load_weights",
-                return_value=None,
-            ) as mock_load_weights,
-        ):
-            result = model._load_native()
-
-        assert result is True
-        mock_validate_weights.assert_called_once()
-        loaded_weights = dict(mock_load_weights.call_args.args[0])
-        assert loaded_weights["embeddings.word_embeddings.weight"].dtype == mx.bfloat16
-
-    def test_load_native_rejects_missing_required_weights(self, tmp_path):
-        """Native loading must fail when core transformer weights are missing."""
-        from safetensors.numpy import save_file
-
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 384,
-            "num_hidden_layers": 2,
-            "vocab_size": 30522,
-            "num_attention_heads": 12,
-            "intermediate_size": 1536,
-            "max_position_embeddings": 512,
-            "hidden_dropout_prob": 0.1,
-            "attention_probs_dropout_prob": 0.1,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-
-        save_file(
-            {
-                "embeddings.word_embeddings.weight": np.random.randn(30522, 384).astype(
-                    np.float32
-                )
-            },
-            str(tmp_path / "model.safetensors"),
-        )
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=30522)
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=tokenizer,
-        ):
-            result = model._load_native()
-
-        assert result is False
-        assert model._loaded is False
-
-    def test_load_native_rejects_shape_mismatches(self, tmp_path):
-        """Native loading must fail when a required weight shape is incompatible."""
-        from safetensors.numpy import save_file
-
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 384,
-            "num_hidden_layers": 2,
-            "vocab_size": 30522,
-            "num_attention_heads": 12,
-            "intermediate_size": 1536,
-            "max_position_embeddings": 512,
-            "hidden_dropout_prob": 0.1,
-            "attention_probs_dropout_prob": 0.1,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-
-        self._write_full_native_checkpoint(tmp_path, config)
-
-        from safetensors import safe_open
-
-        weights = {}
-        with safe_open(tmp_path / "model.safetensors", framework="mlx") as f:
-            for key in f.keys():  # noqa: SIM118 - safe_open is not iterable.
-                weights[key] = np.array(f.get_tensor(key))
-
-        weights["embeddings.word_embeddings.weight"] = np.random.randn(
-            30523, 384
-        ).astype(np.float32)
-        save_file(weights, str(tmp_path / "model.safetensors"))
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=30522)
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=tokenizer,
-        ):
-            result = model._load_native()
-
-        assert result is False
-        assert model._loaded is False
-
-    def test_native_embed_tokenizes_with_tokenizer_call(self, tmp_path):
-        """transformers tokenizers expose a Rust _tokenizer that must stay unused."""
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 32,
-            "num_hidden_layers": 1,
-            "vocab_size": 128,
-            "num_attention_heads": 4,
-            "intermediate_size": 64,
-            "max_position_embeddings": 64,
-            "attention_probs_dropout_prob": 0.0,
-            "hidden_dropout_prob": 0.0,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-        self._write_full_native_checkpoint(tmp_path, config)
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=config["vocab_size"])
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
-        ):
+        tokenizer = self.MockEncoderTokenizer(config["vocab_size"])
+        with patch("omlx.models.embedding.load_processor", return_value=tokenizer):
             model.load()
-            expected = model.embed(["hello world"]).embeddings
-            # Its encode() would apply tokenizer.json padding as real tokens.
-            tokenizer._tokenizer = object()
-            assert model.embed(["hello world"]).embeddings == expected
+        return model
 
-    def test_position_ids_follow_bert_and_roberta_numbering(self):
-        """BERT positions start at 0; XLM-R positions start after padding_idx."""
-        import mlx.core as mx
+    def test_vendored_encoder_module_is_gone(self):
+        """Nothing may re-add the old vendored encoder implementation."""
+        import importlib.util
 
-        from omlx.models.xlm_roberta import Model, ModelArgs
+        import omlx.models.embedding as embedding_module
 
-        input_ids = mx.array([[5, 6, 7, 8]])
-        common = dict(
-            hidden_size=8,
-            num_hidden_layers=1,
-            num_attention_heads=2,
-            intermediate_size=16,
-            vocab_size=16,
+        assert importlib.util.find_spec("omlx.models.xlm_roberta") is None
+        assert "xlm_roberta" not in Path(embedding_module.__file__).read_text()
+
+    def test_bert_checkpoint_routes_to_mlx_vlm(self, tmp_path):
+        """BERT resolves through mlx-vlm rather than a removed internal copy."""
+        model = self._load(tmp_path, dict(self._BERT_CONFIG))
+
+        assert model._using_native is False
+        assert model._hidden_size == self._BERT_CONFIG["hidden_size"]
+        assert model.model.model_type == "bert"
+
+    def test_xlm_roberta_position_table_caps_input_length(self, tmp_path):
+        """Absolute position tables read out of range silently, so cap inputs."""
+        model = self._load(tmp_path, dict(self._XLM_ROBERTA_CONFIG))
+
+        # RoBERTa numbers positions from pad_token_id + 1, so the top of the
+        # table is unreachable; BERT's whole table stays usable.
+        assert (
+            model.model.max_input_length
+            == self._XLM_ROBERTA_CONFIG["max_position_embeddings"]
+            - self._XLM_ROBERTA_CONFIG["pad_token_id"]
+            - 1
         )
-        cases = (
-            ("bert", 0, 512, [0, 1, 2, 3], 512),
-            ("xlm-roberta", 1, 8194, [2, 3, 4, 5], 8192),
+        # An over-long request without an explicit limit must be clamped to the
+        # table instead of reading positions out of range.
+        long_text = " ".join(f"tok{i}" for i in range(400))
+        assert model.embed([long_text], truncation=True).total_tokens <= (
+            model.model.max_input_length
         )
-        for model_type, pad_token_id, table, positions, max_input in cases:
-            model = Model(
-                ModelArgs(
-                    model_type=model_type,
-                    pad_token_id=pad_token_id,
-                    max_position_embeddings=table,
-                    **common,
-                )
-            )
-            model.train(False)
-            expected = model.embeddings(input_ids, position_ids=mx.array([positions]))
 
-            assert mx.array_equal(model.embeddings(input_ids), expected).item()
-            assert model.max_input_length == max_input
+    def test_bert_position_table_is_fully_usable(self, tmp_path):
+        model = self._load(tmp_path, dict(self._BERT_CONFIG))
 
-    def test_load_native_falls_back_for_unknown_arch(self, tmp_path):
-        """Test that native loading returns False for unsupported architectures."""
-        import sys
+        assert (
+            model.model.max_input_length
+            == self._BERT_CONFIG["max_position_embeddings"]
+        )
 
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-
-        # Create config with unknown embedding architecture
-        config = {
-            "model_type": "custom-embedding",
-            "architectures": ["CustomEmbeddingModel"],
-            "hidden_size": 512,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        result = model._load_native()
-        assert result is False
-        assert model._loaded is False
+    def test_embed_tokenizes_with_tokenizer_call(self, tmp_path):
+        """transformers tokenizers expose a Rust _tokenizer that must stay unused."""
+        model = self._load(tmp_path, dict(self._BERT_CONFIG))
+        tokenizer = model.processor
+        expected = model.embed(["hello world"]).embeddings
+        # Its encode() would apply tokenizer.json padding as real tokens.
+        tokenizer._tokenizer = object()
+        assert model.embed(["hello world"]).embeddings == expected
 
     def test_embed_produces_normalized_vectors(self, tmp_path):
-        """Test that embed produces L2-normalized embedding vectors."""
-        import math
-        import sys
+        """embed() returns one L2-normalized vector per input at the model dim."""
+        model = self._load(tmp_path, dict(self._BERT_CONFIG))
+        output = model.embed(["hello world", "a longer sentence with more words"])
 
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 128,
-            "num_hidden_layers": 2,
-            "vocab_size": 1000,
-            "num_attention_heads": 4,
-            "intermediate_size": 512,
-            "max_position_embeddings": 512,
-            "attention_probs_dropout_prob": 0.0,
-            "hidden_dropout_prob": 0.0,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-        vocab_size = config["vocab_size"]
-
-        self._write_full_native_checkpoint(tmp_path, config)
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
-        tokenizer = self.MockNativeTokenizer(vocab_size=vocab_size)
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=tokenizer,
-        ):
-            model.load()
-            output = model.embed(["hello world"])
-
-        # Check normalization
-        emb = output.embeddings[0]
-        norm = math.sqrt(sum(x * x for x in emb))
-        assert abs(norm - 1.0) < 0.01, f"Embedding not normalized: norm={norm}"
-
-    def test_xlm_roberta_sdpa_attention_matches_eager(self):
-        """The fused attention path must match the eager path on padded rows."""
-        import mlx.core as mx
-
-        from omlx.models.xlm_roberta import Model, ModelArgs
-
-        model = Model(
-            ModelArgs(
-                hidden_size=32,
-                num_hidden_layers=2,
-                num_attention_heads=4,
-                intermediate_size=64,
-                vocab_size=100,
-                max_position_embeddings=40,
-            )
-        )
-        model.train(False)
-        input_ids = mx.array([[0, 5, 6, 7, 8, 2], [0, 9, 2, 1, 1, 1]])
-        attention_mask = mx.array([[1, 1, 1, 1, 1, 1], [1, 1, 1, 0, 0, 0]])
-
-        fused = model(input_ids, attention_mask=attention_mask)
-        # output_attentions needs the probabilities, so it keeps the eager path.
-        eager = model(input_ids, attention_mask=attention_mask, output_attentions=True)
-
-        assert mx.allclose(
-            fused.last_hidden_state, eager.last_hidden_state, atol=1e-5
-        ).item()
+        assert len(output.embeddings) == 2
+        for emb in output.embeddings:
+            assert len(emb) == self._BERT_CONFIG["hidden_size"]
+            norm = math.sqrt(sum(x * x for x in emb))
+            assert abs(norm - 1.0) < 1e-3, f"not L2-normalized: norm={norm}"
 
     def test_embed_batches_long_inputs_in_input_order(self, tmp_path):
         """Token-budget batches must match single-input vectors in input order."""
-        config = {
-            "model_type": "bert",
-            "architectures": ["BertModel"],
-            "hidden_size": 32,
-            "num_hidden_layers": 1,
-            "vocab_size": 128,
-            "num_attention_heads": 4,
-            "intermediate_size": 64,
-            "max_position_embeddings": 128,
-            "attention_probs_dropout_prob": 0.0,
-            "hidden_dropout_prob": 0.0,
-            "pad_token_id": 0,
-        }
-        (tmp_path / "config.json").write_text(json.dumps(config))
-        self._write_full_native_checkpoint(tmp_path, config)
-
-        from omlx.models.embedding import MLXEmbeddingModel
-
-        model = MLXEmbeddingModel(str(tmp_path))
+        config = {**self._BERT_CONFIG, "max_position_embeddings": 256}
+        model = self._load(tmp_path, config)
+        model._is_compiled = False
+        model._compiled_embed = None
         texts = ["w " * 40, "a b", "x " * 20, "c d e"]
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=self.MockNativeTokenizer(vocab_size=config["vocab_size"]),
-        ):
-            model.load()
-            singles = [model.embed([text], max_length=64) for text in texts]
 
-            shapes = []
-            forward = model.model
+        singles = [model.embed([text], max_length=64) for text in texts]
 
-            def recording_forward(**kwargs):
-                shapes.append(kwargs["input_ids"].shape)
-                return forward(**kwargs)
+        shapes = []
+        forward = model.model
 
-            model.model = recording_forward
-            with patch("omlx.models.embedding.ENCODER_BATCH_TOKEN_BUDGET", 48):
-                batched = model.embed(texts, max_length=64)
+        def recording_forward(**kwargs):
+            shapes.append(kwargs["input_ids"].shape)
+            return forward(**kwargs)
+
+        model.model = recording_forward
+        with patch("omlx.models.embedding.ENCODER_BATCH_TOKEN_BUDGET", 48):
+            batched = model.embed(texts, max_length=64)
 
         assert len(shapes) == 3
         assert all(batch * width <= 48 for batch, width in shapes)
         for got, single in zip(batched.embeddings, singles):
             assert got == pytest.approx(single.embeddings[0], abs=1e-5)
         assert batched.total_tokens == sum(single.total_tokens for single in singles)
+
+    def test_incomplete_checkpoint_fails_the_load(self, tmp_path):
+        """A partial checkpoint must surface as a failed load, not a silently
+        half-loaded encoder (weight validation lives in the loader now)."""
+        from safetensors.numpy import save_file
+
+        config = dict(self._BERT_CONFIG)
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        save_file(
+            {"embeddings.word_embeddings.weight": np.zeros((1, 1), dtype=np.float32)},
+            str(tmp_path / "model.safetensors"),
+        )
+
+        from omlx.models.embedding import MLXEmbeddingModel
+
+        model = MLXEmbeddingModel(str(tmp_path))
+        with patch(
+            "omlx.models.embedding.load_processor",
+            return_value=self.MockEncoderTokenizer(config["vocab_size"]),
+        ):
+            with pytest.raises(Exception):
+                model.load()
+        assert model._loaded is False
 
 
 class TestGetEmbeddingMaxLength:

@@ -10,9 +10,12 @@ required. Integration tests (marked @pytest.mark.slow) need a real model.
 
 import asyncio
 import base64
+import builtins
 import io
+import re
 import struct
 import threading
+import tomllib
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -42,6 +45,121 @@ def _make_wav_bytes(duration_secs: float = 0.1, sample_rate: int = 22050) -> byt
 DUMMY_WAV = _make_wav_bytes()
 RIFF_MAGIC = b"RIFF"
 MAX_WAV_CHUNK_SIZE = 0xFFFFFFFF
+
+
+def test_audio_and_bundle_extras_omit_espeak_packages():
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject.open("rb") as file:
+        extras = tomllib.load(file)["project"]["optional-dependencies"]
+
+    for extra_name in ("audio", "bundle"):
+        package_names = {
+            re.split(r"[\[<>=!~;\s]", requirement, maxsplit=1)[0]
+            .lower()
+            .replace("_", "-")
+            for requirement in extras[extra_name]
+        }
+        assert "phonemizer-fork" not in package_names
+        assert "espeakng-loader" not in package_names
+
+
+def test_english_kokoro_pipeline_uses_g2p_without_gpl_imports(monkeypatch):
+    pipeline = pytest.importorskip("mlx_audio.tts.models.kokoro.pipeline")
+    from omlx.exceptions import UnsupportedKokoroLanguageError
+    from omlx.patches.mlx_audio_compat import ensure_english_kokoro_g2p
+
+    monkeypatch.setattr(pipeline, "_get_misaki_espeak", pipeline._get_misaki_espeak)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: ensure_english_kokoro_g2p(), range(16)))
+    assert all(results)
+
+    g2p_calls = []
+
+    class FakeG2P:
+        def __init__(self, *, trf, british, fallback, unk):
+            g2p_calls.append(
+                {
+                    "trf": trf,
+                    "british": british,
+                    "fallback": fallback,
+                    "unk": unk,
+                }
+            )
+
+    monkeypatch.setattr(
+        pipeline,
+        "_get_misaki_en",
+        lambda: SimpleNamespace(G2P=FakeG2P),
+    )
+    original_import = builtins.__import__
+    original_import_module = pipeline.importlib.import_module
+
+    def is_forbidden_import(name):
+        return any(
+            name == package or name.startswith(f"{package}.")
+            for package in ("misaki.espeak", "phonemizer", "espeakng_loader")
+        )
+
+    def reject_gpl_import(name, *args, **kwargs):
+        if is_forbidden_import(name):
+            raise AssertionError(f"unexpected GPL phonemizer import: {name}")
+        return original_import(name, *args, **kwargs)
+
+    def reject_gpl_import_module(name, package=None):
+        if is_forbidden_import(name):
+            raise AssertionError(f"unexpected GPL phonemizer import: {name}")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr(builtins, "__import__", reject_gpl_import)
+    monkeypatch.setattr(pipeline.importlib, "import_module", reject_gpl_import_module)
+
+    for lang_code, british in (("a", False), ("b", True)):
+        pipeline.KokoroPipeline(lang_code, model=False, repo_id="test")
+        assert g2p_calls[-1] == {
+            "trf": False,
+            "british": british,
+            "fallback": None,
+            "unk": "",
+        }
+
+    with pytest.raises(UnsupportedKokoroLanguageError, match="requires eSpeak"):
+        pipeline.KokoroPipeline("e", model=False, repo_id="test")
+
+    monkeypatch.setattr(
+        pipeline, "_get_misaki_ja", lambda: SimpleNamespace(JAG2P=lambda: "ja")
+    )
+    monkeypatch.setattr(
+        pipeline, "_get_misaki_zh", lambda: SimpleNamespace(ZHG2P=lambda: "zh")
+    )
+    assert pipeline.KokoroPipeline("j", model=False, repo_id="test").g2p == "ja"
+    assert pipeline.KokoroPipeline("z", model=False, repo_id="test").g2p == "zh"
+
+
+@pytest.mark.asyncio
+async def test_tts_start_installs_kokoro_bridge_before_loading(monkeypatch):
+    pytest.importorskip("mlx_audio.tts.utils")
+    from omlx.engine.tts import TTSEngine
+    from omlx.patches import mlx_audio_compat
+
+    calls = []
+
+    def install_bridge():
+        calls.append("bridge")
+        return True
+
+    def load_model(model_name, *, strict):
+        calls.append(("load", model_name, strict))
+        return object()
+
+    monkeypatch.setattr(mlx_audio_compat, "ensure_english_kokoro_g2p", install_bridge)
+    monkeypatch.setattr("mlx_audio.tts.utils.load_model", load_model)
+
+    engine = TTSEngine("kokoro")
+    await engine.start()
+
+    assert calls == ["bridge", ("load", "kokoro", True)]
 
 
 def _make_mock_tts_engine(wav_bytes: bytes = None) -> MagicMock:
@@ -190,6 +308,30 @@ class TestTTSKokoroLangInference:
         await engine.synthesize("hello", voice="aiden")
 
         assert captured["had_lang_code"] is False
+
+    @pytest.mark.asyncio
+    async def test_qwen_language_remains_passed_to_model(self):
+        import numpy as np
+
+        captured: dict = {}
+
+        class FakeQwen:
+            sample_rate = 24000
+
+            def generate(
+                self, *, text, verbose=False, voice=None, lang_code=None, **kwargs
+            ):
+                captured.update(voice=voice, lang_code=lang_code)
+                return [SimpleNamespace(audio=np.zeros(100, dtype=np.float32))]
+
+        from omlx.engine.tts import TTSEngine
+
+        engine = TTSEngine("qwen3-tts")
+        engine._model = FakeQwen()
+
+        await engine.synthesize("Bonjour", voice="Vivian", language="French")
+
+        assert captured == {"voice": "Vivian", "lang_code": "French"}
 
 
 class TestTTSPresetVoiceRouting:
@@ -487,6 +629,25 @@ class TestTTSEndpointErrors:
         )
         assert response.status_code >= 500
 
+    def test_unsupported_kokoro_language_returns_400(self, server_tts_client):
+        from omlx.exceptions import UnsupportedKokoroLanguageError
+
+        client, mock_pool = server_tts_client
+        mock_pool.get_engine.return_value.synthesize = AsyncMock(
+            side_effect=UnsupportedKokoroLanguageError("es")
+        )
+
+        response = client.post(
+            "/v1/audio/speech",
+            json={"model": "kokoro", "input": "Hola", "language": "es"},
+        )
+
+        assert response.status_code == 400
+        detail = response.json().get("detail") or response.json().get(
+            "error", {}
+        ).get("message", "")
+        assert "Qwen3-TTS" in detail
+
     def test_missing_model_field_returns_error(self, server_tts_client):
         """Request without 'model' field returns 4xx."""
         client, _ = server_tts_client
@@ -750,6 +911,32 @@ class TestTTSStreaming:
 
         assert response.status_code == 500
         assert "audio/wav" not in response.headers.get("content-type", "")
+
+    def test_streaming_unsupported_kokoro_language_returns_400(
+        self, server_tts_client
+    ):
+        from omlx.exceptions import UnsupportedKokoroLanguageError
+
+        client, mock_pool = server_tts_client
+        mock_pool.get_engine.return_value.synthesize = AsyncMock(
+            side_effect=UnsupportedKokoroLanguageError("es")
+        )
+
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "kokoro",
+                "input": "Hola",
+                "language": "es",
+                "stream": True,
+            },
+        )
+
+        assert response.status_code == 400
+        detail = response.json().get("detail") or response.json().get(
+            "error", {}
+        ).get("message", "")
+        assert "Qwen3-TTS" in detail
 
 
 # ---------------------------------------------------------------------------
