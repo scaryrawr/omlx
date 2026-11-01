@@ -145,12 +145,10 @@ audio = [
     # mlx-audio from commit (8c244a1, v0.6.3) with tts/stt/sts extras
     "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5",
     # Keep dependencies for existing audio models removed from upstream extras.
-    "espeakng-loader>=0.2.4",
     "librosa==0.11.0",
     "misaki>=0.9.4",
     "num2words>=0.5.14",
     "numba>=0.60.0",
-    "phonemizer-fork>=3.3.2",
     "pyloudnorm>=0.2.0",
     "spacy>=3.8.4",
     # WebSocket protocol impl for uvicorn (realtime STT endpoint). Pure
@@ -188,8 +186,6 @@ bundle = [
     "misaki>=0.9.4",
     "num2words>=0.5.14",
     "spacy>=3.8.4",
-    "phonemizer-fork>=3.3.2",
-    "espeakng-loader>=0.2.4",
     "webrtcvad>=2.0.10",
     "zstandard>=0.23.0",
     "setuptools<81",

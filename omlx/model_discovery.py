@@ -263,7 +263,7 @@ EMBEDDING_ARCHITECTURES = {
 # Supported reranker architectures
 SUPPORTED_RERANKER_ARCHITECTURES = {
     "ModernBertForSequenceClassification",  # via mlx-vlm
-    "XLMRobertaForSequenceClassification",  # omlx native implementation
+    "XLMRobertaForSequenceClassification",  # via mlx-vlm
     "JinaForRanking",  # Jina v3 listwise reranker
 }
 

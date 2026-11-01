@@ -7,7 +7,7 @@ and CausalLM-based reranker models on Apple's MLX framework.
 
 Supports:
 - ModernBertForSequenceClassification (via mlx-vlm)
-- XLMRobertaForSequenceClassification (omlx native implementation)
+- XLMRobertaForSequenceClassification (via mlx-vlm)
 - CausalLM-based rerankers (e.g., Qwen3-Reranker) via yes/no logit scoring
 - Qwen3-VL-Reranker (via mlx-vlm)
 """
@@ -97,7 +97,7 @@ class MLXRerankerModel:
 
     1. SequenceClassification models (encoder-based):
        - ModernBertForSequenceClassification (via mlx-vlm)
-       - XLMRobertaForSequenceClassification (omlx native implementation)
+       - XLMRobertaForSequenceClassification (via mlx-vlm)
 
     2. CausalLM-based rerankers (decoder-based):
        - Qwen3-Reranker and similar models that use yes/no logit scoring
@@ -207,58 +207,6 @@ class MLXRerankerModel:
                 )
 
         return True
-
-    def _load_xlm_roberta(self) -> Tuple[Any, Any]:
-        """Load XLMRoberta model using omlx native implementation."""
-        import mlx.core as mx
-        from mlx.utils import tree_unflatten
-        from transformers import AutoTokenizer
-
-        from .xlm_roberta import Model, ModelArgs
-
-        model_path = Path(self.model_name)
-
-        # Load config
-        with open(model_path / "config.json") as f:
-            config_dict = json.load(f)
-
-        config = ModelArgs(
-            **{
-                k: v
-                for k, v in config_dict.items()
-                if k in ModelArgs.__dataclass_fields__
-            }
-        )
-
-        # Create model
-        model = Model(config)
-
-        # Load weights. Use mx.load (not safetensors.safe_open + get_tensor),
-        # which reads safetensors directly into MLX arrays and supports the
-        # bfloat16 dtype. safe_open(framework="mlx").get_tensor() routes bf16
-        # through numpy, which has no bfloat16 dtype and raises
-        # "TypeError: data type 'bfloat16' not understood".
-        weights = {}
-        weight_files = list(model_path.glob("*.safetensors"))
-        for wf in weight_files:
-            weights.update(mx.load(str(wf)))
-
-        # Sanitize weights (remove "roberta." prefix, etc.)
-        weights = model.sanitize(weights)
-
-        # Load weights into model
-        model.load_weights(list(weights.items()))
-        mx.eval(model.parameters())
-        # Reranker inference must be deterministic: disable dropout in the
-        # native XLM-RoBERTa path just like the native embedding loader does.
-        model.train(False)
-
-        # Load tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            str(model_path), trust_remote_code=self.trust_remote_code
-        )
-
-        return model, tokenizer
 
     def _build_vl_item(self, item: "str | dict[str, Any]") -> RerankItem:
         """Normalize a rerank input into an mlx-vlm RerankItem.
@@ -825,11 +773,10 @@ class MLXRerankerModel:
                 self.model, self.processor = self._load_causal_lm()
                 self._is_causal_lm = True
                 self._num_labels = 2  # yes/no
-            elif arch == "XLMRobertaForSequenceClassification":
-                # Use omlx native implementation
-                self.model, self.processor = self._load_xlm_roberta()
-                self._num_labels = getattr(self.model.config, "num_labels", None)
             else:
+                # Sequence-classification encoders (ModernBERT, XLM-RoBERTa,
+                # BERT) load through mlx-vlm, whose remappings resolve each
+                # model module's SequenceClassificationModel entry point.
                 model_path = get_model_path(self.model_name)
                 config = load_config(model_path)
                 ensure_model_code_trusted(
