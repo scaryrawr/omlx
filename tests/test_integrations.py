@@ -234,7 +234,10 @@ class TestCodexIntegration:
         assert {
             e["slug"]: [lvl["effort"] for lvl in e["supported_reasoning_levels"]]
             for e in entries
-        } == {"qwen-vl": [], "dsv41": ["low", "high", "max"]}
+        } == {
+            "qwen-vl": ["low", "medium", "high"],
+            "dsv41": ["low", "high", "max"],
+        }
 
     @pytest.mark.parametrize(
         ("model", "default", "expected"),

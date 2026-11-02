@@ -77,16 +77,18 @@ def codex_model_catalog(
         models_from_status = []
         for model_id in model_ids:
             info = ctx.models_status_map.get(model_id, {})
+            model = known_models.get(model_id) or IntegrationModel(id=model_id)
             models_from_status.append(
-                known_models.get(model_id)
-                or IntegrationModel(
-                    id=model_id,
-                    context_window=info.get("max_context_window"),
-                    model_type=info.get("model_type"),
-                    reasoning=info.get("reasoning"),
+                replace(
+                    model,
+                    context_window=info.get("max_context_window", model.context_window),
+                    model_type=info.get("model_type", model.model_type),
+                    reasoning=info.get("reasoning", model.reasoning),
                     reasoning_effort_options=tuple(
                         level
-                        for level in info.get("reasoning_levels") or ()
+                        for level in info.get(
+                            "reasoning_levels", model.reasoning_effort_options
+                        ) or ()
                         if level not in ("off", "on")
                     ),
                 )

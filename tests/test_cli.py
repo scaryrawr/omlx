@@ -934,10 +934,16 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
+        responses = [health_response, status_response]
+        if tool == "codex_app":
+            models_response = MagicMock()
+            models_response.json.return_value = {
+                "data": [{"id": "Qwen3.8-27B-oQ5e-mtp", "model_type": "vlm"}]
+            }
+            responses.append(models_response)
+
         with (
-            # Exactly two requests (health + status): the picker's
-            # /v1/models call must not happen.
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch("requests.get", side_effect=responses),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
