@@ -678,7 +678,10 @@ def launch_command(args, extra_args: list[str] | None = None):
     # disabled models, but this central check prevents --model and tier flags
     # from bypassing the same restriction.
     if tool_name == "claude":
-        from .integrations.claude import claude_code_model_disabled_reason
+        from .integrations.claude import (
+            CLAUDE_CODE_MIN_CONTEXT_WINDOW,
+            claude_code_model_disabled_reason,
+        )
 
         models_to_validate = [
             ("", model),
@@ -736,7 +739,8 @@ def launch_command(args, extra_args: list[str] | None = None):
             )
         except (requests.RequestException, ValueError) as exc:
             print(f"Warning: could not read Claude discovery context limits: {exc}")
-            print("Using only the initial model and configured tier context limits.")
+            print("Using the 48K discovery minimum as a conservative context limit.")
+            context_windows.append(CLAUDE_CODE_MIN_CONTEXT_WINDOW)
         context_window = min(context_windows) if context_windows else None
     ctx = IntegrationContext(
         host=connect_host,

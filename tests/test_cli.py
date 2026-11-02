@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from omlx._version import __version__
 from omlx.cli import _migrate_saved_network_auth
@@ -1974,6 +1975,11 @@ class TestLaunchClaudeTierPrecedence:
         gateway_response = MagicMock()
         gateway_response.json.return_value = {"data": []}
         gateway_response.json.side_effect = gateway_error
+        gateway_result = (
+            gateway_error
+            if isinstance(gateway_error, requests.RequestException)
+            else gateway_response
+        )
 
         settings = SimpleNamespace(
             server=SimpleNamespace(host="127.0.0.1", port=8000),
@@ -2000,10 +2006,10 @@ class TestLaunchClaudeTierPrecedence:
                         health_response,
                         status_response,
                         models_response,
-                        gateway_response,
+                        gateway_result,
                     ]
                     if args_model is None and not cli_tiers
-                    else [health_response, status_response, gateway_response]
+                    else [health_response, status_response, gateway_result]
                 ),
             ),
             patch("omlx.integrations.get_integration", return_value=integration),
@@ -2055,19 +2061,42 @@ class TestLaunchClaudeTierPrecedence:
         assert ctx.model == "picked-model"
         assert (ctx.opus_model, ctx.sonnet_model, ctx.haiku_model) == (None, None, None)
 
-    def test_failed_discovery_preserves_configured_context_limits(self, capsys):
+    @pytest.mark.parametrize(
+        "gateway_error",
+        [
+            ValueError("Invalid discovery JSON"),
+            requests.Timeout("Discovery timed out"),
+            requests.HTTPError("Discovery unavailable"),
+        ],
+    )
+    def test_failed_discovery_clamps_context_limits(self, capsys, gateway_error):
+        from omlx.integrations.claude import ClaudeCodeIntegration
+
         context = self._run(
             args_model="picked-model",
             settings_tiers={"opus_model": "opus-cfg"},
-            gateway_error=ValueError("Invalid discovery JSON"),
+            gateway_error=gateway_error,
         )
 
-        assert context.context_window == 131072
+        assert context.context_window == 49152
         output = capsys.readouterr().out
         assert "could not read Claude discovery context limits" in output
         assert (
-            "Using only the initial model and configured tier context limits." in output
+            "Using the 48K discovery minimum as a conservative context limit." in output
         )
+
+        with (
+            patch.object(
+                ClaudeCodeIntegration, "_find_claude_binary", return_value="claude"
+            ),
+            patch("omlx.integrations.claude.os.execvpe") as execute,
+        ):
+            ClaudeCodeIntegration().launch(context)
+
+        env = execute.call_args.args[2]
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+        assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "49152"
+        assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "49152"
 
     @pytest.mark.parametrize(
         "windows, expected_window",

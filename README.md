@@ -216,6 +216,7 @@ Messages and token-count requests on that path remove one prefix before normal m
 The standard `/v1/models` catalog and Claude Desktop configuration stay unchanged.
 Use Claude Code v2.1.257 or later for discovery while nonessential traffic is disabled, as it is by default in the launcher.
 Context and auto-compact overrides remain process-wide, so the launcher uses the smallest known context limit among the initial model, configured tiers, and discoverable chat models.
+If the discovery preflight fails, the launcher warns and caps both overrides at the 48K discovery minimum.
 Models added after launch appear at the next Claude Code startup.
 
 ### Multi-Model Serving
