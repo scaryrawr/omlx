@@ -1024,7 +1024,10 @@ def _is_api_route(request: FastAPIRequest) -> bool:
     """
 
     path = request.url.path
-    return path.startswith("/v1/") or path in _ROOT_API_ROUTES
+    return (
+        path.startswith(("/v1/", f"{CLAUDE_GATEWAY_PATH}/v1/"))
+        or path in _ROOT_API_ROUTES
+    )
 
 
 def _openai_error_body(message, status_code: int, param=None, code=None) -> dict:

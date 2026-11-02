@@ -823,6 +823,45 @@ class TestExceptionHandlers:
         assert "type" in data["error"]
         assert "param" in data["error"]
 
+    @pytest.mark.parametrize("suffix", ["models", "messages", "messages/count_tokens"])
+    def test_claude_gateway_context_error_matches_standard(
+        self, client, monkeypatch, suffix
+    ):
+        error = srv._ContextLengthExceededError(
+            status_code=400,
+            detail="prompt is too long: 100 tokens > 64",
+        )
+        monkeypatch.setattr(srv, "_list_models", AsyncMock(side_effect=error))
+        monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(side_effect=error))
+        responses = []
+        for prefix in ("", "/claude"):
+            path = f"{prefix}/v1/{suffix}"
+            responses.append(
+                client.get(path)
+                if suffix == "models"
+                else client.post(
+                    path,
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 16,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                )
+            )
+
+        assert [response.status_code for response in responses] == [400, 400]
+        assert responses[0].json()["error"]["code"] == "context_length_exceeded"
+        assert responses[1].json() == responses[0].json()
+
+    @pytest.mark.parametrize("suffix", ["messages", "messages/count_tokens"])
+    def test_claude_gateway_validation_error_matches_standard(self, client, suffix):
+        standard = client.post(f"/v1/{suffix}", json={})
+        gateway = client.post(f"/claude/v1/{suffix}", json={})
+
+        assert standard.status_code == gateway.status_code == 422
+        assert "error" in standard.json()
+        assert gateway.json() == standard.json()
+
     def test_non_api_route_detail_format(self, client):
         """Test that non-/v1/ routes keep the traditional detail format."""
         response = client.get("/nonexistent-page")

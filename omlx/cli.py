@@ -719,13 +719,24 @@ def launch_command(args, extra_args: list[str] | None = None):
             and isinstance(info.get("max_context_window"), int)
             and info["max_context_window"] > 0
         ]
-        context_windows.extend(
-            info["max_context_window"]
-            for info in models_status_map.values()
-            if is_codex_chat_model(info)
-            and isinstance(info.get("max_context_window"), int)
-            and claude_code_model_disabled_reason(info) is None
-        )
+        from .api.claude_gateway import CLAUDE_GATEWAY_PATH
+
+        try:
+            resp = requests.get(
+                f"{base_url}{CLAUDE_GATEWAY_PATH}/v1/models",
+                headers=headers,
+                timeout=5,
+            )
+            resp.raise_for_status()
+            context_windows.extend(
+                entry["max_model_len"]
+                for entry in resp.json().get("data", [])
+                if isinstance(entry.get("max_model_len"), int)
+                and entry["max_model_len"] > 0
+            )
+        except (requests.RequestException, ValueError) as exc:
+            print(f"Warning: could not read Claude discovery context limits: {exc}")
+            print("Using only the initial model and configured tier context limits.")
         context_window = min(context_windows) if context_windows else None
     ctx = IntegrationContext(
         host=connect_host,

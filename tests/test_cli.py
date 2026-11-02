@@ -22,6 +22,13 @@ from omlx.cli import _migrate_saved_network_auth
 from omlx.settings import GlobalSettings
 
 
+@pytest.fixture
+def empty_gateway_response():
+    response = MagicMock()
+    response.json.return_value = {"data": []}
+    return response
+
+
 class TestCLIModule:
     """Tests for CLI module existence and basic functionality."""
 
@@ -851,7 +858,9 @@ class TestLaunchCommandFunction:
         assert ctx.host == "::1"  # raw host preserved; brackets are URL-only
         assert ctx.base_url == "http://[::1]:8000"
 
-    def test_launch_command_passes_cross_session_flag_to_integration(self):
+    def test_launch_command_passes_cross_session_flag_to_integration(
+        self, empty_gateway_response
+    ):
         from omlx.cli import launch_command
 
         integration = MagicMock()
@@ -884,7 +893,10 @@ class TestLaunchCommandFunction:
         )
 
         with (
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, empty_gateway_response],
+            ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
@@ -1007,7 +1019,7 @@ class TestLaunchCommandFunction:
         assert ctx.model_type == "vlm"
         assert ctx.reasoning is False
 
-    def test_launch_command_forwards_extra_args(self):
+    def test_launch_command_forwards_extra_args(self, empty_gateway_response):
         """Unknown CLI tokens (e.g. --resume <id>) should reach integration.launch."""
         from omlx.cli import launch_command
 
@@ -1045,7 +1057,10 @@ class TestLaunchCommandFunction:
         )
 
         with (
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, empty_gateway_response],
+            ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
@@ -1227,7 +1242,9 @@ class TestLaunchCommandFunction:
         assert "Using model: only-32k" in output
         assert "Cannot launch Claude Code with model 'only-32k'" in output
 
-    def test_launch_command_shows_picker_and_keeps_saved_tiers(self):
+    def test_launch_command_shows_picker_and_keeps_saved_tiers(
+        self, empty_gateway_response
+    ):
         """Bare `omlx launch claude` shows the picker for the default model and keeps the saved tier models (#3543)."""
         from omlx.cli import launch_command
 
@@ -1277,7 +1294,12 @@ class TestLaunchCommandFunction:
         with (
             patch(
                 "requests.get",
-                side_effect=[health_response, status_map_response, models_response],
+                side_effect=[
+                    health_response,
+                    status_map_response,
+                    models_response,
+                    empty_gateway_response,
+                ],
             ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
@@ -1292,7 +1314,9 @@ class TestLaunchCommandFunction:
         assert ctx.haiku_model == "haiku-local"
         assert ctx.api_key == "saved-key"
 
-    def test_launch_command_claude_cli_tiers_override_saved_settings(self):
+    def test_launch_command_claude_cli_tiers_override_saved_settings(
+        self, empty_gateway_response
+    ):
         """Explicit --opus/--sonnet/--haiku should win over saved settings."""
         from omlx.cli import launch_command
 
@@ -1330,7 +1354,10 @@ class TestLaunchCommandFunction:
         )
 
         with (
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, empty_gateway_response],
+            ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
@@ -1902,7 +1929,13 @@ class TestCLIDocstrings:
 
 class TestLaunchClaudeTierPrecedence:
     def _run(
-        self, *, args_model, settings_tiers, cli_tiers=None, picked="picked-model"
+        self,
+        *,
+        args_model,
+        settings_tiers,
+        cli_tiers=None,
+        picked="picked-model",
+        gateway_error=None,
     ):
         from omlx.cli import launch_command
 
@@ -1938,6 +1971,9 @@ class TestLaunchClaudeTierPrecedence:
                 for m in status_response.json.return_value["models"]
             ]
         }
+        gateway_response = MagicMock()
+        gateway_response.json.return_value = {"data": []}
+        gateway_response.json.side_effect = gateway_error
 
         settings = SimpleNamespace(
             server=SimpleNamespace(host="127.0.0.1", port=8000),
@@ -1959,7 +1995,16 @@ class TestLaunchClaudeTierPrecedence:
         with (
             patch(
                 "requests.get",
-                side_effect=[health_response, status_response, models_response],
+                side_effect=(
+                    [
+                        health_response,
+                        status_response,
+                        models_response,
+                        gateway_response,
+                    ]
+                    if args_model is None and not cli_tiers
+                    else [health_response, status_response, gateway_response]
+                ),
             ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
@@ -2010,6 +2055,20 @@ class TestLaunchClaudeTierPrecedence:
         assert ctx.model == "picked-model"
         assert (ctx.opus_model, ctx.sonnet_model, ctx.haiku_model) == (None, None, None)
 
+    def test_failed_discovery_preserves_configured_context_limits(self, capsys):
+        context = self._run(
+            args_model="picked-model",
+            settings_tiers={"opus_model": "opus-cfg"},
+            gateway_error=ValueError("Invalid discovery JSON"),
+        )
+
+        assert context.context_window == 131072
+        output = capsys.readouterr().out
+        assert "could not read Claude discovery context limits" in output
+        assert (
+            "Using only the initial model and configured tier context limits." in output
+        )
+
     @pytest.mark.parametrize(
         "windows, expected_window",
         [
@@ -2051,6 +2110,11 @@ class TestLaunchClaudeTierPrecedence:
                     "model_type": "llm",
                     "is_hidden": True,
                 },
+                {
+                    "id": "hidden-draft",
+                    "max_context_window": 49152,
+                    "model_type": "llm",
+                },
             ]
         )
         if discovered_window is not None:
@@ -2059,9 +2123,17 @@ class TestLaunchClaudeTierPrecedence:
                 if expected_window is not None
                 else discovered_window
             )
-        responses = [MagicMock(), MagicMock(), MagicMock()]
+        responses = [MagicMock(), MagicMock(), MagicMock(), MagicMock()]
         responses[1].json.return_value = {"models": models}
         responses[2].json.return_value = {"data": models}
+        responses[3].json.return_value = {
+            "data": [
+                {
+                    "id": "omlx-claude/discovered-model",
+                    "max_model_len": discovered_window,
+                }
+            ]
+        }
         settings = SimpleNamespace(
             server=SimpleNamespace(host="127.0.0.1", port=8000),
             auth=SimpleNamespace(api_key="saved-key"),
@@ -2075,7 +2147,7 @@ class TestLaunchClaudeTierPrecedence:
             tool="claude", host=None, port=None, api_key=None, model=None
         )
         with (
-            patch("requests.get", side_effect=responses),
+            patch("requests.get", side_effect=responses) as get,
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch.object(integration, "is_installed", return_value=True),
@@ -2087,6 +2159,11 @@ class TestLaunchClaudeTierPrecedence:
             launch_command(args, extra_args=["--resume", "session-id"])
 
         execute.assert_called_once()
+        assert get.call_args.args == ("http://127.0.0.1:8000/claude/v1/models",)
+        assert get.call_args.kwargs == {
+            "headers": {"Authorization": "Bearer saved-key"},
+            "timeout": 5,
+        }
         binary, argv, env = execute.call_args.args
         assert binary == "claude"
         assert argv == [
