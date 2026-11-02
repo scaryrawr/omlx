@@ -2999,11 +2999,20 @@ async def update_model_settings(
             # Reset to auto-detected type
             from pathlib import Path
 
-            from ..model_discovery import detect_model_type
+            from ..model_discovery import (
+                VLM_NATIVE_TEXT_MODEL_TYPES,
+                detect_model_type,
+            )
 
             detected_type = detect_model_type(Path(entry.model_path))
             entry.model_type = detected_type
             entry.engine_type = type_to_engine.get(detected_type, "batched")
+            if (
+                detected_type == "llm"
+                and (entry.config_model_type or "").lower().replace("-", "_")
+                in VLM_NATIVE_TEXT_MODEL_TYPES
+            ):
+                entry.engine_type = "vlm"
     if "max_context_window" in sent:
         current_settings.max_context_window = request.max_context_window
     if "max_tokens" in sent:
