@@ -1999,6 +1999,9 @@ class TestClaudeCodeIntegration:
             "PYTHONHOME": "/bundle/python",
             "PYTHONPATH": "/bundle/lib",
             "PYTHONDONTWRITEBYTECODE": "1",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0",
         }
         with (
             patch("omlx.integrations.claude.os.environ", base_env),
@@ -2017,14 +2020,17 @@ class TestClaudeCodeIntegration:
             )
 
         env = captured["env"]
-        assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
+        assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000/claude"
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+        assert "CLAUDE_CODE_USE_BEDROCK" not in env
+        assert "CLAUDE_CODE_USE_VERTEX" not in env
         assert env["ANTHROPIC_AUTH_TOKEN"] == "secret"
         assert env["ANTHROPIC_API_KEY"] == ""
-        assert env["ANTHROPIC_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "qwen3.5"
-        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "qwen3.5"
+        assert env["ANTHROPIC_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "omlx-claude/qwen3.5"
         assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "131072"
         assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "131072"
         # Bundled-python vars must be stripped so claude code subprocess hooks
@@ -2365,10 +2371,10 @@ class TestClaudeCodeIntegration:
             )
 
         env = captured["env"]
-        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "opus-local"
-        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "sonnet-local"
-        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "haiku-local"
-        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku-local"
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "omlx-claude/opus-local"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "omlx-claude/sonnet-local"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "omlx-claude/haiku-local"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "omlx-claude/haiku-local"
 
     def test_launch_open_server_uses_omlx_token(self):
         cc = ClaudeCodeIntegration()

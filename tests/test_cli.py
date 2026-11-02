@@ -2023,8 +2023,9 @@ class TestLaunchClaudeTierPrecedence:
             ((None, None, None, None), None),
         ],
     )
+    @pytest.mark.parametrize("discovered_window", [None, 49152, 65536])
     def test_launch_passes_initial_model_and_shared_context_limit(
-        self, windows, expected_window
+        self, windows, expected_window, discovered_window
     ):
         from omlx.cli import launch_command
         from omlx.integrations.claude import ClaudeCodeIntegration
@@ -2035,6 +2036,29 @@ class TestLaunchClaudeTierPrecedence:
             {"id": model_id, "max_context_window": window, "model_type": "llm"}
             for model_id, window in zip(model_ids, windows)
         ]
+        models.extend(
+            [
+                {
+                    "id": "discovered-model",
+                    "max_context_window": discovered_window,
+                    "model_type": "llm",
+                },
+                {"id": "too-small", "max_context_window": 32768, "model_type": "llm"},
+                {"id": "embed", "max_context_window": 1024, "model_type": "embedding"},
+                {
+                    "id": "hidden",
+                    "max_context_window": 49152,
+                    "model_type": "llm",
+                    "is_hidden": True,
+                },
+            ]
+        )
+        if discovered_window is not None:
+            expected_window = str(
+                min(int(expected_window), discovered_window)
+                if expected_window is not None
+                else discovered_window
+            )
         responses = [MagicMock(), MagicMock(), MagicMock()]
         responses[1].json.return_value = {"models": models}
         responses[2].json.return_value = {"data": models}
@@ -2074,11 +2098,11 @@ class TestLaunchClaudeTierPrecedence:
             "--resume",
             "session-id",
         ]
-        assert env["ANTHROPIC_MODEL"] == "picked-model"
-        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "opus-cfg"
-        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "sonnet-cfg"
-        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "haiku-cfg"
-        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku-cfg"
+        assert env["ANTHROPIC_MODEL"] == "omlx-claude/picked-model"
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "omlx-claude/opus-cfg"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "omlx-claude/sonnet-cfg"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "omlx-claude/haiku-cfg"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "omlx-claude/haiku-cfg"
         assert env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS") == expected_window
         assert env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") == expected_window
 

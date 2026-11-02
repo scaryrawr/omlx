@@ -82,7 +82,11 @@ Run `python -m pytest -q tests/test_engine_teardown.py tests/test_engine_core.py
 
 # Claude launcher tests
 
-Run `python -m pytest -q tests/test_cli.py tests/test_integrations.py` to check model selection, saved tier precedence, and the final Claude Code environment. Mixed-context cases verify that the selected initial model is passed through `ANTHROPIC_MODEL` and that the process-wide context and auto-compact limits use the smallest known context window across the initial model and configured tiers. Larger models consequently compact at that shared limit; models without reported limits cannot contribute a limit.
+Run `python -m pytest -q tests/test_cli.py tests/test_integrations.py` to check model selection, saved tier precedence, and the final Claude Code environment. Mixed-context cases verify that the selected initial model is passed through `ANTHROPIC_MODEL` and that the process-wide context and auto-compact limits use the smallest known context window across the initial model, configured tiers, and discoverable chat models. Larger models consequently compact at that shared limit; models without reported limits cannot contribute a limit.
+
+Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_integrations.py tests/test_cli.py tests/test_v1_models_visibility.py tests/test_server.py` for Claude gateway discovery.
+These tests cover the launch environment, discovery filtering and authentication, unchanged standard model IDs, streaming Messages, token counts, and exposed-profile settings.
+Gateway IDs wrap the served ID with `omlx-claude/`, including the initial model and configured tiers.
 
 # ModernBERT embedding tests
 

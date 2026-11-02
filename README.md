@@ -208,6 +208,16 @@ Handles concurrent requests through mlx-lm's BatchGenerator. Max concurrent requ
 
 Runs smaller context models with Claude Code by reporting the model's real context window to auto-compact instead of scaling token counts, and SSE keep-alive prevents read timeouts during long prefill.
 
+`omlx launch claude` enables [gateway model discovery](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery).
+Claude Code's `/model` picker lists visible chat models and exposed profiles with at least 48K context, or an unknown context limit.
+The launcher uses `/claude` as its Anthropic base path.
+That path advertises models with an `omlx-claude/` prefix because Claude Code filters out IDs without `claude` or `anthropic`.
+Messages and token-count requests on that path remove one prefix before normal model and profile resolution.
+The standard `/v1/models` catalog and Claude Desktop configuration stay unchanged.
+Use Claude Code v2.1.257 or later for discovery while nonessential traffic is disabled, as it is by default in the launcher.
+Context and auto-compact overrides remain process-wide, so the launcher uses the smallest known context limit among the initial model, configured tiers, and discoverable chat models.
+Models added after launch appear at the next Claude Code startup.
+
 ### Multi-Model Serving
 
 Load LLMs, VLMs, embedding models, rerankers, and image models within the same server. Models are managed through a combination of automatic and manual controls:

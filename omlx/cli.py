@@ -711,7 +711,7 @@ def launch_command(args, extra_args: list[str] | None = None):
     context_window = model_info.get("max_context_window")
     if tool_name == "claude":
         # Claude's context overrides are process-wide, including tier switches
-        # and subagents. Do not advertise more than any configured model allows.
+        # and discovered models. Do not advertise more than any model allows.
         context_windows = [
             info["max_context_window"]
             for model_id in (model, opus_model, sonnet_model, haiku_model)
@@ -719,6 +719,13 @@ def launch_command(args, extra_args: list[str] | None = None):
             and isinstance(info.get("max_context_window"), int)
             and info["max_context_window"] > 0
         ]
+        context_windows.extend(
+            info["max_context_window"]
+            for info in models_status_map.values()
+            if is_codex_chat_model(info)
+            and isinstance(info.get("max_context_window"), int)
+            and claude_code_model_disabled_reason(info) is None
+        )
         context_window = min(context_windows) if context_windows else None
     ctx = IntegrationContext(
         host=connect_host,

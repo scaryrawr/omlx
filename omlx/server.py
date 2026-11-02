@@ -98,6 +98,12 @@ from .api.anthropic_utils import (
     request_has_cache_control,
 )
 from .api.body_limit import RequestBodySizeLimitMiddleware
+from .api.claude_gateway import (
+    CLAUDE_GATEWAY_PATH,
+    ClaudeGatewayModelInfo,
+    claude_gateway_model_id,
+    claude_gateway_served_id,
+)
 from .api.embedding_models import (
     EmbeddingData,
     EmbeddingRequest,
@@ -3932,6 +3938,18 @@ async def _create_markitdown_chat_completion(
 @app.get("/v1/models", response_model=None)
 async def list_models(_: bool = Depends(verify_inference_api_key)) -> JSONResponse:
     """List all available models with load status."""
+    return await _list_models()
+
+
+@app.get(f"{CLAUDE_GATEWAY_PATH}/v1/models", response_model=None)
+async def list_claude_gateway_models(
+    _: bool = Depends(verify_inference_api_key),
+) -> JSONResponse:
+    """List visible chat models using Claude Code's discovery ID format."""
+    return await _list_models(claude_gateway=True)
+
+
+async def _list_models(*, claude_gateway: bool = False) -> JSONResponse:
     models = []
     favorite_ids: set[str] = set()
 
@@ -3980,7 +3998,17 @@ async def list_models(_: bool = Depends(verify_inference_api_key)) -> JSONRespon
             unservable = m.get("model_format") == "gguf" and bool(
                 await _server_state.engine_pool.external_engine_problem(model_id, ms)
             )
-            if is_hidden or is_hidden_helper or unservable or m.get("unavailable_reason"):
+            if (
+                is_hidden
+                or is_hidden_helper
+                or unservable
+                or m.get("unavailable_reason")
+            ):
+                excluded_model_ids.add(model_id)
+                continue
+            if claude_gateway and (
+                m.get("model_type") not in ("llm", "vlm") or m.get("is_helper")
+            ):
                 excluded_model_ids.add(model_id)
                 continue
             if ms is not None and ms.is_favorite:
@@ -4032,6 +4060,8 @@ async def list_models(_: bool = Depends(verify_inference_api_key)) -> JSONRespon
                         custom_aliases.add(_ms.model_alias)
             created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             for slot_id, tier_model in tier_aliases.items():
+                if claude_gateway and tier_model in excluded_model_ids:
+                    continue
                 if (
                     slot_id in existing_ids
                     or slot_id in physical_ids
@@ -4069,14 +4099,33 @@ async def list_models(_: bool = Depends(verify_inference_api_key)) -> JSONRespon
                 )
                 existing_ids.add(slot_id)
 
-    if _markitdown_is_visible() and not any(
-        m.id == MARKITDOWN_MODEL_ID for m in models
+    if (
+        not claude_gateway
+        and _markitdown_is_visible()
+        and not any(m.id == MARKITDOWN_MODEL_ID for m in models)
     ):
         models.append(ModelInfo(id=MARKITDOWN_MODEL_ID, owned_by="omlx"))
 
     # Favorites first; stable sort keeps alphabetical order within groups.
     if favorite_ids:
         models.sort(key=lambda m: m.id not in favorite_ids)
+
+    if claude_gateway:
+        from .integrations.claude import claude_code_model_disabled_reason
+
+        data: list[ClaudeGatewayModelInfo] = [
+            {
+                "id": claude_gateway_model_id(m.id),
+                "display_name": m.display_name or m.id,
+                "max_model_len": m.max_model_len,
+            }
+            for m in models
+            if claude_code_model_disabled_reason(
+                {"max_context_window": m.max_model_len}
+            )
+            is None
+        ]
+        return JSONResponse(content={"data": data})
 
     # Serialize explicitly: FastAPI's jsonable_encoder and the
     # ``ModelsResponse`` container both serialize items as the base
@@ -8179,6 +8228,19 @@ async def _count_anthropic_prompt(
         raise
 
 
+@app.post(f"{CLAUDE_GATEWAY_PATH}/v1/messages")
+async def create_claude_gateway_message(
+    request: AnthropicMessagesRequest,
+    http_request: FastAPIRequest,
+    _: bool = Depends(verify_inference_api_key),
+):
+    return await create_anthropic_message(
+        request.model_copy(update={"model": claude_gateway_served_id(request.model)}),
+        http_request,
+        _,
+    )
+
+
 @app.post("/v1/messages")
 async def create_anthropic_message(
     request: AnthropicMessagesRequest,
@@ -8467,6 +8529,17 @@ async def create_anthropic_message(
     except BaseException:
         await lease.release()
         raise
+
+
+@app.post(f"{CLAUDE_GATEWAY_PATH}/v1/messages/count_tokens")
+async def count_claude_gateway_tokens(
+    request: TokenCountRequest,
+    _: bool = Depends(verify_inference_api_key),
+):
+    return await count_anthropic_tokens(
+        request.model_copy(update={"model": claude_gateway_served_id(request.model)}),
+        _,
+    )
 
 
 @app.post("/v1/messages/count_tokens")
