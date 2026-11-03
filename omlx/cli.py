@@ -475,6 +475,7 @@ def launch_command(args, extra_args: list[str] | None = None):
     from .integrations import IntegrationContext, get_integration, list_integrations
     from .integrations.base import IntegrationModel, bracket_host
     from .integrations.codex import is_codex_chat_model
+    from .model_classification import TEXT_ONLY_CHAT_MODEL_TYPES
     from .settings import GlobalSettings
 
     def _optional_str(value) -> str | None:
@@ -574,6 +575,13 @@ def launch_command(args, extra_args: list[str] | None = None):
         resp = requests.get(f"{base_url}/v1/models/status", headers=headers, timeout=5)
         if resp.ok:
             for m in resp.json().get("models", []):
+                # Older servers report loader type as multimodal capability.
+                if (
+                    m.get("model_type") == "vlm"
+                    and (m.get("config_model_type") or "").lower().replace("-", "_")
+                    in TEXT_ONLY_CHAT_MODEL_TYPES
+                ):
+                    m = {**m, "model_type": "llm"}
                 if m_id := m.get("id"):
                     models_status_map[m_id] = m
                 if model_alias := m.get("model_alias"):

@@ -925,6 +925,27 @@ class TestModelsResponseActiveProfile:
         assert r.json()["engine_type"] == "image"
         assert mgr.get_settings("model-a").model_type_override == "image"
 
+    @pytest.mark.parametrize("override", [None, ""])
+    def test_admin_flint_auto_type_preserves_vlm_engine(
+        self, client, tmp_path, override
+    ):
+        c, mgr = client
+        entry = admin_routes._get_engine_pool().get_entry("model-a")
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "flint"}))
+        entry.model_path = str(tmp_path)
+        entry.config_model_type = "flint"
+        entry.engine_type = "vlm"
+
+        response = c.put(
+            "/admin/api/models/model-a/settings",
+            json={"model_type_override": override},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model_type"] == entry.model_type == "llm"
+        assert response.json()["engine_type"] == entry.engine_type == "vlm"
+        assert mgr.get_settings("model-a").model_type_override is None
+
     def test_admin_model_type_override_rejects_gguf(self, client):
         c, mgr = client
         entry = admin_routes._get_engine_pool().get_entry("model-a")

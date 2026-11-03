@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Lightweight checkpoint classification shared by discovery and integrations."""
 
+TEXT_ONLY_CHAT_MODEL_TYPES = frozenset({"flint"})
+
 NEMOTRON_OMNI_MODEL_TYPES = frozenset(
     {"nemotron_h_nano_omni", "nemotronh_nano_omni_reasoning_v3", "nemotron_h_omni"}
 )
