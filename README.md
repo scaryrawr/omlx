@@ -426,6 +426,9 @@ Embedding and reranker models load through mlx-vlm; the separate mlx-embeddings 
 
 RecursiveSI Flint is a text-only MoE model served through native mlx-vlm
 (`model_type: flint`), with reasoning and GLM-style XML tool-call parsing.
+Discovery and integrations report text-only capabilities (`model_type: llm`)
+while retaining `engine_type: vlm` for loading; image, audio, and video inputs
+are not supported.
 oQ supports resident calibration and layer-streamed calibration on the original
 BF16 checkpoint, including routed/shared experts and normalized output-head
 inputs. See [oQ Quantization](docs/oQ_Quantization.md).

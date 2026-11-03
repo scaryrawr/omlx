@@ -36,7 +36,11 @@ from .image_registry import (
     infer_image_model_spec_from_name,
     normalize_image_alias,
 )
-from .model_classification import EMBEDDING_MODEL_TYPES, is_helper_config_model_type
+from .model_classification import (
+    EMBEDDING_MODEL_TYPES,
+    TEXT_ONLY_CHAT_MODEL_TYPES,
+    is_helper_config_model_type,
+)
 from .utils.safetensors_shards import select_safetensors_weight_files
 
 logger = logging.getLogger(__name__)
@@ -1188,7 +1192,7 @@ def detect_model_type(model_path: Path) -> ModelType:
 
     if normalized_type in VLM_NATIVE_TEXT_MODEL_TYPES:
         logger.info(f"{model_type} detected as mlx-vlm native text model")
-        return "vlm"
+        return "llm" if normalized_type in TEXT_ONLY_CHAT_MODEL_TYPES else "vlm"
 
     # Check for VLM: architectures field
     # Some text-only quants (e.g., unsloth/gemma-4-31b-it-MLX-8bit) keep the VLM
@@ -2272,8 +2276,14 @@ def _register_model(
             estimate_text_only_model_size(model_dir) if model_type == "vlm" else 0
         )
 
+        if (
+            model_type == "llm"
+            and config_model_type.lower().replace("-", "_")
+            in VLM_NATIVE_TEXT_MODEL_TYPES
+        ):
+            engine_type = "vlm"
         # Keep text-only capability metadata when selecting the VLM MTP engine.
-        if model_type == "llm" and _gemma4_text_only_wants_vlm_engine(_config):
+        elif model_type == "llm" and _gemma4_text_only_wants_vlm_engine(_config):
             engine_type = "vlm"
             logger.info(
                 "%s is text-only Gemma 4 with a merged MTP head; serving it "

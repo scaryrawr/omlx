@@ -503,14 +503,20 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path) == "vlm"
 
     @pytest.mark.parametrize(
-        "model_type,architecture",
-        [("cohere2_moe", "Cohere2MoeForCausalLM"), ("flint", "FlintForCausalLM")],
+        "model_type,architecture,expected_type",
+        [
+            ("cohere2_moe", "Cohere2MoeForCausalLM", "vlm"),
+            ("flint", "FlintForCausalLM", "llm"),
+            ("Flint", "FlintForCausalLM", "llm"),
+        ],
     )
-    def test_detect_native_text_model_as_vlm(self, tmp_path, model_type, architecture):
-        """Text-only families implemented by mlx-vlm route to the VLM engine."""
+    def test_detect_native_text_model(
+        self, tmp_path, model_type, architecture, expected_type
+    ):
+        """Flint's text-only capabilities are independent of its mlx-vlm loader."""
         config = {"model_type": model_type, "architectures": [architecture]}
         (tmp_path / "config.json").write_text(json.dumps(config))
-        assert detect_model_type(tmp_path) == "vlm"
+        assert detect_model_type(tmp_path) == expected_type
 
     def test_detect_text_only_deepseek_v41_as_vlm(self, tmp_path):
         """oQ text-only V4.1 exports drop vision_config but stay on mlx-vlm."""

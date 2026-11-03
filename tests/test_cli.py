@@ -1020,6 +1020,77 @@ class TestLaunchCommandFunction:
         assert ctx.model_type == "vlm"
         assert ctx.reasoning is False
 
+    @pytest.mark.parametrize("tool", ["opencode", "codex", "copilot"])
+    @pytest.mark.parametrize("model", ["flint-raw", "flint-alias"])
+    @pytest.mark.parametrize("reported_type", ["vlm", "llm"])
+    def test_launch_flint_is_text_only(
+        self, tmp_path, tool, model, reported_type
+    ):
+        from omlx.cli import launch_command
+        from omlx.integrations.opencode import OpenCodeIntegration
+
+        integration = MagicMock()
+        integration.is_installed.return_value = True
+        health_response = MagicMock()
+        health_response.json.return_value = {"default_model": "flint-raw"}
+        status_response = MagicMock()
+        status_response.ok = True
+        status_record = {
+            "id": "flint-raw",
+            "model_alias": "flint-alias",
+            "model_type": reported_type,
+            "config_model_type": "flint",
+            "engine_type": "vlm",
+            "max_context_window": 131072,
+            "max_tokens": 8192,
+            "loaded": True,
+        }
+        status_response.json.return_value = {"models": [status_record]}
+        models_response = MagicMock()
+        models_response.json.return_value = {
+            "data": [{"id": "flint-alias", "model_type": reported_type}]
+        }
+        settings = SimpleNamespace(
+            server=SimpleNamespace(host="127.0.0.1", port=8000),
+            auth=SimpleNamespace(api_key=""),
+            integrations=SimpleNamespace(),
+            claude_code=None,
+        )
+        args = argparse.Namespace(
+            tool=tool, host=None, port=None, api_key=None, model=model
+        )
+
+        with (
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, models_response],
+            ),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args)
+
+        context = integration.launch.call_args.args[0]
+        assert context.model_type == "llm"
+        assert context.supports_images is False
+        for model_id in ("flint-raw", "flint-alias"):
+            assert context.models_status_map[model_id]["model_type"] == "llm"
+            assert context.models_status_map[model_id]["engine_type"] == "vlm"
+        assert status_record["model_type"] == reported_type
+        if tool in ("codex", "copilot"):
+            assert len(context.models) == 1
+            assert context.models[0].id == "flint-alias"
+            assert context.models[0].model_type == "llm"
+        else:
+            config_path = tmp_path / "opencode.json"
+            with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
+                OpenCodeIntegration().configure(context)
+            entry = json.loads(config_path.read_text())["provider"]["omlx"]["models"][
+                model
+            ]
+            assert entry["modalities"] == {"input": ["text"], "output": ["text"]}
+            assert not entry.get("attachment")
+
     def test_launch_command_forwards_extra_args(self, empty_gateway_response):
         """Unknown CLI tokens (e.g. --resume <id>) should reach integration.launch."""
         from omlx.cli import launch_command
