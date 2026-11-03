@@ -11,6 +11,13 @@ from typing import NoReturn
 
 from omlx.exceptions import UnsupportedKokoroLanguageError
 
+from transformers import AutoTokenizer
+
+try:
+    from mlx_audio.tts.models.bailingmm.bailingmm import Model as BailingMMModel
+except ImportError:  # mlx-audio is optional.
+    BailingMMModel = None
+
 logger = logging.getLogger(__name__)
 
 _RESAMPLE_EXPORT_CHECKED = False
@@ -108,4 +115,28 @@ def ensure_mlx_audio_resample_export() -> bool:
     if not _RESAMPLE_EXPORT_CHECKED:
         logger.debug("mlx_audio.utils.resample_audio compatibility export applied")
     _RESAMPLE_EXPORT_CHECKED = True
+    return True
+
+
+def ensure_ming_post_load_skips_campplus_conversion() -> bool:
+    """Load Ming checkpoints that ship only ``campplus.onnx``.
+
+    mlx-audio's Ming ``post_load_hook`` converts ``campplus.onnx`` into the
+    model folder with the optional ``onnx`` package and raises without it.
+    No Ming code path in mlx-audio reads the converted file, so the hook only
+    loads the tokenizer.
+    """
+    if BailingMMModel is None:
+        return False
+    if getattr(BailingMMModel.post_load_hook, "_omlx_skip_campplus", False):
+        return True
+
+    def post_load_hook(cls, model, model_path):
+        model.tokenizer = AutoTokenizer.from_pretrained(
+            str(model_path), trust_remote_code=False
+        )
+        return model
+
+    post_load_hook._omlx_skip_campplus = True
+    BailingMMModel.post_load_hook = classmethod(post_load_hook)
     return True
