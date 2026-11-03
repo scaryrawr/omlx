@@ -266,6 +266,57 @@ Set up OpenClaw, OpenCode, Codex, Hermes Agent, Copilot, Pi, Mistral Vibe, and D
 
 Install [Mistral Vibe](https://github.com/mistralai/mistral-vibe) 2.26.0 or newer with `uv tool install mistral-vibe`, then run `omlx launch vibe` to select a local model, or `omlx launch vibe --model <model-id>`. Vibe's provider, model, API-key reference and context window are configured for that process through its `VIBE_*` environment overrides. Existing `config.toml`, `VIBE_HOME`, tool permissions and cloud configuration are preserved. Pass Vibe arguments after `--`, for example `omlx launch vibe --model <model-id> -- --resume`.
 
+#### OpenCode model switching
+
+OpenCode 2 is required. Run `omlx launch opencode` to register available chat
+models in its global configuration. Use `/models` to switch models, or pass `--model <model-id>` to
+choose the initial default. Without that flag, oMLX uses the saved OpenCode
+model, the server default, or the first available chat model, in that order.
+
+The launcher updates `opencode.jsonc` if it exists, otherwise `opencode.json`
+under `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`. It reads comments and
+trailing commas but rewrites the file as plain JSON with two-space indentation.
+The launcher attempts to back up the original file, including comments and
+formatting, before writing. An existing `.jsonc` filename is retained; plain JSON
+is valid JSONC. Other providers and manually configured models are preserved. Models no
+longer reported by oMLX remain in the file; remove them manually if needed. If
+discovery fails, the existing model list is preserved and an explicitly requested
+chat model is added as the default. If no model can be selected, OpenCode uses its
+existing default. The output limit leaves at least one quarter of the context
+window for input. When a refreshed model has no usable context, reasoning, or model-type
+metadata, existing values are preserved because they may be manually
+configured. The launcher warns that those values may be stale and retains
+configured tool capabilities. The config and backup files use Unix mode `0600`
+because they can contain an API key; existing ACLs may grant additional access.
+A malformed config stops the launch without replacing it.
+
+Audio-capable chat models also advertise audio input when oMLX recognizes their
+checkpoint's audio-encoder weights; this does not load the model. Stripped Gemma
+4 checkpoints without audio weights are not advertised as audio-capable.
+When audio detection is inconclusive (including older servers), manually
+configured audio input is preserved. The running server must use the updated
+code to report audio support; updating only the launcher is not sufficient.
+The launcher warns when the server does not expose this metadata.
+
+Changed existing configs receive a timestamped `.bak` file using the same
+best-effort backup-and-write helper as other integrations. If backup creation
+fails, oMLX warns and still writes the config. Concurrent edits are not protected,
+so avoid editing the file while launching. Unchanged configs are not rewritten.
+Symlinked, hard-linked, and non-owned config files are rejected.
+
+The launcher uses `$OPENCODE_CONFIG_DIR` instead of the default directory when
+set. Project, managed, and explicit OpenCode settings can override the global configuration.
+Only the current `providers` format is updated; legacy `provider` settings are
+left untouched and are not migrated.
+
+An already-running OpenCode 2 shared service may initially use a cached catalog;
+its file watcher can refresh the catalog later. Run `opencode reload` after the
+launcher writes the configuration, or pass
+`-- --standalone` to launch a private OpenCode server with the updated config.
+Reload rebuilds every loaded location and cancels pending permissions and forms
+in all projects. The launcher does not reload the shared service automatically.
+An explicitly selected `--server` may not use this local configuration at all.
+
 #### Codex model switching
 
 ```bash

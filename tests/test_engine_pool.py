@@ -110,6 +110,41 @@ class TestEnginePoolInit:
         assert "model-a" in pool.get_model_ids()
         assert "model-b" in pool.get_model_ids()
 
+    @pytest.mark.parametrize("audio", [True, False])
+    def test_discovered_audio_input_is_exposed_without_loading(self, tmp_path, audio):
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        model_dir = tmp_path / "gemma"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4",
+                    "text_config": {"model_type": "gemma4_text", "hidden_size": 16},
+                    "vision_config": {"hidden_size": 16},
+                    "audio_config": {"hidden_size": 16},
+                }
+            )
+        )
+        key = "audio_tower.layer.weight" if audio else "vision_tower.layer.weight"
+        save_file(
+            {key: np.zeros(1, dtype=np.float32)}, str(model_dir / "model.safetensors")
+        )
+
+        pool = _make_pool()
+        pool.discover_models(str(tmp_path))
+        entry = pool.get_entry("gemma")
+        assert entry is not None
+        assert entry.engine is None
+        assert entry.supports_audio_input is audio
+        status = pool.get_status()["models"][0]
+        assert status["supports_audio_input"] is audio
+        assert status["loaded"] is False
+
+        entry.engine_type = "batched"
+        assert pool.get_status()["models"][0]["supports_audio_input"] is False
+
     def test_discover_models_missing_sole_dir(self, tmp_path):
         """A sole unavailable model dir is skipped instead of failing startup."""
         pool = _make_pool(ceiling=10 * 1024**3)

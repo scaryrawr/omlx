@@ -64,6 +64,7 @@ class IntegrationContext:
     # direct constructions.
     models_status_map: dict[str, dict] = field(default_factory=dict)
     models: tuple[IntegrationModel, ...] = ()
+    models_discovery_succeeded: bool | None = None
     reasoning_effort_options: tuple[str, ...] = ()
     reasoning_effort_default: str | None = None
 

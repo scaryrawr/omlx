@@ -590,7 +590,7 @@ def launch_command(args, extra_args: list[str] | None = None):
         pass
 
     # These integrations use their native selector with a launch-time catalog.
-    native_model_picker = tool_name in ("codex", "codex_app", "copilot")
+    native_model_picker = tool_name in ("codex", "codex_app", "copilot", "opencode")
     model = args.model
     if not model and not integration.requires_model_selection:
         # The integration registers the server's whole model catalog, so
@@ -602,6 +602,8 @@ def launch_command(args, extra_args: list[str] | None = None):
             or ""
         )
     models_info_list = []
+    model_inventory = {}
+    models_discovery_succeeded = False
     if native_model_picker or (
         integration.requires_model_selection
         and not model
@@ -610,28 +612,51 @@ def launch_command(args, extra_args: list[str] | None = None):
         try:
             resp = requests.get(f"{base_url}/v1/models", headers=headers, timeout=5)
             resp.raise_for_status()
-            for entry in resp.json().get("data", []):
+            entries = resp.json()["data"]
+            if not isinstance(entries, list):
+                raise ValueError("model listing is not a list")
+            for entry in entries:
                 model_id = entry["id"]
+                if not isinstance(model_id, str) or not model_id:
+                    raise ValueError("invalid model id")
                 info = {**entry, **models_status_map.get(model_id, {}), "id": model_id}
+                model_inventory[model_id] = info
                 if (is_codex_chat_model if native_model_picker else _is_chat_model)(
                     info
                 ):
                     models_info_list.append(info)
-        except (requests.RequestException, ValueError, KeyError) as exc:
-            if native_model_picker and model:
+            models_discovery_succeeded = True
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            if native_model_picker and (model or tool_name == "opencode"):
                 print(f"Warning: could not list oMLX models: {exc}")
-                print(
-                    f"Only the requested model will be available in "
-                    f"{integration.display_name}."
-                )
+                if tool_name != "opencode":
+                    print(
+                        f"Only the requested model will be available in "
+                        f"{integration.display_name}."
+                    )
             models_info_list = []
+            model_inventory = {}
+
+    if tool_name == "opencode" and not model and not models_discovery_succeeded:
+        model = _optional_str(
+            getattr(settings.integrations, "opencode_model", None)
+        ) or default_model
 
     if native_model_picker:
-        if not is_codex_chat_model(models_status_map.get(model, {})):
+        if not is_codex_chat_model(
+            {**model_inventory.get(model, {}), **models_status_map.get(model, {})}
+        ):
             print(
                 f"Cannot launch {integration.display_name} with non-chat model '{model}'."
             )
             sys.exit(1)
+        if tool_name == "opencode" and model:
+            alias = _optional_str(models_status_map.get(model, {}).get("model_alias"))
+            if alias and (
+                not models_discovery_succeeded
+                or any(info["id"] == alias for info in models_info_list)
+            ):
+                model = alias
         if not model and models_info_list:
             settings_name = (
                 "codex_model" if tool_name == "codex_app" else f"{tool_name}_model"
@@ -640,13 +665,25 @@ def launch_command(args, extra_args: list[str] | None = None):
                 getattr(settings.integrations, settings_name, None)
             )
             available_ids = {info["id"] for info in models_info_list}
+            saved_alias = (
+                _optional_str(
+                    models_status_map.get(saved_model or "", {}).get("model_alias")
+                )
+                if tool_name == "opencode"
+                else None
+            )
             default_alias = _optional_str(
                 models_status_map.get(default_model or "", {}).get("model_alias")
             )
             model = next(
                 (
                     candidate
-                    for candidate in (saved_model, default_alias, default_model)
+                    for candidate in (
+                        saved_model,
+                        saved_alias,
+                        default_alias,
+                        default_model,
+                    )
                     if candidate is not None and candidate in available_ids
                 ),
                 models_info_list[0]["id"],
@@ -665,8 +702,11 @@ def launch_command(args, extra_args: list[str] | None = None):
             model = integration.select_model(models_info_list, integration.display_name)
 
     if not model and integration.requires_model_selection:
-        print("No models available. Load a model first.")
-        sys.exit(1)
+        if tool_name == "opencode" and not models_discovery_succeeded:
+            print("No model selected; OpenCode will use its existing configuration.")
+        else:
+            print("No models available. Load a model first.")
+            sys.exit(1)
 
     # Check if tool is installed
     if not integration.is_installed():
@@ -742,6 +782,7 @@ def launch_command(args, extra_args: list[str] | None = None):
         model_type=model_info.get("model_type"),
         reasoning=model_info.get("enable_thinking"),
         models_status_map=models_status_map,
+        models_discovery_succeeded=models_discovery_succeeded,
         reasoning_effort_options=tuple(model_info.get("reasoning_effort_options") or ()),
         reasoning_effort_default=model_info.get("reasoning_effort_default"),
         tools_profile=getattr(args, "tools_profile", "coding"),

@@ -461,6 +461,7 @@ class DiscoveredModel:
     estimated_size: int  # Estimated memory usage in bytes
     text_only_size: int = 0  # Language-only estimate for VLM checkpoints (0 = n/a)
     realtime_voice: bool = False  # Its model type and config allow /v1/realtime
+    supports_audio_input: bool | None = None
     config_model_type: str = (
         ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     )
@@ -2174,6 +2175,79 @@ def _gemma4_text_only_prefers_llm_engine(config: dict) -> bool:
     return not _has_merged_mtp_head(config)
 
 
+def _detect_audio_input(
+    model_dir: Path, config: dict, model_type: ModelType
+) -> bool | None:
+    """Inspect known audio-input weight layouts without loading tensors."""
+    if model_type != "vlm":
+        return False if model_type == "llm" else None
+
+    import safetensors
+
+    family = config.get("model_type")
+    if family == "gemma4" and config.get("audio_config") is None:
+        return False
+    if family == "gemma4_unified" and config.get("audio_config", {}) is None:
+        return False
+    prefixes: tuple[str, ...] = (
+        "audio_tower.", "embed_audio.", "audio_encoder.", "thinker.audio_tower."
+    )
+    if family in ("inkling", "inkling_mm_model"):
+        prefixes += ("audio.",)
+    elif family == "lfm3_audio":
+        prefixes += ("encoder.",)
+    elif family == "minicpmo":
+        if config.get("init_audio") is False:
+            return False
+        prefixes += ("apm.",)
+
+    files = select_safetensors_weight_files(model_dir)
+    sidecar = model_dir / "omnimodal" / "audio_encoder.safetensors"
+    if sidecar.is_file():
+        files.append(sidecar)
+    optiq = config.get("optiq_vision")
+    if (
+        isinstance(optiq, dict)
+        and isinstance(optiq.get("sidecar"), str)
+        and optiq["sidecar"]
+    ):
+        try:
+            sidecar = (model_dir / optiq["sidecar"]).resolve()
+            valid = (
+                sidecar.is_relative_to(model_dir.resolve())
+                and sidecar.suffix == ".safetensors"
+            )
+        except (OSError, RuntimeError) as exc:
+            logger.warning("Cannot resolve audio input sidecar in %s: %s", model_dir, exc)
+            return None
+        if not valid:
+            logger.warning(
+                "Cannot inspect audio input: invalid OptiQ sidecar in %s", model_dir
+            )
+            return None
+        if sidecar not in files:
+            files.append(sidecar)
+    if not files:
+        return None
+
+    incomplete = False
+    for path in files:
+        try:
+            with safetensors.safe_open(str(path), framework="np") as weights:
+                if any(
+                    key.removeprefix("model.").startswith(prefixes)
+                    for key in weights.keys()  # noqa: SIM118
+                ):
+                    return True
+        except (OSError, safetensors.SafetensorError) as exc:
+            logger.warning("Cannot inspect audio input weights in %s: %s", path, exc)
+            incomplete = True
+    # These Gemma loaders strip orphaned audio config when its weights are absent.
+    if not incomplete and family in ("gemma4", "gemma4_unified"):
+        return False
+    return None
+
+
 def _register_model(
     models: dict[str, DiscoveredModel],
     model_dir: Path,
@@ -2310,6 +2384,7 @@ def _register_model(
             text_only_size=text_only_size,
             config_model_type=config_model_type,
             realtime_voice=is_realtime_voice_model(config_model_type, _config),
+            supports_audio_input=_detect_audio_input(model_dir, _config, model_type),
             reasoning_effort_options=reasoning_effort_options,
             reasoning_effort_default=reasoning_effort_default,
             thinking_default=thinking_default,

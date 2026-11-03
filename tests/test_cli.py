@@ -428,7 +428,7 @@ class TestLaunchCommandFunction:
         with patch("requests.post") as post:
             yield post
 
-    @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot"])
+    @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot", "opencode"])
     @pytest.mark.parametrize(
         ("requested_model", "saved_model", "default_model", "expected_model"),
         [
@@ -518,7 +518,9 @@ class TestLaunchCommandFunction:
             server=SimpleNamespace(host="127.0.0.1", port=8000),
             auth=SimpleNamespace(api_key="saved-key"),
             integrations=SimpleNamespace(
-                codex_model=saved_model, copilot_model=saved_model
+                codex_model=saved_model,
+                copilot_model=saved_model,
+                opencode_model=saved_model,
             ),
             claude_code=None,
         )
@@ -571,6 +573,139 @@ class TestLaunchCommandFunction:
         assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer saved-key"}
         # Auto-selected defaults are not warmed; text-model is already loaded.
         mock_model_load.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("requested", "saved_model", "default_model", "expected"),
+        [
+            ("requested", None, None, "requested"),
+            (None, "raw-model", None, "served-alias"),
+            (None, None, "raw-model", "served-alias"),
+            (None, None, None, ""),
+        ],
+    )
+    def test_opencode_failed_discovery_preserves_selection_without_inventing_catalog(
+        self, capsys, requested, saved_model, default_model, expected
+    ):
+        import requests
+
+        from omlx.cli import launch_command
+
+        integration = MagicMock()
+        integration.display_name = "OpenCode"
+        integration.is_installed.return_value = True
+        integration.requires_model_selection = True
+        health = MagicMock()
+        health.json.return_value = {"default_model": default_model}
+        status = MagicMock()
+        status.ok = bool(expected)
+        status.json.return_value = {
+            "models": [
+                {"id": "requested", "loaded": True},
+                {
+                    "id": "raw-model",
+                    "model_alias": "served-alias",
+                    "model_type": "llm",
+                    "loaded": True,
+                }
+            ]
+        }
+        settings = SimpleNamespace(
+            server=SimpleNamespace(host="127.0.0.1", port=8000),
+            auth=SimpleNamespace(api_key=""),
+            integrations=SimpleNamespace(opencode_model=saved_model),
+            claude_code=None,
+        )
+        args = argparse.Namespace(
+            tool="opencode", host=None, port=None, api_key=None, model=requested
+        )
+        with (
+            patch("requests.get", side_effect=[health, status, requests.Timeout()]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args)
+        context = integration.launch.call_args.args[0]
+        assert context.model == expected
+        assert context.models == ()
+        assert context.models_discovery_succeeded is False
+        assert "could not list oMLX models" in capsys.readouterr().out
+
+    def test_opencode_rejects_non_chat_model_from_inventory_without_status(self):
+        from omlx.cli import launch_command
+
+        integration = MagicMock()
+        integration.display_name = "OpenCode"
+        integration.is_installed.return_value = True
+        health = MagicMock()
+        health.json.return_value = {}
+        status = MagicMock()
+        status.ok = False
+        listing = MagicMock()
+        listing.json.return_value = {
+            "data": [{"id": "embedding-model", "model_type": "embedding"}]
+        }
+        settings = SimpleNamespace(
+            server=SimpleNamespace(host="127.0.0.1", port=8000),
+            auth=SimpleNamespace(api_key=""),
+            claude_code=None,
+        )
+        args = argparse.Namespace(
+            tool="opencode", host=None, port=None, api_key=None, model="embedding-model"
+        )
+        with (
+            patch("requests.get", side_effect=[health, status, listing]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+            pytest.raises(SystemExit) as exc,
+        ):
+            launch_command(args)
+        assert exc.value.code == 1
+        integration.launch.assert_not_called()
+
+    @pytest.mark.parametrize("requested", [True, False])
+    def test_opencode_uses_served_alias_for_raw_model_id(self, requested):
+        from omlx.cli import launch_command
+
+        integration = MagicMock()
+        integration.display_name = "OpenCode"
+        integration.is_installed.return_value = True
+        health = MagicMock()
+        health.json.return_value = {"default_model": "different"}
+        status = MagicMock()
+        status.json.return_value = {
+            "models": [
+                {
+                    "id": "raw-model",
+                    "model_alias": "served-alias",
+                    "model_type": "llm",
+                    "loaded": True,
+                }
+            ]
+        }
+        listing = MagicMock()
+        listing.json.return_value = {
+            "data": [{"id": "different"}, {"id": "served-alias"}]
+        }
+        settings = SimpleNamespace(
+            server=SimpleNamespace(host="127.0.0.1", port=8000),
+            auth=SimpleNamespace(api_key=""),
+            integrations=SimpleNamespace(opencode_model="raw-model"),
+            claude_code=None,
+        )
+        args = argparse.Namespace(
+            tool="opencode",
+            host=None,
+            port=None,
+            api_key=None,
+            model="raw-model" if requested else None,
+        )
+        with (
+            patch("requests.get", side_effect=[health, status, listing]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args)
+        assert integration.launch.call_args.args[0].model == "served-alias"
 
     @pytest.mark.parametrize("tool", ["codex", "codex_app", "copilot"])
     @pytest.mark.parametrize("load_failure", [None, "http", "timeout"])
@@ -778,8 +913,14 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
+        models_response = MagicMock()
+        models_response.json.return_value = {"data": [{"id": "qwen2.5-vl"}]}
+
         with (
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, models_response],
+            ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
@@ -833,9 +974,13 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
+        models_response = MagicMock()
+        models_response.json.return_value = {"data": [{"id": "qwen3.5"}]}
+
         with (
             patch(
-                "requests.get", side_effect=[health_response, status_response]
+                "requests.get",
+                side_effect=[health_response, status_response, models_response],
             ) as mock_get,
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
@@ -846,6 +991,7 @@ class TestLaunchCommandFunction:
         assert called_urls == [
             "http://[::1]:8000/health",
             "http://[::1]:8000/v1/models/status",
+            "http://[::1]:8000/v1/models",
         ]
         ctx = integration.launch.call_args.args[0]
         assert ctx.host == "::1"  # raw host preserved; brackets are URL-only
@@ -957,6 +1103,7 @@ class TestLaunchCommandFunction:
     def test_launch_command_resolves_alias_status_metadata(self):
         """Alias model IDs should keep status metadata from the real model."""
         from omlx.cli import launch_command
+        from omlx.integrations.opencode import opencode_provider_config
 
         integration = MagicMock()
         integration.display_name = "OpenCode"
@@ -976,6 +1123,7 @@ class TestLaunchCommandFunction:
                     "max_context_window": 32768,
                     "max_tokens": 8192,
                     "enable_thinking": False,
+                    "supports_audio_input": True,
                 }
             ]
         }
@@ -993,8 +1141,14 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
+        models_response = MagicMock()
+        models_response.json.return_value = {"data": [{"id": "gpt-4o"}]}
+
         with (
-            patch("requests.get", side_effect=[health_response, status_response]),
+            patch(
+                "requests.get",
+                side_effect=[health_response, status_response, models_response],
+            ),
             patch("omlx.integrations.get_integration", return_value=integration),
             patch("omlx.settings.GlobalSettings.load", return_value=settings),
         ):
@@ -1006,6 +1160,13 @@ class TestLaunchCommandFunction:
         assert ctx.max_tokens == 8192
         assert ctx.model_type == "vlm"
         assert ctx.reasoning is False
+        assert ctx.models_discovery_succeeded is True
+        assert ctx.models[0].id == "gpt-4o"
+        assert ctx.models[0].model_type == "vlm"
+        assert ctx.models_status_map["gpt-4o"]["supports_audio_input"] is True
+        assert opencode_provider_config(ctx)["models"]["gpt-4o"]["capabilities"][
+            "input"
+        ] == ["text", "image", "audio"]
 
     @pytest.mark.parametrize("tool", ["opencode", "codex", "copilot"])
     @pytest.mark.parametrize("model", ["flint-raw", "flint-alias"])
@@ -1070,13 +1231,16 @@ class TestLaunchCommandFunction:
             assert context.models[0].model_type == "llm"
         else:
             config_path = tmp_path / "opencode.json"
-            with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
+            with (
+                patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path),
+                patch("omlx.integrations.opencode._major_version", return_value=2),
+            ):
                 OpenCodeIntegration().configure(context)
-            entry = json.loads(config_path.read_text())["provider"]["omlx"]["models"][
-                model
+            entry = json.loads(config_path.read_text())["providers"]["omlx"]["models"][
+                context.model
             ]
-            assert entry["modalities"] == {"input": ["text"], "output": ["text"]}
-            assert not entry.get("attachment")
+            assert entry["capabilities"]["input"] == ["text"]
+            assert entry["capabilities"]["output"] == ["text"]
 
     def test_launch_command_forwards_extra_args(self):
         """Unknown CLI tokens (e.g. --resume <id>) should reach integration.launch."""

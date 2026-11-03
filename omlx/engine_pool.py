@@ -390,6 +390,7 @@ class EngineEntry:
         ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     )
     realtime_voice: bool = False  # Its model type and config allow /v1/realtime
+    supports_audio_input: bool | None = None
     thinking_default: bool | None = (
         None  # True if model thinks by default, False if not, None if unknown
     )
@@ -1575,6 +1576,7 @@ class EnginePool:
                     text_only_size=getattr(info, "text_only_size", 0),
                     config_model_type=getattr(info, "config_model_type", ""),
                     realtime_voice=getattr(info, "realtime_voice", False),
+                    supports_audio_input=getattr(info, "supports_audio_input", None),
                     reasoning_effort_options=list(
                         getattr(info, "reasoning_effort_options", [])
                     ),
@@ -4951,6 +4953,9 @@ class EnginePool:
                     ),
                     # d1 decision checkpoints share lfm3_omni but run on the decision engine.
                     "realtime_voice": e.engine_type == "vlm" and e.realtime_voice,
+                    "supports_audio_input": (
+                        e.supports_audio_input if e.engine_type == "vlm" else False
+                    ),
                     "model_context_length": e.model_context_length,
                     "is_helper": e.is_helper,
                     "reasoning_effort_options": list(e.reasoning_effort_options),

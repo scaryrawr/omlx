@@ -11,6 +11,7 @@ import pytest
 from omlx import gguf
 from omlx.model_discovery import (
     DiscoveredModel,
+    _detect_audio_input,
     _is_adapter_dir,
     _is_causal_lm_reranker,
     _is_helper_checkpoint,
@@ -34,6 +35,80 @@ from omlx.model_discovery import (
     model_display_name,
     model_unavailable_reason,
 )
+
+
+class TestAudioInputDiscovery:
+    @pytest.mark.parametrize(
+        ("family", "key", "expected"),
+        [
+            ("gemma4", "audio_tower.layer.weight", True),
+            ("gemma4", "model.audio_tower.layer.weight", True),
+            ("gemma4_unified", "model.embed_audio.projection.weight", True),
+            ("qwen3_omni_moe", "thinker.audio_tower.layer.weight", True),
+            ("inkling_mm_model", "model.audio.encoder.weight", True),
+            ("lfm3_audio", "encoder.downsample.weight", True),
+            ("minicpmo", "apm.conv1.weight", True),
+            ("gemma4", "vision_tower.layer.weight", False),
+            ("gemma4", "audio_decoder.layer.weight", False),
+            ("unknown", "vision_tower.layer.weight", None),
+        ],
+    )
+    def test_audio_input_weight_layouts(self, tmp_path, family, key, expected):
+        _write_safetensors(tmp_path / "model.safetensors", {key: ("F32", [1])})
+        config = {"model_type": family, "audio_config": {"hidden_size": 16}}
+        assert _detect_audio_input(tmp_path, config, "vlm") is expected
+
+    @pytest.mark.parametrize(
+        "sidecar", ["omnimodal/audio_encoder.safetensors", "optiq/vision.safetensors"]
+    )
+    def test_audio_input_sidecars(self, tmp_path, sidecar):
+        path = tmp_path / sidecar
+        path.parent.mkdir()
+        _write_safetensors(path, {"audio_encoder.weight": ("F32", [1])})
+        config = {"model_type": "mimo_v2"}
+        if sidecar.startswith("optiq/"):
+            config["optiq_vision"] = {"sidecar": sidecar}
+        assert _detect_audio_input(tmp_path, config, "vlm") is True
+
+    @pytest.mark.parametrize("model_type", ["llm", "audio_stt", "audio_tts", "audio_sts"])
+    def test_audio_input_is_only_detected_for_multimodal_chat(self, tmp_path, model_type):
+        config = {"model_type": "gemma4", "audio_config": {"hidden_size": 16}}
+        expected = False if model_type == "llm" else None
+        assert _detect_audio_input(tmp_path, config, model_type) is expected
+
+    @pytest.mark.parametrize("corrupt", [True, False])
+    def test_missing_or_unreadable_weights_are_unknown(self, tmp_path, caplog, corrupt):
+        if corrupt:
+            (tmp_path / "model.safetensors").write_bytes(b"corrupt")
+        assert _detect_audio_input(
+            tmp_path, {"model_type": "gemma4", "audio_config": {}}, "vlm"
+        ) is None
+        if corrupt:
+            assert "Cannot inspect audio input weights" in caplog.text
+
+    def test_audio_sidecar_must_stay_inside_model(self, tmp_path, caplog):
+        config = {
+            "model_type": "gemma4",
+            "audio_config": {},
+            "optiq_vision": {"sidecar": "../outside.safetensors"},
+        }
+        assert _detect_audio_input(tmp_path, config, "vlm") is None
+        assert "invalid OptiQ sidecar" in caplog.text
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"model_type": "minicpmo", "init_audio": False},
+            {"model_type": "gemma4"},
+            {"model_type": "gemma4", "audio_config": None},
+            {"model_type": "gemma4_unified", "audio_config": None},
+        ],
+    )
+    def test_disabled_audio_is_not_advertised(self, tmp_path, config):
+        _write_safetensors(
+            tmp_path / "model.safetensors", {"audio_tower.weight": ("F32", [1])}
+        )
+        assert _detect_audio_input(tmp_path, config, "vlm") is False
 
 
 class TestImageModelDiscovery:
