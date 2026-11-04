@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the integrations module."""
 
 import json
 import os
 import plistlib
+import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +20,7 @@ from omlx.integrations import (
     get_integration,
     list_integrations,
 )
-from omlx.integrations.base import IntegrationContext
+from omlx.integrations.base import IntegrationContext, IntegrationModel
 from omlx.integrations.claude import ClaudeCodeIntegration
 from omlx.integrations.claude_desktop import (
     PROFILE_ID,
@@ -36,6 +39,7 @@ from omlx.integrations.codex import (
     codex_model_catalog,
     resolve_codex_models,
     write_codex_config,
+    write_codex_model_catalog,
 )
 from omlx.integrations.codex_app import CodexAppIntegration, find_codex_app_bundle
 from omlx.integrations.copilot import CopilotIntegration, copilot_provider_config
@@ -48,7 +52,7 @@ from omlx.integrations.dsh import (
 )
 from omlx.integrations.hermes import HermesIntegration
 from omlx.integrations.openclaw import OpenClawIntegration
-from omlx.integrations.opencode import OpenCodeIntegration
+from omlx.integrations.opencode import OpenCodeIntegration, opencode_provider_config
 from omlx.integrations.pi import PiIntegration, _get_agent_dir
 from omlx.integrations.vibe import VibeIntegration
 
@@ -65,6 +69,36 @@ def ctx(**overrides) -> IntegrationContext:
 
 
 class TestIntegrationRegistry:
+    def test_registry_and_listing_do_not_import_inference_dependencies(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import importlib.abc
+import sys
+from types import SimpleNamespace
+
+class NoInferenceImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in ("omlx.model_discovery", "mlx_audio"):
+            raise ImportError(f"Unexpected inference dependency: {fullname}")
+
+sys.meta_path.insert(0, NoInferenceImports())
+from omlx.integrations import list_integrations
+assert {"codex_app", "vibe"} <= {entry.name for entry in list_integrations()}
+from omlx.cli import launch_command
+launch_command(SimpleNamespace(tool="list"))
+""",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Available integrations:" in result.stdout
+        assert "codex_app" in result.stdout
+
     def test_list_integrations(self):
         integrations = list_integrations()
         assert len(integrations) == 11
@@ -198,7 +232,10 @@ class TestCodexIntegration:
         assert {
             e["slug"]: [lvl["effort"] for lvl in e["supported_reasoning_levels"]]
             for e in entries
-        } == {"qwen-vl": [], "dsv41": ["low", "high", "max"]}
+        } == {
+            "qwen-vl": ["low", "medium", "high"],
+            "dsv41": ["low", "high", "max"],
+        }
 
     @pytest.mark.parametrize(
         ("model", "default", "expected"),
@@ -312,6 +349,9 @@ class TestCodexIntegration:
         }
         with (
             patch("omlx.integrations.codex.write_codex_config") as writer,
+            patch(
+                "omlx.integrations.codex.CODEX_CONFIG_PATH", tmp_path / "config.toml"
+            ),
             patch("omlx.integrations.codex.os.environ", base_env),
             patch("omlx.integrations.codex.os.execvpe", side_effect=fake_execvpe),
             patch("omlx.integrations.codex.shutil.which", return_value="/bin/codex"),
@@ -342,6 +382,244 @@ class TestCodexIntegration:
         assert "PYTHONPATH" not in captured["env"]
         assert "PYTHONDONTWRITEBYTECODE" not in captured["env"]
         writer.assert_not_called()
+        assert not (tmp_path / "config.toml").exists()
+        catalog_arg = next(
+            arg for arg in captured["argv"] if arg.startswith("model_catalog_json=")
+        )
+        catalog = json.loads(Path(json.loads(catalog_arg.split("=", 1)[1])).read_text())
+        assert catalog["models"][0]["slug"] == "qwen3.5"
+
+
+class TestCodexModelCatalog:
+    def test_preserves_ids_and_per_model_capabilities(self):
+        catalog = codex_model_catalog(
+            ctx(
+                model="vision-alias",
+                context_window=999999,
+                reasoning=True,
+                models=(
+                    IntegrationModel("small-text", 8192, "llm", False),
+                    IntegrationModel("vision-alias", 131072, "vlm", True),
+                    IntegrationModel("embedding", 1024, "embedding"),
+                    IntegrationModel("audio", 1024, "stt"),
+                ),
+            )
+        )
+        models = catalog["models"]
+        assert [model["slug"] for model in models] == ["vision-alias", "small-text"]
+        assert [model["priority"] for model in models] == [0, 1]
+        assert models[0]["context_window"] == 131072
+        assert models[0]["input_modalities"] == ["text", "image"]
+        assert models[0]["default_reasoning_level"] == "high"
+        assert [
+            level["effort"] for level in models[0]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
+        assert models[1]["context_window"] == 8192
+        assert models[1]["input_modalities"] == ["text"]
+        assert [
+            level["effort"] for level in models[1]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
+        assert models[1]["default_reasoning_level"] is None
+        assert models[1]["truncation_policy"]["limit"] == 2048
+        assert all(model["base_instructions"] for model in models)
+        assert all(not model["prefer_websockets"] for model in models)
+
+    @pytest.mark.parametrize("listed", [True, False])
+    @pytest.mark.parametrize("reasoning", [True, False, None])
+    def test_models_without_native_efforts_advertise_compatibility_levels(
+        self, listed, reasoning
+    ):
+        metadata = {"reasoning": reasoning}
+        model = codex_model_catalog(
+            ctx(
+                model="custom-alias",
+                models=(
+                    (IntegrationModel("custom-alias", **metadata),) if listed else ()
+                ),
+                **metadata,
+            )
+        )["models"][0]
+
+        assert [level["effort"] for level in model["supported_reasoning_levels"]] == [
+            "low",
+            "medium",
+            "high",
+        ]
+        assert all(
+            "ignored by templates without effort controls" in level["description"]
+            for level in model["supported_reasoning_levels"]
+        )
+        assert model["default_reasoning_level"] == ("high" if reasoning else None)
+
+    @pytest.mark.parametrize(
+        "selected",
+        ["Qwen3.5-9B-oQ4e-mtp", "Qwen3.8-Flash-Next-oQ4e-mtp"],
+    )
+    def test_desktop_title_fallback_prefers_launch_default_over_other_models(
+        self, selected
+    ):
+        catalog = codex_model_catalog(
+            ctx(
+                model=selected,
+                models=(
+                    IntegrationModel(
+                        "Qwen3.8-Flash-Next-oQ4e-mtp",
+                        reasoning=True,
+                        reasoning_effort_options=("low", "medium", "xhigh"),
+                        reasoning_effort_default="xhigh",
+                    ),
+                    IntegrationModel("Qwen3.6-35B-A3B-oQ6e-mtp", reasoning=True),
+                    IntegrationModel("Qwen3.5-9B-oQ4e-mtp", reasoning=True),
+                ),
+            )
+        )
+
+        # Codex Desktop filters low-effort candidates before preferring the
+        # catalog default (priority zero), then falls back to the first match.
+        candidates = [
+            model
+            for model in catalog["models"]
+            if any(
+                level["effort"] == "low"
+                for level in model["supported_reasoning_levels"]
+            )
+        ]
+        title_model = next(
+            (model for model in candidates if model["priority"] == 0), candidates[0]
+        )
+        assert title_model["slug"] == selected
+        assert len(catalog["models"]) == 3
+
+    @pytest.mark.parametrize("listed", [True, False])
+    def test_qwen_native_efforts_default_to_medium(self, listed):
+        metadata = {
+            "reasoning": True,
+            "reasoning_effort_options": ("xhigh", "medium", "low"),
+            "reasoning_effort_default": "xhigh",
+        }
+        catalog = codex_model_catalog(
+            ctx(
+                model="custom-alias",
+                models=(IntegrationModel("custom-alias", **metadata),) if listed else (),
+                **metadata,
+            )
+        )
+        model = catalog["models"][0]
+        assert model["default_reasoning_level"] == "medium"
+        assert [level["effort"] for level in model["supported_reasoning_levels"]] == [
+            "low",
+            "medium",
+            "xhigh",
+        ]
+
+    @pytest.mark.parametrize("default,expected", [("low", "low"), ("bogus", "low")])
+    def test_native_default_without_medium_and_unknown_values(self, default, expected):
+        model = codex_model_catalog(
+            ctx(
+                model="alias",
+                reasoning=True,
+                reasoning_effort_options=("low", "ultra", "custom", "low"),
+                reasoning_effort_default=default,
+            )
+        )["models"][0]
+        assert model["default_reasoning_level"] == expected
+        assert [level["effort"] for level in model["supported_reasoning_levels"]] == [
+            "low",
+            "ultra",
+        ]
+
+    def test_disabled_thinking_does_not_advertise_effort(self):
+        model = codex_model_catalog(
+            ctx(
+                model="alias",
+                reasoning=False,
+                reasoning_effort_options=("low", "medium", "xhigh"),
+                reasoning_effort_default="xhigh",
+            )
+        )["models"][0]
+        assert model["supported_reasoning_levels"] == []
+        assert model["default_reasoning_level"] is None
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            {"model_type": "llm", "is_helper": True},
+            {"model_type": "vlm", "config_model_type": "embedding_gemma2"},
+            {"model_type": "llm", "config_model_type": "qwen3_5_mtp"},
+            {"model_type": "embedding"},
+            {"model_type": "llm", "engine_type": "reranker"},
+        ],
+    )
+    @pytest.mark.parametrize("listed", [False, True])
+    def test_status_excludes_non_chat_models_even_when_selected(self, status, listed):
+        assert codex_model_catalog(
+            ctx(
+                model="alias",
+                models=(IntegrationModel("alias", model_type="vlm"),) if listed else (),
+                models_status_map={"alias": status},
+            )
+        ) == {"models": []}
+
+    def test_explicit_non_chat_model_is_not_added(self):
+        assert codex_model_catalog(ctx(model="embedding", model_type="embedding")) == {
+            "models": []
+        }
+
+    @pytest.mark.parametrize("context_window", [None, 0, -1])
+    def test_unknown_or_invalid_context_uses_fallback(self, context_window):
+        catalog = codex_model_catalog(ctx(model="model", context_window=context_window))
+        assert catalog["models"][0]["context_window"] == 32768
+
+    def test_explicit_model_is_included_when_listing_is_unavailable(self):
+        catalog = codex_model_catalog(ctx(model="deepseek-r1", context_window=65536))
+        assert len(catalog["models"]) == 1
+        model = catalog["models"][0]
+        assert model["slug"] == "deepseek-r1"
+        assert model["context_window"] == 65536
+        assert model["default_reasoning_level"] == "high"
+
+    def test_metadata_overrides_reasoning_name_heuristic(self):
+        catalog = codex_model_catalog(ctx(model="deepseek-r1", reasoning=False))
+        assert [
+            level["effort"]
+            for level in catalog["models"][0]["supported_reasoning_levels"]
+        ] == ["low", "medium", "high"]
+        assert catalog["models"][0]["default_reasoning_level"] is None
+        assert catalog["models"][0]["context_window"] == 32768
+        assert catalog["models"][0]["input_modalities"] == ["text"]
+
+    def test_catalog_overrides_do_not_freeze_model_settings(self, tmp_path):
+        path = tmp_path / "catalog.json"
+        args = codex_config_args(
+            ctx(model="thinking", reasoning=True, context_window=4096), path
+        )
+        assert f"model_catalog_json={json.dumps(str(path))}" in args
+        assert not any(arg.startswith("model_context_window=") for arg in args)
+        assert not any(arg.startswith("model_reasoning_effort=") for arg in args)
+        assert 'model_providers.omlx.wire_api="responses"' in args
+        assert "model_providers.omlx.supports_websockets=false" in args
+
+    def test_catalog_refreshes_without_replacing_other_catalogs(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        other_catalog = tmp_path / "my-models.json"
+        other_catalog.write_text("user-owned")
+        path = write_codex_model_catalog(
+            config_path.parent, "codex", ctx(model="old"), ["old"], "instructions"
+        )
+        new_path = write_codex_model_catalog(
+            config_path.parent, "codex", ctx(model="new"), ["new"], "instructions"
+        )
+        assert path == new_path
+        assert json.loads(path.read_text())["models"][0]["slug"] == "new"
+        assert other_catalog.read_text() == "user-owned"
+        assert not config_path.exists()
+        assert (
+            write_codex_model_catalog(
+                config_path.parent, "codex", ctx(port=9000, model="other"),
+                ["other"], "instructions",
+            )
+            != path
+        )
 
 
 class TestCodexConfigWriter:
@@ -367,6 +645,75 @@ class TestCodexConfigWriter:
         assert f'model_catalog_json = "{tmp_path / "omlx-models.json"}"' in content
         assert 'base_url = "http://192.168.1.100:9000/v1"' in content
         assert 'env_key = "OMLX_API_KEY"' in content
+
+    def test_writes_catalog_and_clears_global_model_overrides(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "model_context_window = 999999\n"
+            "model_auto_compact_token_limit = 900000\n"
+            'model_reasoning_effort = "high"\n'
+            'model_reasoning_summary = "auto"\n'
+            "model_supports_reasoning_summaries = true\n"
+            'approval_policy = "on-request"\n'
+            "[model_providers.other]\n"
+            'name = "Other"\n'
+        )
+        write_codex_config(
+            config_path,
+            ctx(
+                model='model "with quotes"',
+                models=(IntegrationModel('model "with quotes"', 8192, "llm", False),),
+            ),
+        )
+        config = tomllib.loads(config_path.read_text())
+        assert config["model"] == 'model "with quotes"'
+        assert config["approval_policy"] == "on-request"
+        assert config["model_providers"]["other"]["name"] == "Other"
+        assert "model_context_window" not in config
+        assert "model_auto_compact_token_limit" not in config
+        assert "model_reasoning_effort" not in config
+        assert "model_reasoning_summary" not in config
+        assert "model_supports_reasoning_summaries" not in config
+        models = json.loads(Path(config["model_catalog_json"]).read_text())["models"]
+        assert models[0]["context_window"] == 8192
+        assert config["model_providers"]["omlx"]["wire_api"] == "responses"
+        assert config["model_providers"]["omlx"]["supports_websockets"] is False
+
+    def test_backup_failure_does_not_overwrite_config(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('model = "old"\n')
+        with (
+            patch(
+                "omlx.integrations.codex.shutil.copy2", side_effect=OSError("read-only")
+            ),
+            pytest.raises(OSError, match="read-only"),
+        ):
+            write_codex_config(config_path, ctx(model="new"))
+        assert config_path.read_text() == 'model = "old"\n'
+
+    def test_replaces_provider_subtables_and_commented_header(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[model_providers.omlx] # old provider\n"
+            'name = "Old"\n'
+            "[model_providers.omlx.http_headers]\n"
+            'old_header = "old"\n'
+            "[model_providers.other] # keep\n"
+            'name = "Other"\n'
+        )
+        write_codex_config(config_path, ctx(model="new"))
+        providers = tomllib.loads(config_path.read_text())["model_providers"]
+        assert providers["omlx"]["name"] == "oMLX"
+        assert "http_headers" not in providers["omlx"]
+        assert providers["other"]["name"] == "Other"
+
+    def test_invalid_config_is_not_overwritten(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('model = "unterminated\n')
+        with pytest.raises(tomllib.TOMLDecodeError):
+            write_codex_config(config_path, ctx(model="new"))
+        assert config_path.read_text() == 'model = "unterminated\n'
+        assert not list(tmp_path.glob("omlx-models-*.json"))
 
     def test_creates_backup(self, tmp_path):
         config_path = tmp_path / "config.toml"
@@ -596,205 +943,515 @@ class TestCodexAppIntegration:
 
 
 class TestOpenCodeIntegration:
+    @pytest.fixture
+    def opencode_v2(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            OpenCodeIntegration, "CONFIG_PATH", tmp_path / "opencode.json"
+        )
+        monkeypatch.setattr("omlx.integrations.opencode._major_version", lambda: 2)
+        return OpenCodeIntegration()
+
     def test_get_command(self):
-        oc = OpenCodeIntegration()
-        cmd = oc.get_command(ctx(port=8000, api_key="key", model="qwen3.5"))
-        assert "omlx launch opencode" in cmd
-        assert "--model qwen3.5" in cmd
+        assert "--model qwen" in OpenCodeIntegration().get_command(ctx(model="qwen"))
 
-    def test_configure_new_file(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=8000, api_key="test-key", model="qwen3.5"))
-
-        assert config_path.exists()
-        config = json.loads(config_path.read_text())
-        assert (
-            config["provider"]["omlx"]["options"]["baseURL"]
-            == "http://127.0.0.1:8000/v1"
+    @pytest.mark.parametrize("reported_audio", [None, True, False])
+    def test_warns_when_running_server_lacks_audio_metadata(
+        self, opencode_v2, capsys, reported_audio
+    ):
+        status = {"model_type": "vlm"}
+        if reported_audio is not None:
+            status["supports_audio_input"] = reported_audio
+        context = ctx(
+            model="gemma",
+            models=(IntegrationModel(id="gemma", model_type="vlm"),),
+            models_status_map={"gemma": status},
         )
-        assert config["provider"]["omlx"]["npm"] == "@ai-sdk/openai-compatible"
-        assert config["provider"]["omlx"]["options"]["apiKey"] == "test-key"
-        assert config["provider"]["omlx"]["models"]["qwen3.5"]["name"] == "qwen3.5"
-        assert config["provider"]["omlx"]["models"]["qwen3.5"]["modalities"] == {
-            "input": ["text"],
-            "output": ["text"],
-        }
-        assert config["model"] == "omlx/qwen3.5"
+        opencode_v2.configure(context)
+        warning = "updating the launcher alone is not enough"
+        assert (warning in capsys.readouterr().out) is (reported_audio is None)
 
-    def test_configure_custom_host(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=9000, api_key="key", model="test", host="10.0.0.5"))
+    @pytest.mark.parametrize("audio_input", [True, False, None, "true"])
+    @pytest.mark.parametrize("listed", [True, False])
+    def test_audio_input_capability(self, audio_input, listed):
+        context = ctx(
+            model="omni",
+            model_type="vlm",
+            models=(IntegrationModel(id="omni", model_type="vlm"),) if listed else (),
+            models_status_map={"omni": {"supports_audio_input": audio_input}},
+        )
+        provider = opencode_provider_config(context)
+        inputs = provider["models"]["omni"]["capabilities"]["input"]
+        assert inputs == ["text", "image"] + (["audio"] if audio_input is True else [])
+        assert provider["models"]["omni"]["capabilities"]["output"] == ["text"]
 
-        config = json.loads(config_path.read_text())
-        assert (
-            config["provider"]["omlx"]["options"]["baseURL"]
-            == "http://10.0.0.5:9000/v1"
+    @pytest.mark.parametrize("model_type", ["vlm", None])
+    @pytest.mark.parametrize("audio_input", [True, False, None])
+    @pytest.mark.parametrize("previous_audio", [True, False])
+    def test_refresh_audio_input_capability(
+        self, tmp_path, opencode_v2, model_type, audio_input, previous_audio
+    ):
+        path = tmp_path / "opencode.json"
+        old_inputs = ["text", "image"] + (["audio"] if previous_audio else [])
+        models = {"omni": {"capabilities": {"input": old_inputs}}}
+        path.write_text(json.dumps({"providers": {"omlx": {"models": models}}}))
+        context = ctx(
+            model="omni",
+            model_type=model_type,
+            models_status_map={"omni": {"supports_audio_input": audio_input}},
+        )
+        opencode_v2.configure(context)
+        first = path.read_text()
+        opencode_v2.configure(context)
+        assert path.read_text() == first
+        model = json.loads(first)["providers"]["omlx"]["models"]["omni"]
+        expected_audio = previous_audio if audio_input is None else audio_input
+        assert model["capabilities"]["input"] == ["text", "image"] + (
+            ["audio"] if expected_audio else []
         )
 
-    def test_configure_preserves_existing(self, tmp_path):
-        config_path = tmp_path / "opencode.json"
-        existing = {
-            "provider": {
-                "ollama": {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "options": {
-                        "baseURL": "http://localhost:11434/v1",
-                    },
-                }
-            },
-            "logLevel": "INFO",
-        }
-        config_path.write_text(json.dumps(existing))
-
-        oc = OpenCodeIntegration()
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=9000, api_key="", model="llama"))
-
-        config = json.loads(config_path.read_text())
-        # Existing provider preserved
-        assert "ollama" in config["provider"]
-        assert (
-            config["provider"]["ollama"]["options"]["baseURL"]
-            == "http://localhost:11434/v1"
+    def test_v2_catalog_and_preservation(self, tmp_path):
+        path = tmp_path / "opencode.jsonc"
+        original = """{
+  // keep this comment
+  "providers": {
+    "other": {"name": "Other"},
+    "omlx": {
+      "custom": true, // keep provider comment
+      "settings": {"timeout": 100},
+      "models": {"manual": {"name": "Manual"}, "vision": {"custom": 7}},
+    },
+  },
+  "model": "other/model",
+}
+"""
+        path.write_text(original)
+        models = (
+            IntegrationModel(id="text", context_window=32768, model_type="llm"),
+            IntegrationModel(
+                id="vision", context_window=8192, model_type="vlm", reasoning=True
+            ),
+            IntegrationModel(id="embedding", model_type="embedding"),
         )
-        # omlx provider added
-        assert "omlx" in config["provider"]
-        assert (
-            config["provider"]["omlx"]["options"]["baseURL"]
-            == "http://127.0.0.1:9000/v1"
+        context = ctx(
+            model="text",
+            models=models,
+            models_discovery_succeeded=True,
+            models_status_map={"text": {"max_tokens": 2048}},
         )
-        # Other keys preserved
-        assert config["logLevel"] == "INFO"
-
-    def test_configure_creates_backup(self, tmp_path):
-        config_path = tmp_path / "opencode.json"
-        config_path.write_text('{"existing": true}')
-
-        oc = OpenCodeIntegration()
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=8000, api_key="", model="test"))
-
-        # Check backup was created
-        backups = list(tmp_path.glob("opencode.*.bak"))
-        assert len(backups) == 1
-        backup_content = json.loads(backups[0].read_text())
-        assert backup_content == {"existing": True}
-
-    def test_configure_handles_invalid_json(self, tmp_path):
-        config_path = tmp_path / "opencode.json"
-        config_path.write_text("not valid json {{{")
-
-        oc = OpenCodeIntegration()
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=8000, api_key="key", model="test"))
-
-        # Should create new config despite invalid existing file
-        config = json.loads(config_path.read_text())
-        assert "omlx" in config["provider"]
-
-    def test_configure_with_limits(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(
-                ctx(
-                    port=8000,
-                    api_key="key",
-                    model="qwen3.5",
-                    context_window=32768,
-                    max_tokens=8192,
-                )
-            )
-
-        config = json.loads(config_path.read_text())
-        model_config = config["provider"]["omlx"]["models"]["qwen3.5"]
-        assert model_config["limit"]["context"] == 32768
-        assert model_config["limit"]["output"] == 8192
-
-    def test_configure_vlm_modalities(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(
-                ctx(
-                    port=8000,
-                    api_key="key",
-                    model="qwen2.5-vl",
-                    model_type="vlm",
-                )
-            )
-
-        config = json.loads(config_path.read_text())
-        model_config = config["provider"]["omlx"]["models"]["qwen2.5-vl"]
-        assert model_config["attachment"] is True
-        assert model_config["modalities"] == {
-            "input": ["text", "image"],
-            "output": ["text"],
-        }
-
-    def test_configure_with_context_window_only(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(
-                ctx(
-                    port=8000,
-                    api_key="key",
-                    model="qwen3.5",
-                    context_window=32768,
-                )
-            )
-
-        config = json.loads(config_path.read_text())
-        model_config = config["provider"]["omlx"]["models"]["qwen3.5"]
-        assert model_config["limit"]["context"] == 32768
-        assert model_config["limit"]["output"] == 32768
-
-    def test_configure_without_limits(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-
-        with patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path):
-            oc.configure(ctx(port=8000, api_key="key", model="qwen3.5"))
-
-        config = json.loads(config_path.read_text())
-        model_config = config["provider"]["omlx"]["models"]["qwen3.5"]
-        assert "limit" not in model_config
-
-    def test_launch_scrubs_python_env(self, tmp_path):
-        oc = OpenCodeIntegration()
-        config_path = tmp_path / "opencode" / "opencode.json"
-        captured = {}
-
-        def fake_execvpe(binary, argv, env):
-            captured["argv"] = argv
-            captured["env"] = env
-
-        base_env = {
-            "PATH": "/usr/bin",
-            "PYTHONHOME": "/bundle/python",
-            "PYTHONPATH": "/bundle/lib",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
         with (
-            patch.object(OpenCodeIntegration, "CONFIG_PATH", config_path),
-            patch("omlx.integrations.opencode.os.environ", base_env),
-            patch("omlx.integrations.opencode.os.execvpe", side_effect=fake_execvpe),
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", path),
+            patch("omlx.integrations.opencode._major_version", return_value=2),
         ):
-            oc.launch(ctx(port=8000, api_key="key", model="qwen3.5"))
+            OpenCodeIntegration().configure(context)
+            result = path.read_text()
+            OpenCodeIntegration().configure(context)
+        assert path.read_text() == result
+        assert "// keep this comment" not in result
+        assert "// keep provider comment" not in result
+        config = json.loads(result)
+        assert result == json.dumps(config, indent=2) + "\n"
+        provider = config["providers"]["omlx"]
+        assert provider["package"] == "@opencode/ai/providers/openai-compatible"
+        assert provider["settings"] == {
+            "timeout": 100,
+            "baseURL": "http://127.0.0.1:8000/v1",
+            "apiKey": "omlx",
+        }
+        assert config["providers"]["other"] == {"name": "Other"}
+        assert provider["custom"] is True
+        assert set(provider["models"]) == {"manual", "text", "vision"}
+        assert provider["models"]["text"]["limit"] == {"context": 32768, "output": 2048}
+        assert provider["models"]["vision"]["custom"] == 7
+        assert provider["models"]["vision"]["capabilities"]["input"] == [
+            "text",
+            "image",
+        ]
+        assert config["model"] == "omlx/text"
+        backups = list(tmp_path.glob("opencode.*.bak"))
+        assert len(backups) == 1 and backups[0].read_text() == original
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert backups[0].stat().st_mode & 0o777 == 0o600
 
-        assert captured["argv"] == ["opencode"]
-        assert "PYTHONHOME" not in captured["env"]
-        assert "PYTHONPATH" not in captured["env"]
-        assert "PYTHONDONTWRITEBYTECODE" not in captured["env"]
+    @pytest.mark.parametrize("native_models", [{}, {"native": {}}])
+    def test_legacy_settings_are_not_modified(
+        self, tmp_path, opencode_v2, native_models
+    ):
+        path = tmp_path / "opencode.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "provider": {"omlx": {"models": {"legacy": {}}}},
+                    "providers": {"omlx": {"models": native_models}},
+                }
+            )
+        )
+        opencode_v2.configure(
+            ctx(
+                model="fresh",
+                models=(IntegrationModel(id="fresh", model_type="llm"),),
+                models_discovery_succeeded=True,
+            )
+        )
+        config = json.loads(path.read_text())
+        assert set(config["providers"]["omlx"]["models"]) == set(native_models) | {
+            "fresh"
+        }
+        assert config["provider"]["omlx"]["models"] == {"legacy": {}}
+
+    @pytest.mark.parametrize(
+        "original",
+        [
+            "invalid {",
+            "[]",
+            '{"providers": []}',
+            '{"providers": {"omlx": {"models": null}}}',
+            '{"providers": {}, "providers": {}}',
+            '{"providers": {"omlx": {}, "omlx": {}}}',
+            '{"x": /* unterminated',
+            '{"x": NaN}',
+            '{"x": Infinity}',
+        ],
+    )
+    def test_invalid_config_is_not_overwritten(self, tmp_path, original):
+        path = tmp_path / "opencode.jsonc"
+        path.write_text(original)
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", path),
+            patch("omlx.integrations.opencode._major_version", return_value=2),
+            pytest.raises(ValueError),
+        ):
+            OpenCodeIntegration().configure(ctx(model="test"))
+        assert path.read_text() == original
+        assert not list(tmp_path.glob("opencode.*.bak"))
+
+    @pytest.mark.parametrize(
+        ("model", "discovered"),
+        [("requested", False), ("requested", True), ("", False)],
+    )
+    def test_refresh_preserves_catalog_and_selects_only_available_default(
+        self, tmp_path, opencode_v2, model, discovered
+    ):
+        path = tmp_path / "opencode.json"
+        path.write_text(
+            '{"model":"omlx/saved", "providers":{"omlx":{"models":{"saved":{}}}}}'
+        )
+        opencode_v2.configure(ctx(model=model, models_discovery_succeeded=discovered))
+        config = json.loads(path.read_text())
+        assert config["model"] == f"omlx/{model or 'saved'}"
+        assert set(config["providers"]["omlx"]["models"]) == (
+            {"saved", model} if model else {"saved"}
+        )
+
+    @pytest.mark.parametrize(
+        ("window", "max_tokens", "expected_output"),
+        [
+            (32768, None, 2048),
+            (32768, 4096, 4096),
+            (32768, 32768, 24576),
+            (32768, 65536, 24576),
+            (2, None, 1),
+            (3, None, 2),
+        ],
+    )
+    def test_model_output_limit_leaves_room_for_input(
+        self, window, max_tokens, expected_output
+    ):
+        context = ctx(
+            model="test",
+            models=(
+                IntegrationModel(id="test", context_window=window, model_type="llm"),
+            ),
+            max_tokens=max_tokens,
+        )
+        limit = opencode_provider_config(context)["models"]["test"]["limit"]
+        assert limit == {"context": window, "output": expected_output}
+        assert (window - expected_output) * 4 >= window
+
+    def test_unusable_context_preserves_existing_limits(
+        self, tmp_path, opencode_v2, capsys
+    ):
+        path = tmp_path / "opencode.json"
+        path.write_text(
+            '{"providers":{"omlx":{"models":{"test":'
+            '{"limit":{"context":100,"output":40}}}}}}'
+        )
+        opencode_v2.configure(
+            ctx(
+                model="test",
+                models=(IntegrationModel(id="test", context_window=1),),
+                models_discovery_succeeded=True,
+            )
+        )
+        limit = json.loads(path.read_text())["providers"]["omlx"]["models"]["test"][
+            "limit"
+        ]
+        assert limit == {"context": 100, "output": 40}
+        assert "context window for test is unusable" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(("previous", "expected"), [(1, True), (False, False)])
+    def test_refresh_preserves_only_boolean_tool_capabilities(
+        self, tmp_path, opencode_v2, previous, expected
+    ):
+        path = tmp_path / "opencode.json"
+        models = {"test": {"capabilities": {"tools": previous}}}
+        path.write_text(json.dumps({"providers": {"omlx": {"models": models}}}))
+        opencode_v2.configure(ctx(model="test", model_type="llm"))
+        tools = json.loads(path.read_text())["providers"]["omlx"]["models"]["test"][
+            "capabilities"
+        ]["tools"]
+        assert tools is expected
+
+    @pytest.mark.parametrize(
+        ("line_break", "escaped"),
+        [("\n", r"\ud83d\ude00"), ("\r\n", r"\ud800"), ("\r", r"\u00e9")],
+    )
+    def test_jsonc_conversion_preserves_values_and_original_backup(
+        self, tmp_path, line_break, escaped
+    ):
+        path = tmp_path / "opencode.jsonc"
+        original = (
+            "{\n// keep header\n"
+            f'"custom": "{escaped}",\n'
+            '"providers":{"omlx":{"models":{"vision":{"capabilities":'
+            '{"input":["text", /* block comment */ // line comment\n'
+            '"image"],"output":["text"]}}}}},\n}\n'
+        ).replace("\n", line_break)
+        path.write_bytes(original.encode())
+
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", path),
+            patch("omlx.integrations.opencode._major_version", return_value=2),
+        ):
+            OpenCodeIntegration().configure(ctx(model="vision", model_type="llm"))
+
+        updated = path.read_bytes().decode()
+        config = json.loads(updated)
+        assert updated == json.dumps(config, indent=2) + "\n"
+        assert next(tmp_path.glob("opencode.*.bak")).read_bytes() == original.encode()
+        assert config["custom"] == json.loads(f'"{escaped}"')
+        assert config["providers"]["omlx"]["models"]["vision"]["capabilities"][
+            "input"
+        ] == ["text"]
+
+    def test_backup_failure_warns_and_writes_config(
+        self, tmp_path, opencode_v2, capsys
+    ):
+        path = tmp_path / "opencode.json"
+        path.write_text('{"original":true}')
+        with patch(
+            "omlx.integrations.base.shutil.copy2", side_effect=OSError("denied")
+        ):
+            opencode_v2.configure(ctx(model="test"))
+        assert json.loads(path.read_text())["original"] is True
+        assert json.loads(path.read_text())["model"] == "omlx/test"
+        assert "Warning: could not create backup: denied" in capsys.readouterr().out
+        assert not list(tmp_path.glob("opencode.*.bak"))
+
+    def test_existing_hardlinked_config_is_not_modified(self, tmp_path, opencode_v2):
+        path = tmp_path / "opencode.json"
+        other = tmp_path / "other.json"
+        path.write_text('{"before": true}')
+        path.chmod(0o644)
+        os.link(path, other)
+        with pytest.raises(ValueError, match="singly linked regular file"):
+            opencode_v2.configure(ctx(model="test"))
+        assert path.samefile(other)
+        assert path.read_text() == '{"before": true}'
+        assert other.stat().st_mode & 0o777 == 0o644
+
+    def test_relaunch_warns_when_metadata_is_unavailable(
+        self, tmp_path, opencode_v2, capsys
+    ):
+        path = tmp_path / "opencode.json"
+        first = ctx(
+            model="test",
+            models=(IntegrationModel(id="test", context_window=32768, reasoning=True),),
+            models_discovery_succeeded=True,
+        )
+        second = ctx(
+            model="test",
+            models=(IntegrationModel(id="test"),),
+            models_discovery_succeeded=True,
+        )
+        opencode_v2.configure(first)
+        capsys.readouterr()
+        opencode_v2.configure(second)
+        model = json.loads(path.read_text())["providers"]["omlx"]["models"]["test"]
+        assert model["limit"] == {"context": 32768, "output": 2048}
+        assert model["capabilities"]["reasoning"] == {"supported": True}
+        warning = capsys.readouterr().out
+        assert "no current metadata for test" in warning
+        assert "limit, capabilities.reasoning" in warning
+        assert "may be stale" in warning
+
+    def test_relaunch_preserves_vision_when_model_type_is_unknown(
+        self, tmp_path, opencode_v2, capsys
+    ):
+        path = tmp_path / "opencode.json"
+        opencode_v2.configure(
+            ctx(
+                model="vision",
+                models=(IntegrationModel(id="vision", model_type="vlm"),),
+                models_discovery_succeeded=True,
+            )
+        )
+        capsys.readouterr()
+        opencode_v2.configure(
+            ctx(
+                model="vision",
+                models=(IntegrationModel(id="vision"),),
+                models_discovery_succeeded=True,
+            )
+        )
+        config = json.loads(path.read_text())
+        model = config["providers"]["omlx"]["models"]["vision"]
+        assert model["capabilities"]["input"] == ["text", "image"]
+        assert "model type" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("major", [0, 1, 3, 99])
+    def test_unsupported_version_does_not_change_config(self, tmp_path, major):
+        path = tmp_path / "opencode.json"
+        path.write_text('{"original":true}')
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", path),
+            patch("omlx.integrations.opencode._major_version", return_value=major),
+            pytest.raises(ValueError, match="Unsupported OpenCode major version"),
+        ):
+            OpenCodeIntegration().configure(ctx(model="test"))
+        assert path.read_text() == '{"original":true}'
+        assert not list(tmp_path.glob("*.bak"))
+
+    def test_unknown_version_does_not_change_config(self, tmp_path):
+        path = tmp_path / "opencode.json"
+        path.write_text('{"original":true}')
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", path),
+            patch(
+                "omlx.integrations.opencode.subprocess.run",
+                side_effect=OSError("missing executable"),
+            ),
+            pytest.raises(RuntimeError, match="Cannot determine OpenCode version"),
+        ):
+            OpenCodeIntegration().configure(ctx(model="test"))
+        assert path.read_text() == '{"original":true}'
+        assert not list(tmp_path.glob("*.bak"))
+
+    def test_jsonc_takes_precedence(self, tmp_path, monkeypatch):
+        from omlx.integrations.opencode import _config_path
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        directory = tmp_path / "opencode"
+        directory.mkdir()
+        (directory / "opencode.json").write_text("{}")
+        (directory / "opencode.jsonc").write_text("{}")
+        assert _config_path() == directory / "opencode.jsonc"
+
+    def test_config_directory_override(self, tmp_path, monkeypatch):
+        xdg_config = tmp_path / "xdg"
+        custom = tmp_path / "custom"
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
+        monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(custom))
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", None),
+            patch("omlx.integrations.opencode._major_version", return_value=2),
+        ):
+            OpenCodeIntegration().configure(ctx(model="test"))
+        assert (custom / "opencode.json").exists()
+        assert not (xdg_config / "opencode" / "opencode.json").exists()
+
+    def test_dangling_jsonc_symlink_is_not_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        directory = tmp_path / "opencode"
+        directory.mkdir()
+        jsonc = directory / "opencode.jsonc"
+        jsonc.symlink_to(directory / "missing.jsonc")
+        with (
+            patch.object(OpenCodeIntegration, "CONFIG_PATH", None),
+            patch("omlx.integrations.opencode._major_version", return_value=2),
+            pytest.raises(ValueError, match="Refusing to overwrite symlink"),
+        ):
+            OpenCodeIntegration().configure(ctx(model="test"))
+        assert jsonc.is_symlink()
+        assert not (directory / "opencode.json").exists()
+
+    def test_launch_scrubs_python_env(self, opencode_v2):
+        with (
+            patch("omlx.integrations.opencode.os.execvpe") as execvpe,
+            patch.dict(
+                "os.environ",
+                {
+                    "PYTHONHOME": "bundle",
+                    "PYTHONPATH": "bundle",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                },
+            ),
+        ):
+            opencode_v2.launch(ctx(model="qwen"))
+        binary, argv, env = execvpe.call_args.args
+        assert binary == "opencode"
+        assert argv == ["opencode"]
+        assert "PYTHONHOME" not in env
+        assert "PYTHONPATH" not in env
+        assert "PYTHONDONTWRITEBYTECODE" not in env
+
+    def test_launch_flushes_warnings_before_exec(self, tmp_path):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import os
+from pathlib import Path
+from omlx.integrations.base import IntegrationContext
+import omlx.integrations.opencode as opencode
+
+opencode._major_version = lambda: 2
+opencode.OpenCodeIntegration.CONFIG_PATH = Path(os.environ["TEST_CONFIG"])
+opencode.os.execvpe = lambda *args: os._exit(0)
+context = IntegrationContext(host="127.0.0.1", port=8000, api_key="", model="test")
+opencode.OpenCodeIntegration().launch(context)
+""",
+            ],
+            env={**os.environ, "TEST_CONFIG": str(tmp_path / "opencode.json")},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "OpenCode's running shared service" in result.stdout
+
+    def test_reload_warning_describes_shared_service_effects(self, opencode_v2, capsys):
+        opencode_v2.configure(ctx(model="test"))
+        assert "Reload cancels pending permissions and forms" in capsys.readouterr().out
+        opencode_v2.configure(ctx(model="test", extra_args=("--standalone",)))
+        assert "shared service" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "extra_args",
+        [
+            ("--server", "https://example.invalid"),
+            ("--server=https://example.invalid",),
+        ],
+    )
+    def test_explicit_server_warns_without_suggesting_local_reload(
+        self, opencode_v2, capsys, extra_args
+    ):
+        opencode_v2.configure(ctx(model="test", extra_args=extra_args))
+        warning = capsys.readouterr().out
+        assert (
+            "selected OpenCode server may not use this local configuration" in warning
+        )
+        assert "opencode reload" not in warning
+        assert "example.invalid" not in warning
+
+    def test_standalone_after_opencode_separator_does_not_suppress_warning(
+        self, opencode_v2, capsys
+    ):
+        opencode_v2.configure(
+            ctx(model="test", extra_args=("run", "--", "--standalone"))
+        )
+        assert "shared service may use a cached catalog" in capsys.readouterr().out
 
     def test_type(self):
         oc = OpenCodeIntegration()
@@ -1658,6 +2315,9 @@ class TestClaudeCodeIntegration:
             "PYTHONHOME": "/bundle/python",
             "PYTHONPATH": "/bundle/lib",
             "PYTHONDONTWRITEBYTECODE": "1",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "CLAUDE_CODE_USE_VERTEX": "1",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0",
         }
         with (
             patch("omlx.integrations.claude.os.environ", base_env),
@@ -1676,14 +2336,17 @@ class TestClaudeCodeIntegration:
             )
 
         env = captured["env"]
-        assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
+        assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000/claude"
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+        assert "CLAUDE_CODE_USE_BEDROCK" not in env
+        assert "CLAUDE_CODE_USE_VERTEX" not in env
         assert env["ANTHROPIC_AUTH_TOKEN"] == "secret"
         assert env["ANTHROPIC_API_KEY"] == ""
-        assert env["ANTHROPIC_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "qwen3.5"
-        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "qwen3.5"
-        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "qwen3.5"
+        assert env["ANTHROPIC_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "omlx-claude/qwen3.5"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "omlx-claude/qwen3.5"
         assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "131072"
         assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "131072"
         # Bundled-python vars must be stripped so claude code subprocess hooks
@@ -2024,10 +2687,10 @@ class TestClaudeCodeIntegration:
             )
 
         env = captured["env"]
-        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "opus-local"
-        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "sonnet-local"
-        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "haiku-local"
-        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku-local"
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "omlx-claude/opus-local"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "omlx-claude/sonnet-local"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "omlx-claude/haiku-local"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "omlx-claude/haiku-local"
 
     def test_launch_open_server_uses_omlx_token(self):
         cc = ClaudeCodeIntegration()
@@ -2440,6 +3103,7 @@ class TestCopilotIntegration:
         assert captured["path"] == existing_config
         assert "COPILOT_PROVIDER_BASE_URL" not in env
         assert "COPILOT_MODEL" not in env
+        assert env["COPILOT_OFFLINE"] == "true"
         assert "PYTHONHOME" not in env
         assert "PYTHONPATH" not in env
         assert "PYTHONDONTWRITEBYTECODE" not in env
