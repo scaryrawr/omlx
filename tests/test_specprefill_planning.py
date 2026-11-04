@@ -15,11 +15,23 @@ def _all_tokens(system_token_count: int, conversation_token_count: int) -> list[
 
 
 @pytest.mark.parametrize(
-    ("selected_indices", "expected_remove", "expected_sparse_count"),
-    [([0, 2, 7], True, 2), ([0, 2], False, 2), ([7, 1, 7, 4], True, 3)],
+    (
+        "selected_indices",
+        "expected_remove",
+        "expected_sparse_count",
+        "expected_sparse_indices",
+    ),
+    [
+        ([0, 2, 7], True, 2, [0, 2]),
+        ([0, 2], False, 2, [0, 2]),
+        ([7, 1, 7, 4], True, 3, [1, 4, 7]),
+    ],
 )
 def test_kickoff_selection_changes_tracker_count_once(
-    selected_indices: list[int], expected_remove: bool, expected_sparse_count: int
+    selected_indices: list[int],
+    expected_remove: bool,
+    expected_sparse_count: int,
+    expected_sparse_indices: list[int],
 ):
     plan = plan_specprefill_target(
         all_tokens=_all_tokens(system_token_count=3, conversation_token_count=8),
@@ -30,6 +42,7 @@ def test_kickoff_selection_changes_tracker_count_once(
 
     assert plan.remove_kickoff_index is expected_remove
     assert plan.sparse_selected_token_count == expected_sparse_count
+    assert list(plan.sparse_selected_indices) == expected_sparse_indices
     assert plan.total_tracker_prefill_count == 3 + expected_sparse_count
 
 

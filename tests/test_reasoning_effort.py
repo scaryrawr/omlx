@@ -75,7 +75,8 @@ def test_native_value_renders_once():
     assert target.calls == ["medium"]
 
 
-def test_template_that_ignores_reasoning_effort_renders_once():
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "maximum"])
+def test_template_that_ignores_reasoning_effort_renders_once(effort):
     class IgnoringTemplate:
         def __init__(self):
             self.calls = 0
@@ -86,7 +87,7 @@ def test_template_that_ignores_reasoning_effort_renders_once():
 
     target = IgnoringTemplate()
 
-    assert render(target, "maximum") == "unchanged"
+    assert render(target, effort) == "unchanged"
     assert target.calls == 1
 
 

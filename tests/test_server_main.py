@@ -35,6 +35,7 @@ def module_entry(monkeypatch, tmp_path):
     # HOME alone is not enough when a macOS app bootstrap file exists.
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("OMLX_BASE_PATH", str(tmp_path / "omlx-base"))
+    monkeypatch.delenv("OMLX_API_KEY", raising=False)
     reset_settings()
 
     # Reset the middleware stack so init_server's add_middleware works
@@ -238,6 +239,7 @@ def test_headless_module_entry_end_to_end(tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     env = {**os.environ, "OMLX_HEADLESS": "1", "HOME": str(tmp_path)}
+    env.pop("OMLX_API_KEY", None)
     env["OMLX_BASE_PATH"] = str(tmp_path / "base")
     result = subprocess.run(
         [sys.executable, "-c", MODULE_ENTRY_PROBE, "--model-dir", str(model_dir)],

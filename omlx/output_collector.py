@@ -9,7 +9,6 @@ providing non-blocking output collection with intelligent aggregation.
 
 import asyncio
 from dataclasses import dataclass, replace
-from typing import List, Optional
 
 from .request import RequestOutput
 
@@ -46,7 +45,7 @@ class RequestOutputCollector:
             aggregate: If True, merge outputs when producer gets ahead.
                        This prevents buffer explosion under load.
         """
-        self.output: Optional[RequestOutput] = None
+        self.output: RequestOutput | None = None
         self.ready = asyncio.Event()
         self.aggregate = aggregate
         self._is_waiting = False
@@ -71,7 +70,7 @@ class RequestOutputCollector:
             self.output = output
         self.ready.set()
 
-    def get_nowait(self) -> Optional[RequestOutput]:
+    def get_nowait(self) -> RequestOutput | None:
         """
         Get output without blocking.
 
@@ -132,7 +131,6 @@ class RequestOutputCollector:
         Returns:
             Merged RequestOutput
         """
-        # Combine new tokens
         merged_new_token_ids = existing.new_token_ids + new.new_token_ids
         merged_new_text = existing.new_text + new.new_text
 

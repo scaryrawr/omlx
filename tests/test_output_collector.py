@@ -346,6 +346,7 @@ class TestRequestOutputCollectorClear:
         collector.clear()
 
         assert collector._is_waiting is False
+        assert RequestOutputCollector._waiting_consumers == initial_count
 
 
 class TestRequestOutputCollectorMergeOutputs:
