@@ -102,7 +102,7 @@ def copilot_provider_config(ctx: IntegrationContext) -> dict:
 
 
 class CopilotIntegration(Integration):
-    """Copilot integration launching via the persistent provider registry."""
+    """Copilot integration launching offline via the persistent provider registry."""
 
     def __init__(self):
         super().__init__(
@@ -205,6 +205,7 @@ class CopilotIntegration(Integration):
             if key.startswith("COPILOT_PROVIDER_") or key == "COPILOT_MODEL":
                 del env[key]
         env["COPILOT_PROVIDERS_CONFIG"] = str(config_path)
+        env["COPILOT_OFFLINE"] = "true"
 
         args = ["copilot", "--model", f"{PROVIDER_NAME}/{model}"]
         args.extend(ctx.extra_args)
