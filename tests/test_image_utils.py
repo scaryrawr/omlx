@@ -13,6 +13,7 @@ from PIL import Image
 
 from omlx.exceptions import InvalidRequestError
 from omlx.utils.image import (
+    compute_audio_video_hash,
     compute_image_hash,
     compute_per_image_hashes,
     extract_images_from_messages,
@@ -97,8 +98,8 @@ class TestLoadImage:
         img = _make_test_image(4, 4)
         path = tmp_path / "local.png"
         img.save(path)
-
         with pytest.raises(InvalidRequestError):
+            load_image(str(path))
             load_image(str(path))
 
     def test_load_invalid_format_raises(self):
@@ -447,8 +448,133 @@ class TestExtractImagesFromMessages:
         # Text content should be preserved
         assert "Describe this image and audio" in text_msgs[0]["content"]
 
+    def test_input_video_data_uri_is_preserved(self):
+        """Inline video stays in memory until model-specific preprocessing."""
+        video_b64 = base64.b64encode(b"fake mp4 bytes").decode("ascii")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "data": f"data:video/mp4;base64,{video_b64}",
+                            "format": "mp4",
+                            "filename": "clip.mp4",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this clip"},
+                ],
+            }
+        ]
 
-def test_video_input_is_rejected():
+        text_msgs, images, audio, videos = extract_media_from_messages(messages)
+        assert images == []
+        assert audio == []
+        assert videos == [f"data:video/mp4;base64,{video_b64}"]
+        assert text_msgs[0]["content"] == "Describe this clip"
+
+    def test_input_video_base64_data_is_normalized(self):
+        messages = [{
+            "role": "user",
+            "content": [{
+                "type": "input_video",
+                "input_video": {"data": "cmVjb3JkaW5n", "format": "mp4"},
+            }],
+        }]
+        _, _, _, videos = extract_media_from_messages(messages)
+        assert videos == ["data:video/mp4;base64,cmVjb3JkaW5n"]
+
+    def test_input_video_url_is_rejected(self):
+        """Video inputs must be inline rather than server-fetched."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "https://example.com/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_private_url_rejected(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {
+                            "url": "http://127.0.0.1/clip.mp4",
+                            "format": "mp4",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "http://127.0.0.1/clip.mp4",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_string_private_url_rejected_after_strip(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": " http://127.0.0.1/clip.mp4 ",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
+
+    def test_input_video_empty_string_rejected(self):
+        """Empty video parts fail explicitly instead of silently disappearing."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": "   ",
+                    }
+                ],
+            }
+        ]
+
+        with pytest.raises(InvalidRequestError, match="base64"):
+            extract_media_from_messages(messages)
+
+
+def test_compat_image_extraction_rejects_video():
     messages = [
         {
             "role": "user",
@@ -496,6 +622,16 @@ def test_extract_media_rejects_video_part_without_url():
 
     with pytest.raises(InvalidRequestError, match="missing video_url"):
         extract_media_from_messages(messages)
+
+
+def test_audio_cache_hash_preserves_buffer_position():
+    recording = io.BytesIO(b"recording")
+    recording.seek(3)
+    digest = compute_audio_video_hash([recording], [])
+    assert recording.tell() == 3
+    assert digest == compute_audio_video_hash([io.BytesIO(b"recording")], [])
+    assert digest != compute_audio_video_hash([io.BytesIO(b"different")], [])
+    assert compute_audio_video_hash([], []) is None
 
 
 # =============================================================================
