@@ -235,7 +235,8 @@ class DecisionBackbone:
         return hidden
 
     def embed_tokens(self, ids: np.ndarray) -> mx.array:
-        return self._text_model.embed_tokens(mx.array(ids)[None])
+        embeds: mx.array = self._text_model.embed_tokens(mx.array(ids)[None])
+        return embeds
 
     def vision_features(
         self, pixel_values: np.ndarray, grid_thw: np.ndarray
@@ -243,6 +244,7 @@ class DecisionBackbone:
         """Vision-tower features of images or videos, one row per prompt token."""
         tower = self.model.vision_tower
         pixels = mx.array(pixel_values).astype(tower.patch_embed.proj.weight.dtype)
+        features: mx.array
         features, _ = tower(pixels, mx.array(grid_thw))
         return features
 
@@ -287,7 +289,8 @@ class DecisionBackbone:
             mx.eval(hidden)
             yield length * end // depth - length * done // depth
             done = end
-        return self._text_model.norm(hidden[0, -1])
+        normed: mx.array = self._text_model.norm(hidden[0, -1])
+        return normed
 
     def logits(self, hidden: mx.array) -> mx.array:
         if isinstance(self._lm_head, nn.Embedding | nn.QuantizedEmbedding):
