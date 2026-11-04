@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ def apply_mlx_vlm_inkling_compat_patch() -> bool:
     try:
         _install_vendor_namespace()
         _import_vendor_modules()
+        _patch_route_kernel()
 
         import mlx_vlm.prompt_utils as prompt_utils
         import mlx_vlm.utils as vlm_utils
@@ -68,9 +70,38 @@ def _append_package_path(package: Any, path: Path) -> None:
 
 
 def _import_vendor_modules() -> None:
+    import mlx_vlm.models
+
+    module_prefix = f"mlx_vlm.models.{_MODULE_NAME}"
+    for module_name in tuple(sys.modules):
+        if module_name == module_prefix or module_name.startswith(f"{module_prefix}."):
+            del sys.modules[module_name]
+    if hasattr(mlx_vlm.models, _MODULE_NAME):
+        delattr(mlx_vlm.models, _MODULE_NAME)
+    importlib.invalidate_caches()
     importlib.import_module("mlx_vlm.models.activations")
     importlib.import_module("mlx_vlm.models.mlp")
     importlib.import_module(f"mlx_vlm.models.{_MODULE_NAME}")
+
+
+def _patch_route_kernel() -> None:
+    import mlx.core as mx
+
+    language = importlib.import_module(f"mlx_vlm.models.{_MODULE_NAME}.language")
+    source = language._ROUTE_SRC
+    old = "const device T* lg = logits + (size_t)n * (R + SH);"
+    if old not in source:
+        return
+    # MLX places small inputs in Metal's constant address space.
+    language._ROUTE_SRC = source.replace(
+        old, "auto lg = logits + (size_t)n * (R + SH);"
+    )
+    language._route_kernel = mx.fast.metal_kernel(
+        name="omlx_inkling_moe_route",
+        input_names=["logits", "corr", "wscale"],
+        output_names=["idx", "wk", "gamma"],
+        source=language._ROUTE_SRC,
+    )
 
 
 def _patch_model_remapping(vlm_utils: Any) -> None:

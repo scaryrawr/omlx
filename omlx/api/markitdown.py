@@ -349,7 +349,10 @@ def preprocess_markitdown_file_parts(
                     status_code=400,
                 )
 
-            parsed = parse_file_part(part_dict, max_file_size_mb=max_file_size_mb)
+            parsed = parse_file_part(
+                part_dict,
+                max_file_size_mb=max_file_size_mb,
+            )
             markdown = convert_attachment_to_markdown(
                 parsed,
                 global_settings=global_settings,
@@ -433,7 +436,10 @@ async def preprocess_markitdown_file_parts_async(
                     status_code=400,
                 )
 
-            parsed = parse_file_part(part_dict, max_file_size_mb=max_file_size_mb)
+            parsed = parse_file_part(
+                part_dict,
+                max_file_size_mb=max_file_size_mb,
+            )
             markdown = await convert_attachment_to_markdown_async(
                 parsed,
                 global_settings=global_settings,
@@ -456,25 +462,43 @@ async def preprocess_markitdown_file_parts_async(
     return processed
 
 
-def parse_file_part(part: dict[str, Any], *, max_file_size_mb: int) -> MarkItDownFile:
+def parse_file_part(
+    part: dict[str, Any],
+    *,
+    max_file_size_mb: int,
+) -> MarkItDownFile:
     file_obj = part.get("file")
     if not isinstance(file_obj, dict):
         raise MarkItDownRequestError("File content part must include a file object.")
 
     data_value = file_obj.get("file_data") or file_obj.get("data")
+    file_url = file_obj.get("file_url")
+    required_source_message = "File content part requires file.file_data."
+    if file_url:
+        raise MarkItDownRequestError(
+            "File URLs are not supported. Send base64 content in file.file_data.",
+            status_code=400,
+        )
     if not data_value and file_obj.get("file_id"):
         raise MarkItDownRequestError(
             "File content part file_id is not supported. "
             "Send base64 content in file.file_data instead.",
             status_code=400,
         )
-    if not isinstance(data_value, str) or not data_value.strip():
+    if not data_value:
         raise MarkItDownRequestError(
-            "File content part requires file.file_data.",
+            required_source_message,
+            status_code=400,
+        )
+    if data_value is not None and (
+        not isinstance(data_value, str) or not data_value.strip()
+    ):
+        raise MarkItDownRequestError(
+            required_source_message,
             status_code=400,
         )
 
-    data_uri_mime_type = _mime_type_from_data_uri(data_value)
+    data_uri_mime_type = _mime_type_from_data_uri(data_value or "")
     mime_type = (
         str(file_obj.get("mime_type") or data_uri_mime_type or "").strip().lower()
     )
@@ -492,8 +516,8 @@ def parse_file_part(part: dict[str, Any], *, max_file_size_mb: int) -> MarkItDow
     extension = Path(filename).suffix.lower()
     _validate_supported_file(filename, mime_type)
 
-    data = _decode_data(data_value)
     max_bytes = max_file_size_mb * 1024 * 1024
+    data = _decode_data(data_value)
     if len(data) > max_bytes:
         raise MarkItDownRequestError(
             f"Attached file exceeds the {max_file_size_mb}MB limit: {filename}",
