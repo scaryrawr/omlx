@@ -20,7 +20,8 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -36,6 +37,9 @@ from .variants import apply_partial_rope, load_mask_embedding
 logger = logging.getLogger(__name__)
 
 _FP16_MAX = 65504.0
+
+if TYPE_CHECKING:
+    from ..dspark_drafter import DSparkDrafter
 
 
 def resolve_block_size(
@@ -163,13 +167,14 @@ def load_dflash_drafter(
     target_model: Any,
     *,
     tokenizer: Any = None,
+    target_path: str | None = None,
     block_size: int | None = None,
     quant_enabled: bool = False,
     quant_bits: int = 4,
     quant_group_size: int = 64,
     verify_mode: str | None = None,
     window_size: int | None = None,
-) -> DFlashDrafter:
+) -> DFlashDrafter | DSparkDrafter:
     """Load a DFlash checkpoint through mlx-vlm and bind it to ``target_model``.
 
     ``target_model`` is the mlx-vlm model whose ``language_model`` owns the
@@ -177,7 +182,28 @@ def load_dflash_drafter(
     checkpoint's context window.
     """
     adaptive = resolve_verify_mode(verify_mode)
-    model, kind = load_drafter(path, kind="dflash")
+    is_minicpm = (
+        getattr(getattr(target_model, "config", None), "model_type", None)
+        == "minicpmv4_7"
+    )
+    if is_minicpm:
+        from ..minicpm_dspark import (
+            MiniCPMDSparkDraftModel,
+            load_dspark_model,
+        )
+        from ..minicpm_pairing import validate_model_pair
+
+        if not Path(path).is_dir():
+            raise ValueError("MiniCPM DSpark requires an existing local helper checkpoint.")
+        dspark_class = MiniCPMDSparkDraftModel
+        if not callable(getattr(dspark_class, "propose_block", None)):
+            raise ValueError("Native DSpark proposal support is incomplete.")
+        validate_model_pair(target_path, path)
+        model, kind = load_dspark_model(path), "dflash"
+        if not isinstance(model, dspark_class):
+            raise ValueError("MiniCPM-V 4.7 requires its paired DSpark helper, not DFlash.")
+    else:
+        model, kind = load_drafter(path, kind="dflash")
     if kind != "dflash":
         raise ValueError(f"{path} resolved to drafter kind {kind!r}, expected 'dflash'")
     cast = match_target_dtype(model, target_model)
@@ -193,7 +219,8 @@ def load_dflash_drafter(
         )
     local = get_model_path(path)
     config = json.loads((local / "config.json").read_text())
-    apply_partial_rope(model, config)
+    if not is_minicpm:
+        apply_partial_rope(model, config)
     mask_path = local / "mask_embedding.pt"
     mask_embedding = (
         load_mask_embedding(mask_path, int(config["hidden_size"]))
@@ -212,34 +239,44 @@ def load_dflash_drafter(
     language_model = getattr(target_model, "language_model", target_model)
     block = resolve_block_size(
         model,
-        block_size,
+        (
+            getattr(model, "dflash_default_block_size", None)
+            if is_minicpm and block_size is None
+            else block_size
+        ),
         getattr(language_model, "_omlx_mtp_max_verify_rows", None),
     )
     mx.eval(model.parameters())
-    if qwen35_packed_linear.enabled(target_model):
+    if not is_minicpm and qwen35_packed_linear.enabled(target_model):
         packed = qwen35_packed_linear.pack_drafter(model)
         logger.info("DFlash drafter packed 4-bit projections: %d layers", packed)
-    drafter = DFlashDrafter(
-        model,
-        block_size=block,
-        source_path=path,
-        adaptive=adaptive,
-        window_size=window_size,
-        value_scale=(config.get("dflash_config") or {}).get("attention_value_scale"),
-        mask_embedding=mask_embedding,
-    )
+    drafter: DFlashDrafter | DSparkDrafter
+    if is_minicpm:
+        from ..dspark_drafter import DSparkDrafter
+
+        drafter = DSparkDrafter(model, block_size=block, source_path=path)
+    else:
+        drafter = DFlashDrafter(
+            model,
+            block_size=block,
+            source_path=path,
+            adaptive=adaptive,
+            window_size=window_size,
+            value_scale=(config.get("dflash_config") or {}).get("attention_value_scale"),
+            mask_embedding=mask_embedding,
+        )
     logger.info(
         "DFlash drafter loaded: path=%s kind=%s block=%d adaptive=%s target_layers=%s",
         path,
         drafter.kind,
         block,
-        drafter.adaptive,
+        adaptive if not is_minicpm else False,
         drafter.target_layer_ids,
     )
     return drafter
 
 
-def attach_drafter(language_model: Any, drafter: DFlashDrafter) -> None:
+def attach_drafter(language_model: Any, drafter: DFlashDrafter | DSparkDrafter) -> None:
     """Expose the drafter to Lightning MTP through the language model markers."""
     language_model._omlx_drafter = drafter
     language_model._omlx_mtp_decode_enabled = True
@@ -250,15 +287,19 @@ def attach_drafter(language_model: Any, drafter: DFlashDrafter) -> None:
     language_model._omlx_mtp_chain = True
     language_model._omlx_mtp_depth = drafter.depth
     language_model._omlx_mtp_head_clone = False
+    if drafter.kind == "dspark":
+        language_model._omlx_mtp_depth_fixed = True
 
 
-def detach_drafter(language_model: Any) -> DFlashDrafter | None:
+def detach_drafter(language_model: Any) -> DFlashDrafter | DSparkDrafter | None:
     drafter = getattr(language_model, "_omlx_drafter", None)
     if drafter is None:
         return None
     drafter.clear()
     language_model._omlx_drafter = None
     language_model._omlx_mtp_decode_enabled = False
+    if drafter.kind == "dspark":
+        language_model._omlx_mtp_depth_fixed = False
     return drafter
 
 

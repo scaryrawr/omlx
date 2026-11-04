@@ -227,6 +227,9 @@ class TTSEngine(BaseNonStreamingEngine):
         model_name = self._model_name
 
         def _load_sync():
+            from ..patches.mlx_audio_compat import ensure_english_kokoro_g2p
+
+            ensure_english_kokoro_g2p()
             try:
                 return _load_model(model_name, strict=True)
             except ValueError as exc:

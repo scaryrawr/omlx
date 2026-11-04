@@ -124,6 +124,10 @@ def advance(batch, batch_state):
 
 
 def _advance_group(batch, depth, rows, replacements, *, cache=None):
+    if getattr(batch.model, "_omlx_native_mtp_full_prompt", False):
+        from .uniform import advance_uniform
+
+        return advance_uniform(batch, depth, rows, replacements, cache=cache)
     batch_state = getattr(batch, "_omlx_mtp_batch_state", None)
     drafter = bg._drafter_for(batch.model)
     use_head_batch = (
