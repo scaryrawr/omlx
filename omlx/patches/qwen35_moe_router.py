@@ -708,14 +708,21 @@ def _ensure_vlm_verify_patch() -> None:
 
     @wraps(original)
     def verify(self, feed_forward, x):
-        if not (
-            isinstance(feed_forward, Qwen3_5MoeSparseMoeBlock)
-            and x.ndim == 3
-            and router_eligible(x, feed_forward.num_experts)
+        if not (isinstance(feed_forward, Qwen3_5MoeSparseMoeBlock) and x.ndim == 3):
+            return original(self, feed_forward, x)
+        if feed_forward.norm_topk_prob and not router_eligible(
+            x, feed_forward.num_experts
         ):
             return original(self, feed_forward, x)
         gates = mx.softmax(self._linear(feed_forward.gate, x), axis=-1, precise=True)
-        indices, scores = fused_router_topk(gates, feed_forward.top_k)
+        if feed_forward.norm_topk_prob:
+            indices, scores = fused_router_topk(gates, feed_forward.top_k)
+        else:
+            indices = mx.argpartition(gates, kth=-feed_forward.top_k, axis=-1)[
+                ..., -feed_forward.top_k :
+            ]
+            indices = mx.stop_gradient(indices)
+            scores = mx.take_along_axis(gates, indices, axis=-1)
         shared = self._feed_forward(feed_forward.shared_expert, x)
         shared = mx.sigmoid(self._linear(feed_forward.shared_expert_gate, x)) * shared
         routed = self._switch_glu(feed_forward.switch_mlp, x, indices)
@@ -781,7 +788,7 @@ def apply_qwen35_moe_router_patch() -> bool:
         vlm_orig = vcls.__call__
 
         def vlm_patched_call(self, x):
-            if not router_eligible(x, self.num_experts):
+            if not self.norm_topk_prob or not router_eligible(x, self.num_experts):
                 return vlm_orig(self, x)
             # Children by item: this runs for every MoE layer of every decode step.
             gates = mx.softmax(self["gate"](x), axis=-1, precise=True)
