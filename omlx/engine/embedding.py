@@ -3,7 +3,7 @@
 Embedding engine for oMLX.
 
 This module provides an engine for generating text embeddings using
-mlx-embeddings. Unlike LLM engines, embedding engines don't support
+mlx-vlm. Unlike LLM engines, embedding engines don't support
 streaming or chat completion.
 """
 
@@ -12,7 +12,7 @@ import gc
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import mlx.core as mx
 
@@ -24,7 +24,7 @@ from .forward_fairness import ForwardFairnessGate
 logger = logging.getLogger(__name__)
 
 
-def _input_length(item: Union[str, Dict[str, str]]) -> int:
+def _input_length(item: str | dict[str, str]) -> int:
     """Approximate token cost of one embedding input, used only to group similar sizes."""
     if isinstance(item, str):
         return len(item)
@@ -82,7 +82,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
                 else 32
             )
         self._batch_size = max(1, int(batch_size))
-        self._model: Optional[MLXEmbeddingModel] = None
+        self._model: MLXEmbeddingModel | None = None
         self._fairness = ForwardFairnessGate(
             f"embed:{model_name}:{id(self):x}", scheduler_config
         )
@@ -114,7 +114,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
         return await loop.run_in_executor(get_mlx_executor(), fn)
 
     @property
-    def hidden_size(self) -> Optional[int]:
+    def hidden_size(self) -> int | None:
         """Get the embedding dimension."""
         return self._model.hidden_size if self._model else None
 
@@ -154,7 +154,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
 
     async def embed(
         self,
-        texts: Union[List[str], List[Dict[str, str]]],
+        texts: list[str] | list[dict[str, str]],
         max_length: int | None = None,
         padding: bool = True,
         truncation: bool = True,
@@ -190,7 +190,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
         )
         try:
             loop = asyncio.get_running_loop()
-            embeddings: List[List[float]] = []
+            embeddings: list[list[float]] = []
             total_tokens = 0
             dimensions = 0
 
@@ -209,12 +209,12 @@ class EmbeddingEngine(BaseNonStreamingEngine):
                 batch = ordered_items[index:index + size]
                 index += len(batch)
 
-                def _embed_sync(batch=batch):
+                def _embed_sync(batch_inputs=batch):
                     contended = fairness.wait_turn()
                     start_ts = time.perf_counter()
                     try:
                         return model.embed(
-                            inputs=batch,
+                            inputs=batch_inputs,
                             max_length=max_length,
                             padding=padding,
                             truncation=truncation,
@@ -222,7 +222,9 @@ class EmbeddingEngine(BaseNonStreamingEngine):
                     finally:
                         mx.synchronize()
                         fairness.settle(
-                            time.perf_counter() - start_ts, len(batch), contended
+                            time.perf_counter() - start_ts,
+                            len(batch_inputs),
+                            contended,
                         )
                         if fairness.should_clear_cache():
                             mx.clear_cache()
@@ -240,7 +242,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
                 )
 
             if len(embeddings) == len(order):
-                restored: List[List[float]] = [[]] * len(order)
+                restored: list[list[float]] = [[]] * len(order)
                 for position, original_index in enumerate(order):
                     restored[original_index] = embeddings[position]
                 embeddings = restored
@@ -259,7 +261,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
         finally:
             self._end_activity(activity_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         return {
             "model_name": self._model_name,
@@ -268,7 +270,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
             "batch_size": self._batch_size,
         }
 
-    def get_model_info(self) -> Dict[str, Any]:
+    def get_model_info(self) -> dict[str, Any]:
         """Get information about the loaded model."""
         if self._model is None:
             return {"loaded": False, "model_name": self._model_name}
