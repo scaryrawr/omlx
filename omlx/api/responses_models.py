@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
+from .media_options import MultimodalProcessorOptions
 from .shared_models import IDPrefix, generate_id, get_unix_timestamp
 
 
@@ -126,6 +127,7 @@ class ResponsesRequest(BaseModel):
     seed: Optional[int] = None
     # Chat template kwargs (e.g. enable_thinking, reasoning_effort)
     chat_template_kwargs: Optional[Dict[str, Any]] = None
+    mm_processor_kwargs: MultimodalProcessorOptions | None = None
 
     model_config = {"extra": "allow"}
 

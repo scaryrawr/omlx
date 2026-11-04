@@ -1533,7 +1533,7 @@ def _transcode_speech_output(wav_bytes: bytes, response_format: str) -> bytes:
 async def create_speech(request: AudioSpeechRequest):
     """OpenAI-compatible text-to-speech endpoint."""
     from omlx.engine.tts import TTSEngine
-    from omlx.exceptions import ModelNotFoundError
+    from omlx.exceptions import ModelNotFoundError, UnsupportedKokoroLanguageError
 
     if not request.input or not request.input.strip():
         raise HTTPException(status_code=400, detail="'input' field must not be empty")
@@ -1568,6 +1568,8 @@ async def create_speech(request: AudioSpeechRequest):
             status_code=404,
             detail=f"Model '{resolved_model}' not found. Available: {avail}",
         ) from exc
+    except UnsupportedKokoroLanguageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1597,6 +1599,8 @@ async def create_speech(request: AudioSpeechRequest):
             ) from exc
         except (HTTPException, InvalidRequestError):
             raise
+        except UnsupportedKokoroLanguageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return StreamingResponse(
@@ -1621,6 +1625,8 @@ async def create_speech(request: AudioSpeechRequest):
         )
     except (HTTPException, InvalidRequestError):
         raise
+    except UnsupportedKokoroLanguageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:

@@ -43,6 +43,7 @@ def register_virtual_tensors(index, config) -> int:
     from .mlx_vlm_qwen4_exp_compat.virtual_ple import (
         register as register_qwen4_exp_ple,
     )
+    from .nemotron_omni_quantization import register_source_tensors
 
     # Import errors are deliberately not caught. A registrar that fails to
     # load leaves its checkpoint in the layout the quantizer cannot read, so
@@ -53,4 +54,5 @@ def register_virtual_tensors(index, config) -> int:
         + register_qwen4_exp_ple(index, config)
         + register_minimax_nvfp4(index, config)
         + register_inkling2_experts(index, config)
+        + register_source_tensors(index, config)
     )
