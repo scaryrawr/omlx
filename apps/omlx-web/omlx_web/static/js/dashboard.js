@@ -653,9 +653,13 @@
             uploadAllModels: [],
             uploadOqModelsLoaded: false,
             uploadTasks: [],
+            uploadTasksLoading: false,
+            uploadTasksLoaded: false,
+            uploadTasksError: '',
             uploadError: '',
             uploadSuccess: '',
             _uploadRefreshTimer: null,
+            _uploadRefreshEnabled: false,
             // Upload modal
             uploadModalOpen: false,
             uploadModalModelPath: '',
@@ -878,6 +882,7 @@
 
                 window.addEventListener('popstate', () => {
                     this.applyTabStateFromUrl();
+                    this.refreshUploadTab();
                     this.settingsScrollToHash();
                 });
 
@@ -920,6 +925,7 @@
                     if (this.modelsTab === 'quantizer') {
                         loads.push(this.loadOQModels());
                     }
+                    loads.push(this.refreshUploadTab());
                     if (this.msInitialized && this.msAvailable) {
                         loads.push(this.loadMSTasks());
                     }
@@ -934,6 +940,9 @@
                         ['pending', 'loading', 'quantizing', 'saving'].includes(t.status));
                     if (hasOqActive) this.startOQRefresh();
                 } else {
+                    if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                        this.stopUploadRefresh();
+                    }
                     this.stopHFRefresh();
                     this.stopMSRefresh();
                     this.stopOQRefresh();
@@ -1177,10 +1186,7 @@
                 if (tab === 'quantizer') {
                     this.loadOQModels();
                 }
-                if (tab === 'uploader') {
-                    if (!this.uploadOqModelsLoaded) this.loadUploadOqModels();
-                    this.loadUploadTasks();
-                }
+                this.refreshUploadTab();
                 if (tab === 'downloader' && this.downloaderSource === 'recommended') {
                     this.loadRecommendations();
                 }
@@ -1800,6 +1806,11 @@
                         if (g) out.guided_grammar = g;
                         continue;
                     }
+                    if (k === 'mm_processor_kwargs') {
+                        const options = this.mmProcessorOptions(ms);
+                        if (options || ms.is_minicpm_model) out[k] = options || {};
+                        continue;
+                    }
                     // Standard field: omit unset values entirely — the server
                     // treats absent universal keys as "reset to default" when
                     // the profile is applied (snapshot semantics).
@@ -2207,6 +2218,7 @@
             buildModelSettingsState(model, settings) {
                 const s = settings || {};
                 const isDiffusion = this.isDiffusionModel(model);
+                const isMiniCPM = model?.config_model_type === 'minicpmv4_7';
                 const ctKwargEntries = this.buildCtKwargEntries(
                     s.chat_template_kwargs,
                     s.forced_ct_kwargs,
@@ -2300,6 +2312,11 @@
                     qwen35_ane_prefill_cpu_threads: s.qwen35_ane_prefill_cpu_threads ?? 8,
                     qwen35_ane_prefill_cpu_shared_resource: s.qwen35_ane_prefill_cpu_shared_resource !== false,
                     specprefill_enabled: s.specprefill_enabled || false,
+                    mm_processor_kwargs: {
+                        downsample_mode: '',
+                        max_slice_nums: null,
+                        ...s.mm_processor_kwargs,
+                    },
                     specprefill_draft_model: s.specprefill_draft_model || '',
                     specprefill_keep_pct: s.specprefill_keep_pct ? String(s.specprefill_keep_pct) : '0.2',
                     specprefill_threshold: s.specprefill_threshold || null,
@@ -2310,7 +2327,8 @@
                     dflash_draft_quant_group_size: s.dflash_draft_quant_group_size || 64,
                     dflash_draft_window_size: s.dflash_draft_window_size ?? null,
                     dflash_block_size: s.dflash_block_size ?? null,
-                    dflash_verify_mode: s.dflash_verify_mode || 'adaptive',
+                    dflash_verify_mode: s.dflash_verify_mode || (isMiniCPM ? 'dflash' : 'adaptive'),
+                    is_minicpm_model: isMiniCPM,
                     dflash_compatible: model?.dflash_compatible !== false,
                     dflash_compatibility_reason: model?.dflash_compatibility_reason || '',
                     mtp_enabled: s.mtp_enabled || false,
@@ -2333,6 +2351,14 @@
                     embedding_audio_enabled: s.embedding_audio_enabled || false,
                     embedding_audio_max_seconds: s.embedding_audio_max_seconds ?? null,
                 };
+            },
+
+            mmProcessorOptions(ms = this.modelSettings) {
+                const options = { ...ms.mm_processor_kwargs };
+                for (const key of ['downsample_mode', 'max_slice_nums']) {
+                    if (options[key] == null || options[key] === '') delete options[key];
+                }
+                return Object.keys(options).length ? options : null;
             },
 
             moeExpertOffloadResidentInvalid() {
@@ -3682,8 +3708,9 @@
                         ? parseInt(ms.dflash_block_size)
                         : null,
                     dflash_verify_mode: ms.dflash_enabled
-                        ? (ms.dflash_verify_mode || 'adaptive')
+                        ? (ms.dflash_verify_mode || (ms.is_minicpm_model ? 'dflash' : 'adaptive'))
                         : null,
+                    mm_processor_kwargs: this.mmProcessorOptions(ms),
                     mtp_enabled: !!ms.mtp_enabled,
                     mtp_adaptive_max_depth: ms.mtp_enabled
                         ? parseInt(ms.mtp_adaptive_max_depth || '3')
@@ -4068,7 +4095,7 @@
                         this.modelSettings.dflash_draft_quant_group_size = null;
                         this.modelSettings.dflash_draft_window_size = null;
                         this.modelSettings.dflash_block_size = null;
-                        this.modelSettings.dflash_verify_mode = 'adaptive';
+                        this.modelSettings.dflash_verify_mode = this.modelSettings.is_minicpm_model ? 'dflash' : 'adaptive';
                         this.modelSettings.mtp_enabled = false;
                         this.modelSettings.mtp_adaptive_max_depth = '3';
                         this.modelSettings.trust_remote_code = false;
@@ -8562,20 +8589,46 @@
                 }
             },
 
+            async refreshUploadTab() {
+                if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                    this.stopUploadRefresh();
+                    return;
+                }
+                this.startUploadRefresh();
+                const loads = [this.loadUploadTasks()];
+                if (!this.uploadOqModelsLoaded) loads.push(this.loadUploadOqModels());
+                await Promise.all(loads);
+            },
+
             async loadUploadTasks() {
+                if (this.uploadTasksLoading) return;
+                this.uploadTasksLoading = true;
+                if (this._uploadRefreshTimer !== null) {
+                    clearTimeout(this._uploadRefreshTimer);
+                    this._uploadRefreshTimer = null;
+                }
                 try {
                     const response = await fetch('/admin/api/upload/tasks');
-                    if (response.ok) {
-                        const data = await response.json();
-                        this.uploadTasks = data.tasks || [];
-                        const hasActive = this.uploadTasks.some(t =>
-                            ['pending', 'uploading'].includes(t.status));
-                        if (!hasActive) {
-                            this.stopUploadRefresh();
-                        }
+                    if (!response.ok) {
+                        this.uploadTasksError = `${window.t('models.uploader.queue_error')} (HTTP ${response.status})`;
+                        return;
                     }
+                    const data = await response.json();
+                    if (!data || !Array.isArray(data.tasks) || !data.tasks.every(task =>
+                        task && typeof task.task_id === 'string' &&
+                        typeof task.model_name === 'string' &&
+                        ['pending', 'uploading', 'completed', 'failed', 'cancelled'].includes(task.status))) {
+                        throw new Error('Invalid upload task response');
+                    }
+                    this.uploadTasks = data.tasks;
+                    this.uploadTasksLoaded = true;
+                    this.uploadTasksError = '';
                 } catch (err) {
+                    this.uploadTasksError = window.t('models.uploader.queue_error');
                     console.error('Failed to load upload tasks:', err);
+                } finally {
+                    this.uploadTasksLoading = false;
+                    if (this._uploadRefreshEnabled) this.startUploadRefresh();
                 }
             },
 
@@ -8598,15 +8651,25 @@
             },
 
             startUploadRefresh() {
-                this.stopUploadRefresh();
-                this._uploadRefreshTimer = setInterval(() => {
-                    this.loadUploadTasks();
-                }, 2000);
+                if (this.mainTab !== 'models' || this.modelsTab !== 'uploader') {
+                    this.stopUploadRefresh();
+                    return;
+                }
+                this._uploadRefreshEnabled = true;
+                if (this._uploadRefreshTimer !== null || this.uploadTasksLoading) return;
+                const hasActive = this.uploadTasks.some(task =>
+                    ['pending', 'uploading'].includes(task.status));
+                const delay = hasActive && !this.uploadTasksError ? 2000 : 6000;
+                this._uploadRefreshTimer = setTimeout(async () => {
+                    this._uploadRefreshTimer = null;
+                    await this.loadUploadTasks();
+                }, delay);
             },
 
             stopUploadRefresh() {
-                if (this._uploadRefreshTimer) {
-                    clearInterval(this._uploadRefreshTimer);
+                this._uploadRefreshEnabled = false;
+                if (this._uploadRefreshTimer !== null) {
+                    clearTimeout(this._uploadRefreshTimer);
                     this._uploadRefreshTimer = null;
                 }
             },

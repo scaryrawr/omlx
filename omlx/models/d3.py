@@ -207,12 +207,13 @@ def messages(
 
 
 def chat_text(tokenizer, conversation: list[dict]) -> str:
-    return tokenizer.apply_chat_template(
+    text: str = tokenizer.apply_chat_template(
         conversation,
         tokenize=False,
         add_generation_prompt=True,
         enable_thinking=False,
     )
+    return text
 
 
 def answer_codes(tokenizer) -> tuple[list[str], list[int]]:
@@ -296,7 +297,8 @@ def sample_indices(total: int, fps: float) -> list[int]:
     """Two frames per second, 4 to 32, spread over the whole video."""
     count = int(total / fps * VIDEO_FPS)
     count = min(max(count, VIDEO_MIN_FRAMES), VIDEO_MAX_FRAMES, total)
-    return np.linspace(0, total - 1, count).round().astype(int).tolist()
+    indices: list[int] = np.linspace(0, total - 1, count).round().astype(int).tolist()
+    return indices
 
 
 def decode_video(url: str) -> D3Video:
@@ -477,7 +479,12 @@ class D3Model:
                 "this tokenizer gives"
             )
         hidden = (backbone.config.get("text_config") or backbone.config)["hidden_size"]
-        weight = mx.load(str(path / D3_READOUT_WEIGHTS))["weight"]
+        weights = mx.load(str(path / D3_READOUT_WEIGHTS))
+        if not isinstance(weights, dict):
+            raise ValueError(f"{D3_READOUT_WEIGHTS} must contain named tensors")
+        weight = weights.get("weight")
+        if not isinstance(weight, mx.array):
+            raise ValueError(f"{D3_READOUT_WEIGHTS} is missing its weight tensor")
         if tuple(weight.shape) != (MAX_OPTIONS, hidden):
             raise ValueError(
                 f"readout weight has shape {tuple(weight.shape)}, expected "
@@ -659,12 +666,17 @@ class D3Model:
     def run(self, plan: D3Plan, chunk_size: ChunkSize) -> Generator[int, None, dict]:
         """Encode every question, yielding per layer step, then read out."""
         backbone = self.backbone
+        readout = self.readout
+        if readout is None:
+            raise RuntimeError("Decision 3.0 model is not loaded")
         image_features = video_features = None
         if plan.image_pixels is not None:
+            assert plan.image_grids is not None
             image_features = backbone.vision_features(
                 plan.image_pixels, plan.image_grids
             )
         if plan.video_pixels is not None:
+            assert plan.video_grids is not None
             video_features = backbone.vision_features(
                 plan.video_pixels, plan.video_grids
             )
@@ -690,11 +702,11 @@ class D3Model:
             hidden = yield from backbone.encode(
                 embeds, mx.array(positions)[:, None, :], chunk_size, self.causal
             )
-            logits = (hidden.astype(self.readout.dtype) @ self.readout.T).astype(
-                mx.float32
-            )
+            logits = (hidden.astype(readout.dtype) @ readout.T).astype(mx.float32)
             count = len(item.keys)
-            probabilities = mx.softmax(logits[:count] / self.temperature).tolist()
+            probabilities: list[float] = np.asarray(
+                mx.softmax(logits[:count] / self.temperature)
+            ).tolist()
             answers[item.question_id] = format_answer(item, probabilities)
             input_tokens += len(ids)
         return {"answers": answers, "input_tokens": input_tokens}

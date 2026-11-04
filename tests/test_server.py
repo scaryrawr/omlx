@@ -36,6 +36,7 @@ from omlx.server import (
     _remove_legacy_ced_ssd_cache_for_server,
     _reset_boundary_snapshots_for_server,
     _resolve_metric_durations,
+    _select_default_chat_model,
     app,
     get_engine,
     get_max_context_window,
@@ -49,6 +50,72 @@ def _mock_pool() -> MagicMock:
     pool = MagicMock()
     pool._scheduler_config.paged_ssd_cache_dir = None
     return pool
+
+
+class _DefaultModelPool:
+    def __init__(self, entries: dict[str, EngineEntry]):
+        self._entries = entries
+
+    def get_model_ids(self) -> list[str]:
+        return list(self._entries)
+
+    def get_entry(self, model_id: str) -> EngineEntry | None:
+        return self._entries.get(model_id)
+
+
+def _entry(model_id: str, model_type: str) -> EngineEntry:
+    engine_type = "batched" if model_type == "llm" else model_type
+    return EngineEntry(
+        model_id=model_id,
+        model_path=f"/models/{model_id}",
+        model_type=model_type,
+        engine_type=engine_type,
+        estimated_size=1,
+    )
+
+
+class TestDefaultChatModelSelection:
+    def test_missing_default_skips_image_first_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "qwen-chat": _entry("qwen-chat", "vlm"),
+                "embedding": _entry("embedding", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "missing-model")
+
+        assert model_id == "qwen-chat"
+        assert reason == "Default model 'missing-model' not found"
+
+    def test_image_default_falls_back_to_chat_model(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "llama-chat": _entry("llama-chat", "llm"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, "flux-image")
+
+        assert model_id == "llama-chat"
+        assert reason == (
+            "Default model 'flux-image' is a image model, not a chat-capable model"
+        )
+
+    def test_no_chat_capable_models_returns_none(self):
+        pool = _DefaultModelPool(
+            {
+                "flux-image": _entry("flux-image", "image"),
+                "embed": _entry("embed", "embedding"),
+            }
+        )
+
+        model_id, reason = _select_default_chat_model(pool, None)
+
+        assert model_id is None
+        assert reason is None
 
 
 class TestBoundarySnapshotLifecycle:
@@ -765,6 +832,45 @@ class TestExceptionHandlers:
         assert "type" in data["error"]
         assert "param" in data["error"]
 
+    @pytest.mark.parametrize("suffix", ["models", "messages", "messages/count_tokens"])
+    def test_claude_gateway_context_error_matches_standard(
+        self, client, monkeypatch, suffix
+    ):
+        error = srv._ContextLengthExceededError(
+            status_code=400,
+            detail="prompt is too long: 100 tokens > 64",
+        )
+        monkeypatch.setattr(srv, "_list_models", AsyncMock(side_effect=error))
+        monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(side_effect=error))
+        responses = []
+        for prefix in ("", "/claude"):
+            path = f"{prefix}/v1/{suffix}"
+            responses.append(
+                client.get(path)
+                if suffix == "models"
+                else client.post(
+                    path,
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 16,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                    },
+                )
+            )
+
+        assert [response.status_code for response in responses] == [400, 400]
+        assert responses[0].json()["error"]["code"] == "context_length_exceeded"
+        assert responses[1].json() == responses[0].json()
+
+    @pytest.mark.parametrize("suffix", ["messages", "messages/count_tokens"])
+    def test_claude_gateway_validation_error_matches_standard(self, client, suffix):
+        standard = client.post(f"/v1/{suffix}", json={})
+        gateway = client.post(f"/claude/v1/{suffix}", json={})
+
+        assert standard.status_code == gateway.status_code == 422
+        assert "error" in standard.json()
+        assert gateway.json() == standard.json()
+
     def test_non_api_route_detail_format(self, client):
         """Test that non-/v1/ routes keep the traditional detail format."""
         response = client.get("/nonexistent-page")
@@ -1166,6 +1272,11 @@ class TestExposedProfileModels:
         def get_entry(self, model_id):
             return None
 
+        def get_active_model_aliases(self, settings_manager):
+            settings = settings_manager.get_settings("qwen-base")
+            alias = settings.model_alias.strip() if settings.model_alias else ""
+            return {"qwen-base": alias} if alias else {}
+
     @staticmethod
     def _save_exposed_profile(manager, settings):
         return manager.save_profile(
@@ -1241,6 +1352,9 @@ class TestExposedProfileModels:
         assert profile_model["config_model_type"] == "gemma4"
         assert profile_model["max_context_window"] == 4096
         assert profile_model["max_tokens"] == 1024
+        assert profile_model["enable_thinking"] is True
+        base_model = next(m for m in status["models"] if m["id"] == "qwen-base")
+        assert base_model["enable_thinking"] is None
 
     @pytest.mark.asyncio
     async def test_v1_models_status_lists_chat_ui_reasoning_levels(self, manager):
@@ -1408,6 +1522,9 @@ class TestClaudeDesktopTierAliases:
     class _FakePool:
         def __init__(self, model_ids):
             self._model_ids = model_ids
+
+        def get_active_model_aliases(self, settings_manager):
+            return {}
 
         def get_status(self):
             return {
@@ -1784,7 +1901,8 @@ def test_chat_completion_returns_token_logprobs(
 
 
 @pytest.mark.parametrize("subclass", [False, True])
-def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass):
+@pytest.mark.asyncio
+async def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass):
     class OtherBatchedEngine(BatchedEngine):
         pass
 
@@ -1792,7 +1910,7 @@ def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass)
     engine.count_chat_tokens = MagicMock(return_value=7)
     messages = [{"role": "user", "content": "Hello"}]
 
-    assert srv._prepare_chat_prompt_for_request(
+    assert await srv._prepare_chat_prompt_for_request(
         engine,
         messages,
         chat_template_kwargs={"enable_thinking": False},
@@ -1805,7 +1923,8 @@ def test_prepare_chat_prompt_for_request_keeps_other_engine_count_path(subclass)
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
-    "path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
+    "path",
+    ["/v1/chat/completions", "/v1/messages", "/claude/v1/messages", "/v1/responses"],
 )
 def test_chat_routes_reuse_final_prepared_prompt(
     monkeypatch, prepared_chat_engine, path, stream
@@ -1824,6 +1943,8 @@ def test_chat_routes_reuse_final_prepared_prompt(
         new_text="</think>Done.",
         prompt_tokens=3,
         completion_tokens=1,
+        finished=True,
+        finish_reason="stop",
     )
     engine.chat = AsyncMock(return_value=output)
     streamed_kwargs = []
@@ -1851,7 +1972,12 @@ def test_chat_routes_reuse_final_prepared_prompt(
     monkeypatch.setitem(
         srv.app.dependency_overrides, srv.verify_inference_api_key, lambda: True
     )
-    body = {"model": "test-model", "stream": stream}
+    body = {
+        "model": (
+            "omlx-claude/test-model" if path == "/claude/v1/messages" else "test-model"
+        ),
+        "stream": stream,
+    }
     if path == "/v1/responses":
         body.update(input="Hello", store=False)
     else:
@@ -1871,7 +1997,8 @@ def test_chat_routes_reuse_final_prepared_prompt(
     assert generated["_prepared_prompt"] is prepared
     assert generated["_request_id"] == response.headers["x-omlx-request-id"]
     assert generated["chat_template_kwargs"]["preserve_thinking"] is True
-    if path == "/v1/messages" and stream:
+    assert srv.get_engine_for_model.call_args.args == ("test-model",)
+    if path.endswith("/v1/messages") and stream:
         events = [
             json.loads(line.removeprefix("data: "))
             for line in response.text.splitlines()
@@ -1879,28 +2006,129 @@ def test_chat_routes_reuse_final_prepared_prompt(
         ]
         start = next(event for event in events if event["type"] == "message_start")
         assert start["message"]["usage"]["input_tokens"] == len(prepared[1])
+        delta = next(event for event in events if event["type"] == "message_delta")
+        assert delta["delta"]["stop_reason"] == "end_turn"
+        assert events[-1]["type"] == "message_stop"
 
 
-def test_prepare_chat_prompt_for_request_prepares_vlm_prompt():
-    engine = VLMBatchedEngine.__new__(VLMBatchedEngine)
+@pytest.mark.parametrize(
+    "model_id", ["owner/chat:fast", "omlx-claude/chat:fast", "Claude-local:fast"]
+)
+@pytest.mark.parametrize("count_tokens", [False, True])
+def test_claude_gateway_preserves_profile_settings(
+    monkeypatch, tmp_path, prepared_chat_engine, model_id, count_tokens
+):
+    source_id, profile_name = model_id.rsplit(":", 1)
+    manager = ModelSettingsManager(base_path=tmp_path)
+    manager.set_settings(source_id, ModelSettings(max_context_window=65536))
+    manager.save_profile(
+        source_id,
+        profile_name,
+        "Fast",
+        None,
+        {"temperature": 0.3, "chat_template_kwargs": {"enable_thinking": False}},
+        expose_as_model=True,
+    )
+    engine = prepared_chat_engine
+    engine.chat = AsyncMock(
+        return_value=GenerationOutput(
+            text="Done.",
+            prompt_tokens=3,
+            completion_tokens=1,
+            finished=True,
+            finish_reason="stop",
+        )
+    )
+    engine.preflight_chat = AsyncMock()
+    pool = MagicMock()
+    pool.get_entry.return_value = None
+    pool.get_active_model_aliases.return_value = {}
+    pool.get_status.return_value = {"models": [{"id": source_id, "model_type": "llm"}]}
+    pool.resolve_model_id.side_effect = (
+        lambda name, settings_manager: settings_manager.get_exposed_profile_source_model_id(
+            name
+        )
+        or name
+    )
+    state = ServerState()
+    state.engine_pool = pool
+    state.settings_manager = manager
+    monkeypatch.setattr(srv, "_server_state", state)
+    acquire = AsyncMock(return_value=engine)
+    monkeypatch.setattr(srv, "get_engine_for_model", acquire)
+    monkeypatch.setitem(
+        srv.app.dependency_overrides, srv.verify_inference_api_key, lambda: True
+    )
+
+    path = "/claude/v1/messages"
+    if count_tokens:
+        path += "/count_tokens"
+    client = TestClient(app)
+    discovery = client.get("/claude/v1/models?limit=1000")
+    assert discovery.status_code == 200
+    discovered_id = next(
+        entry["id"]
+        for entry in discovery.json()["data"]
+        if entry["display_name"] == model_id
+    )
+    assert discovered_id == f"omlx-claude/{model_id}"
+    response = client.post(
+        path,
+        json={
+            "model": discovered_id,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert acquire.call_args.args == (model_id,)
+    template_kwargs = engine._apply_chat_template.call_args.kwargs[
+        "chat_template_kwargs"
+    ]
+    assert template_kwargs["enable_thinking"] is False
+    if count_tokens:
+        assert response.json() == {"input_tokens": 3}
+        engine.chat.assert_not_called()
+    else:
+        assert engine.chat.call_args.kwargs["temperature"] == 0.3
+        assert response.json()["content"][0]["type"] == "text"
+        assert response.json()["content"][0]["text"] == "Done."
+        assert response.json()["usage"]["input_tokens"] == 3
+        assert response.json()["usage"]["output_tokens"] == 1
+        assert response.json()["stop_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_prepare_chat_prompt_for_request_prepares_vlm_prompt():
+    engine = VLMBatchedEngine(model_name="test-model")
     engine.prepare_chat_prompt = MagicMock(return_value=("prompt", [1, 2]))
     messages = [{"role": "user", "content": "Hello"}]
 
-    assert srv._prepare_chat_prompt_for_request(engine, messages) == (
+    assert await srv._prepare_chat_prompt_for_request(engine, messages) == (
         2,
         ("prompt", [1, 2]),
     )
 
 
 @pytest.mark.asyncio
-async def test_text_engine_prepares_prompt_off_the_event_loop():
-    engine = BatchedEngine(model_name="test-model")
+@pytest.mark.parametrize("engine_type", [BatchedEngine, VLMBatchedEngine])
+async def test_batched_engine_prepares_request_prompt_off_the_event_loop(engine_type):
+    engine = engine_type(model_name="test-model")
+    prepare_threads = []
 
-    prepare_thread = await srv._prepare_prompt_off_loop(
-        engine, lambda engine: threading.get_ident()
+    def prepare(*args):
+        prepare_threads.append(threading.get_ident())
+        return "prompt", [1, 2]
+
+    engine.prepare_chat_prompt = prepare
+    result = await srv._prepare_chat_prompt_for_request(
+        engine, [{"role": "user", "content": "Hello"}]
     )
 
-    assert prepare_thread != threading.get_ident()
+    assert result == (2, ("prompt", [1, 2]))
+    assert len(prepare_threads) == 1
+    assert prepare_threads[0] != threading.get_ident()
 
 
 @pytest.fixture
@@ -2072,3 +2300,111 @@ def test_ignore_eos_reaches_the_engine(
     else:
         generated = (engine.chat if chat else engine.generate).call_args.kwargs
     assert generated.get("ignore_eos", False) is bool(ignore_eos)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_responses_tool_result_round_trip_renders_native_arguments(monkeypatch, stream):
+    """The next Codex turn must reach generation, not retry a template HTTP 500."""
+    from jinja2 import Environment
+
+    from omlx.engine.base import GenerationOutput
+
+    template = Environment().from_string(
+        "{% for message in messages %}{{ message.role }}:{{ message.content or '' }}"
+        "{% for call in message.tool_calls or [] %}"
+        "{% for key, value in call.function.arguments|items %}{{ key }}={{ value }};"
+        "{% endfor %}{% endfor %}{% endfor %}"
+    )
+
+    class NativeToolTokenizer:
+        chat_template = "tool_calls"
+
+        def apply_chat_template(self, messages, **kwargs):
+            return template.render(messages=messages)
+
+        def encode(self, text, **kwargs):
+            return [1] * len(text.split())
+
+    engine = MagicMock()
+    engine.tokenizer = NativeToolTokenizer()
+    engine.model_type = "qwen3_5"
+    engine.is_diffusion_model = False
+    engine.supports_multimodal_fallback = False
+    engine.supports_request_scoped_abort = False
+    engine.preflight_chat = AsyncMock()
+    captured_prompts = []
+
+    def count_chat_tokens(messages, *args, **kwargs):
+        rendered = engine.tokenizer.apply_chat_template(messages)
+        captured_prompts.append(rendered)
+        return 16
+
+    engine.count_chat_tokens.side_effect = count_chat_tokens
+    output = GenerationOutput(
+        text="All done.", new_text="All done.", prompt_tokens=16, completion_tokens=2
+    )
+    engine.chat = AsyncMock(return_value=output)
+
+    async def stream_chat(**kwargs):
+        yield output
+
+    engine.stream_chat = stream_chat
+    pool = MagicMock()
+    pool.get_entry.return_value = SimpleNamespace(
+        config_model_type="qwen3_5", preserve_thinking_default=False
+    )
+    monkeypatch.setattr(
+        srv,
+        "_server_state",
+        ServerState(engine_pool=pool, global_settings=GlobalSettings()),
+    )
+    monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(return_value=engine))
+    monkeypatch.setattr(srv, "resolve_model_id", lambda name: name)
+    monkeypatch.setattr(srv, "validate_context_window", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        srv, "get_model_settings_for_request", lambda name: ModelSettings()
+    )
+    monkeypatch.setitem(
+        srv.app.dependency_overrides, srv.verify_inference_api_key, lambda: True
+    )
+    response = TestClient(srv.app).post(
+        "/v1/responses",
+        json={
+            "model": "test-model",
+            "stream": stream,
+            "store": False,
+            "input": [
+                {"role": "user", "content": "Inspect the workspace."},
+                {
+                    "type": "function_call",
+                    "call_id": "call_shell",
+                    "name": "exec_command",
+                    "arguments": '{"cmd":"pwd"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_shell",
+                    "output": "/tmp",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert captured_prompts and "cmd=pwd;" in captured_prompts[0]
+    if stream:
+        events = [
+            json.loads(line[6:])
+            for line in response.text.splitlines()
+            if line.startswith("data: {")
+        ]
+        assert events[-1]["type"] == "response.completed"
+        final = events[-1]["response"]
+        sequence = [event["sequence_number"] for event in events]
+        assert sequence == sorted(set(sequence))
+    else:
+        final = response.json()
+    assert final["status"] == "completed"
+    assert final["output"][0]["content"][0]["text"] == "All done."
+    assert final["usage"]["input_tokens"] == 16
+    assert final["usage"]["output_tokens"] == 2
+    assert final["usage"]["total_tokens"] == 18
