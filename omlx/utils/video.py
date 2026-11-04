@@ -55,14 +55,21 @@ _VIDEO_INPUT_ERROR = (
 
 def _video_url(part: Any) -> str | None:
     value = (
-        part.get("video_url", part.get("input_video"))
+        part.get("video_url") or part.get("input_video") or part.get("video")
         if isinstance(part, dict)
-        else getattr(part, "video_url", None)
+        else getattr(part, "video_url", None) or getattr(part, "input_video", None)
     )
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        return value.get("url")
+        if value.get("url"):
+            return value["url"]
+        data = value.get("data") or value.get("file_data")
+        if isinstance(data, str) and data.strip():
+            if data.strip().startswith("data:"):
+                return data.strip()
+            media_format = value.get("format") or "mp4"
+            return f"data:video/{media_format};base64,{data.strip()}"
     if value is not None:
         return getattr(value, "url", None)
     return None

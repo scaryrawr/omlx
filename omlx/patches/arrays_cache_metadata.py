@@ -25,7 +25,7 @@ def apply_arrays_cache_metadata_patch() -> bool:
     except ImportError:
         return False
 
-    cache_classes = [ArraysCache]
+    cache_classes: list[type] = [ArraysCache]
     try:
         from mlx_vlm.models.cache import ArraysCache as VLMArraysCache
     except ImportError:
