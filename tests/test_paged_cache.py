@@ -6,8 +6,8 @@ This module tests the block-based paged KV cache management following vLLM's
 architecture, adapted for MLX on Apple Silicon.
 """
 
-from typing import List
-from unittest.mock import MagicMock, patch
+from typing import get_type_hints
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,6 +21,18 @@ from omlx.cache.paged_cache import (
     compute_block_hash,
     resolve_block_extra_keys,
 )
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        PagedCacheManager.register_tail_block,
+        PagedCacheManager.seed_tail_blocks,
+        PagedCacheManager._match_tail_block,
+    ],
+)
+def test_tail_cache_annotations_resolve(method):
+    assert get_type_hints(method)
 
 
 class TestComputeBlockHash:

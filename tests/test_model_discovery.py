@@ -11,6 +11,7 @@ import pytest
 from omlx import gguf
 from omlx.model_discovery import (
     DiscoveredModel,
+    _detect_audio_input,
     _is_adapter_dir,
     _is_causal_lm_reranker,
     _is_helper_checkpoint,
@@ -32,7 +33,156 @@ from omlx.model_discovery import (
     is_realtime_voice_model,
     model_directory_access_error,
     model_display_name,
+    model_unavailable_reason,
 )
+
+
+class TestAudioInputDiscovery:
+    @pytest.mark.parametrize(
+        ("family", "key", "expected"),
+        [
+            ("gemma4", "audio_tower.layer.weight", True),
+            ("gemma4", "model.audio_tower.layer.weight", True),
+            ("gemma4_unified", "model.embed_audio.projection.weight", True),
+            ("qwen3_omni_moe", "thinker.audio_tower.layer.weight", True),
+            ("inkling_mm_model", "model.audio.encoder.weight", True),
+            ("lfm3_audio", "encoder.downsample.weight", True),
+            ("minicpmo", "apm.conv1.weight", True),
+            ("gemma4", "vision_tower.layer.weight", False),
+            ("gemma4", "audio_decoder.layer.weight", False),
+            ("unknown", "vision_tower.layer.weight", None),
+        ],
+    )
+    def test_audio_input_weight_layouts(self, tmp_path, family, key, expected):
+        _write_safetensors(tmp_path / "model.safetensors", {key: ("F32", [1])})
+        config = {"model_type": family, "audio_config": {"hidden_size": 16}}
+        assert _detect_audio_input(tmp_path, config, "vlm") is expected
+
+    @pytest.mark.parametrize(
+        "sidecar", ["omnimodal/audio_encoder.safetensors", "optiq/vision.safetensors"]
+    )
+    def test_audio_input_sidecars(self, tmp_path, sidecar):
+        path = tmp_path / sidecar
+        path.parent.mkdir()
+        _write_safetensors(path, {"audio_encoder.weight": ("F32", [1])})
+        config = {"model_type": "mimo_v2"}
+        if sidecar.startswith("optiq/"):
+            config["optiq_vision"] = {"sidecar": sidecar}
+        assert _detect_audio_input(tmp_path, config, "vlm") is True
+
+    @pytest.mark.parametrize("model_type", ["llm", "audio_stt", "audio_tts", "audio_sts"])
+    def test_audio_input_is_only_detected_for_multimodal_chat(self, tmp_path, model_type):
+        config = {"model_type": "gemma4", "audio_config": {"hidden_size": 16}}
+        expected = False if model_type == "llm" else None
+        assert _detect_audio_input(tmp_path, config, model_type) is expected
+
+    @pytest.mark.parametrize("corrupt", [True, False])
+    def test_missing_or_unreadable_weights_are_unknown(self, tmp_path, caplog, corrupt):
+        if corrupt:
+            (tmp_path / "model.safetensors").write_bytes(b"corrupt")
+        assert _detect_audio_input(
+            tmp_path, {"model_type": "gemma4", "audio_config": {}}, "vlm"
+        ) is None
+        if corrupt:
+            assert "Cannot inspect audio input weights" in caplog.text
+
+    def test_audio_sidecar_must_stay_inside_model(self, tmp_path, caplog):
+        config = {
+            "model_type": "gemma4",
+            "audio_config": {},
+            "optiq_vision": {"sidecar": "../outside.safetensors"},
+        }
+        assert _detect_audio_input(tmp_path, config, "vlm") is None
+        assert "invalid OptiQ sidecar" in caplog.text
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"model_type": "minicpmo", "init_audio": False},
+            {"model_type": "gemma4"},
+            {"model_type": "gemma4", "audio_config": None},
+            {"model_type": "gemma4_unified", "audio_config": None},
+        ],
+    )
+    def test_disabled_audio_is_not_advertised(self, tmp_path, config):
+        _write_safetensors(
+            tmp_path / "model.safetensors", {"audio_tower.weight": ("F32", [1])}
+        )
+        assert _detect_audio_input(tmp_path, config, "vlm") is False
+
+
+class TestImageModelDiscovery:
+    def test_native_flux3_root_config_is_discovered(self, tmp_path):
+        pytest.importorskip("mlx_vlm")
+        model = tmp_path / "native-flux3"
+        model.mkdir()
+        (model / "config.json").write_text(
+            json.dumps(
+                {
+                    "model": "flux-3-image-klein",
+                    "dit": {
+                        "in_channels": {
+                            "image": 128,
+                            "image_cond": 128,
+                            "text": 20480,
+                        }
+                    },
+                }
+            )
+        )
+        (model / "model.safetensors").write_bytes(b"0" * 100)
+
+        discovered = discover_models(tmp_path)[model.name]
+
+        assert discovered.model_type == discovered.engine_type == "image"
+        assert discovered.capabilities == discovered.tasks == ["generation", "edit"]
+
+    def test_mlx_vlm_image_layout_is_discovered(
+        self, tmp_path, write_z_image_checkpoint
+    ):
+        write_z_image_checkpoint(tmp_path / "custom-folder")
+
+        discovered = discover_models(tmp_path)["custom-folder"]
+
+        assert discovered.model_type == discovered.engine_type == "image"
+        assert discovered.config_model_type == "mlx-vlm"
+        assert discovered.capabilities == discovered.tasks == ["generation", "edit"]
+
+    def test_unrecognized_diffusion_layout_is_not_an_image_model(self, tmp_path):
+        model = tmp_path / "unknown-pipeline"
+        model.mkdir()
+        (model / "model_index.json").write_text('{"_class_name": "UnknownPipeline"}')
+        (model / "transformer").mkdir()
+        (model / "transformer" / "model.safetensors").write_bytes(b"0" * 100)
+
+        assert "unknown-pipeline" not in discover_models(tmp_path)
+
+    def test_diffusion_gemma_stays_on_text_path(self, tmp_path):
+        model = tmp_path / "diffusion-gemma"
+        model.mkdir()
+        (model / "config.json").write_text(
+            json.dumps({"model_type": "diffusion_gemma"})
+        )
+        (model / "model.safetensors").write_bytes(b"0" * 100)
+
+        discovered = discover_models(tmp_path)[model.name]
+
+        assert discovered.model_type != "image"
+        assert discovered.engine_type != "image"
+
+    def test_hf_cache_accepts_image_component_layout(
+        self, tmp_path, write_z_image_checkpoint
+    ):
+        write_z_image_checkpoint(
+            tmp_path / "models--Tongyi-MAI--Z-Image" / "snapshots" / "abc"
+        )
+
+        discovered = discover_models(tmp_path)["Tongyi-MAI--Z-Image"]
+
+        assert discovered.model_type == "image"
+        assert discovered.tasks == ["generation", "edit"]
+        assert discovered.source_type == "hf_cache"
+        assert discovered.source_repo_id == "Tongyi-MAI/Z-Image"
 
 
 def _write_safetensors(path, tensors):
@@ -94,6 +244,33 @@ class TestIsHelperModelConfig:
     def test_dflash_draft_via_config_block(self):
         config = {"model_type": "qwen3", "dflash_config": {"block_size": 16}}
         assert is_helper_model_config(config) is True
+
+    def test_minicpm_dspark_is_helper_not_independent_chat_model(self, tmp_path):
+        config = {
+            "model_type": "qwen3",
+            "architectures": ["Qwen3DSparkModel"],
+            "dflash_config": {
+                "projector_type": "dspark",
+                "target_layer_ids": [3, 11, 19, 27, 35],
+            },
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_helper_model_config(config)
+        assert _is_helper_checkpoint(tmp_path)
+
+    def test_minicpm_target_is_not_helper_despite_embedded_mtp_config(self, tmp_path):
+        config = {
+            "model_type": "minicpmv4_7",
+            "architectures": ["MiniCPMV4_7ForConditionalGeneration"],
+            "text_config": {
+                "model_type": "qwen3_5_moe_text",
+                "mtp_num_hidden_layers": 1,
+            },
+            "vision_config": {"model_type": "minicpmv4_7_vision"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert not is_helper_model_config(config)
+        assert detect_model_type(tmp_path) == "vlm"
 
     def test_assistant_via_model_type(self):
         config = {
@@ -344,6 +521,29 @@ class TestDetectModelType:
         (vlm_dir / "config.json").write_text(json.dumps(config))
         assert detect_model_type(vlm_dir) == "vlm"
 
+    def test_detect_qwen4_exp_official_config_as_vlm(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+            "vision_config": {"hidden_size": 1152},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "vlm"
+        assert model_unavailable_reason("qwen4_exp") is None
+
+    def test_qwen4_exp_without_vision_is_available_as_llm(self, tmp_path):
+        config = {
+            "model_type": "qwen4_exp",
+            "architectures": ["Qwen4ExpForConditionalGeneration"],
+            "text_config": {"model_type": "qwen4_exp_text"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert detect_model_type(tmp_path) == "llm"
+        assert model_unavailable_reason("qwen4_exp") is None
+
     def test_missing_config_defaults_to_llm(self, tmp_path):
         """Test that missing config.json defaults to LLM."""
         assert detect_model_type(tmp_path) == "llm"
@@ -378,14 +578,20 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path) == "vlm"
 
     @pytest.mark.parametrize(
-        "model_type,architecture",
-        [("cohere2_moe", "Cohere2MoeForCausalLM"), ("flint", "FlintForCausalLM")],
+        "model_type,architecture,expected_type",
+        [
+            ("cohere2_moe", "Cohere2MoeForCausalLM", "vlm"),
+            ("flint", "FlintForCausalLM", "llm"),
+            ("Flint", "FlintForCausalLM", "llm"),
+        ],
     )
-    def test_detect_native_text_model_as_vlm(self, tmp_path, model_type, architecture):
-        """Text-only families implemented by mlx-vlm route to the VLM engine."""
+    def test_detect_native_text_model(
+        self, tmp_path, model_type, architecture, expected_type
+    ):
+        """Flint's text-only capabilities are independent of its mlx-vlm loader."""
         config = {"model_type": model_type, "architectures": [architecture]}
         (tmp_path / "config.json").write_text(json.dumps(config))
-        assert detect_model_type(tmp_path) == "vlm"
+        assert detect_model_type(tmp_path) == expected_type
 
     def test_detect_text_only_deepseek_v41_as_vlm(self, tmp_path):
         """oQ text-only V4.1 exports drop vision_config but stay on mlx-vlm."""
@@ -787,6 +993,20 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         (tmp_path / "modules.json").write_text(json.dumps(modules))
         assert detect_model_type(tmp_path) == "llm"
+
+    def test_detect_embedding_gemma2_without_sentence_transformers_modules(
+        self, tmp_path
+    ):
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "embedding_gemma2",
+                    "architectures": ["EmbeddingGemma2Model"],
+                    "vision_config": {"model_type": "gemma4_vision"},
+                }
+            )
+        )
+        assert detect_model_type(tmp_path) == "embedding"
 
     def test_detect_embedding_gemma2_with_vision_config_as_embedding(self, tmp_path):
         """EmbeddingGemma 2 ships a vision_config and sentence-transformers v6 modules."""
@@ -1906,6 +2126,32 @@ class TestDiscoverModelsFromDirs:
 
 class TestUnsupportedModels:
     """Tests for _is_unsupported_model() — audio models are now supported."""
+
+    @pytest.mark.parametrize(
+        ("model_type", "architectures"),
+        [
+            ("gemma4_assistant", ["Gemma4AssistantForCausalLM"]),
+            ("gemma4_unified_assistant", ["Gemma4UnifiedAssistantForCausalLM"]),
+            ("qwen3_5_mtp", None),
+        ],
+    )
+    def test_vlm_mtp_helpers_are_discovered(
+        self, tmp_path, model_type, architectures
+    ):
+        """Assistant/MTP checkpoints must reach status and drafter selectors."""
+        model_dir = tmp_path / model_type
+        model_dir.mkdir()
+        config = {"model_type": model_type}
+        if architectures is not None:
+            config["architectures"] = architectures
+        (model_dir / "config.json").write_text(json.dumps(config))
+        (model_dir / "model.safetensors").write_bytes(b"0" * 1000)
+
+        models = discover_models(tmp_path)
+
+        assert _is_unsupported_model(model_dir) is False
+        assert models[model_type].is_helper is True
+        assert models[model_type].config_model_type == model_type
 
     def test_whisper_not_unsupported(self, tmp_path):
         """Whisper is now an audio_stt model, not unsupported."""

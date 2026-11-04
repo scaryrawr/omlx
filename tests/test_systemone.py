@@ -693,6 +693,51 @@ def tiny_d3(tiny_backbone):
     return model
 
 
+@pytest.mark.parametrize(
+    ("name", "rows", "error"),
+    [
+        ("weight", d3.MAX_OPTIONS, None),
+        ("other", d3.MAX_OPTIONS, "missing its weight tensor"),
+        ("weight", 1, "readout weight has shape"),
+    ],
+)
+def test_d3_load_validates_readout(tiny_d3, tmp_path, monkeypatch, name, rows, error):
+    token_ids = list(range(len(tiny_d3.codes)))
+    config = {
+        "format_id": d3.D3_FORMAT_ID,
+        "format_version": 1,
+        "codes": tiny_d3.codes,
+        "token_ids": token_ids,
+    }
+    (tmp_path / d3.D3_DECISION_CONFIG).write_text(json.dumps(config))
+    mx.save_safetensors(
+        str(tmp_path / d3.D3_READOUT_WEIGHTS), {name: mx.ones((rows, 64))}
+    )
+    tiny_d3.model_path = str(tmp_path)
+    tiny_d3.readout = None
+    monkeypatch.setattr(tiny_d3.backbone, "load", lambda: None)
+    monkeypatch.setattr(
+        d3, "answer_codes", lambda tokenizer: (tiny_d3.codes, token_ids)
+    )
+    monkeypatch.setattr(d3, "apply_sdpa256_attention_patch", lambda: True)
+
+    if error:
+        with pytest.raises(ValueError, match=error):
+            tiny_d3.load()
+        assert tiny_d3.readout is None
+    else:
+        tiny_d3.load()
+        assert tiny_d3.readout.shape == (d3.MAX_OPTIONS, 64)
+        assert tiny_d3.readout.dtype == mx.float32
+
+
+def test_d3_run_requires_loaded_readout():
+    model = d3.D3Model("unused")
+    plan = d3.D3Plan({}, [], [], [])
+    with pytest.raises(RuntimeError, match="model is not loaded"):
+        next(model.run(plan, lambda: 16))
+
+
 def test_d3_encode_matches_full_forward_without_causal_mask(tiny_d3, monkeypatch):
     from mlx_vlm.models.qwen3_5 import language
 
