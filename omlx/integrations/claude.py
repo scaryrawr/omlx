@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Claude Code integration."""
 
 from __future__ import annotations
@@ -6,6 +7,7 @@ import os
 import shutil
 from pathlib import Path
 
+from omlx.api.claude_gateway import CLAUDE_GATEWAY_PATH, claude_gateway_model_id
 from omlx.integrations.base import Integration, IntegrationContext
 from omlx.utils.install import get_cli_command_prefix
 
@@ -93,7 +95,11 @@ class ClaudeCodeIntegration(Integration):
             raise SystemExit(1)
 
         env = self._scrubbed_env()
-        env["ANTHROPIC_BASE_URL"] = ctx.base_url
+        for key in list(env):
+            if key.startswith("CLAUDE_CODE_USE_"):
+                del env[key]
+        env["ANTHROPIC_BASE_URL"] = f"{ctx.base_url}{CLAUDE_GATEWAY_PATH}"
+        env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
         # Use the actual omlx API key so Claude Code authenticates correctly.
         # Fallback to "omlx" only when no API key is configured (open server).
         env["ANTHROPIC_AUTH_TOKEN"] = ctx.auth_token
@@ -102,7 +108,7 @@ class ClaudeCodeIntegration(Integration):
         # Large timeout for local model inference (model loading + generation).
         env["API_TIMEOUT_MS"] = "3000000"
         if ctx.model:
-            env["ANTHROPIC_MODEL"] = ctx.model
+            env["ANTHROPIC_MODEL"] = claude_gateway_model_id(ctx.model)
 
         if ctx.cross_session:
             # Cross-session messaging (ListAgents/SendMessage) needs telemetry
@@ -135,15 +141,17 @@ class ClaudeCodeIntegration(Integration):
         haiku_model = ctx.haiku_model or ctx.model
 
         if opus_model:
-            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = claude_gateway_model_id(opus_model)
         if sonnet_model:
-            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = claude_gateway_model_id(
+                sonnet_model
+            )
         if haiku_model:
-            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = claude_gateway_model_id(haiku_model)
 
         subagent_model = haiku_model or sonnet_model or opus_model
         if subagent_model:
-            env["CLAUDE_CODE_SUBAGENT_MODEL"] = subagent_model
+            env["CLAUDE_CODE_SUBAGENT_MODEL"] = claude_gateway_model_id(subagent_model)
 
         if ctx.context_window:
             env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(ctx.context_window)
