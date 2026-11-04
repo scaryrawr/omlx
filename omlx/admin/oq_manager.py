@@ -186,6 +186,7 @@ class OQManager:
         """Scan all model dirs. Returns (source_models, all_models)."""
 
         def _scan() -> tuple[list[dict], list[dict]]:
+            from ..model_classification import normalize_nemotron_config
             from ..model_discovery import (
                 _is_readable_dir,
                 _iter_readable_entries,
@@ -243,6 +244,7 @@ class OQManager:
                         try:
                             with open(path / "config.json") as f:
                                 config = json.load(f)
+                            config = normalize_nemotron_config(config)
                             size = _safetensors_size(path)
                             if size == 0:
                                 continue
@@ -287,7 +289,7 @@ class OQManager:
                                 ) or tc.get("num_hidden_layers", 0)
                                 info_full["num_experts"] = config.get(
                                     "num_local_experts", 0
-                                )
+                                ) or tc.get("n_routed_experts", 0)
                                 if is_v41:
                                     info_full["num_layers"] = (
                                         info_full["num_layers"] or tc.get("n_layers", 0)
