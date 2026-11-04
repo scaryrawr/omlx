@@ -49,6 +49,7 @@ def _custom_kernel_build_kwargs() -> dict:
             "omlx_quant_matmul_kernels",
             sources=[
                 f"{quant}/affine_qmm.metal",
+                f"{quant}/fp_qmm.metal",
                 f"{quant}/gather_qmm.metal",
                 f"{quant}/head_flat_qmm.metal",
                 f"{quant}/moe_weighted_sum.metal",
