@@ -19,7 +19,7 @@ request is translated to a System One request and back.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -321,7 +321,7 @@ async def decide(
     engine: Any,
     request: DecisionRequest,
     multimodal: bool,
-    prepare: Callable[[list[dict]], dict] | None = None,
+    prepare: Callable[[list[dict]], Awaitable[dict]] | None = None,
     require_answer: bool = True,
 ) -> dict:
     """Answer every question with a chat model; returns answers and tokens.
@@ -337,7 +337,7 @@ async def decide(
 
     async def chat(messages, **kwargs):
         if prepare is not None:
-            kwargs.update(prepare(messages))
+            kwargs.update(await prepare(messages))
         return await engine.chat(messages=messages, **kwargs)
 
     async def answer(question):

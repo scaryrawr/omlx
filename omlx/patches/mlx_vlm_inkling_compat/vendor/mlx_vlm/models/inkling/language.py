@@ -558,7 +558,6 @@ _ROUTE_SRC = r"""
     uint lane = thread_position_in_grid.x;
     uint n = thread_position_in_grid.y;
     if (n >= N) return;
-    auto lg = logits + (size_t)n * (R + SH);
     float ws = wscale[0];
     constexpr int PER = (R + 31) / 32;
     float sc[PER];
@@ -568,7 +567,7 @@ _ROUTE_SRC = r"""
         uint j = lane + (uint)t * 32u;
         taken[t] = false;
         if (j < R) {
-            float l = (float)lg[j];
+            float l = (float)logits[(size_t)n * (R + SH) + j];
             tl_[t] = l;
             sc[t] = 1.0f / (1.0f + metal::exp(-l)) + (float)corr[j];
         } else {
@@ -591,7 +590,9 @@ _ROUTE_SRC = r"""
     float lp[K + SH];
     float m = -INFINITY;
     for (uint t = 0; t < K + SH; ++t) {
-        float tv = (t < K) ? btl[t] : (float)lg[R + (t - K)];
+        float tv = (t < K)
+            ? btl[t]
+            : (float)logits[(size_t)n * (R + SH) + R + (t - K)];
         float a = -tv;
         float lad = metal::max(a, 0.0f)
                   + metal::log(1.0f + metal::exp(-metal::fabs(a)));

@@ -27,10 +27,9 @@ because oMLX pins transformers <5.13. Audio (dMel) extraction is not
 implemented yet (text+vision first).
 
 The sibling shims `../mlp.py`, `../switch_layers.py`, `../activations.py`
-are byte-identical copies from the same PR head; they do not exist at the
-oMLX mlx-vlm pin (`78b96eb`). The `__path__`-append install searches the
-real package first, so a future pin bump that ships any of these upstream
-automatically retires the vendored copy.
+were copied from the original PR head. The current mlx-vlm pin supplies the
+shared modules, while oMLX places only this vendored Inkling package first to
+retain its continuous-batching and mixed-quantization fixes.
 
 Retire this whole package when the mlx-vlm pin advances past PR #1756's
 merge (and transformers reaches 5.14+ for the processors).
