@@ -2,6 +2,21 @@
 
 Server tests live in `tests/` and must not depend on `apps/`: after the full run, CI deletes `apps/`, collects the server tests again, and starts `omlx serve` to check the API-only fallback. Web UI tests live in `apps/omlx-web/tests/` and the macOS app's Python tests in `apps/omlx-mac/Tests/python/`. A plain `pytest` runs all three through `testpaths`. The standalone dashboard script tests are the `apps/omlx-web/tests/*.test.cjs` files except `network_auth_ui.test.cjs`, which `test_admin_network_auth_ui.py` runs with its input.
 
+# Live chat compatibility smoke
+
+Against an isolated server, run
+`OMLX_BASE_URL=http://127.0.0.1:18080 OMLX_TEST_MODEL=Qwen3.5-9B-oQ4e-mtp uv run --python python3.12 pytest tests/integration/test_live_tool_calling.py -m integration`.
+The selected model must appear in `/v1/models`. Cases cover streaming and
+non-streaming tool-call round trips, token usage, chat logprobs and top alternatives,
+and chat-backed decision readouts. Enable native MTP in the isolated model settings
+to exercise multi-token verification too. Keep the server's base path and `HOME`
+isolated so startup cannot overwrite the running service's cluster shim.
+
+Run `uv run --python python3.12 pytest tests/integration/test_responses_tool_merge.py`
+for mocked protocol checks. The Anthropic cases verify that generation and token
+counting share the same tools, thinking, reasoning effort, and multimodal
+processor options, and that template errors remain visible on both endpoints.
+
 # Qwen3.5 text-only checkpoint tests
 
 Run `python -m pytest -q tests/test_oq.py -k Qwen35TextCheckpoint` to check
@@ -71,11 +86,15 @@ Run `python -m pytest -q tests/test_engine_teardown.py tests/test_engine_core.py
 
 # Claude launcher tests
 
-Run `python -m pytest -q tests/test_cli.py tests/test_integrations.py` to check model selection, saved tier precedence, and the final Claude Code environment. Mixed-context cases verify that the selected initial model is passed through `ANTHROPIC_MODEL` and that the process-wide context and auto-compact limits use the smallest known context window across the initial model and configured tiers. Larger models consequently compact at that shared limit; models without reported limits cannot contribute a limit.
+Run `python -m pytest -q tests/test_cli.py tests/test_integrations.py` to check model selection, saved tier precedence, and the final Claude Code environment. Mixed-context cases verify that the selected initial model is passed through `ANTHROPIC_MODEL` and that the process-wide context and auto-compact limits use the smallest known context window across the initial model, configured tiers, and discoverable chat models. Larger models consequently compact at that shared limit; models without reported limits cannot contribute a limit.
+
+Run `UV_PYTHON=python3.12 uv run --python python3.12 pytest tests/test_integrations.py tests/test_cli.py tests/test_v1_models_visibility.py tests/test_server.py` for Claude gateway discovery.
+These tests cover the launch environment, discovery filtering and authentication, unchanged standard model IDs, streaming Messages, token counts, and exposed-profile settings.
+Gateway IDs wrap the served ID with `omlx-claude/`, including the initial model and configured tiers.
 
 # ModernBERT embedding tests
 
-Run `python -m pytest -q tests/test_modernbert_attention.py tests/test_embedding.py tests/test_mlx_embeddings_compat.py` to check finite padded attention, single-input equivalence, local-window masking, and embedding integration. The attention regression covers fp16, bf16, and fp32 at lengths around the affected SDPA tile boundaries.
+Run `python -m pytest -q tests/test_modernbert_attention.py tests/test_embedding.py` to check finite padded attention, single-input equivalence, local-window masking, and embedding integration. The attention regression covers fp16, bf16, and fp32 at lengths around the affected SDPA tile boundaries.
 
 # GGUF model tests
 
