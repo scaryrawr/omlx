@@ -759,6 +759,13 @@ def _register_uid_rows(model, uids, samplers, lps_rows) -> None:
             _uid_row_registry.popitem(last=False)
 
 
+def _record_native_mtp_request_eligibility(model, uid: int, request) -> None:
+    """Tell an optional VLM adapter whether this UID used embeddings prefill."""
+    setter = getattr(model, "set_native_mtp_request_eligible", None)
+    if callable(setter):
+        setter(uid, getattr(request, "vlm_inputs_embeds", None) is None)
+
+
 def _unregister_uid_row(model, uid) -> None:
     """Drop a finished request's row so heavy processors are not pinned
     until FIFO eviction; the bounded size stays as the backstop."""
@@ -7700,6 +7707,7 @@ class Scheduler:
                 _register_uid_rows(self.model, uids, [state.sampler], [per_row_lps])
                 _mtp_priming.bind_uid(self.model, request.request_id, uid)
                 self._dflash_bind_uid(request.request_id, uid)
+                _record_native_mtp_request_eligibility(self.model, uid, request)
                 if hasattr(self.model, "register_rope_delta"):
                     self.model.register_rope_delta(uid, request.rope_deltas)
                 _mark_text_positions(self.model, request, uid)
@@ -11113,6 +11121,19 @@ class Scheduler:
         if request.request_id in self._prefix_cache_prepared:
             return
 
+        if request.vlm_extra_kwargs is not None:
+            source_prompt_tokens = request.vlm_extra_kwargs.pop(
+                "_omlx_source_prompt_tokens", None
+            )
+            if source_prompt_tokens is not None:
+                request.source_prompt_tokens = source_prompt_tokens
+        unpaired_native_history = (
+            getattr(self.model, "_omlx_native_mtp_full_prompt", False) is True
+            or (request.vlm_extra_kwargs or {}).get("_omlx_pruned_video") is True
+        )
+        if unpaired_native_history:
+            request.skip_cache_store = True
+
         prefix_hook = getattr(self.model, "minimum_prefill_prefix", None)
         minimum_prefix = (
             prefix_hook(request.prompt_token_ids) if callable(prefix_hook) else 0
@@ -11124,6 +11145,10 @@ class Scheduler:
         if (
             self.block_aware_cache is not None
             and not self._model_has_unreconstructible_cache()
+            # DSpark needs every target-layer capture, which KV prefix entries
+            # do not contain. Re-prefill rather than silently truncate its context.
+            and getattr(_block_drafter_for(self.model), "kind", None) != "dspark"
+            and not unpaired_native_history
         ):
             # Use paged cache
             fetch_started = time.perf_counter()
@@ -14147,6 +14172,7 @@ class Scheduler:
                 uid = uids[0]
                 _mtp_priming.bind_uid(self.model, request.request_id, uid)
                 self._dflash_bind_uid(request.request_id, uid)
+                _record_native_mtp_request_eligibility(self.model, uid, request)
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id
                 now = time.monotonic()
@@ -14370,7 +14396,11 @@ class Scheduler:
                 logprobs=token_logprobs,
                 # Only the terminal chunk's cumulative ids are read.
                 output_token_ids=list(request.output_token_ids) if is_finished else [],
-                prompt_tokens=request.num_prompt_tokens,
+                prompt_tokens=(
+                    request.source_prompt_tokens
+                    if request.source_prompt_tokens is not None
+                    else request.num_prompt_tokens
+                ),
                 completion_tokens=request.num_output_tokens,
                 generated_at=output_generated_at,
                 generated_until=output_generated_at,
@@ -15544,6 +15574,8 @@ class Scheduler:
             return "specprefill"
         if _block_drafter_for(self.model) is not None:
             return "block drafter"
+        if getattr(self.model, "_omlx_native_mtp_full_prompt", False) is True:
+            return "native full-prompt MTP"
         if request_id in self._prefill_states:
             return None
         uid = self.request_id_to_uid.get(request_id)
@@ -15567,7 +15599,14 @@ class Scheduler:
         config = getattr(getattr(self.model, "_vlm_model", None), "config", None)
         media_ids = {
             int(value)
-            for name in ("image_token_id", "video_token_id", "audio_token_id")
+            for name in (
+                "image_token_id",
+                "video_token_id",
+                "audio_token_id",
+                "img_context_token_id",
+                "video_context_token_id",
+                "sound_context_token_id",
+            )
             if isinstance(value := getattr(config, name, None), int)
         }
         if not media_ids:
