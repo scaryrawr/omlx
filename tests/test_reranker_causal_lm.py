@@ -19,44 +19,58 @@ from omlx.models.reranker import MLXRerankerModel, RerankOutput
 
 
 class TestXLMRobertaReranker:
-    """Tests for native XLM-RoBERTa sequence-classification rerankers."""
+    """XLM-RoBERTa sequence-classification rerankers served via mlx-vlm."""
+
+    _CONFIG = {
+        "model_type": "xlm-roberta",
+        "architectures": ["XLMRobertaForSequenceClassification"],
+        "hidden_size": 8,
+        "num_hidden_layers": 1,
+        "vocab_size": 16,
+        "num_attention_heads": 2,
+        "intermediate_size": 16,
+        "max_position_embeddings": 16,
+        "pad_token_id": 1,
+        "num_labels": 1,
+    }
 
     @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
-    def test_load_xlm_roberta_switches_to_eval_mode(self, tmp_path):
-        """Native reranker load must disable dropout for deterministic scores."""
-        from mlx.utils import tree_flatten
-        from omlx.models.xlm_roberta import Model, ModelArgs
+    def test_xlm_roberta_routes_to_mlx_vlm_and_scores_deterministically(
+        self, tmp_path
+    ):
+        """The RoBERTa head comes from mlx-vlm, and scoring is deterministic.
 
-        config = {
-            "model_type": "xlm-roberta",
-            "architectures": ["XLMRobertaForSequenceClassification"],
-            "hidden_size": 4,
-            "num_hidden_layers": 1,
-            "vocab_size": 16,
-            "num_attention_heads": 1,
-            "intermediate_size": 8,
-            "max_position_embeddings": 8,
-            "attention_probs_dropout_prob": 0.5,
-            "hidden_dropout_prob": 0.5,
-            "classifier_dropout": 0.5,
-            "pad_token_id": 1,
-            "num_labels": 1,
-        }
+        Dropout used to make rerankers non-deterministic when the encoder kept
+        dropout modules; mlx-vlm's encoder builds none, so repeated eager
+        scoring must agree exactly.
+        """
+        from mlx.utils import tree_flatten
+        from mlx_vlm.models.xlm_roberta import ModelConfig, SequenceClassificationModel
+
+        config = dict(self._CONFIG)
         (tmp_path / "config.json").write_text(json.dumps(config))
-        source_model = Model(ModelArgs(**config))
+        source_model = SequenceClassificationModel(ModelConfig.from_dict(config))
         mx.save_safetensors(
             str(tmp_path / "model.safetensors"),
             {name: value for name, value in tree_flatten(source_model.parameters())},
         )
 
         loader = MLXRerankerModel(str(tmp_path))
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=MagicMock(),
-        ):
-            loaded_model, _ = loader._load_xlm_roberta()
+        with patch("omlx.models.reranker.load_processor", return_value=MagicMock()):
+            loader.load()
 
-        assert loaded_model.training is False
+        from mlx_vlm.models.xlm_roberta.xlm_roberta import SequenceClassificationModel
+
+        assert isinstance(loader.model, SequenceClassificationModel)
+        assert loader._num_labels == 1
+
+        loader._is_compiled = False
+        loader._compiled_seq_logits = None
+        input_ids = mx.array([[1, 5, 6, 7, 2], [1, 8, 9, 3, 3]])
+        attention_mask = mx.array([[1, 1, 1, 1, 1], [1, 1, 1, 1, 0]])
+        first = loader._seq_classification_logits(input_ids, attention_mask)
+        second = loader._seq_classification_logits(input_ids, attention_mask)
+        assert np.array_equal(np.array(first), np.array(second))
 
     def test_max_length_defaults_to_tokenizer_limit_and_is_capped(self, tmp_path):
         """Encoder rerankers default to the tokenizer limit and never exceed it."""
