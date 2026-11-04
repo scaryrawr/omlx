@@ -98,6 +98,31 @@ GLM = make_family(
 CATALOG = [QWEN_27B, GEMMA_31B, QWEN_35B_A3B, FLASH_NEXT, GLM]
 
 
+@pytest.mark.parametrize(
+    ("data", "valid"),
+    [
+        ({}, True),
+        ({"model_type": "qwen3_5"}, True),
+        ([], False),
+        ("text", False),
+        (None, False),
+    ],
+)
+def test_hub_json_requires_object(monkeypatch, data, valid):
+    response = SimpleNamespace(json=lambda: data)
+    monkeypatch.setattr(
+        rec,
+        "get_session",
+        lambda: SimpleNamespace(get=lambda *args, **kwargs: response),
+    )
+    monkeypatch.setattr(rec, "hf_raise_for_status", lambda response: None)
+    if valid:
+        assert rec._read_json(None, "Jundot/model", "config.json", "revision") == data
+    else:
+        with pytest.raises(ValueError, match="Jundot/model/config.json.*JSON object"):
+            rec._read_json(None, "Jundot/model", "config.json", "revision")
+
+
 def mac(monkeypatch, ram_gib, *, metal_gib=None, tier="balanced", guard=True):
     """MemoryInputs for a Mac whose Metal cap is macOS's default unless given."""
     ram = ram_gib * GiB

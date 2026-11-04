@@ -350,6 +350,32 @@ class MockEnginePool:
             "max_model_memory": self.max_model_memory,
         }
 
+    def get_active_model_aliases(self, settings_manager) -> Dict[str, str]:
+        if settings_manager is None:
+            return {}
+        aliases_by_name: Dict[str, List[str]] = {}
+        for m in self._models:
+            model_id = m["id"]
+            settings = settings_manager.get_settings(model_id)
+            alias = getattr(settings, "model_alias", None)
+            if not alias:
+                continue
+            alias = alias.strip()
+            if not alias:
+                continue
+            aliases_by_name.setdefault(alias, []).append(model_id)
+        active: Dict[str, str] = {}
+        lower_ids = {m["id"].lower(): m["id"] for m in self._models}
+        for alias, model_ids in aliases_by_name.items():
+            if len(model_ids) != 1:
+                continue
+            model_id = model_ids[0]
+            conflicting = lower_ids.get(alias.lower())
+            if conflicting is not None and conflicting != model_id:
+                continue
+            active[model_id] = alias
+        return active
+
     async def get_engine(
         self,
         model_id: str,
@@ -1833,7 +1859,7 @@ class TestEmbeddingsEndpoint:
         assert len(data["data"]) == 2
 
     def test_embeddings_use_discovered_context_length(self, client, mock_engine_pool):
-        """Embedding requests should not fall back to mlx-embeddings' 512 default."""
+        """Embedding requests should not fall back to a 512-token default."""
         mock_engine_pool._models.append(
             {"id": "test-embed-model", "loaded": True, "pinned": False, "size": 500000}
         )
