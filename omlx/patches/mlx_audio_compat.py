@@ -3,8 +3,13 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
+import threading
 from functools import wraps
+from typing import NoReturn
+
+from omlx.exceptions import UnsupportedKokoroLanguageError
 
 from transformers import AutoTokenizer
 
@@ -16,6 +21,48 @@ except ImportError:  # mlx-audio is optional.
 logger = logging.getLogger(__name__)
 
 _RESAMPLE_EXPORT_CHECKED = False
+_KOKORO_G2P_LOCK = threading.Lock()
+
+
+class _EnglishOnlyEspeakBridge:
+    def EspeakFallback(self, british: bool = False) -> None:  # noqa: N802
+        return None
+
+    def EspeakG2P(self, language: str) -> NoReturn:  # noqa: N802
+        raise UnsupportedKokoroLanguageError(language)
+
+
+_ENGLISH_ONLY_ESPEAK_BRIDGE = _EnglishOnlyEspeakBridge()
+
+
+def _get_english_only_espeak_bridge() -> _EnglishOnlyEspeakBridge:
+    return _ENGLISH_ONLY_ESPEAK_BRIDGE
+
+
+def ensure_english_kokoro_g2p() -> bool:
+    """Keep English Kokoro on Misaki's built-in G2P without loading eSpeak."""
+    with _KOKORO_G2P_LOCK:
+        try:
+            pipeline = importlib.import_module(
+                "mlx_audio.tts.models.kokoro.pipeline"
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Unable to install the English-only Kokoro G2P compatibility "
+                "bridge for the pinned mlx-audio pipeline"
+            ) from exc
+
+        original = getattr(pipeline, "_get_misaki_espeak", None)
+        if original is _get_english_only_espeak_bridge:
+            return True
+        if not callable(original):
+            raise RuntimeError(
+                "The installed mlx-audio Kokoro pipeline no longer exposes "
+                "_get_misaki_espeak"
+            )
+
+        pipeline._get_misaki_espeak = _get_english_only_espeak_bridge
+        return True
 
 
 def ensure_qwen3_asr_audio_quantization() -> bool:
