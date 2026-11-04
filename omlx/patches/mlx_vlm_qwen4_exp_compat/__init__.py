@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,15 @@ def apply_mlx_vlm_qwen4_exp_compat_patch() -> bool:
 
         _append_package_path(mlx_vlm, _VENDOR_MLX_VLM)
         _append_package_path(mlx_vlm.models, _VENDOR_MLX_VLM / "models")
+        module_prefix = "mlx_vlm.models.qwen4_exp"
+        for module_name in tuple(sys.modules):
+            if module_name == module_prefix or module_name.startswith(
+                f"{module_prefix}."
+            ):
+                del sys.modules[module_name]
+        if hasattr(mlx_vlm.models, "qwen4_exp"):
+            delattr(mlx_vlm.models, "qwen4_exp")
+        importlib.invalidate_caches()
         importlib.import_module("mlx_vlm.models.qwen4_exp")
         from mlx_vlm.models.qwen3_5 import language as qwen35_language
 
@@ -108,16 +118,24 @@ def _patch_prompt_utils() -> None:
 
 
 def _ple_prefetch_hook(model):
-    hook = getattr(model, "prefetch_ple", None)
-    if hook is None:
-        hook = getattr(getattr(model, "language_model", None), "prefetch_ple", None)
-    return hook
+    language_model = getattr(model, "_language_model", None)
+    if language_model is None:
+        language_model = getattr(model, "language_model", None)
+    if language_model is not None:
+        return getattr(language_model, "prefetch_ple", None)
+    return getattr(model, "prefetch_ple", None)
+
+
+_BASE_PROMPT_LOOP = None
 
 
 def _prompt_with_ple_lookahead(self, tokens):
     """mlx_lm's PromptProcessingBatch.prompt, telling the model the next chunk before each one."""
     from mlx_lm.generate import _right_pad_prompts
 
+    hook = _ple_prefetch_hook(self.model)
+    if hook is None:
+        return _BASE_PROMPT_LOOP(self, tokens)
     if len(self.uids) != len(tokens):
         raise ValueError("The batch length doesn't match the number of inputs")
     if not tokens:
@@ -134,7 +152,6 @@ def _prompt_with_ple_lookahead(self, tokens):
             c.prepare(lengths=lengths, right_padding=padding)
     else:
         tokens = mx.array(tokens)
-    hook = _ple_prefetch_hook(self.model)
     while tokens.shape[1] > 0:
         n_to_process = min(self.prefill_step_size, tokens.shape[1])
         if hook is not None and tokens.shape[1] > n_to_process:
@@ -152,12 +169,16 @@ def _prompt_with_ple_lookahead(self, tokens):
 
 def _patch_prompt_loop() -> None:
     """Install the lookahead loop as the base of the scheduler's prompt wrapper, or as prompt() itself."""
+    global _BASE_PROMPT_LOOP
+
     from mlx_lm.generate import PromptProcessingBatch
 
     _prompt_with_ple_lookahead._omlx_ple_lookahead = True
     if hasattr(PromptProcessingBatch, "_omlx_base_prompt"):
+        _BASE_PROMPT_LOOP = PromptProcessingBatch._omlx_base_prompt
         PromptProcessingBatch._omlx_base_prompt = _prompt_with_ple_lookahead
     elif not getattr(PromptProcessingBatch.prompt, "_omlx_ple_lookahead", False):
+        _BASE_PROMPT_LOOP = PromptProcessingBatch.prompt
         PromptProcessingBatch.prompt = _prompt_with_ple_lookahead
 
 
