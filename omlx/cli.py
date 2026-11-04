@@ -476,14 +476,30 @@ def launch_command(args, extra_args: list[str] | None = None):
     extra_args are unknown CLI tokens forwarded to the underlying tool binary
     (e.g. ``-r`` / ``--resume <id>`` for Claude Code).
     """
+    from urllib.parse import quote
+
     import requests
 
     from .integrations import IntegrationContext, get_integration, list_integrations
-    from .integrations.base import bracket_host
+    from .integrations.base import IntegrationModel, bracket_host
+    from .integrations.codex import is_codex_chat_model
+    from .model_classification import TEXT_ONLY_CHAT_MODEL_TYPES
     from .settings import GlobalSettings
 
     def _optional_str(value) -> str | None:
         return value if isinstance(value, str) and value else None
+
+    def _is_chat_model(info: dict) -> bool:
+        return info.get("model_type") in (None, "llm", "vlm") and info.get(
+            "engine_type"
+        ) not in (
+            "image",
+            "embedding",
+            "reranker",
+            "audio_stt",
+            "audio_tts",
+            "audio_sts",
+        )
 
     tool_name = args.tool
 
@@ -567,6 +583,13 @@ def launch_command(args, extra_args: list[str] | None = None):
         resp = requests.get(f"{base_url}/v1/models/status", headers=headers, timeout=5)
         if resp.ok:
             for m in resp.json().get("models", []):
+                # Older servers report loader type as multimodal capability.
+                if (
+                    m.get("model_type") == "vlm"
+                    and (m.get("config_model_type") or "").lower().replace("-", "_")
+                    in TEXT_ONLY_CHAT_MODEL_TYPES
+                ):
+                    m = {**m, "model_type": "llm"}
                 if m_id := m.get("id"):
                     models_status_map[m_id] = m
                 if model_alias := m.get("model_alias"):
@@ -574,10 +597,8 @@ def launch_command(args, extra_args: list[str] | None = None):
     except Exception:
         pass
 
-    # Determine model. Explicit CLI tier flags bypass the picker; otherwise always
-    # prompt interactively so the user's selection is honoured. Integrations
-    # that resolve models server-side (requires_model_selection=False) skip
-    # this block.
+    # These integrations use their native selector with a launch-time catalog.
+    native_model_picker = tool_name in ("codex", "codex_app", "copilot", "opencode")
     model = args.model
     if not model and not integration.requires_model_selection:
         # The integration registers the server's whole model catalog, so
@@ -588,34 +609,112 @@ def launch_command(args, extra_args: list[str] | None = None):
             _optional_str(getattr(settings.integrations, f"{setting_tool}_model", None))
             or ""
         )
-    if not model and (cli_opus_model or cli_sonnet_model or cli_haiku_model):
-        model = cli_sonnet_model or cli_opus_model or cli_haiku_model or ""
-    elif not model and integration.requires_model_selection:
-        # Fetch available models from server
+    models_info_list = []
+    model_inventory = {}
+    models_discovery_succeeded = False
+    if native_model_picker or (
+        integration.requires_model_selection
+        and not model
+        and not (cli_opus_model or cli_sonnet_model or cli_haiku_model)
+    ):
         try:
             resp = requests.get(f"{base_url}/v1/models", headers=headers, timeout=5)
             resp.raise_for_status()
-            data = resp.json()
-            models = [
-                m["id"]
-                for m in data.get("data", [])
-                if m.get("model_type") in ("llm", "vlm", None)
-            ]
-        except Exception:
-            models = []
+            entries = resp.json()["data"]
+            if not isinstance(entries, list):
+                raise ValueError("model listing is not a list")
+            for entry in entries:
+                model_id = entry["id"]
+                if not isinstance(model_id, str) or not model_id:
+                    raise ValueError("invalid model id")
+                info = {**entry, **models_status_map.get(model_id, {}), "id": model_id}
+                model_inventory[model_id] = info
+                if (is_codex_chat_model if native_model_picker else _is_chat_model)(
+                    info
+                ):
+                    models_info_list.append(info)
+            models_discovery_succeeded = True
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            if native_model_picker and (model or tool_name == "opencode"):
+                print(f"Warning: could not list oMLX models: {exc}")
+                if tool_name != "opencode":
+                    print(
+                        f"Only the requested model will be available in "
+                        f"{integration.display_name}."
+                    )
+            models_info_list = []
+            model_inventory = {}
 
-        if not models:
-            print("No models available. Load a model first.")
+    if tool_name == "opencode" and not model and not models_discovery_succeeded:
+        model = _optional_str(
+            getattr(settings.integrations, "opencode_model", None)
+        ) or default_model
+
+    if native_model_picker:
+        if not is_codex_chat_model(
+            {**model_inventory.get(model, {}), **models_status_map.get(model, {})}
+        ):
+            print(
+                f"Cannot launch {integration.display_name} with non-chat model '{model}'."
+            )
             sys.exit(1)
-
-        if len(models) == 1:
-            model = models[0]
+        if tool_name == "opencode" and model:
+            alias = _optional_str(models_status_map.get(model, {}).get("model_alias"))
+            if alias and (
+                not models_discovery_succeeded
+                or any(info["id"] == alias for info in models_info_list)
+            ):
+                model = alias
+        if not model and models_info_list:
+            settings_name = (
+                "codex_model" if tool_name == "codex_app" else f"{tool_name}_model"
+            )
+            saved_model = _optional_str(
+                getattr(settings.integrations, settings_name, None)
+            )
+            available_ids = {info["id"] for info in models_info_list}
+            saved_alias = (
+                _optional_str(
+                    models_status_map.get(saved_model or "", {}).get("model_alias")
+                )
+                if tool_name == "opencode"
+                else None
+            )
+            default_alias = _optional_str(
+                models_status_map.get(default_model or "", {}).get("model_alias")
+            )
+            model = next(
+                (
+                    candidate
+                    for candidate in (
+                        saved_model,
+                        saved_alias,
+                        default_alias,
+                        default_model,
+                    )
+                    if candidate is not None and candidate in available_ids
+                ),
+                models_info_list[0]["id"],
+            )
+            print(
+                f"Using model: {model} "
+                f"(switch models inside {integration.display_name})"
+            )
+    elif not model and (cli_opus_model or cli_sonnet_model or cli_haiku_model):
+        model = cli_sonnet_model or cli_opus_model or cli_haiku_model or ""
+    elif not model and models_info_list:
+        if len(models_info_list) == 1:
+            model = models_info_list[0]["id"]
             print(f"Using model: {model}")
         else:
-            models_info_list = [
-                {"id": m_id, **models_status_map.get(m_id, {})} for m_id in models
-            ]
             model = integration.select_model(models_info_list, integration.display_name)
+
+    if not model and integration.requires_model_selection:
+        if tool_name == "opencode" and not models_discovery_succeeded:
+            print("No model selected; OpenCode will use its existing configuration.")
+        else:
+            print("No models available. Load a model first.")
+            sys.exit(1)
 
     # Check if tool is installed
     if not integration.is_installed():
@@ -635,7 +734,10 @@ def launch_command(args, extra_args: list[str] | None = None):
     # disabled models, but this central check prevents --model and tier flags
     # from bypassing the same restriction.
     if tool_name == "claude":
-        from .integrations.claude import claude_code_model_disabled_reason
+        from .integrations.claude import (
+            CLAUDE_CODE_MIN_CONTEXT_WINDOW,
+            claude_code_model_disabled_reason,
+        )
 
         models_to_validate = [
             ("", model),
@@ -668,7 +770,7 @@ def launch_command(args, extra_args: list[str] | None = None):
     context_window = model_info.get("max_context_window")
     if tool_name == "claude":
         # Claude's context overrides are process-wide, including tier switches
-        # and subagents. Do not advertise more than any configured model allows.
+        # and discovered models. Do not advertise more than any model allows.
         context_windows = [
             info["max_context_window"]
             for model_id in (model, opus_model, sonnet_model, haiku_model)
@@ -676,6 +778,25 @@ def launch_command(args, extra_args: list[str] | None = None):
             and isinstance(info.get("max_context_window"), int)
             and info["max_context_window"] > 0
         ]
+        from .api.claude_gateway import CLAUDE_GATEWAY_PATH
+
+        try:
+            resp = requests.get(
+                f"{base_url}{CLAUDE_GATEWAY_PATH}/v1/models",
+                headers=headers,
+                timeout=5,
+            )
+            resp.raise_for_status()
+            context_windows.extend(
+                entry["max_model_len"]
+                for entry in resp.json().get("data", [])
+                if isinstance(entry.get("max_model_len"), int)
+                and entry["max_model_len"] > 0
+            )
+        except (requests.RequestException, ValueError) as exc:
+            print(f"Warning: could not read Claude discovery context limits: {exc}")
+            print("Using the 48K discovery minimum as a conservative context limit.")
+            context_windows.append(CLAUDE_CODE_MIN_CONTEXT_WINDOW)
         context_window = min(context_windows) if context_windows else None
     ctx = IntegrationContext(
         host=connect_host,
@@ -691,10 +812,52 @@ def launch_command(args, extra_args: list[str] | None = None):
         model_type=model_info.get("model_type"),
         reasoning=model_info.get("enable_thinking"),
         models_status_map=models_status_map,
+        models_discovery_succeeded=models_discovery_succeeded,
+        reasoning_effort_options=tuple(model_info.get("reasoning_effort_options") or ()),
+        reasoning_effort_default=model_info.get("reasoning_effort_default"),
         tools_profile=getattr(args, "tools_profile", "coding"),
         extra_args=tuple(extra_args or ()),
         cross_session=getattr(args, "cross_session", False),
+        models=(
+            tuple(
+                IntegrationModel(
+                    id=info["id"],
+                    context_window=info.get("max_context_window")
+                    or info.get("max_model_len"),
+                    model_type=info.get("model_type"),
+                    reasoning=info.get("enable_thinking"),
+                    reasoning_effort_options=tuple(
+                        info.get("reasoning_effort_options") or ()
+                    ),
+                    reasoning_effort_default=info.get("reasoning_effort_default"),
+                )
+                for info in models_info_list
+            )
+            if native_model_picker
+            else ()
+        ),
     )
+
+    # Only warm a model the user explicitly requested; an auto-selected
+    # default may never be used once the user switches models in the client.
+    if (
+        native_model_picker
+        and args.model
+        and not (model_info.get("loaded") or model_info.get("is_loading"))
+    ):
+        load_model_id = model_info.get("source_model_id") or model_info.get("id") or model
+        try:
+            resp = requests.post(
+                f"{base_url}/v1/models/{quote(load_model_id, safe='')}/load",
+                headers=headers,
+                params={"wait": "false"},
+                timeout=3,
+            )
+            resp.raise_for_status()
+            print(f"Warming up model: {model} (loading in background)")
+        except requests.RequestException as exc:
+            print(f"Warning: could not warm up model '{model}': {exc}")
+            print("Launching anyway; oMLX will load the model on demand.")
 
     # Launch
     if model:
