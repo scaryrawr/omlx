@@ -2591,8 +2591,16 @@ class TestSearchModels:
         assert item["params"] is None
 
     @pytest.mark.asyncio
-    async def test_search_most_params_sort(self):
-        """Test most_params sorting works correctly."""
+    @pytest.mark.parametrize(
+        ("sort", "expected_order"),
+        [
+            pytest.param("most_params", ["org/large", "org/small"], id="most-params"),
+            pytest.param("least_params", ["org/small", "org/large"], id="least-params"),
+            pytest.param("largest", ["org/large", "org/small"], id="largest"),
+            pytest.param("smallest", ["org/small", "org/large"], id="smallest"),
+        ],
+    )
+    async def test_search_size_and_parameter_sorting(self, sort, expected_order):
         small = _make_mock_model("org/small", disk_size_bytes=2_000_000_000, downloads=100)
         large = _make_mock_model("org/large", disk_size_bytes=20_000_000_000, downloads=100)
 
@@ -2601,32 +2609,9 @@ class TestSearchModels:
             mock_api.list_models.return_value = [small, large]
             mock_api_cls.return_value = mock_api
 
-            result = await HFDownloader.search_models(
-                query="model", sort="most_params"
-            )
+            result = await HFDownloader.search_models(query="model", sort=sort)
 
-        # Large should come first
-        assert result["models"][0]["repo_id"] == "org/large"
-        assert result["models"][1]["repo_id"] == "org/small"
-
-    @pytest.mark.asyncio
-    async def test_search_least_params_sort(self):
-        """Test least_params sorting works correctly."""
-        small = _make_mock_model("org/small", disk_size_bytes=2_000_000_000, downloads=100)
-        large = _make_mock_model("org/large", disk_size_bytes=20_000_000_000, downloads=100)
-
-        with patch("omlx.admin.hf_downloader.HfApi") as mock_api_cls:
-            mock_api = MagicMock()
-            mock_api.list_models.return_value = [small, large]
-            mock_api_cls.return_value = mock_api
-
-            result = await HFDownloader.search_models(
-                query="model", sort="least_params"
-            )
-
-        # Small should come first
-        assert result["models"][0]["repo_id"] == "org/small"
-        assert result["models"][1]["repo_id"] == "org/large"
+        assert [model["repo_id"] for model in result["models"]] == expected_order
 
     @pytest.mark.asyncio
     async def test_search_respects_limit(self):
@@ -2646,44 +2631,6 @@ class TestSearchModels:
             result = await HFDownloader.search_models(query="model", limit=5)
 
         assert len(result["models"]) == 5
-
-    @pytest.mark.asyncio
-    async def test_search_largest_sort(self):
-        """Test largest sorting works correctly."""
-        small = _make_mock_model("org/small", disk_size_bytes=2_000_000_000, downloads=100)
-        large = _make_mock_model("org/large", disk_size_bytes=20_000_000_000, downloads=100)
-
-        with patch("omlx.admin.hf_downloader.HfApi") as mock_api_cls:
-            mock_api = MagicMock()
-            mock_api.list_models.return_value = [small, large]
-            mock_api_cls.return_value = mock_api
-
-            result = await HFDownloader.search_models(
-                query="model", sort="largest"
-            )
-
-        # Large should come first
-        assert result["models"][0]["repo_id"] == "org/large"
-        assert result["models"][1]["repo_id"] == "org/small"
-
-    @pytest.mark.asyncio
-    async def test_search_smallest_sort(self):
-        """Test smallest sorting works correctly."""
-        small = _make_mock_model("org/small", disk_size_bytes=2_000_000_000, downloads=100)
-        large = _make_mock_model("org/large", disk_size_bytes=20_000_000_000, downloads=100)
-
-        with patch("omlx.admin.hf_downloader.HfApi") as mock_api_cls:
-            mock_api = MagicMock()
-            mock_api.list_models.return_value = [small, large]
-            mock_api_cls.return_value = mock_api
-
-            result = await HFDownloader.search_models(
-                query="model", sort="smallest"
-            )
-
-        # Small should come first
-        assert result["models"][0]["repo_id"] == "org/small"
-        assert result["models"][1]["repo_id"] == "org/large"
 
     @pytest.mark.asyncio
     async def test_search_sort_by_size(self):
