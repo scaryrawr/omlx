@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from omlx.utils.tokenizer import (
     apply_qwen3_fix,
     create_streaming_detokenizer,
@@ -369,106 +371,74 @@ class TestRepairMisconvertedUnlimitedOCRTokenizer:
 class TestIsHarmonyModel:
     """Test cases for is_harmony_model function."""
 
-    def test_harmony_model_via_config_model_type(self):
-        """Test detection via config.model_type == 'gpt_oss'."""
-        config = {"model_type": "gpt_oss"}
-        assert is_harmony_model("some-model", config) is True
-
-    def test_harmony_model_via_name_gpt_oss(self):
-        """Test detection via model name containing 'gpt-oss'."""
-        assert is_harmony_model("gpt-oss-1.0", None) is True
-        assert is_harmony_model("GPT-OSS-v2", None) is True
-        assert is_harmony_model("my-gpt-oss-model", None) is True
-
-    def test_harmony_model_via_name_gptoss(self):
-        """Test detection via model name containing 'gptoss'."""
-        assert is_harmony_model("gptoss", None) is True
-        assert is_harmony_model("GPTOSS-large", None) is True
-        assert is_harmony_model("my-gptoss", None) is True
-
-    def test_not_harmony_model(self):
-        """Test non-Harmony models return False."""
-        assert is_harmony_model("llama-3.1-8b", None) is False
-        assert is_harmony_model("qwen2.5-32b", None) is False
-        assert is_harmony_model("mistral-7b", None) is False
-
-    def test_not_harmony_with_different_model_type(self):
-        """Test non-Harmony model type returns False."""
-        config = {"model_type": "llama"}
-        assert is_harmony_model("some-model", config) is False
-
-    def test_harmony_model_empty_name(self):
-        """Test with empty model name."""
-        assert is_harmony_model("", None) is False
-
-    def test_harmony_model_none_config(self):
-        """Test with None config."""
-        assert is_harmony_model("gpt-oss", None) is True
-        assert is_harmony_model("llama", None) is False
-
-    def test_harmony_model_empty_config(self):
-        """Test with empty config dict."""
-        assert is_harmony_model("gpt-oss", {}) is True
-        assert is_harmony_model("llama", {}) is False
+    @pytest.mark.parametrize(
+        "name, config, expected",
+        [
+            ("some-model", {"model_type": "gpt_oss"}, True),
+            ("gpt-oss-1.0", None, True),
+            ("GPT-OSS-v2", None, True),
+            ("my-gpt-oss-model", None, True),
+            ("gptoss", None, True),
+            ("GPTOSS-large", None, True),
+            ("my-gptoss", None, True),
+            ("llama-3.1-8b", None, False),
+            ("qwen2.5-32b", None, False),
+            ("mistral-7b", None, False),
+            ("some-model", {"model_type": "llama"}, False),
+            pytest.param("", None, False, id="empty-name"),
+            ("gpt-oss", None, True),
+            ("llama", None, False),
+            ("gpt-oss", {}, True),
+            ("llama", {}, False),
+        ],
+    )
+    def test_detects_harmony_model(self, name, config, expected):
+        assert is_harmony_model(name, config) is expected
 
 
 class TestIsGemma4Model:
     """Test cases for is_gemma4_model function."""
 
-    def test_gemma4_model_via_config_model_type(self):
-        config = {"model_type": "gemma4"}
-        assert is_gemma4_model("some-model", config) is True
-
-    def test_gemma4_unified_model_via_config_model_type(self):
-        config = {"model_type": "gemma4_unified"}
-        assert is_gemma4_model("some-model", config) is True
-
-    def test_gemma4_model_via_name(self):
-        assert is_gemma4_model("google/gemma-4b", None) is True
-        assert is_gemma4_model("GEMMA-4-27B", None) is True
-        assert is_gemma4_model("my-gemma4-model", None) is True
-
-    def test_not_gemma4_model(self):
-        assert is_gemma4_model("gemma-3-27b", None) is False
-        assert is_gemma4_model("llama-3.1-8b", None) is False
-
-    def test_not_gemma4_with_different_model_type(self):
-        config = {"model_type": "gemma"}
-        assert is_gemma4_model("some-model", config) is False
+    @pytest.mark.parametrize(
+        "name, config, expected",
+        [
+            ("some-model", {"model_type": "gemma4"}, True),
+            ("some-model", {"model_type": "gemma4_unified"}, True),
+            ("google/gemma-4b", None, True),
+            ("GEMMA-4-27B", None, True),
+            ("my-gemma4-model", None, True),
+            ("gemma-3-27b", None, False),
+            ("llama-3.1-8b", None, False),
+            ("some-model", {"model_type": "gemma"}, False),
+        ],
+    )
+    def test_detects_gemma4_model(self, name, config, expected):
+        assert is_gemma4_model(name, config) is expected
 
 
 class TestIsQwen3Model:
     """Test cases for is_qwen3_model function."""
 
-    def test_qwen3_lowercase(self):
-        """Test detection with lowercase 'qwen3'."""
-        assert is_qwen3_model("qwen3-8b") is True
-        assert is_qwen3_model("my-qwen3-model") is True
-        assert is_qwen3_model("qwen3") is True
-
-    def test_qwen3_mixed_case(self):
-        """Test detection with mixed case 'Qwen3'."""
-        assert is_qwen3_model("Qwen3-8B") is True
-        assert is_qwen3_model("My-Qwen3-Model") is True
-        assert is_qwen3_model("Qwen3") is True
-
-    def test_not_qwen3(self):
-        """Test non-Qwen3 models return False."""
-        assert is_qwen3_model("qwen2.5-32b") is False
-        assert is_qwen3_model("Qwen2-7B") is False
-        assert is_qwen3_model("llama-3.1") is False
-        assert is_qwen3_model("qwen-7b") is False
-
-    def test_qwen3_empty_name(self):
-        """Test with empty model name."""
-        assert is_qwen3_model("") is False
-
-    def test_qwen3_partial_match(self):
-        """Test that partial matches don't trigger false positives."""
-        # 'qwen30' should NOT match as Qwen3
-        # However, current implementation will match it since 'qwen3' is in 'qwen30'
-        # This test documents the current behavior
-        assert is_qwen3_model("qwen30-model") is True  # Contains 'qwen3'
+    @pytest.mark.parametrize(
+        "name, expected",
+        [
+            ("qwen3-8b", True),
+            ("my-qwen3-model", True),
+            ("qwen3", True),
+            ("Qwen3-8B", True),
+            ("My-Qwen3-Model", True),
+            ("Qwen3", True),
+            ("qwen2.5-32b", False),
+            ("Qwen2-7B", False),
+            ("llama-3.1", False),
+            ("qwen-7b", False),
+            pytest.param("", False, id="empty-name"),
+            # Preserve the current substring-matching behavior.
+            ("qwen30-model", True),
+        ],
+    )
+    def test_detects_qwen3_model(self, name, expected):
+        assert is_qwen3_model(name) is expected
 
 
 class TestGetTokenizerConfig:

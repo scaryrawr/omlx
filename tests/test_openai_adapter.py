@@ -58,11 +58,11 @@ class TestInternalDataClasses:
         assert msg.tool_calls == tool_calls
         assert msg.tool_call_id == "call_456"
 
-    def test_internal_message_roles(self):
+    @pytest.mark.parametrize("role", ["user", "assistant", "system", "tool"])
+    def test_internal_message_roles(self, role):
         """Test InternalMessage with different roles."""
-        for role in ["user", "assistant", "system", "tool"]:
-            msg = InternalMessage(role=role, content=f"Content for {role}")
-            assert msg.role == role
+        msg = InternalMessage(role=role, content=f"Content for {role}")
+        assert msg.role == role
 
     # =========================================================================
     # InternalRequest Tests
@@ -272,76 +272,38 @@ class TestOpenAIAdapter:
         assert internal.messages[2].role == "assistant"
         assert internal.messages[3].role == "user"
 
-    def test_parse_request_with_temperature(self, adapter):
-        """Test parsing request with temperature."""
+    @pytest.mark.parametrize(
+        ("field", "request_fields", "expected"),
+        [
+            pytest.param("temperature", {"temperature": 0.5}, 0.5, id="temperature"),
+            pytest.param(
+                "temperature", {"temperature": 0.0}, 0.0, id="zero-temperature"
+            ),
+            pytest.param("temperature", {}, 1.0, id="default-temperature"),
+            pytest.param("top_p", {"top_p": 0.9}, 0.9, id="top-p"),
+            pytest.param("min_p", {"min_p": 0.1}, 0.1, id="min-p"),
+            pytest.param(
+                "presence_penalty",
+                {"presence_penalty": 0.5},
+                0.5,
+                id="presence-penalty",
+            ),
+            pytest.param("max_tokens", {"max_tokens": 500}, 500, id="max-tokens"),
+            pytest.param("max_tokens", {}, 2048, id="default-max-tokens"),
+        ],
+    )
+    def test_parse_request_sampling_parameters(
+        self, adapter, field, request_fields, expected
+    ):
         request = ChatCompletionRequest(
             model="test-model",
             messages=[Message(role="user", content="Hello")],
-            temperature=0.5,
+            **request_fields,
         )
 
         internal = adapter.parse_request(request)
 
-        assert internal.temperature == 0.5
-
-    def test_parse_request_with_zero_temperature(self, adapter):
-        """Test parsing request with zero temperature."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            temperature=0.0,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.temperature == 0.0
-
-    def test_parse_request_default_temperature(self, adapter):
-        """Test parsing request without temperature uses default."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.temperature == 1.0
-
-    def test_parse_request_with_top_p(self, adapter):
-        """Test parsing request with top_p."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            top_p=0.9,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.top_p == 0.9
-
-    def test_parse_request_with_min_p(self, adapter):
-        """Test parsing request with min_p."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            min_p=0.1,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.min_p == 0.1
-
-    def test_parse_request_with_presence_penalty(self, adapter):
-        """Test parsing request with presence_penalty."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            presence_penalty=0.5,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.presence_penalty == 0.5
+        assert getattr(internal, field) == expected
 
     def test_parse_request_default_min_p_and_presence_penalty(self, adapter):
         """Test default min_p and presence_penalty values."""
@@ -355,52 +317,17 @@ class TestOpenAIAdapter:
         assert internal.min_p == 0.0
         assert internal.presence_penalty == 0.0
 
-    def test_parse_request_with_max_tokens(self, adapter):
-        """Test parsing request with max_tokens."""
+    @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
+    def test_parse_request_stream(self, adapter, stream):
         request = ChatCompletionRequest(
             model="test-model",
             messages=[Message(role="user", content="Hello")],
-            max_tokens=500,
+            stream=stream,
         )
 
         internal = adapter.parse_request(request)
 
-        assert internal.max_tokens == 500
-
-    def test_parse_request_default_max_tokens(self, adapter):
-        """Test parsing request without max_tokens uses default."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.max_tokens == 2048
-
-    def test_parse_request_with_stream_true(self, adapter):
-        """Test parsing request with stream=True."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            stream=True,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.stream is True
-
-    def test_parse_request_with_stream_false(self, adapter):
-        """Test parsing request with stream=False."""
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[Message(role="user", content="Hello")],
-            stream=False,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.stream is False
+        assert internal.stream is stream
 
     def test_parse_request_with_stop_list(self, adapter):
         """Test parsing request with stop sequences as list."""

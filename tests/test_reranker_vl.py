@@ -22,22 +22,18 @@ IMAGE_DATA_URI = (
 
 
 class TestCoerceItemToText:
-    def test_str_passthrough(self):
-        assert _coerce_item_to_text("hello") == "hello"
-
-    def test_dict_text_extract(self):
-        assert _coerce_item_to_text({"text": "hi"}) == "hi"
-
-    def test_dict_image_only_returns_empty(self):
-        # Text-only paths should not crash when only image is present; they
-        # just get an empty string.
-        assert _coerce_item_to_text({"image": "https://x/y.jpg"}) == ""
-
-    def test_dict_text_and_image_takes_text(self):
-        assert _coerce_item_to_text({"text": "t", "image": "i"}) == "t"
-
-    def test_non_str_non_dict_stringifies(self):
-        assert _coerce_item_to_text(42) == "42"
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param("hello", "hello", id="string"),
+            pytest.param({"text": "hi"}, "hi", id="text-dict"),
+            pytest.param({"image": "https://x/y.jpg"}, "", id="image-only"),
+            pytest.param({"text": "t", "image": "i"}, "t", id="text-and-image"),
+            pytest.param(42, "42", id="non-string"),
+        ],
+    )
+    def test_coerce_item_to_text(self, item, expected):
+        assert _coerce_item_to_text(item) == expected
 
 
 class TestVLRerankerValidation:
@@ -73,25 +69,24 @@ class TestVLItemBuilder:
         model = MLXRerankerModel(str(tmp_path))
         assert model._build_vl_item({"text": "hi"}) == RerankItem(text="hi")
 
-    def test_dict_image_loads_via_load_image(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("item", "text"),
+        [
+            pytest.param({"image": IMAGE_DATA_URI}, None, id="image-only"),
+            pytest.param(
+                {"text": "t", "image": IMAGE_DATA_URI}, "t", id="text-and-image"
+            ),
+        ],
+    )
+    def test_dict_image_loads_via_load_image(self, tmp_path, item, text):
         model = MLXRerankerModel(str(tmp_path))
         fake_img = object()
         with patch(
             "omlx.models.reranker.load_image", return_value=fake_img
         ) as mock_load:
-            result = model._build_vl_item({"image": IMAGE_DATA_URI})
+            result = model._build_vl_item(item)
         mock_load.assert_called_once_with(IMAGE_DATA_URI, field="image")
-        assert result == RerankItem(image=fake_img)
-
-    def test_dict_text_and_image(self, tmp_path):
-        model = MLXRerankerModel(str(tmp_path))
-        fake_img = object()
-        with patch(
-            "omlx.models.reranker.load_image", return_value=fake_img
-        ) as mock_load:
-            result = model._build_vl_item({"text": "t", "image": IMAGE_DATA_URI})
-        mock_load.assert_called_once_with(IMAGE_DATA_URI, field="image")
-        assert result == RerankItem(text="t", image=fake_img)
+        assert result == RerankItem(text=text, image=fake_img)
 
     def test_dict_image_rejects_url(self, tmp_path):
         model = MLXRerankerModel(str(tmp_path))

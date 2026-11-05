@@ -225,207 +225,98 @@ class TestCLIEntryPoint:
 class TestServeCommandOptions:
     """Tests for serve command options via help output."""
 
-    def test_serve_has_model_dir_option(self):
-        """Test that serve command has --model-dir option."""
+    @pytest.fixture(scope="class")
+    def serve_help(self):
         result = subprocess.run(
             [sys.executable, "-m", "omlx.cli", "serve", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert "--model-dir" in result.stdout
+        assert result.returncode == 0, result.stderr
+        return result.stdout
 
-    def test_serve_has_no_max_memory_options(self):
-        """The --max-model-memory and --max-process-memory CLI flags are removed."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--max-model-memory" not in result.stdout
-        assert "--max-process-memory" not in result.stdout
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "--model-dir",
+            "--memory-guard",
+            "--memory-guard-gb",
+            "safe",
+            "balanced",
+            "aggressive",
+            "--host",
+            "--port",
+            "--max-concurrent-requests",
+            "--embedding-batch-size",
+            "--max-audio-upload-size",
+            "settings.json",
+            "--paged-ssd-cache-dir",
+            "--paged-ssd-cache-max-size",
+            "--no-cache",
+            "--mcp-config",
+            "--base-path",
+            "--api-key",
+        ],
+    )
+    def test_serve_help_includes(self, serve_help, text):
+        assert text in serve_help
 
-    def test_serve_has_memory_guard_options(self):
-        """Test that serve command exposes memory guard controls."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--memory-guard" in result.stdout
-        assert "--memory-guard-gb" in result.stdout
-        assert "safe" in result.stdout
-        assert "balanced" in result.stdout
-        assert "aggressive" in result.stdout
-
-    def test_serve_no_model_specific_options(self):
-        """Test that serve command does not have model-specific options (managed via admin page)."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        # These options are now managed via admin page, not CLI
-        assert "--pin" not in result.stdout
-        assert "--default-model" not in result.stdout
-        assert "--max-tokens" not in result.stdout
-        assert "--temperature" not in result.stdout
-        assert "--top-p" not in result.stdout
-        assert "--top-k" not in result.stdout
-        assert "--force-sampling" not in result.stdout
-
-    def test_serve_has_host_port_options(self):
-        """Test that serve command has --host and --port options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--host" in result.stdout
-        assert "--port" in result.stdout
-
-    def test_serve_has_scheduler_options(self):
-        """Test that serve command has scheduler options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--max-concurrent-requests" in result.stdout
-        assert "--embedding-batch-size" in result.stdout
-        assert "--max-audio-upload-size" in result.stdout
-        assert "settings.json" in result.stdout
-        assert "Default: 100MB" not in result.stdout
-
-    def test_serve_has_cache_options(self):
-        """Test that serve command has cache options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--paged-ssd-cache-dir" in result.stdout
-        assert "--paged-ssd-cache-max-size" in result.stdout
-        assert "--no-cache" in result.stdout
-
-    def test_serve_has_mcp_option(self):
-        """Test that serve command has --mcp-config option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--mcp-config" in result.stdout
-
-    def test_serve_has_base_path_option(self):
-        """Test that serve command has --base-path option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--base-path" in result.stdout
-
-    def test_serve_has_api_key_option(self):
-        """Test that serve command has --api-key option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--api-key" in result.stdout
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "--max-model-memory",
+            "--max-process-memory",
+            "--pin",
+            "--default-model",
+            "--max-tokens",
+            "--temperature",
+            "--top-p",
+            "--top-k",
+            "--force-sampling",
+            "Default: 100MB",
+        ],
+    )
+    def test_serve_help_excludes(self, serve_help, text):
+        assert text not in serve_help
 
 
 class TestLaunchCommandOptions:
     """Tests for launch command options via help output."""
 
-    def test_launch_has_host_port_options(self):
-        """Test that launch command has --host and --port options."""
+    @pytest.fixture(scope="class")
+    def launch_help(self):
         result = subprocess.run(
             [sys.executable, "-m", "omlx.cli", "launch", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert result.returncode == 0
-        assert "--host" in result.stdout
-        assert "--port" in result.stdout
+        assert result.returncode == 0, result.stderr
+        return result.stdout
 
-    def test_launch_has_model_option(self):
-        """Test that launch command has --model option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--model" in result.stdout
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "--host",
+            "--port",
+            "--model",
+            "--opus",
+            "--sonnet",
+            "--haiku",
+            "--cross-session",
+            "hermes",
+            "Hermes Agent",
+            "codex_app",
+            "dsh",
+        ],
+    )
+    def test_launch_help_includes(self, launch_help, text):
+        assert text in launch_help
 
-    def test_launch_has_claude_tier_options(self):
-        """Claude tier options should remain accepted for copied app commands."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--opus" in result.stdout
-        assert "--sonnet" in result.stdout
-        assert "--haiku" in result.stdout
-
-    def test_launch_has_cross_session_option(self):
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "--cross-session" in result.stdout
-
-    def test_launch_lists_hermes(self):
-        """Test that launch help lists Hermes as an available integration."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "hermes" in result.stdout
-        assert "Hermes Agent" in result.stdout
-
-    def test_launch_lists_codex_app(self):
-        """Test that launch help lists the Codex Desktop App target."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "codex_app" in result.stdout
-        assert "Codex App" in " ".join(result.stdout.split())
-
-    def test_launch_lists_dsh(self):
-        """Test that launch help lists the DeepSeek Harness target."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0
-        assert "dsh" in result.stdout
-        assert "DeepSeek Harness" in " ".join(result.stdout.split())
+    @pytest.mark.parametrize("text", ["Codex App", "DeepSeek Harness"])
+    def test_launch_help_includes_wrapped_description(self, launch_help, text):
+        assert text in " ".join(launch_help.split())
 
 
 class TestLaunchCommandFunction:

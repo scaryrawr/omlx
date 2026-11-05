@@ -8,6 +8,8 @@ just pin the code-extraction branches.
 
 from __future__ import annotations
 
+import pytest
+
 from omlx.eval.mbpp import _extract_code
 
 
@@ -54,19 +56,16 @@ def area(r):
 
 # ready
 ```"""
-        result = _extract_code(response)
-        assert "import math" in result
-        assert "def area(r):" in result
-        assert "return math.pi * r ** 2" in result
+        assert _extract_code(response) == (
+            "import math\n\ndef area(r):\n    return math.pi * r ** 2\n\n# ready"
+        )
 
     def test_fence_strips_surrounding_whitespace(self):
         """The .strip() inside the regex branch must remove leading/
         trailing whitespace inside the fence — the subprocess executor
         wants clean source."""
         response = "```python\n\n   def f():\n       return 1\n\n```"
-        result = _extract_code(response)
-        assert not result.startswith("\n")
-        assert not result.endswith("\n")
+        assert _extract_code(response) == "def f():\n       return 1"
 
 
 class TestHeuristicLineScan:
@@ -134,23 +133,19 @@ print(f())"""
 
 
 class TestFallback:
-    def test_response_with_no_code_markers_returned_as_is(self):
-        """When nothing matches, return the stripped response verbatim.
-        This is a degraded but non-crashing fallback — the subprocess
-        will surface the syntax error to the grader."""
-        response = "  I don't know how to solve this.  "
-        assert _extract_code(response) == "I don't know how to solve this."
-
-    def test_empty_response_returns_empty_string(self):
-        assert _extract_code("") == ""
-
-    def test_whitespace_only_response_returns_empty(self):
-        assert _extract_code("   \n\n  \t  ") == ""
-
-    def test_lone_print_statement_falls_through(self):
-        """A bare ``print(...)`` line doesn't start with def/class/
-        import/from/# so the heuristic doesn't fire — falls back to
-        returning the whole response. Documents the limitation."""
-        response = "print('hello')"
-        # Falls through to the whole-response fallback
-        assert _extract_code(response) == "print('hello')"
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [
+            pytest.param(
+                "  I don't know how to solve this.  ",
+                "I don't know how to solve this.",
+                id="no-code-markers",
+            ),
+            pytest.param("", "", id="empty"),
+            pytest.param("   \n\n  \t  ", "", id="whitespace-only"),
+            pytest.param("print('hello')", "print('hello')", id="bare-print"),
+        ],
+    )
+    def test_returns_stripped_response(self, response, expected):
+        """A bare print is not a code-start marker, so it uses the fallback."""
+        assert _extract_code(response) == expected
