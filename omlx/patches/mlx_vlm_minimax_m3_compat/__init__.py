@@ -13,6 +13,7 @@ import contextlib
 import importlib
 import inspect
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,26 @@ def _append_package_path(package: Any, path: Path) -> None:
 
 
 def _import_vendor_modules() -> None:
+    for package_name in (
+        "mlx_vlm.models.minimax_m3",
+        "mlx_vlm.models.minimax_m3_vl",
+        "mlx_vlm.tools.parsers.minimax_m3",
+    ):
+        package = sys.modules.get(package_name)
+        if package is None or Path(package.__file__).resolve().is_relative_to(
+            _VENDOR_MLX_VLM
+        ):
+            continue
+        # Discovery can import upstream before the vendor search path is installed.
+        for name in tuple(sys.modules):
+            if name == package_name or name.startswith(f"{package_name}."):
+                del sys.modules[name]
+        parent_name, name = package_name.rsplit(".", 1)
+        parent = sys.modules[parent_name]
+        if hasattr(parent, name):
+            delattr(parent, name)
+    importlib.invalidate_caches()
+
     # Importing the processor module installs mlx-vlm's AutoProcessor hook for
     # minimax_m3_vl via install_auto_processor_patch().
     for module_name in (
