@@ -425,64 +425,42 @@ def test_cluster_discovery_never_implies_trust(monkeypatch):
     assert response.json()["trusted"] is False
 
 
-def test_cluster_worker_smoke_route(monkeypatch):
-    monkeypatch.setattr(
-        routes,
-        "run_worker_smoke",
-        lambda **_: {
-            "ok": True,
-            "protocol_version": 1,
-            "worker_pid": 42,
-        },
-    )
+@pytest.mark.parametrize(
+    ("endpoint", "runner", "timeout", "payload"),
+    [
+        pytest.param(
+            "worker-smoke",
+            "run_worker_smoke",
+            1.0,
+            {"ok": True, "protocol_version": 1, "worker_pid": 42},
+            id="worker",
+        ),
+        pytest.param(
+            "collective-smoke",
+            "run_local_collective_smoke",
+            2.0,
+            {"ok": True, "backend": "ring", "rank_count": 2},
+            id="collective",
+        ),
+        pytest.param(
+            "pipeline-smoke",
+            "run_local_pipeline_smoke",
+            4.0,
+            {"ok": True, "model_type": "nemotron_h", "rank_count": 2},
+            id="pipeline",
+        ),
+    ],
+)
+def test_cluster_smoke_route(monkeypatch, endpoint, runner, timeout, payload):
+    monkeypatch.setattr(routes, runner, lambda **_: payload)
 
     response = _client().post(
-        "/admin/api/cluster/worker-smoke",
-        params={"timeout": 1.0},
+        f"/admin/api/cluster/{endpoint}",
+        params={"timeout": timeout},
     )
 
     assert response.status_code == 200
-    assert response.json()["worker_pid"] == 42
-
-
-def test_cluster_collective_smoke_route(monkeypatch):
-    monkeypatch.setattr(
-        routes,
-        "run_local_collective_smoke",
-        lambda **_: {
-            "ok": True,
-            "backend": "ring",
-            "rank_count": 2,
-        },
-    )
-
-    response = _client().post(
-        "/admin/api/cluster/collective-smoke",
-        params={"timeout": 2.0},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["rank_count"] == 2
-
-
-def test_cluster_pipeline_smoke_route(monkeypatch):
-    monkeypatch.setattr(
-        routes,
-        "run_local_pipeline_smoke",
-        lambda **_: {
-            "ok": True,
-            "model_type": "nemotron_h",
-            "rank_count": 2,
-        },
-    )
-
-    response = _client().post(
-        "/admin/api/cluster/pipeline-smoke",
-        params={"timeout": 4.0},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["model_type"] == "nemotron_h"
+    assert response.json() == payload
 
 
 def test_cluster_peer_probe_route(monkeypatch):

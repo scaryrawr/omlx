@@ -978,53 +978,33 @@ class TestImageSizeAndDownscaling:
         with pytest.raises(InvalidRequestError, match="exceeds the maximum allowed limit"):
             load_image(uri)
 
-    def test_downscales_oversized_width_preserving_aspect(self, monkeypatch):
-        """Wide image exceeding max side length is downscaled preserving aspect ratio."""
+    @pytest.mark.parametrize(
+        ("size", "color", "max_side", "expected_size"),
+        [
+            pytest.param(
+                (2048, 1024), "red", 1024, (1024, 512), id="wide-preserves-aspect"
+            ),
+            pytest.param(
+                (1024, 2048), "green", 1024, (512, 1024), id="tall-preserves-aspect"
+            ),
+            pytest.param(
+                (800, 600), "yellow", 2048, (800, 600), id="within-limit"
+            ),
+            pytest.param(
+                (3000, 1500), "purple", 0, (3000, 1500), id="downscaling-disabled"
+            ),
+        ],
+    )
+    def test_image_side_limit(self, monkeypatch, size, color, max_side, expected_size):
         from omlx.utils import image as module
 
-        monkeypatch.setattr(module, "get_max_image_side_length", lambda: 1024)
-        img = _make_test_image(2048, 1024, "red")
+        monkeypatch.setattr(module, "get_max_image_side_length", lambda: max_side)
+        img = _make_test_image(*size, color)
         b64 = _image_to_base64(img)
         uri = f"data:image/png;base64,{b64}"
 
         loaded = load_image(uri)
-        assert loaded.size == (1024, 512)
-
-    def test_downscales_oversized_height_preserving_aspect(self, monkeypatch):
-        """Tall image exceeding max side length is downscaled preserving aspect ratio."""
-        from omlx.utils import image as module
-
-        monkeypatch.setattr(module, "get_max_image_side_length", lambda: 1024)
-        img = _make_test_image(1024, 2048, "green")
-        b64 = _image_to_base64(img)
-        uri = f"data:image/png;base64,{b64}"
-
-        loaded = load_image(uri)
-        assert loaded.size == (512, 1024)
-
-    def test_preserves_dimensions_within_limit(self, monkeypatch):
-        """Images within limits are not resized."""
-        from omlx.utils import image as module
-
-        monkeypatch.setattr(module, "get_max_image_side_length", lambda: 2048)
-        img = _make_test_image(800, 600, "yellow")
-        b64 = _image_to_base64(img)
-        uri = f"data:image/png;base64,{b64}"
-
-        loaded = load_image(uri)
-        assert loaded.size == (800, 600)
-
-    def test_downscaling_disabled_when_side_limit_zero(self, monkeypatch):
-        """Setting max side length to 0 disables downscaling."""
-        from omlx.utils import image as module
-
-        monkeypatch.setattr(module, "get_max_image_side_length", lambda: 0)
-        img = _make_test_image(3000, 1500, "purple")
-        b64 = _image_to_base64(img)
-        uri = f"data:image/png;base64,{b64}"
-
-        loaded = load_image(uri)
-        assert loaded.size == (3000, 1500)
+        assert loaded.size == expected_size
 
     def test_decompression_bomb_raises_invalid_request_error(self, monkeypatch):
         """Decompression bombs detected by Pillow raise InvalidRequestError."""

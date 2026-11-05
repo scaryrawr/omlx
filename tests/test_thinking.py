@@ -5,44 +5,60 @@ import pytest
 
 from omlx.api.thinking import ThinkingParser, extract_thinking
 
+
 class TestExtractThinking:
     """Tests for non-streaming extract_thinking()."""
 
-    def test_basic_separation(self):
-        """Standard <think>reasoning</think>answer case."""
-        thinking, content = extract_thinking("<think>reasoning</think>Answer")
-        assert thinking == "reasoning"
-        assert content == "Answer"
-
-    def test_minimax_m3_tag_separation(self):
-        """MiniMax M3 <mm:think> tags are treated as thinking tags."""
-        thinking, content = extract_thinking("<mm:think>reasoning</mm:think>Answer")
-        assert thinking == "reasoning"
-        assert content == "Answer"
-
-    def test_no_thinking(self):
-        """No think tags in text."""
-        thinking, content = extract_thinking("Just a normal answer")
-        assert thinking == ""
-        assert content == "Just a normal answer"
-
-    def test_empty_text(self):
-        """Empty input."""
-        thinking, content = extract_thinking("")
-        assert thinking == ""
-        assert content == ""
-
-    def test_empty_think_block(self):
-        """Empty <think></think> block."""
-        thinking, content = extract_thinking("<think></think>Answer")
-        assert thinking == ""
-        assert content == "Answer"
-
-    def test_think_only(self):
-        """Only thinking content, no answer."""
-        thinking, content = extract_thinking("<think>reasoning</think>")
-        assert thinking == "reasoning"
-        assert content == ""
+    @pytest.mark.parametrize(
+        "text, expected_thinking, expected_content",
+        [
+            pytest.param(
+                "<think>reasoning</think>Answer",
+                "reasoning",
+                "Answer",
+                id="basic-separation",
+            ),
+            pytest.param(
+                "<mm:think>reasoning</mm:think>Answer",
+                "reasoning",
+                "Answer",
+                id="minimax-m3-tags",
+            ),
+            pytest.param(
+                "Just a normal answer", "", "Just a normal answer", id="no-thinking"
+            ),
+            pytest.param("", "", "", id="empty-text"),
+            pytest.param("<think></think>Answer", "", "Answer", id="empty-think-block"),
+            pytest.param(
+                "<think>reasoning</think>", "reasoning", "", id="thinking-only"
+            ),
+            pytest.param(
+                "reasoning content</think>Answer",
+                "reasoning content",
+                "Answer",
+                id="scheduler-preopened-tag",
+            ),
+            pytest.param(
+                "thought process</think>visible answer",
+                "thought process",
+                "visible answer",
+                id="close-tag-only-partial-tail",
+            ),
+            # Issue #1348: short, tag-free tool-turn answers must remain visible.
+            pytest.param(
+                "just the reasoning",
+                "",
+                "just the reasoning",
+                id="tag-free-reasoning-is-content",
+            ),
+        ],
+    )
+    def test_extracts_thinking_and_content(
+        self, text, expected_thinking, expected_content
+    ):
+        thinking, content = extract_thinking(text)
+        assert thinking == expected_thinking
+        assert content == expected_content
 
     def test_multiline_thinking(self):
         """Thinking with newlines."""
@@ -57,16 +73,9 @@ class TestExtractThinking:
         """Model opened ``<think>`` but never closed it — non-streaming
         path treats the body as content (matching the streaming
         recovery in ThinkingParser.finish())."""
-        from omlx.api.thinking import extract_thinking
         thinking, content = extract_thinking("<think>\nthe whole answer body")
         assert thinking == ""
         assert content == "the whole answer body"
-
-    def test_partial_no_open_tag(self):
-        """Content before </think> without <think> tag (scheduler prefix case)."""
-        thinking, content = extract_thinking("reasoning content</think>Answer")
-        assert thinking == "reasoning content"
-        assert content == "Answer"
 
     def test_multiple_think_blocks(self):
         """Multiple think blocks should all be extracted."""
@@ -93,26 +102,6 @@ class TestExtractThinking:
         )
         assert "Let me reason..." in thinking
         assert "Final answer." in content
-
-    def test_tag_free_text_always_classified_as_content(self):
-        """Tag-free text is content, never thinking. Regression guard for
-        issue #1348: in 0.3.9 the Responses API passed
-        ``start_in_thinking=True`` here, which misclassified short tool-turn
-        answers (no ``</think>``) as thinking and left ``output_text`` empty.
-        Mirrors ``ThinkingParser.finish()`` recovery semantics."""
-        thinking, content = extract_thinking("just the reasoning")
-        assert thinking == ""
-        assert content == "just the reasoning"
-
-    def test_close_tag_only_partial_tail_branch(self):
-        """Prompt pre-opened ``<think>``; model emits ``body</think>answer``
-        (no opening tag in output). Partial-tail branch splits correctly."""
-        thinking, content = extract_thinking(
-            "thought process</think>visible answer"
-        )
-        assert thinking == "thought process"
-        assert content == "visible answer"
-
 
 class TestThinkingParser:
     """Tests for streaming ThinkingParser."""
@@ -234,9 +223,9 @@ class TestThinkingParser:
         """Angle brackets inside thinking that are not tags."""
         parser = ThinkingParser()
 
-        t1, c1 = parser.feed("<think>if x > 0 then y < 10")
-        # The > and < characters should pass through since they don't form valid tags
-        assert "x > 0" in t1 or "x > 0" in (t1 + parser._buffer)
+        thinking, content = parser.feed("<think>if x > 0 then y < 10</think>answer")
+        assert thinking == "if x > 0 then y < 10"
+        assert content == "answer"
 
     def test_recovery_when_no_close_tag_streams_as_content(self):
         """Model opened ``<think>`` but never emitted ``</think>``.
@@ -391,7 +380,7 @@ class TestCleanSpecialTokens:
     def test_preserves_think_tags(self):
         from omlx.api.utils import clean_special_tokens
         result = clean_special_tokens("<think>reasoning</think>Answer")
-        assert "<think>reasoning</think>Answer" == result
+        assert result == "<think>reasoning</think>Answer"
 
     def test_removes_special_tokens(self):
         from omlx.api.utils import clean_special_tokens
@@ -408,7 +397,7 @@ class TestCleanSpecialTokens:
         result = clean_special_tokens(
             "<|im_start|><think>reasoning</think>Answer<|im_end|>"
         )
-        assert "<think>reasoning</think>Answer" == result
+        assert result == "<think>reasoning</think>Answer"
 
 
 class TestCleanOutputTextBackwardCompat:
