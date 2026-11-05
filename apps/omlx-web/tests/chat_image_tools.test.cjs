@@ -15,7 +15,8 @@ global.localStorage = {
 };
 global.window = { innerWidth: 1200, t: key => key, matchMedia: () => ({ matches: false }) };
 global.document = { getElementById: () => null };
-global.marked = { use() {} };
+const markdownOptions = [];
+global.marked = { use: options => markdownOptions.push(options) };
 const images = vm.runInThisContext(
     fs.readFileSync(path.join(web, 'static/js/chat-image-tools.js'), 'utf8') + '\nChatImageTools;'
 );
@@ -57,6 +58,18 @@ function appFixture(messages = [structuredClone(upload)]) {
     ]) app[name] = () => {};
     return app;
 }
+
+test('Markdown image references render as escaped text instead of broken URLs', () => {
+    const ref = images.reference('owner', 'result', 'tool', 0);
+    const renderer = markdownOptions[0].renderer;
+    for (const kind of ['image', 'link']) {
+        assert.equal(renderer[kind](ref), `<code>${ref}</code>`);
+        assert.equal(renderer[kind]('image:<img src=x onerror=alert(1)>&'), '<code>image:&lt;img src=x onerror=alert(1)&gt;&amp;</code>');
+        assert.equal(renderer[kind]('https://example.com/image.png'), false);
+        assert.equal(renderer[kind]('/admin/static/image.png'), false);
+        assert.equal(renderer[kind]('data:image/png;base64,c291cmNl'), false);
+    }
+});
 
 test('discovery uses canonical IDs first, deduplicates aliases and never guesses tasks', async () => {
     const requests = [];

@@ -2809,7 +2809,11 @@
     // Configure marked.js
     marked.use({
         breaks: true,
-        gfm: true
+        gfm: true,
+        renderer: {
+            image: ChatImageTools.renderReference,
+            link: ChatImageTools.renderReference,
+        },
     });
 
     if (typeof markedHighlight !== 'undefined') {

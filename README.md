@@ -652,6 +652,8 @@ and ask for an edit. Text-only chat models can use these tools without
 receiving image bytes. Vision models retain their normal image inputs.
 Generated images appear inline with download and reuse controls. Reuse
 inserts an explicit image reference into the composer for a later edit.
+These references are identifiers, not URLs; references in assistant Markdown
+render as text, while the tool result contains the image preview.
 Images remain in the open conversation only. Saved and exported histories
 strip image bytes, so their references cannot be edited after reload.
 Image inference has a ten-minute browser deadline. Stop prevents later

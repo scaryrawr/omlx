@@ -57,6 +57,12 @@ const ChatImageTools = (() => {
         return `image:${encodeURIComponent(chatId)}:${encodeURIComponent(messageId)}:${kind}:${slot}`;
     }
 
+    function renderReference(href) {
+        if (!href.startsWith('image:')) return false;
+        const escaped = href.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<code>${escaped}</code>`;
+    }
+
     function sources(chatId, messages) {
         const found = new Map();
         for (const msg of messages) {
@@ -224,5 +230,5 @@ const ChatImageTools = (() => {
         return entry.execute(args, scope);
     }
 
-    return { owns, definitions, reference, sources, project, execute, discover };
+    return { owns, definitions, reference, renderReference, sources, project, execute, discover };
 })();
