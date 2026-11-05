@@ -183,23 +183,19 @@ class TestValidateConfigGlobalOptions:
         cfg = validate_config({"max_tool_calls": 5})
         assert cfg.max_tool_calls == 5
 
-    def test_max_tool_calls_zero_rejected(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="zero"),
+            pytest.param(-1, id="negative"),
+            pytest.param(3.5, id="non-integer"),
+        ],
+    )
+    def test_invalid_max_tool_calls_rejected(self, value):
         with pytest.raises(
             ValueError, match="'max_tool_calls' must be a positive integer"
         ):
-            validate_config({"max_tool_calls": 0})
-
-    def test_max_tool_calls_negative_rejected(self):
-        with pytest.raises(
-            ValueError, match="'max_tool_calls' must be a positive integer"
-        ):
-            validate_config({"max_tool_calls": -1})
-
-    def test_max_tool_calls_non_int_rejected(self):
-        with pytest.raises(
-            ValueError, match="'max_tool_calls' must be a positive integer"
-        ):
-            validate_config({"max_tool_calls": 3.5})
+            validate_config({"max_tool_calls": value})
 
     def test_max_tool_calls_bool_rejected_in_practice(self):
         """``isinstance(True, int)`` is True in Python, so True passes
@@ -208,31 +204,27 @@ class TestValidateConfigGlobalOptions:
         cfg = validate_config({"max_tool_calls": True})
         assert cfg.max_tool_calls is True  # currently accepted; weird but expected
 
-    def test_custom_default_timeout_int(self):
-        cfg = validate_config({"default_timeout": 60})
-        assert cfg.default_timeout == 60
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(60, id="integer"), pytest.param(45.5, id="float")],
+    )
+    def test_custom_default_timeout(self, value):
+        cfg = validate_config({"default_timeout": value})
+        assert cfg.default_timeout == value
 
-    def test_custom_default_timeout_float(self):
-        cfg = validate_config({"default_timeout": 45.5})
-        assert cfg.default_timeout == 45.5
-
-    def test_default_timeout_zero_rejected(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="zero"),
+            pytest.param(-1.0, id="negative"),
+            pytest.param("30s", id="string"),
+        ],
+    )
+    def test_invalid_default_timeout_rejected(self, value):
         with pytest.raises(
             ValueError, match="'default_timeout' must be a positive number"
         ):
-            validate_config({"default_timeout": 0})
-
-    def test_default_timeout_negative_rejected(self):
-        with pytest.raises(
-            ValueError, match="'default_timeout' must be a positive number"
-        ):
-            validate_config({"default_timeout": -1.0})
-
-    def test_default_timeout_string_rejected(self):
-        with pytest.raises(
-            ValueError, match="'default_timeout' must be a positive number"
-        ):
-            validate_config({"default_timeout": "30s"})
+            validate_config({"default_timeout": value})
 
 
 # =============================================================================
