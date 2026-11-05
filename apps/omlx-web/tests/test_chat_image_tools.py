@@ -35,9 +35,3 @@ def test_image_tools_replace_imagine_navigation_and_locales():
         assert translations["chat.image_reuse"]
         assert not any(key.startswith("imagine.") for key in translations)
         assert "navbar.tab.imagine" not in translations
-
-
-def test_hidden_chat_cards_accept_uploaded_images_and_non_web_tool_messages():
-    source = (WEB_ROOT / "templates" / "chat.html").read_text()
-    assert "renderMarkdown(msg.content)" not in source
-    assert "msg._web.query" not in source

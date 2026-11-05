@@ -16,7 +16,11 @@ global.localStorage = {
 global.window = { innerWidth: 1200, t: key => key, matchMedia: () => ({ matches: false }) };
 global.document = { getElementById: () => null };
 const markdownOptions = [];
-global.marked = { use: options => markdownOptions.push(options) };
+global.marked = {
+    use: options => markdownOptions.push(options),
+    parse: text => `<p>${text}</p>`,
+};
+global.DOMPurify = { sanitize: html => html };
 const images = vm.runInThisContext(
     fs.readFileSync(path.join(web, 'static/js/chat-image-tools.js'), 'utf8') + '\nChatImageTools;'
 );
@@ -35,9 +39,15 @@ const call = (name, args, id = name) => ({
     id, type: 'function', function: { name, arguments: JSON.stringify(args) },
 });
 const json = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
-const sse = calls => new Response(`data: ${JSON.stringify({
-    choices: [{ delta: calls ? { tool_calls: calls.map((tc, index) => ({ ...tc, index })) } : { content: 'Done' }, finish_reason: calls ? 'tool_calls' : 'stop' }],
-})}\n\ndata: [DONE]\n\n`);
+function sse(calls) {
+    const delta = calls
+        ? { tool_calls: calls.map((tc, index) => ({ ...tc, index })) }
+        : { content: 'Done' };
+    const data = {
+        choices: [{ delta, finish_reason: calls ? 'tool_calls' : 'stop' }],
+    };
+    return new Response(`data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`);
+}
 
 function appFixture(messages = [structuredClone(upload)]) {
     const app = chatApp();
@@ -68,6 +78,29 @@ test('Markdown image references render as escaped text instead of broken URLs', 
         assert.equal(renderer[kind]('https://example.com/image.png'), false);
         assert.equal(renderer[kind]('/admin/static/image.png'), false);
         assert.equal(renderer[kind]('data:image/png;base64,c291cmNl'), false);
+    }
+});
+
+test('hidden card bindings render image uploads and non-web tool results without throwing', () => {
+    const app = appFixture();
+    const bindings = [...template.matchAll(/x-html="(renderMarkdown\([^"]+\))"/g)]
+        .map(match => match[1])
+        .filter(expression => expression.includes('msg.'));
+    const webQuery = template.match(/x-show="msg\._web\?\.query"[\s\S]*?x-text="([^"]+)"/)[1];
+    assert.ok(bindings.length > 0);
+
+    for (const msg of [upload, { role: 'tool', content: 'Tool result' }]) {
+        const scope = {
+            msg,
+            renderMarkdown: app.renderMarkdown.bind(app),
+            getTextContent: app.getTextContent.bind(app),
+        };
+        for (const expression of bindings) {
+            const html = vm.runInNewContext(expression, scope);
+            assert.equal(html, expression.includes('msg.content')
+                ? `<p>${app.getTextContent(msg.content)}</p>` : '');
+        }
+        assert.equal(vm.runInNewContext(webQuery, scope), '“”');
     }
 });
 
@@ -371,7 +404,7 @@ test('regenerated streamed tool chains use their own image results, not the excl
     assert.ok(!app.getApiTurnMessages(messages).some(msg => msg.id === 'old-image'));
 });
 
-test('MCP images are reusable edit sources and image drop, paste and select work for text models', async () => {
+test('image drop, paste and select work for text models but not audio-only models', () => {
     const app = appFixture();
     const files = [];
     app.loadImageFile = file => files.push(file);
@@ -389,7 +422,10 @@ test('MCP images are reusable edit sources and image drop, paste and select work
     app.handlePaste({ clipboardData: { items: [{ type: 'image/png', getAsFile: () => image }] } });
     app.handleDrop({ dataTransfer: { files: [image] } });
     assert.equal(files.length, 3);
+});
 
+test('MCP image results can be edited and reused in the composer', async () => {
+    const app = appFixture();
     const split = app.splitToolContent([{ type: 'image', mimeType: 'image/png', data: 'c291cmNl' }]);
     const mcpMessage = { id: 'mcp-source', role: 'tool', content: split.content, _images: split.images };
     global.fetch = async (url, init) => {
@@ -404,6 +440,9 @@ test('MCP images are reusable edit sources and image drop, paste and select work
     app.currentChatId = 'owner';
     app.reuseToolImage(mcpMessage, 0);
     assert.equal(app.inputMessage, images.reference('owner', 'mcp-source', 'tool', 0));
+    app.inputMessage = 'Please edit';
+    app.reuseToolImage(mcpMessage, 0);
+    assert.equal(app.inputMessage, `Please edit ${images.reference('owner', 'mcp-source', 'tool', 0)}`);
 });
 
 test('tool sources use the branch sent to the model even if a different variant is selected while streaming', async () => {
@@ -437,86 +476,82 @@ test('tool sources use the branch sent to the model even if a different variant 
     assert.ok(messages.at(-2)._images?.length);
 });
 
-test('deadlines cover body consumption, clean up timers and retain web/MCP behavior', async () => {
+test('deadlines cover body consumption, clean up timers and retain web/MCP behavior', async t => {
     const app = appFixture();
     assert.equal(app.IMAGE_TOOL_TIMEOUT_MS, 600000);
     assert.equal(app.TOOL_TIMEOUT_MS, 30000);
     const scope = controllerScope();
-    const nativeSetTimeout = global.setTimeout;
-    const nativeClearTimeout = global.clearTimeout;
-    const durations = [];
-    const cleared = [];
     const timers = [];
-    global.setTimeout = (fn, ms) => { durations.push(ms); timers.push(fn); return timers.length; };
-    global.clearTimeout = id => cleared.push(id);
-    try {
-        global.fetch = async () => ({
-            ok: true,
-            json: async () => { timers.at(-1)(); return { data: [{ b64_json: 'eA==' }] }; },
-        });
-        const timeout = await app.executeChatTool(call('generate_image', { model: 'm', prompt: 'p' }), scope);
-        assert.equal(timeout.error, true);
-        assert.match(timeout.content, /timed out after 600s/);
-        global.fetch = async (url, init) => {
-            assert.equal(url, '/v1/mcp/execute');
-            assert.deepEqual(JSON.parse(init.body), { tool_name: 'mcp-image', arguments: { a: 1 } });
-            return json({ content: [{ type: 'image', mimeType: 'image/png', data: 'eA==' }, { type: 'text', text: 'MCP text' }] });
-        };
-        const mcp = await app.executeChatTool(call('mcp-image', { a: 1 }), scope);
-        assert.deepEqual(mcp.images, ['data:image/png;base64,eA==']);
-        assert.ok(!mcp.content.includes('eA=='));
-        app.chatSettings.webSearchEnabled = true;
-        global.fetch = async (url, init) => {
-            assert.equal(url, '/v1/web/search');
-            assert.deepEqual(JSON.parse(init.body), { query: 'hello' });
-            return json({ ok: true, results: [{ title: 'Result', url: 'https://example.com' }] });
-        };
-        const web = await app.executeChatTool(call('web_search', { query: 'hello' }), scope);
-        assert.equal(web.web.ok, true);
-        assert.equal(web.web.results[0].title, 'Result');
-        global.fetch = async url => json(url === '/v1/models' ? { data: [] } : { models: [] });
-        const discovery = await app.executeChatTool(call('list_image_models', {}), scope);
-        assert.deepEqual(JSON.parse(discovery.content), { models: [] });
-        assert.deepEqual(durations, [600000, 30000, 30000, 30000]);
-        assert.deepEqual(cleared, [1, 2, 3, 4]);
-    } finally {
-        global.setTimeout = nativeSetTimeout;
-        global.clearTimeout = nativeClearTimeout;
-    }
+    const scheduled = t.mock.method(global, 'setTimeout', fn => timers.push(fn));
+    const cleared = t.mock.method(global, 'clearTimeout', () => {});
+
+    global.fetch = async () => ({
+        ok: true,
+        json: async () => {
+            timers.at(-1)();
+            return { data: [{ b64_json: 'eA==' }] };
+        },
+    });
+    const timeout = await app.executeChatTool(call('generate_image', { model: 'm', prompt: 'p' }), scope);
+    assert.equal(timeout.error, true);
+    assert.match(timeout.content, /timed out after 600s/);
+
+    global.fetch = async (url, init) => {
+        assert.equal(url, '/v1/mcp/execute');
+        assert.deepEqual(JSON.parse(init.body), { tool_name: 'mcp-image', arguments: { a: 1 } });
+        return json({ content: [{ type: 'image', mimeType: 'image/png', data: 'eA==' }, { type: 'text', text: 'MCP text' }] });
+    };
+    const mcp = await app.executeChatTool(call('mcp-image', { a: 1 }), scope);
+    assert.deepEqual(mcp.images, ['data:image/png;base64,eA==']);
+    assert.ok(!mcp.content.includes('eA=='));
+
+    app.chatSettings.webSearchEnabled = true;
+    global.fetch = async (url, init) => {
+        assert.equal(url, '/v1/web/search');
+        assert.deepEqual(JSON.parse(init.body), { query: 'hello' });
+        return json({ ok: true, results: [{ title: 'Result', url: 'https://example.com' }] });
+    };
+    const web = await app.executeChatTool(call('web_search', { query: 'hello' }), scope);
+    assert.equal(web.web.ok, true);
+    assert.equal(web.web.results[0].title, 'Result');
+
+    global.fetch = async url => json(url === '/v1/models' ? { data: [] } : { models: [] });
+    const discovery = await app.executeChatTool(call('list_image_models', {}), scope);
+    assert.deepEqual(JSON.parse(discovery.content), { models: [] });
+    assert.deepEqual(scheduled.mock.calls.map(call => call.arguments[1]), [600000, 30000, 30000, 30000]);
+    assert.deepEqual(cleared.mock.calls.map(call => call.arguments[0]), [1, 2, 3, 4]);
 });
 
-test('fallback abort composition disposes listeners after response body consumption', async () => {
+test('fallback abort composition disposes listeners after response body consumption', async t => {
     const app = appFixture();
     const scope = controllerScope();
     const nativeAny = AbortSignal.any;
-    const nativeAdd = scope.signal.addEventListener.bind(scope.signal);
-    const nativeRemove = scope.signal.removeEventListener.bind(scope.signal);
-    let added = 0;
-    let removed = 0;
-    scope.signal.addEventListener = (...args) => { added++; nativeAdd(...args); };
-    scope.signal.removeEventListener = (...args) => { removed++; nativeRemove(...args); };
+    const added = t.mock.method(scope.signal, 'addEventListener');
+    const removed = t.mock.method(scope.signal, 'removeEventListener');
     AbortSignal.any = undefined;
-    try {
-        global.fetch = async () => ({
-            ok: true,
-            json: async () => {
-                assert.equal(added, 1);
-                assert.equal(removed, 0);
-                return { data: [{ b64_json: 'eA==' }] };
-            },
-        });
-        const result = await app.executeChatTool(call('generate_image', { model: 'm', prompt: 'p' }), scope);
-        assert.equal(result.error, false);
-        assert.equal(removed, 1);
-    } finally {
-        AbortSignal.any = nativeAny;
-    }
+    t.after(() => { AbortSignal.any = nativeAny; });
+
+    global.fetch = async () => ({
+        ok: true,
+        json: async () => {
+            assert.equal(added.mock.callCount(), 1);
+            assert.equal(removed.mock.callCount(), 0);
+            return { data: [{ b64_json: 'eA==' }] };
+        },
+    });
+    const result = await app.executeChatTool(call('generate_image', { model: 'm', prompt: 'p' }), scope);
+    assert.equal(result.error, false);
+    assert.equal(removed.mock.callCount(), 1);
 });
 
 test('malformed reserved tools never fall through to MCP and API errors retain their source', async () => {
     const app = appFixture();
     let requests = 0;
-    global.fetch = async url => { requests++; assert.equal(url, '/v1/images/generations'); return new Response('{"detail":"Model lacks generation"}', { status: 400 }); };
+    global.fetch = async url => {
+        requests++;
+        assert.equal(url, '/v1/images/generations');
+        return new Response('{"detail":"Model lacks generation"}', { status: 400 });
+    };
     const scope = controllerScope();
     const invalid = call('edit_image', {});
     invalid.function.arguments = '{bad';

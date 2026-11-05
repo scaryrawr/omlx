@@ -75,11 +75,9 @@ const ChatImageTools = (() => {
                 });
             }
             if (msg.role === 'tool') {
-                (msg._images || []).forEach((url, slot) => {
-                    found.set(reference(chatId, msg.id, 'tool', slot), url);
-                });
-                for (let slot = 0; !msg._images?.length && slot < (msg._imagesStripped || 0); slot++) {
-                    found.set(reference(chatId, msg.id, 'tool', slot), '');
+                const count = msg._images?.length || msg._imagesStripped || 0;
+                for (let slot = 0; slot < count; slot++) {
+                    found.set(reference(chatId, msg.id, 'tool', slot), msg._images?.[slot] ?? '');
                 }
             }
         }
@@ -151,7 +149,12 @@ const ChatImageTools = (() => {
                 for (const [key, value] of Object.entries(metadata)) {
                     if (key.startsWith('default_')) defaults[key] = value;
                 }
-                entry = { id: model.id, aliases: [], tasks: [...new Set((Array.isArray(tasks) ? tasks : []).filter(task => task === 'generation' || task === 'edit'))], defaults };
+                entry = {
+                    id: model.id,
+                    aliases: [],
+                    tasks: [...new Set((Array.isArray(tasks) ? tasks : []).filter(task => task === 'generation' || task === 'edit'))],
+                    defaults,
+                };
                 result.set(model.id, entry);
             }
             if (publicModel.id !== model.id && !entry.aliases.includes(publicModel.id)) entry.aliases.push(publicModel.id);
@@ -218,11 +221,17 @@ const ChatImageTools = (() => {
         for (const [key, value] of Object.entries(args)) {
             if (!Object.hasOwn(entry.properties, key)) throw new Error(`Unsupported image option ${key}`);
             const rule = entry.properties[key];
-            const valid = rule.type === 'array'
-                ? Array.isArray(value) && value.length > 0 && value.every(ref => typeof ref === 'string' && ref.startsWith('image:'))
-                : rule.type === 'integer' ? Number.isInteger(value)
-                : rule.type === 'number' ? typeof value === 'number' && Number.isFinite(value)
-                : typeof value === 'string' && (!rule.minLength || value.trim().length >= rule.minLength);
+            let valid;
+            if (rule.type === 'array') {
+                valid = Array.isArray(value) && value.length > 0
+                    && value.every(ref => typeof ref === 'string' && ref.startsWith('image:'));
+            } else if (rule.type === 'integer') {
+                valid = Number.isInteger(value);
+            } else if (rule.type === 'number') {
+                valid = typeof value === 'number' && Number.isFinite(value);
+            } else {
+                valid = typeof value === 'string' && (!rule.minLength || value.trim().length >= rule.minLength);
+            }
             if (!valid || (rule.minimum !== undefined && value < rule.minimum)
                 || (rule.maximum !== undefined && value > rule.maximum)
                 || (rule.enum && !rule.enum.includes(value))) throw new Error(`Invalid image option ${key}`);

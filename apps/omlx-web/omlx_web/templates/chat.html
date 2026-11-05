@@ -4671,9 +4671,6 @@
         return null;
     },
 
-    // Tools advertised on the next request. With the toggle on, built-in
-    // web tools win name collisions against MCP tools so the model never
-    // sees duplicate definitions.
     activeTools() {
         const builtins = [
             ...ChatImageTools.definitions(),
@@ -4692,7 +4689,7 @@
 
     reuseToolImage(msg, slot) {
         const ref = this.imageReference(msg, slot);
-        this.inputMessage = `${this.inputMessage || ''}${this.inputMessage ? ' ' : ''}${ref}`;
+        this.inputMessage += `${this.inputMessage ? ' ' : ''}${ref}`;
         this.$refs.messageInput?.focus();
     },
 
