@@ -53,50 +53,25 @@ class TestRequestStreamState:
 class TestRequestStreamStateShouldSend:
     """Tests for RequestStreamState.should_send()."""
 
-    def test_should_send_on_finish(self):
-        """Test should_send returns True when finished."""
-        state = RequestStreamState(stream_interval=10)
-        state.sent_tokens = 5
+    @pytest.mark.parametrize(
+        ("interval", "sent", "total", "finished", "expected"),
+        [
+            pytest.param(10, 5, 6, True, True, id="finish-with-new-token"),
+            pytest.param(10, 5, 5, True, True, id="finish-without-new-token"),
+            pytest.param(10, 0, 1, False, True, id="first-token"),
+            pytest.param(5, 5, 6, False, False, id="below-interval"),
+            pytest.param(5, 5, 9, False, False, id="just-below-interval"),
+            pytest.param(5, 5, 10, False, True, id="at-interval"),
+            pytest.param(5, 5, 15, False, True, id="past-interval"),
+            pytest.param(1, 0, 1, False, True, id="interval-one-first-token"),
+            pytest.param(1, 1, 2, False, True, id="interval-one-second-token"),
+            pytest.param(1, 5, 6, False, True, id="interval-one-later-token"),
+        ],
+    )
+    def test_should_send(self, interval, sent, total, finished, expected):
+        state = RequestStreamState(stream_interval=interval, sent_tokens=sent)
 
-        # Should always send on finish regardless of token count
-        assert state.should_send(total_tokens=6, finished=True) is True
-        assert state.should_send(total_tokens=5, finished=True) is True
-
-    def test_should_send_first_token(self):
-        """Test should_send returns True for first token."""
-        state = RequestStreamState(stream_interval=10)
-
-        # First token (sent_tokens == 0) should always send
-        assert state.should_send(total_tokens=1, finished=False) is True
-
-    def test_should_send_interval_reached(self):
-        """Test should_send returns True when interval reached."""
-        state = RequestStreamState(stream_interval=5)
-        state.sent_tokens = 5
-
-        # Not enough tokens accumulated
-        assert state.should_send(total_tokens=6, finished=False) is False
-        assert state.should_send(total_tokens=9, finished=False) is False
-
-        # Exactly at interval
-        assert state.should_send(total_tokens=10, finished=False) is True
-
-        # Past interval
-        assert state.should_send(total_tokens=15, finished=False) is True
-
-    def test_should_send_interval_one(self):
-        """Test should_send with interval=1 (every token)."""
-        state = RequestStreamState(stream_interval=1)
-
-        # Should send every token
-        state.sent_tokens = 0
-        assert state.should_send(total_tokens=1, finished=False) is True
-
-        state.sent_tokens = 1
-        assert state.should_send(total_tokens=2, finished=False) is True
-
-        state.sent_tokens = 5
-        assert state.should_send(total_tokens=6, finished=False) is True
+        assert state.should_send(total_tokens=total, finished=finished) is expected
 
 
 class TestRequestStreamStateMarkSent:

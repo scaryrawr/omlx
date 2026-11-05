@@ -1,41 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for omlx.api.shared_models module."""
 
+import json
 import time
-import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from omlx.api.shared_models import (
+    BaseUsage,
     IDPrefix,
     generate_id,
     get_unix_timestamp,
-    BaseUsage,
 )
 
 
 class TestIDPrefix:
     """Test cases for IDPrefix enum."""
 
-    def test_chat_completion_prefix(self):
-        """Test CHAT_COMPLETION prefix value."""
-        assert IDPrefix.CHAT_COMPLETION.value == "chatcmpl"
-
-    def test_completion_prefix(self):
-        """Test COMPLETION prefix value."""
-        assert IDPrefix.COMPLETION.value == "cmpl"
-
-    def test_message_prefix(self):
-        """Test MESSAGE prefix value."""
-        assert IDPrefix.MESSAGE.value == "msg"
-
-    def test_embedding_prefix(self):
-        """Test EMBEDDING prefix value."""
-        assert IDPrefix.EMBEDDING.value == "emb"
-
-    def test_rerank_prefix(self):
-        """Test RERANK prefix value."""
-        assert IDPrefix.RERANK.value == "rerank"
+    @pytest.mark.parametrize(
+        "prefix, expected",
+        [
+            (IDPrefix.CHAT_COMPLETION, "chatcmpl"),
+            (IDPrefix.COMPLETION, "cmpl"),
+            (IDPrefix.MESSAGE, "msg"),
+            (IDPrefix.EMBEDDING, "emb"),
+            (IDPrefix.RERANK, "rerank"),
+        ],
+    )
+    def test_prefix_value(self, prefix, expected):
+        assert prefix.value == expected
 
     def test_all_prefixes_are_strings(self):
         """Test that all prefixes are strings."""
@@ -52,37 +46,20 @@ class TestIDPrefix:
 class TestGenerateId:
     """Test cases for generate_id function."""
 
-    def test_generate_chat_completion_id(self):
-        """Test generating chat completion ID."""
-        id_str = generate_id(IDPrefix.CHAT_COMPLETION)
-        assert id_str.startswith("chatcmpl-")
-        # Default length is 8
-        assert len(id_str) == len("chatcmpl-") + 8
-
-    def test_generate_completion_id(self):
-        """Test generating completion ID."""
-        id_str = generate_id(IDPrefix.COMPLETION)
-        assert id_str.startswith("cmpl-")
-        assert len(id_str) == len("cmpl-") + 8
-
-    def test_generate_message_id(self):
-        """Test generating message ID (Anthropic style)."""
-        id_str = generate_id(IDPrefix.MESSAGE)
-        # Anthropic style: msg_<24-char-hex>
-        assert id_str.startswith("msg_")
-        assert len(id_str) == len("msg_") + 24
-
-    def test_generate_embedding_id(self):
-        """Test generating embedding ID."""
-        id_str = generate_id(IDPrefix.EMBEDDING)
-        assert id_str.startswith("emb-")
-        assert len(id_str) == len("emb-") + 8
-
-    def test_generate_rerank_id(self):
-        """Test generating rerank ID."""
-        id_str = generate_id(IDPrefix.RERANK)
-        assert id_str.startswith("rerank-")
-        assert len(id_str) == len("rerank-") + 8
+    @pytest.mark.parametrize(
+        "prefix, expected_prefix, suffix_length",
+        [
+            (IDPrefix.CHAT_COMPLETION, "chatcmpl-", 8),
+            (IDPrefix.COMPLETION, "cmpl-", 8),
+            (IDPrefix.MESSAGE, "msg_", 24),
+            (IDPrefix.EMBEDDING, "emb-", 8),
+            (IDPrefix.RERANK, "rerank-", 8),
+        ],
+    )
+    def test_generate_default_id(self, prefix, expected_prefix, suffix_length):
+        id_str = generate_id(prefix)
+        assert id_str.startswith(expected_prefix)
+        assert len(id_str) == len(expected_prefix) + suffix_length
 
     def test_generate_id_custom_length(self):
         """Test generating ID with custom length."""
@@ -206,8 +183,10 @@ class TestBaseUsage:
             completion_tokens=50,
         )
         json_str = usage.model_dump_json()
-        assert "prompt_tokens" in json_str
-        assert "100" in json_str
+        data = json.loads(json_str)
+        assert data["prompt_tokens"] == 100
+        assert data["completion_tokens"] == 50
+        assert data["total_tokens"] == 150
 
     def test_pydantic_validation(self):
         """Test Pydantic validation."""
@@ -216,7 +195,7 @@ class TestBaseUsage:
         assert usage.prompt_tokens == 100
 
         # Invalid type should raise error
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             BaseUsage(prompt_tokens="not_a_number")
 
     def test_large_token_counts(self):

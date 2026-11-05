@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the enable_thinking toggle and detect_thinking_default heuristic."""
 
 import json
@@ -19,44 +20,45 @@ from omlx.model_settings import ModelSettings
 class TestDetectThinkingDefault:
     """Test chat template heuristic for thinking default detection."""
 
-    def test_qwen_pattern_returns_true(self, tmp_path):
-        """Qwen3 pattern: thinking is ON by default, only suppressed when
-        enable_thinking is explicitly false."""
-        template = (
-            "{%- if enable_thinking is false -%}\n"
-            "  ... suppress thinking ...\n"
-            "{%- endif -%}"
-        )
+    @pytest.mark.parametrize(
+        "template, expected",
+        [
+            pytest.param(
+                "{%- if enable_thinking is false -%}\n"
+                "  ... suppress thinking ...\n"
+                "{%- endif -%}",
+                True,
+                id="qwen-default-on",
+            ),
+            pytest.param(
+                "{%- set thinking = enable_thinking | default(false) -%}",
+                False,
+                id="gemma-default-off",
+            ),
+            pytest.param(
+                "{%- set enable_thinking = enable_thinking | default(true) -%}\n"
+                "{%- set preserve_thinking = preserve_thinking | default(false) -%}",
+                True,
+                id="explicit-default-on-with-other-default-off",
+            ),
+            pytest.param(
+                "{%- if default(enable_thinking) -%}think{%- endif -%}",
+                False,
+                id="parenthesized-enable-thinking",
+            ),
+            pytest.param(
+                "{{ messages[0].content }}", None, id="no-enable-thinking"
+            ),
+            pytest.param(
+                "{%- if enable_thinking == 'maybe' -%}hmm{%- endif -%}",
+                None,
+                id="unrecognized-pattern",
+            ),
+        ],
+    )
+    def test_template_default(self, tmp_path, template, expected):
         (tmp_path / "chat_template.jinja").write_text(template)
-        assert detect_thinking_default(tmp_path) is True
-
-    def test_gemma_default_false_pattern_returns_false(self, tmp_path):
-        """Gemma4 pattern: thinking is OFF by default, requires explicit enable."""
-        template = "{%- set thinking = enable_thinking | default(false) -%}"
-        (tmp_path / "chat_template.jinja").write_text(template)
-        assert detect_thinking_default(tmp_path) is False
-
-    def test_explicit_default_true_pattern_returns_true(self, tmp_path):
-        """Laguna S-2.1 pattern: enable_thinking | default(true) means ON even
-        when another flag in the same template defaults to false."""
-        template = (
-            "{%- set enable_thinking = enable_thinking | default(true) -%}\n"
-            "{%- set preserve_thinking = preserve_thinking | default(false) -%}"
-        )
-        (tmp_path / "chat_template.jinja").write_text(template)
-        assert detect_thinking_default(tmp_path) is True
-
-    def test_enable_thinking_paren_pattern_returns_false(self, tmp_path):
-        """Template that references enable_thinking) returns False."""
-        template = "{%- if default(enable_thinking) -%}think{%- endif -%}"
-        (tmp_path / "chat_template.jinja").write_text(template)
-        assert detect_thinking_default(tmp_path) is False
-
-    def test_no_enable_thinking_returns_none(self, tmp_path):
-        """Template without enable_thinking reference returns None."""
-        template = "{{ messages[0].content }}"
-        (tmp_path / "chat_template.jinja").write_text(template)
-        assert detect_thinking_default(tmp_path) is None
+        assert detect_thinking_default(tmp_path) is expected
 
     def test_no_template_files_returns_none(self, tmp_path):
         """Directory without any template file returns None."""
@@ -72,15 +74,10 @@ class TestDetectThinkingDefault:
 
         assert detect_thinking_default(tmp_path) is True
 
-    def test_laguna_without_thinking_template_returns_none(self, tmp_path):
-        """A Laguna config alone is not evidence that its template accepts the flag."""
-        (tmp_path / "config.json").write_text(json.dumps({"model_type": "laguna"}))
-
-        assert detect_thinking_default(tmp_path) is None
-
-    def test_non_laguna_config_without_thinking_template_returns_none(self, tmp_path):
-        """Reading config metadata must not enable thinking for other models."""
-        (tmp_path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    @pytest.mark.parametrize("model_type", ["laguna", "llama"])
+    def test_config_without_thinking_template_returns_none(self, tmp_path, model_type):
+        """Config metadata alone is not evidence that a template accepts the flag."""
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
 
         assert detect_thinking_default(tmp_path) is None
 
@@ -105,12 +102,6 @@ class TestDetectThinkingDefault:
     def test_tokenizer_config_without_chat_template_key(self, tmp_path):
         """tokenizer_config.json without chat_template key returns None."""
         (tmp_path / "tokenizer_config.json").write_text(json.dumps({"model_type": "llama"}))
-        assert detect_thinking_default(tmp_path) is None
-
-    def test_unrecognized_pattern_returns_none(self, tmp_path):
-        """Template with enable_thinking but no recognized pattern returns None."""
-        template = "{%- if enable_thinking == 'maybe' -%}hmm{%- endif -%}"
-        (tmp_path / "chat_template.jinja").write_text(template)
         assert detect_thinking_default(tmp_path) is None
 
     def test_malformed_tokenizer_config_returns_none(self, tmp_path):

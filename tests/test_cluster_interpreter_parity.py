@@ -209,38 +209,34 @@ def _preflight_runner(python_version: str | None):
     return runner
 
 
-def test_preflight_allows_a_different_python_minor_and_records_it(
-    monkeypatch, stub_admission
+@pytest.mark.parametrize(
+    ("local_version", "remote_version", "warning"),
+    [
+        pytest.param(
+            "3.11.9", "3.12.13",
+            "python minor differs: local=3.11.9 remote=3.12.13",
+            id="different-minor",
+        ),
+        pytest.param(
+            "3.12.13", "3.12.14",
+            "python patch differs: local=3.12.13 remote=3.12.14",
+            id="different-patch",
+        ),
+    ],
+)
+def test_preflight_allows_python_version_difference_and_records_it(
+    monkeypatch, stub_admission, local_version, remote_version, warning
 ):
-    monkeypatch.setattr(platform, "python_version", lambda: "3.11.9")
+    monkeypatch.setattr(platform, "python_version", lambda: local_version)
 
     results = preflight_remote_hosts(
         _deployment(),
         python_executable=PEER_PYTHON,
-        runner=_preflight_runner("3.12.13"),
+        runner=_preflight_runner(remote_version),
     )
 
     assert results[0]["runtime_warnings"] == []
-    assert results[1]["runtime_warnings"] == [
-        "python minor differs: local=3.11.9 remote=3.12.13"
-    ]
-
-
-def test_preflight_allows_a_patch_difference_and_records_it(
-    monkeypatch, stub_admission
-):
-    monkeypatch.setattr(platform, "python_version", lambda: "3.12.13")
-
-    results = preflight_remote_hosts(
-        _deployment(),
-        python_executable=PEER_PYTHON,
-        runner=_preflight_runner("3.12.14"),
-    )
-
-    assert results[0]["runtime_warnings"] == []
-    assert results[1]["runtime_warnings"] == [
-        "python patch differs: local=3.12.13 remote=3.12.14"
-    ]
+    assert results[1]["runtime_warnings"] == [warning]
 
 
 def test_preflight_refuses_a_rank_that_reports_no_interpreter(

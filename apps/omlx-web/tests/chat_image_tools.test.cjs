@@ -698,3 +698,195 @@ test('malformed reserved tools never fall through to MCP and API errors retain t
     assert.match(result.content, /\/v1\/images\/generations: Model lacks generation/);
     assert.equal(requests, 1);
 });
+
+for (const [label, content, urls, text] of [
+    ['multiple images', [
+        { type: 'image_url', image_url: { url: png } },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,bmV3' } },
+        { type: 'text', text: 'What are these?' },
+    ], [png, 'data:image/jpeg;base64,bmV3'], 'What are these?'],
+    ['text only', 'Hello', [], 'Hello'],
+    ['image only', [{ type: 'image_url', image_url: { url: png } }], [png], ''],
+    ['stripped image', [
+        { type: 'image_url', image_url: { url: '' } },
+        { type: 'text', text: 'Old text' },
+    ], [], 'Old text'],
+]) {
+    test(`editing ${label} preserves available images and replaces the text`, async () => {
+        const app = appFixture([{ id: 'original', role: 'user', content }]);
+        app.currentChatId = 'owner';
+        app.messages = app.chatSessions.owner.messages;
+        const streams = [];
+        app.streamResponse = async context => streams.push(context);
+
+        assert.deepEqual(app.getImageUrls(content), urls);
+        assert.equal(app.getTextContent(content), text);
+        const stored = app.messageForStorage(app.messages[0]);
+        assert.deepEqual(app.getImageUrls(stored.content), []);
+        assert.equal(app.getTextContent(stored.content), text);
+        assert.deepEqual(app.getImageUrls(content), urls);
+
+        app.startEdit(0);
+        assert.deepEqual(app.editImages, urls);
+        assert.equal(app.editContent, text);
+        app.editContent = '  New description  ';
+        await app.saveEdit(0);
+
+        const edited = app.messages[0];
+        assert.equal(edited.role, 'user');
+        assert.deepEqual(edited.content, urls.length ? [
+            ...urls.map(url => ({ type: 'image_url', image_url: { url } })),
+            { type: 'text', text: 'New description' },
+        ] : 'New description');
+        assert.equal(app.editingIndex, null);
+        assert.deepEqual(app.editImages, []);
+        assert.equal(streams.length, 1);
+        assert.equal(streams[0].chatId, 'owner');
+    });
+}
+
+for (const [value, expected] of [[null, 10], ['bad', 10], [0, 1], [150, 100], [25, 25]]) {
+    test(`tool round limit normalizes ${JSON.stringify(value)} to ${expected}`, () => {
+        assert.equal(appFixture().normalizeMaxToolRounds(value), expected);
+    });
+}
+
+for (const finalAnswer of [true, false]) {
+    test(`the last permitted tool round ${finalAnswer ? 'allows a final answer' : 'blocks another tool execution'}`, async () => {
+        const app = appFixture();
+        app.chatSettings.maxToolRounds = 1;
+        let completions = 0;
+        let executions = 0;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                completions++;
+                return completions === 1 || !finalAnswer
+                    ? sse([call('search', { query: 'hello' })]) : sse(null);
+            }
+            assert.equal(url, '/v1/mcp/execute');
+            executions++;
+            return json({ content: 'Search result' });
+        };
+        await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        assert.equal(completions, 2);
+        assert.equal(executions, 1);
+        const messages = app.chatSessions.owner.messages;
+        assert.equal(messages.at(-1).content, finalAnswer ? 'Done' : 'chat.error.max_tool_rounds');
+        const chain = app.getApiTurnMessages(messages);
+        assert.equal(chain.find(msg => msg.tool_calls)?._ui, false);
+        assert.equal(chain.find(msg => msg.role === 'tool').tool_call_id, 'search');
+        assert.equal(app.getStreamSession('owner').isStreaming, false);
+    });
+}
+
+test('streamed parallel tool calls assemble fragmented names and arguments before dispatch', async () => {
+    const app = appFixture();
+    const executed = [];
+    let completions = 0;
+    global.fetch = async (url, init) => {
+        if (url === '/v1/chat/completions') {
+            if (completions++) return sse(null);
+            const deltas = [
+                [{ id: 'first', function: { name: 'sea' } }],
+                [{ index: 1, id: 'second', function: { name: 'extract', arguments: '{"urls":' } }],
+                [{ index: 0, function: { name: 'rch', arguments: '{"q":' } }],
+                [{ index: 1, function: { arguments: '["https://example.com"]}' } }],
+                [{ index: 0, function: { arguments: '"hello"}' } }],
+            ];
+            return new Response(deltas.map(tool_calls => `data: ${JSON.stringify({
+                choices: [{ delta: { tool_calls } }],
+            })}\n\n`).join('') + 'data: [DONE]\n\n');
+        }
+        assert.equal(url, '/v1/mcp/execute');
+        executed.push(JSON.parse(init.body));
+        return json({ content: 'Result' });
+    };
+    await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    assert.deepEqual(executed, [
+        { tool_name: 'search', arguments: { q: 'hello' } },
+        { tool_name: 'extract', arguments: { urls: ['https://example.com'] } },
+    ]);
+    assert.deepEqual(app.chatSessions.owner.messages.filter(msg => msg.role === 'tool')
+        .map(msg => msg.tool_call_id), ['first', 'second']);
+});
+
+for (const [provider, flag] of [
+    ['brave', 'braveKeySet'], ['searxng', 'searxngUrlSet'],
+    ['ddgs_custom', 'ddgsBackendsSet'], ['ddgs', null], ['duckduckgo', null],
+]) {
+    for (const enabled of [false, true]) {
+        for (const configured of flag ? [false, true] : [true]) {
+            test(`web tools: ${provider}, enabled=${enabled}, configured=${configured}`, () => {
+                const app = appFixture();
+                app.chatSettings.webSearchEnabled = enabled;
+                app.webSearchSettings = { provider };
+
+                if (flag) app.webSearchSettings[flag] = configured;
+
+                app.mcpTools = ['web_search', 'fetch_url', 'other']
+                    .map(name => ({ type: 'function', function: { name, description: 'MCP' } }));
+                const active = enabled && configured;
+                assert.equal(app.webSearchToolsActive(), active);
+                assert.equal(app.builtinWebRoute('web_search'), active ? '/v1/web/search' : null);
+                assert.equal(app.builtinWebRoute('fetch_url'), active ? '/v1/web/fetch' : null);
+                assert.equal(app.builtinWebRoute('other'), null);
+                const tools = app.activeTools().filter(tool => !images.owns(tool.function.name));
+                assert.deepEqual(tools.map(tool => tool.function.name), ['web_search', 'fetch_url', 'other']);
+                assert.equal(tools[0].function.description === 'MCP', !active);
+            });
+        }
+    }
+}
+
+for (const [label, turn, activeId, expected] of [
+    ['hidden tool round', [
+        { id: 'round', role: 'assistant', _ui: false, tool_calls: [{}] },
+        { id: 'result', role: 'tool', _ui: false },
+        { id: 'final', role: 'assistant', content: 'Answer' },
+    ], 'final', ['round', 'result', 'final']],
+    ['visible segment boundary', [
+        { id: 'round', role: 'assistant', tool_calls: [{}] },
+        { id: 'result', role: 'tool', _ui: false },
+        { id: 'final', role: 'assistant', content: 'Answer' },
+    ], 'final', ['result', 'final']],
+    ['unfinished tool round', [
+        { id: 'round', role: 'assistant', _ui: false, tool_calls: [{}] },
+        { id: 'result', role: 'tool', _ui: false },
+    ], null, ['round', 'result']],
+]) {
+    test(`variant selection retains the expected ${label} chain`, () => {
+        assert.deepEqual(appFixture().getActiveVariantChain(turn, activeId).map(msg => msg.id), expected);
+    });
+}
+
+test('API message projection omits UI indicators but keeps tool calls and results', () => {
+    const app = appFixture();
+    const toolCalls = [call('search', { q: 'hello' }, 'tc-1')];
+    const messages = [
+        { id: 'user', role: 'user', content: 'Search for X' },
+        { role: 'tool_call', content: 'Searching', _ui: true },
+        { id: 'round', role: 'assistant', content: null, tool_calls: toolCalls, _ui: false },
+        { id: 'result', role: 'tool', tool_call_id: 'tc-1', content: 'Result', _ui: false },
+        { role: 'tool_call', content: 'Failed', _error: true, _ui: true },
+        { id: 'final', role: 'assistant', content: 'Answer' },
+    ];
+    const body = app.buildChatCompletionBody(messages, { chatId: 'owner', model: 'text', systemPrompt: '' });
+
+    assert.deepEqual(body.messages, [
+        { role: 'user', content: 'Search for X' },
+        { role: 'assistant', content: null, tool_calls: toolCalls },
+        { role: 'tool', content: 'Result', tool_call_id: 'tc-1' },
+        { role: 'assistant', content: 'Answer' },
+    ]);
+});
+
+for (const status of [200, 503]) {
+    test(`MCP HTTP ${status} produces a named tool result`, async () => {
+        global.fetch = async () => status === 200
+            ? json({ content: 'Search result' }) : new Response('', { status });
+        const result = await appFixture().executeChatTool(call('search', {}), controllerScope());
+        assert.equal(result.toolName, 'search');
+        assert.equal(result.error, status !== 200);
+        assert.equal(result.content, status === 200 ? 'Search result' : 'Error: search: HTTP 503');
+    });
+}

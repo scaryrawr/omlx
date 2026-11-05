@@ -165,48 +165,25 @@ class TestApplyWindowPadding:
         result = prefix_cache._apply_window_padding(16, config)
         assert result == 12
 
-    def test_padding_exceeds_matched(self, prefix_cache):
-        """Test when padding blocks exceed matched blocks, returns 0."""
+    @pytest.mark.parametrize(
+        ("matched_blocks", "window_size", "expected_blocks"),
+        [
+            pytest.param(3, 1024, 0, id="padding-exceeds-matched"),
+            pytest.param(4, 1024, 0, id="exact-padding"),
+            pytest.param(16, 1000, 12, id="partial-block-rounds-up"),
+            pytest.param(16, 0, 16, id="zero-window"),
+        ],
+    )
+    def test_rotating_window_padding(
+        self, prefix_cache, matched_blocks, window_size, expected_blocks
+    ):
         config = ModelCacheConfig.from_type_list(
             ["KVCache", "RotatingKVCache"]
         )
-        config._max_window_size = 1024
+        config._max_window_size = window_size
 
-        # 3 blocks matched, need 4 for padding -> 0
-        result = prefix_cache._apply_window_padding(3, config)
-        assert result == 0
-
-    def test_exact_padding(self, prefix_cache):
-        """Test when matched blocks exactly equal padding blocks."""
-        config = ModelCacheConfig.from_type_list(
-            ["KVCache", "RotatingKVCache"]
-        )
-        config._max_window_size = 1024
-
-        # 4 blocks matched, need 4 for padding -> 0
-        result = prefix_cache._apply_window_padding(4, config)
-        assert result == 0
-
-    def test_window_size_not_multiple_of_block_size(self, prefix_cache):
-        """Test with window_size not a multiple of block_size."""
-        config = ModelCacheConfig.from_type_list(
-            ["KVCache", "RotatingKVCache"]
-        )
-        config._max_window_size = 1000  # Not a multiple of 256
-
-        # ceil(1000/256) = 4 padding blocks
-        result = prefix_cache._apply_window_padding(16, config)
-        assert result == 12
-
-    def test_window_size_zero(self, prefix_cache):
-        """Test with window_size=0 returns all blocks."""
-        config = ModelCacheConfig.from_type_list(
-            ["KVCache", "RotatingKVCache"]
-        )
-        config._max_window_size = 0
-
-        result = prefix_cache._apply_window_padding(16, config)
-        assert result == 16
+        result = prefix_cache._apply_window_padding(matched_blocks, config)
+        assert result == expected_blocks
 
     def test_small_block_size(self):
         """Test with small block_size (more padding blocks needed)."""

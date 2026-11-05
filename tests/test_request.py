@@ -16,53 +16,31 @@ from omlx.request import (
 class TestRequestStatus:
     """Test cases for RequestStatus enum."""
 
-    def test_status_values(self):
-        """Test that status enum has expected values."""
-        assert RequestStatus.WAITING is not None
-        assert RequestStatus.RUNNING is not None
-        assert RequestStatus.PREEMPTED is not None
-        assert RequestStatus.FINISHED_STOPPED is not None
-        assert RequestStatus.FINISHED_LENGTH_CAPPED is not None
-        assert RequestStatus.FINISHED_ABORTED is not None
-
-    def test_status_ordering(self):
+    @pytest.mark.parametrize(
+        "status",
+        [RequestStatus.WAITING, RequestStatus.RUNNING, RequestStatus.PREEMPTED],
+        ids=lambda status: status.name,
+    )
+    def test_status_ordering(self, status):
         """Test that finished statuses are greater than active statuses."""
-        assert RequestStatus.WAITING < RequestStatus.FINISHED_STOPPED
-        assert RequestStatus.RUNNING < RequestStatus.FINISHED_STOPPED
-        assert RequestStatus.PREEMPTED < RequestStatus.FINISHED_STOPPED
+        assert status < RequestStatus.FINISHED_STOPPED
 
-    def test_is_finished_active_states(self):
-        """Test is_finished returns False for active states."""
-        assert RequestStatus.is_finished(RequestStatus.WAITING) is False
-        assert RequestStatus.is_finished(RequestStatus.RUNNING) is False
-        assert RequestStatus.is_finished(RequestStatus.PREEMPTED) is False
-
-    def test_is_finished_finished_states(self):
-        """Test is_finished returns True for finished states."""
-        assert RequestStatus.is_finished(RequestStatus.FINISHED_STOPPED) is True
-        assert RequestStatus.is_finished(RequestStatus.FINISHED_LENGTH_CAPPED) is True
-        assert RequestStatus.is_finished(RequestStatus.FINISHED_ABORTED) is True
-
-    def test_get_finish_reason_stopped(self):
-        """Test get_finish_reason for FINISHED_STOPPED."""
-        reason = RequestStatus.get_finish_reason(RequestStatus.FINISHED_STOPPED)
-        assert reason == "stop"
-
-    def test_get_finish_reason_length_capped(self):
-        """Test get_finish_reason for FINISHED_LENGTH_CAPPED."""
-        reason = RequestStatus.get_finish_reason(RequestStatus.FINISHED_LENGTH_CAPPED)
-        assert reason == "length"
-
-    def test_get_finish_reason_aborted(self):
-        """Test get_finish_reason for FINISHED_ABORTED."""
-        reason = RequestStatus.get_finish_reason(RequestStatus.FINISHED_ABORTED)
-        assert reason == "abort"
-
-    def test_get_finish_reason_active_states(self):
-        """Test get_finish_reason returns None for active states."""
-        assert RequestStatus.get_finish_reason(RequestStatus.WAITING) is None
-        assert RequestStatus.get_finish_reason(RequestStatus.RUNNING) is None
-        assert RequestStatus.get_finish_reason(RequestStatus.PREEMPTED) is None
+    @pytest.mark.parametrize(
+        ("status", "finished", "reason"),
+        [
+            pytest.param(RequestStatus.WAITING, False, None, id="waiting"),
+            pytest.param(RequestStatus.RUNNING, False, None, id="running"),
+            pytest.param(RequestStatus.PREEMPTED, False, None, id="preempted"),
+            pytest.param(RequestStatus.FINISHED_STOPPED, True, "stop", id="stopped"),
+            pytest.param(
+                RequestStatus.FINISHED_LENGTH_CAPPED, True, "length", id="length-capped"
+            ),
+            pytest.param(RequestStatus.FINISHED_ABORTED, True, "abort", id="aborted"),
+        ],
+    )
+    def test_finish_status_and_reason(self, status, finished, reason):
+        assert RequestStatus.is_finished(status) is finished
+        assert RequestStatus.get_finish_reason(status) == reason
 
 
 class TestSamplingParams:
