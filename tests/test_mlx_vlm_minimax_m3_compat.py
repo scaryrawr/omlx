@@ -4,9 +4,70 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_compat_replaces_preimported_upstream_modules():
+    script = """
+import importlib
+from pathlib import Path
+import sys
+import types
+
+import mlx_vlm.models
+import mlx_vlm.tools.parsers
+
+from omlx.patches import mlx_vlm_minimax_m3_compat as compat
+
+module_names = (
+    "mlx_vlm.models.minimax_m3",
+    "mlx_vlm.models.minimax_m3_vl",
+    "mlx_vlm.models.minimax_m3_vl.language",
+    "mlx_vlm.tools.parsers.minimax_m3",
+)
+for name in module_names:
+    module = types.ModuleType(name)
+    module.__file__ = f"/upstream/{name.replace('.', '/')}.py"
+    sys.modules[name] = module
+    parent_name, attr = name.rsplit(".", 1)
+    setattr(sys.modules[parent_name], attr, module)
+
+assert compat.apply_mlx_vlm_minimax_m3_compat_patch()
+assert not compat.apply_mlx_vlm_minimax_m3_compat_patch()
+for name in module_names:
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve().is_relative_to(compat._VENDOR_MLX_VLM)
+    parent_name, attr = name.rsplit(".", 1)
+    assert getattr(sys.modules[parent_name], attr) is module
+
+from omlx.oq import _build_model_sanitizer
+
+config = {
+    "model_type": "minimax_m3_vl",
+    "architectures": ["MiniMaxM3ForConditionalGeneration"],
+    "text_config": {
+        "model_type": "minimax_m3",
+        "num_hidden_layers": 1,
+        "n_shared_experts": 1,
+    },
+}
+predicate = _build_model_sanitizer(config)._omlx_cast_predicate
+prefix = "language_model.model.layers.0.block_sparse_moe"
+assert predicate(f"{prefix}.gate.weight") is False
+assert predicate(f"{prefix}.e_score_correction_bias") is False
+assert predicate(f"{prefix}.switch_mlp.gate_proj.weight") is True
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_minimax_m3_compat_installs_vendor_modules():
