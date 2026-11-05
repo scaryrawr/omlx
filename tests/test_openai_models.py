@@ -43,19 +43,12 @@ from omlx.api.responses_models import ResponsesRequest
 class TestContentPart:
     """Tests for ContentPart model."""
 
-    def test_text_content_part(self):
-        """Test creating text content part."""
-        part = ContentPart(type="text", text="Hello world")
+    @pytest.mark.parametrize("text", ["Hello world", ""], ids=["nonempty", "empty"])
+    def test_text_content_part(self, text):
+        part = ContentPart(type="text", text=text)
 
         assert part.type == "text"
-        assert part.text == "Hello world"
-
-    def test_text_content_part_empty_text(self):
-        """Test creating text content part with empty text."""
-        part = ContentPart(type="text", text="")
-
-        assert part.type == "text"
-        assert part.text == ""
+        assert part.text == text
 
     def test_content_part_none_text(self):
         """Test creating content part without text."""
@@ -217,11 +210,15 @@ class TestFunctionCallAndToolCall:
         assert fc.name == "Bash"
         assert fc.arguments == "{}"
 
-    def test_function_call_rejects_non_string_name(self):
+    @pytest.mark.parametrize(
+        "name",
+        [None, 123, {"name": "Bash"}, ["Bash"]],
+        ids=["none", "number", "dict", "list"],
+    )
+    def test_function_call_rejects_non_string_name(self, name):
         """Name normalization must not widen FunctionCall.name beyond str."""
-        for name in (None, 123, {"name": "Bash"}, ["Bash"]):
-            with pytest.raises(ValidationError):
-                FunctionCall(name=name, arguments={})
+        with pytest.raises(ValidationError):
+            FunctionCall(name=name, arguments={})
 
     def test_tool_call(self):
         """Test creating tool call."""
@@ -255,14 +252,10 @@ class TestFunctionCallArgumentsValidation:
     must be rejected at the request boundary with a 422-friendly ValueError.
     """
 
-    def test_accepts_empty_string_as_empty_object(self):
-        """Some clients send ``""`` — normalize to ``"{}"`` instead of rejecting."""
-        fc = FunctionCall(name="f", arguments="")
-        assert fc.arguments == "{}"
-
-    def test_accepts_whitespace_only_string(self):
-        """Whitespace-only input normalizes to ``"{}"`` too."""
-        fc = FunctionCall(name="f", arguments="   ")
+    @pytest.mark.parametrize("arguments", ["", "   "], ids=["empty", "whitespace"])
+    def test_accepts_empty_arguments_as_empty_object(self, arguments):
+        """Normalize empty client arguments instead of rejecting them."""
+        fc = FunctionCall(name="f", arguments=arguments)
         assert fc.arguments == "{}"
 
     def test_accepts_dict_and_serializes(self):
@@ -270,34 +263,21 @@ class TestFunctionCallArgumentsValidation:
         fc = FunctionCall(name="f", arguments={"a": 1, "b": "x"})
         assert json.loads(fc.arguments) == {"a": 1, "b": "x"}
 
-    def test_rejects_invalid_json(self):
-        """Truncated or otherwise malformed JSON must raise."""
-        with pytest.raises(ValidationError) as exc:
-            FunctionCall(name="f", arguments='{"a": "b')
-        msg = str(exc.value)
-        assert "valid JSON" in msg
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"a": "b', "{'a': 1}", "Tokyo"],
+        ids=["truncated-json", "python-repr", "plain-text"],
+    )
+    def test_rejects_invalid_json(self, arguments):
+        with pytest.raises(ValidationError, match="valid JSON"):
+            FunctionCall(name="f", arguments=arguments)
 
-    def test_rejects_python_repr_with_single_quotes(self):
-        """``{'a': 1}`` is not valid JSON and must be rejected."""
-        with pytest.raises(ValidationError):
-            FunctionCall(name="f", arguments="{'a': 1}")
-
-    def test_rejects_bare_string(self):
-        """``"Tokyo"`` parses as a JSON string, not an object — reject."""
-        with pytest.raises(ValidationError) as exc:
-            FunctionCall(name="f", arguments='"Tokyo"')
-        assert "JSON object" in str(exc.value)
-
-    def test_rejects_json_array(self):
-        """Arrays are valid JSON but not objects; reject."""
-        with pytest.raises(ValidationError) as exc:
-            FunctionCall(name="f", arguments="[1, 2, 3]")
-        assert "JSON object" in str(exc.value)
-
-    def test_rejects_plain_text(self):
-        """Plain text that isn't JSON at all — reject."""
-        with pytest.raises(ValidationError):
-            FunctionCall(name="f", arguments="Tokyo")
+    @pytest.mark.parametrize(
+        "arguments", ['"Tokyo"', "[1, 2, 3]"], ids=["string", "array"]
+    )
+    def test_rejects_non_object_json(self, arguments):
+        with pytest.raises(ValidationError, match="JSON object"):
+            FunctionCall(name="f", arguments=arguments)
 
     def test_rejects_numeric_type(self):
         """Non-string, non-dict types are rejected."""
@@ -342,25 +322,16 @@ class TestMessageToolCallsArgumentsValidation:
         )
         assert json.loads(msg.tool_calls[0]["function"]["arguments"]) == {"a": 1}
 
-    def test_malformed_json_rejected(self):
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"a":', "{'a': 1}", "Tokyo"],
+        ids=["truncated-json", "python-repr", "plain-text"],
+    )
+    def test_invalid_arguments_rejected(self, arguments):
         with pytest.raises(ValidationError):
             Message(
                 role="assistant",
-                tool_calls=[{"function": {"name": "f", "arguments": '{"a":'}}],
-            )
-
-    def test_python_repr_rejected(self):
-        with pytest.raises(ValidationError):
-            Message(
-                role="assistant",
-                tool_calls=[{"function": {"name": "f", "arguments": "{'a': 1}"}}],
-            )
-
-    def test_plain_text_rejected(self):
-        with pytest.raises(ValidationError):
-            Message(
-                role="assistant",
-                tool_calls=[{"function": {"name": "f", "arguments": "Tokyo"}}],
+                tool_calls=[{"function": {"name": "f", "arguments": arguments}}],
             )
 
     def test_missing_arguments_key_allowed(self):

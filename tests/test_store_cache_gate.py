@@ -120,30 +120,20 @@ class TestAdjustStoreCacheCap:
         sched._store_cache_gate = _StoreCacheGate(cap=cap)
         return sched
 
-    def test_ok_grows_by_one(self):
-        sched = self._fake_scheduler(cap=4, max_num_seqs=8)
-        Scheduler.adjust_store_cache_cap(sched, "ok")
-        assert sched._store_cache_gate.cap == 5
-
-    def test_ok_clamps_to_max_num_seqs(self):
-        sched = self._fake_scheduler(cap=8, max_num_seqs=8)
-        Scheduler.adjust_store_cache_cap(sched, "ok")
-        assert sched._store_cache_gate.cap == 8
-
-    def test_soft_shrinks_by_one(self):
-        sched = self._fake_scheduler(cap=5)
-        Scheduler.adjust_store_cache_cap(sched, "soft")
-        assert sched._store_cache_gate.cap == 4
-
-    def test_hard_shrinks_by_one(self):
-        sched = self._fake_scheduler(cap=3)
-        Scheduler.adjust_store_cache_cap(sched, "hard")
-        assert sched._store_cache_gate.cap == 2
-
-    def test_shrink_floor_at_one(self):
-        sched = self._fake_scheduler(cap=1)
-        Scheduler.adjust_store_cache_cap(sched, "hard")
-        assert sched._store_cache_gate.cap == 1
+    @pytest.mark.parametrize(
+        "cap, pressure, expected",
+        [
+            pytest.param(4, "ok", 5, id="ok-grows-by-one"),
+            pytest.param(8, "ok", 8, id="ok-clamps-to-max-num-seqs"),
+            pytest.param(5, "soft", 4, id="soft-shrinks-by-one"),
+            pytest.param(3, "hard", 2, id="hard-shrinks-by-one"),
+            pytest.param(1, "hard", 1, id="shrink-floor-at-one"),
+        ],
+    )
+    def test_pressure_adjusts_cap(self, cap, pressure, expected):
+        sched = self._fake_scheduler(cap=cap, max_num_seqs=8)
+        Scheduler.adjust_store_cache_cap(sched, pressure)
+        assert sched._store_cache_gate.cap == expected
 
     def test_no_op_when_gate_missing(self):
         from unittest.mock import MagicMock

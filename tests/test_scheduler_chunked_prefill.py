@@ -1029,49 +1029,24 @@ class TestScheduleWaitingChunkedFork:
             "omlx.scheduler.get_phys_footprint", return_value=target
         )
 
-    def test_adaptive_throttle_below_soft_watermark_passthrough(self):
-        """current < soft watermark → no throttle, full chunk."""
+    @pytest.mark.parametrize(
+        "current_gb, requested, expected",
+        [
+            pytest.param(5, 2048, 2048, id="below-soft-watermark"),
+            pytest.param(8.4, 2048, 1024, id="tier-1024"),
+            pytest.param(10.4, 2048, 512, id="tier-512"),
+            pytest.param(10.4, 256, 256, id="requested-smaller-than-tier"),
+        ],
+    )
+    def test_adaptive_throttle_tiers(self, current_gb, requested, expected):
+        """The soft-to-hard pressure band runs from 8 to 12 GiB."""
         sched = self._setup_throttle(max_bytes_gb=10, hard_cap_gb=12)
-        # soft_watermark = 10 * 0.80 = 8 GB; current 5 GB is below
-        a, b = self._mock_current(sched, 5)
+        a, b = self._mock_current(sched, current_gb)
         with a, b:
             result = sched._adaptive_chunk_size(
-                2048, request_id="r1", loop_label="external"
+                requested, request_id="r1", loop_label="external"
             )
-        assert result == 2048
-
-    def test_adaptive_throttle_tier_1024(self):
-        """First quarter of the soft-to-hard band → 1024."""
-        sched = self._setup_throttle(max_bytes_gb=10, hard_cap_gb=12)
-        # soft_wm = 8 GB, band = 12 - 8 = 4 GB. 10% into band = 8.4 GB.
-        a, b = self._mock_current(sched, 8.4)
-        with a, b:
-            result = sched._adaptive_chunk_size(
-                2048, request_id="r1", loop_label="external"
-            )
-        assert result == 1024
-
-    def test_adaptive_throttle_tier_512(self):
-        """50%+ of band → 512."""
-        sched = self._setup_throttle(max_bytes_gb=10, hard_cap_gb=12)
-        # 60% of band: 8 + 4*0.60 = 10.4 GB
-        a, b = self._mock_current(sched, 10.4)
-        with a, b:
-            result = sched._adaptive_chunk_size(
-                2048, request_id="r1", loop_label="external"
-            )
-        assert result == 512
-
-    def test_adaptive_throttle_requested_smaller_than_tier(self):
-        """Requested chunk already smaller than the tier target → pass through."""
-        sched = self._setup_throttle(max_bytes_gb=10, hard_cap_gb=12)
-        # 60% of band → tier 512. But requested=256 < 512.
-        a, b = self._mock_current(sched, 10.4)
-        with a, b:
-            result = sched._adaptive_chunk_size(
-                256, request_id="r1", loop_label="external"
-            )
-        assert result == 256
+        assert result == expected
 
     def test_adaptive_throttle_no_cap_passthrough(self):
         """When hard limit or soft base is unset (=0), no throttle."""
