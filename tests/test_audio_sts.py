@@ -273,8 +273,14 @@ class TestSTSEndpointErrors:
 class TestSTSModelAliasResolution:
     """Verify that STS endpoint resolves model aliases (#489)."""
 
-    def test_process_resolves_alias(self):
-        """POST /v1/audio/process with alias resolves to real model ID."""
+    @pytest.mark.parametrize(
+        "requested_model",
+        [
+            pytest.param("denoise", id="alias"),
+            pytest.param("MossFormer2-SE", id="direct-model-id"),
+        ],
+    )
+    def test_process_resolves_model(self, requested_model):
         from omlx.server import app
 
         _ensure_audio_routes(app)
@@ -298,38 +304,7 @@ class TestSTSModelAliasResolution:
             with TestClient(app, raise_server_exceptions=False) as client:
                 response = client.post(
                     "/v1/audio/process",
-                    data={"model": "denoise"},
-                    files={"file": ("test.wav", TINY_WAV, "audio/wav")},
-                )
-                assert response.status_code == 200
-                mock_pool.get_engine.assert_awaited_once_with("MossFormer2-SE")
-
-    def test_process_direct_model_id(self):
-        """POST /v1/audio/process with direct model ID works without alias."""
-        from omlx.server import app
-
-        _ensure_audio_routes(app)
-
-        mock_pool = _make_mock_pool(model_id="MossFormer2-SE")
-        mock_pool.resolve_model_id = MagicMock(
-            return_value="MossFormer2-SE"
-        )
-
-        with patch("omlx.server._server_state") as mock_state:
-            mock_state.engine_pool = mock_pool
-            mock_state.global_settings = None
-            mock_state.distributed_inference_enabled = False
-            mock_state.process_memory_enforcer = None
-            mock_state.gpu_power_limiter = None
-            mock_state.hf_downloader = None
-            mock_state.ms_downloader = None
-            mock_state.mcp_manager = None
-            mock_state.api_key = None
-            mock_state.settings_manager = MagicMock()
-            with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.post(
-                    "/v1/audio/process",
-                    data={"model": "MossFormer2-SE"},
+                    data={"model": requested_model},
                     files={"file": ("test.wav", TINY_WAV, "audio/wav")},
                 )
                 assert response.status_code == 200

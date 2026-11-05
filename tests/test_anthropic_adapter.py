@@ -172,31 +172,18 @@ class TestAnthropicAdapter:
     # parse_request Tests - Generation Parameters
     # =========================================================================
 
-    def test_parse_request_with_temperature(self, adapter):
-        """Test parsing request with temperature."""
+    @pytest.mark.parametrize("temperature", [0.5, 0.0], ids=["nonzero", "zero"])
+    def test_parse_request_with_temperature(self, adapter, temperature):
         request = MessagesRequest(
             model="claude-3-sonnet",
             max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hello")],
-            temperature=0.5,
+            temperature=temperature,
         )
 
         internal = adapter.parse_request(request)
 
-        assert internal.temperature == 0.5
-
-    def test_parse_request_with_zero_temperature(self, adapter):
-        """Test parsing request with zero temperature."""
-        request = MessagesRequest(
-            model="claude-3-sonnet",
-            max_tokens=1024,
-            messages=[AnthropicMessage(role="user", content="Hello")],
-            temperature=0.0,
-        )
-
-        internal = adapter.parse_request(request)
-
-        assert internal.temperature == 0.0
+        assert internal.temperature == temperature
 
     def test_parse_request_default_temperature(self, adapter):
         """Test parsing request without temperature uses default."""
@@ -516,25 +503,22 @@ class TestAnthropicAdapter:
         assert result["error"]["message"] == "Something went wrong"
         assert result["error"]["type"] == "api_error"
 
-    def test_create_error_response_custom_type(self, adapter):
-        """Test creating error response with custom type."""
-        result = adapter.create_error_response(
-            "Invalid request",
-            error_type="invalid_request_error",
-        )
+    @pytest.mark.parametrize(
+        ("message", "error_type"),
+        [
+            pytest.param(
+                "Invalid request", "invalid_request_error", id="invalid-request"
+            ),
+            pytest.param(
+                "Invalid API key", "authentication_error", id="authentication"
+            ),
+        ],
+    )
+    def test_create_error_response_custom_type(self, adapter, message, error_type):
+        result = adapter.create_error_response(message, error_type=error_type)
 
-        assert result["error"]["message"] == "Invalid request"
-        assert result["error"]["type"] == "invalid_request_error"
-
-    def test_create_error_response_authentication(self, adapter):
-        """Test creating authentication error response."""
-        result = adapter.create_error_response(
-            "Invalid API key",
-            error_type="authentication_error",
-        )
-
-        assert result["error"]["type"] == "authentication_error"
-        assert result["error"]["message"] == "Invalid API key"
+        assert result["error"]["message"] == message
+        assert result["error"]["type"] == error_type
 
     # =========================================================================
     # format_error_event Tests
