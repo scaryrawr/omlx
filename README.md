@@ -646,6 +646,18 @@ or performance; those require separate model-specific validation.
 
 ### Image model discovery and manifests
 
+Chat at `/admin/chat` includes image tools without a separate image tab.
+Ask which image models are available, request an image, or upload an image
+and ask for an edit. Text-only chat models can use these tools without
+receiving image bytes. Vision models retain their normal image inputs.
+Generated images appear inline with download and reuse controls. Reuse
+inserts an explicit image reference into the composer for a later edit.
+Images remain in the open conversation only. Saved and exported histories
+strip image bytes, so their references cannot be edited after reload.
+Image inference has a ten-minute browser deadline. Stop prevents later
+tool results and follow-up chat requests, but does not guarantee immediate
+GPU preemption.
+
 Image generation and editing use the core mlx-vlm dependency. oMLX asks
 mlx-vlm whether each local diffusion checkpoint supports generation, editing,
 or both. Checkpoint metadata can identify models in renamed directories.
@@ -710,13 +722,13 @@ does not replace a saved checkpoint grid. Base checkpoints without saved
 grids keep 30 generation steps or 40 editing steps. Finite positive guidance
 overrides remain supported.
 
-Custom sigma grids are an API extension, not an Imagine editor. Supply a
+Custom sigma grids are an API extension, not a chat tool option. Supply a
 nonempty, finite, strictly descending JSON array in `(0, 1]`, without terminal
 zero; the scheduler applies the checkpoint's shift settings and appends the
 terminal zero. For multipart edits, encode the `sigmas` form field as a JSON
 array, for example `[1, 0.8, 0.4]`. Each response image includes the backend's
 effective `steps` and `guidance` when available, plus its actual output size.
-Imagine explains saved-grid precedence and displays the actual result steps.
+Chat tool results include the actual result steps when the backend returns them.
 
 Qwen 2.1 editing conditions on all supplied reference images; the existing
 API/UI upload limits still apply. With automatic size, the backend selects

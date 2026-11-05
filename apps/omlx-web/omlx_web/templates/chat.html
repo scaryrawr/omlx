@@ -1375,11 +1375,6 @@
 
         <!-- Sidebar Footer -->
         <div class="p-2 border-t border-line space-y-0.5 flex-shrink-0">
-            <a href="/admin/imagine"
-                class="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-fg-tertiary hover:bg-surface-muted rounded">
-                <i data-lucide="image" class="w-3 h-3"></i>
-                {{ t('navbar.tab.imagine') }}
-            </a>
             <button @click="showChatSettingsModal = true"
                 class="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-fg-tertiary hover:bg-surface-muted rounded">
                 <i data-lucide="settings" class="w-3 h-3"></i>
@@ -1500,7 +1495,7 @@
                                             <div class="flex flex-wrap gap-2 mb-2">
                                                 <template x-for="imgUrl in getImageUrls(msg.content)"
                                                     :key="imgUrl.substring(0, 50)">
-                                                    <img :src="imgUrl" @click="openImageModal(imgUrl)"
+                                                    <img :src="imgUrl" :alt="window.t('chat.image_preview')" @click="openImageModal(imgUrl)"
                                                         class="max-w-48 max-h-48 object-cover rounded-lg cursor-pointer">
                                                 </template>
                                             </div>
@@ -1622,7 +1617,7 @@
                             </template>
                             <div x-show="msg.content" class="message-body markdown-content" data-math-pending="true"
                                 :data-math-version="typeof msg.content === 'string' ? String(msg.content.length) : '0'"
-                                x-html="renderMarkdown(msg.content)"></div>
+                                x-html="renderMarkdown(getTextContent(msg.content))"></div>
                         </div>
 
                         <!-- Built-in web tool activity card (search sources / fetched page).
@@ -1664,7 +1659,7 @@
                                             : window.t('chat.web_card.searched')"></span>
                                     <span x-show="msg._web?.query" class="truncate"
                                         style="color: var(--text-tertiary);"
-                                        x-text="'“' + msg._web.query + '”'"></span>
+                                        x-text="'“' + (msg._web?.query || '') + '”'"></span>
                                 </div>
                                 <div x-show="msg._web?.results?.length" class="mt-2 flex flex-col gap-1">
                                     <template x-for="(r, ri) in (msg._web?.results || [])" :key="ri">
@@ -1695,8 +1690,16 @@
                             class="max-w-3xl">
                             <div x-show="msg._images?.length" class="my-1 flex flex-wrap gap-2">
                                 <template x-for="(imgUrl, ii) in (msg._images || [])" :key="ii">
-                                    <img :src="imgUrl" @click="openImageModal(imgUrl)"
-                                        class="max-w-48 max-h-48 object-cover rounded-lg cursor-pointer">
+                                    <div>
+                                        <img :src="imgUrl" :alt="window.t('chat.image_preview')" @click="openImageModal(imgUrl)"
+                                            class="max-w-48 max-h-48 object-cover rounded-lg cursor-pointer">
+                                        <div class="flex gap-2 text-xs mt-1">
+                                            <a :href="imgUrl" download="image">{{ t('chat.image_download') }}</a>
+                                            <button type="button" @click="reuseToolImage(msg, ii)">{{ t('chat.image_reuse') }}</button>
+                                        </div>
+                                        <code class="block text-xs" style="overflow-wrap:anywhere"
+                                            x-text="imageReference(msg, ii)"></code>
+                                    </div>
                                 </template>
                             </div>
                             <div x-show="!msg._images?.length && msg._imagesStripped"
@@ -1836,7 +1839,7 @@
                             </template>
                             <div class="message-body markdown-content" data-math-pending="true"
                                 :data-math-version="typeof msg.content === 'string' ? String(msg.content.length) : '0'"
-                                x-html="renderMarkdown(msg.content)"></div>
+                                x-html="renderMarkdown(getTextContent(msg.content))"></div>
                         </div>
                     </div>
                 </template>
@@ -2076,7 +2079,7 @@
                             </button>
                             <div x-show="open" x-transition.opacity x-cloak class="composer-popover left-0 p-1.5"
                                 style="--popover-w: 15rem;">
-                                <button x-show="hasVisionSupport()" class="composer-menu-item"
+                                <button x-show="!hasAsrSupport()" class="composer-menu-item"
                                     @click="open = false; $refs.imageInput.click()"
                                     :disabled="isCurrentChatStreaming() || imageLimitReached()">
                                     <i data-lucide="image" class="w-4 h-4" style="color: var(--text-tertiary);"></i>
@@ -2094,7 +2097,7 @@
                                     <i data-lucide="audio-lines" class="w-4 h-4" style="color: var(--text-tertiary);"></i>
                                     <span>{{ t('chat.upload_audio') }}</span>
                                 </button>
-                                <div x-show="!hasAsrSupport() && (hasVisionSupport() || hasDocumentSupport())"
+                                <div x-show="!hasAsrSupport()"
                                     class="my-1 border-t border-line"></div>
                                 <button x-show="!hasAsrSupport()" class="composer-menu-item" @click="toggleWebSearch()"
                                     :title="window.t(chatSettings.webSearchEnabled ? 'chat.web_search_on' : 'chat.web_search_off')">
@@ -2801,6 +2804,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ static('js/chat-image-tools.js') }}"></script>
 <script>
     // Configure marked.js
     marked.use({
@@ -2973,6 +2977,7 @@
 
             // MODEL SETTINGS Section State (shared prompt profiles from PROFILE tab)
             TOOL_TIMEOUT_MS: 30000,      // Per-tool execution timeout (ms)
+            IMAGE_TOOL_TIMEOUT_MS: 600000,
 
             // MCP tools & prefill polling
             mcpTools: [],                // OpenAI-format tool definitions loaded from /v1/mcp/tools
@@ -3935,7 +3940,10 @@
                 const out = this.getApiTurnMessages(messages, excludeVariantsAtUserIndex, regenChainId)
                     .filter(msg => ['user', 'assistant', 'tool', 'system'].includes(msg.role))
                     .map(msg => {
-                        const m = { role: msg.role, content: this.buildContentForApi(msg.content) };
+                        const content = opts.chatId
+                            ? ChatImageTools.project(msg, opts.chatId, opts.vision)
+                            : msg.content;
+                        const m = { role: msg.role, content: this.buildContentForApi(content) };
                         if (this.hasVisibleThinking(msg.reasoning_content)) {
                             m.reasoning_content = msg.reasoning_content;
                         }
@@ -3969,6 +3977,8 @@
                         variantUserIndex,
                         excludeVariantsAtUserIndex,
                         regenChainId,
+                        chatId: context.chatId,
+                        vision: this.modelTypeMap[this.resolveGatewayModelId(model)] === 'vlm',
                     }),
                     stream: true,
                     stream_options: { include_usage: true },
@@ -4661,12 +4671,79 @@
     // web tools win name collisions against MCP tools so the model never
     // sees duplicate definitions.
     activeTools() {
-        if (!this.webSearchToolsActive()) return this.mcpTools;
-        const builtinNames = new Set(Object.keys(this.BUILTIN_WEB_TOOL_ROUTES));
+        const builtins = [
+            ...ChatImageTools.definitions(),
+            ...(this.webSearchToolsActive() ? this.builtinWebTools() : []),
+        ];
+        const builtinNames = new Set(builtins.map(t => t.function.name));
         return [
-            ...this.builtinWebTools(),
+            ...builtins,
             ...this.mcpTools.filter(t => !builtinNames.has(t.function?.name)),
         ];
+    },
+
+    imageReference(msg, slot) {
+        return ChatImageTools.reference(this.currentChatId, msg.id, 'tool', slot);
+    },
+
+    reuseToolImage(msg, slot) {
+        const ref = this.imageReference(msg, slot);
+        this.inputMessage = `${this.inputMessage || ''}${this.inputMessage ? ' ' : ''}${ref}`;
+        this.$refs.messageInput?.focus();
+    },
+
+    async executeChatTool(tc, scope) {
+        const toolName = tc.function.name;
+        const imageTool = ChatImageTools.owns(toolName);
+        const timeoutMs = imageTool && toolName !== 'list_image_models'
+            ? this.IMAGE_TOOL_TIMEOUT_MS : this.TOOL_TIMEOUT_MS;
+        const deadline = new AbortController();
+        const timer = setTimeout(() => deadline.abort(new DOMException(
+            `Tool timed out after ${timeoutMs / 1000}s`, 'TimeoutError'
+        )), timeoutMs);
+        const { signal, dispose } = this.combineAbortSignals([scope.signal, deadline.signal]);
+        const started = Date.now();
+        const headers = { 'Authorization': `Bearer ${this.getApiKey()}` };
+        let args = {};
+        let webRoute = null;
+        try {
+            signal.throwIfAborted();
+            try {
+                args = JSON.parse(tc.function.arguments || '{}');
+            } catch (error) {
+                if (imageTool) throw new Error('Invalid image tool arguments JSON');
+            }
+            let result;
+            if (imageTool) {
+                result = await ChatImageTools.execute(toolName, args, { ...scope, headers, signal });
+            } else {
+                webRoute = this.builtinWebRoute(toolName);
+                const response = await fetch(webRoute || '/v1/mcp/execute', {
+                    method: 'POST',
+                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(webRoute ? args : { tool_name: toolName, arguments: args }),
+                    signal,
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                result = webRoute
+                    ? { content: JSON.stringify(data), images: [], web: this.buildWebCard(toolName, args, data) }
+                    : this.splitToolContent(data.content ?? data);
+            }
+            signal.throwIfAborted();
+            return { ...result, error: false, toolName, elapsed: ((Date.now() - started) / 1000).toFixed(2) };
+        } catch (error) {
+            const reason = deadline.signal.aborted && !scope.signal.aborted
+                ? `Tool timed out after ${timeoutMs / 1000}s` : error.message;
+            const content = `Error: ${toolName}: ${reason}`;
+            return {
+                content, error: true, toolName, elapsed: ((Date.now() - started) / 1000).toFixed(2),
+                web: webRoute ? this.buildWebCard(toolName, args, { ok: false, error: { message: content } }) : null,
+            };
+        } finally {
+            clearTimeout(timer);
+            dispose();
+        }
     },
 
     // ===== Engine Status =====
@@ -4786,7 +4863,7 @@
         Array.from(files).forEach(file => {
             if (this.hasAsrSupport()) {
                 if (this.isSupportedAudioFile(file)) this.loadAudioFile(file);
-            } else if (this.hasVisionSupport() && file.type.startsWith('image/')) {
+            } else if (file.type.startsWith('image/')) {
                 this.loadImageFile(file);
             } else if (this.hasDocumentSupport() && this.isSupportedDocumentFile(file)) {
                 this.loadDocumentFile(file);
@@ -4954,7 +5031,7 @@
     },
 
     handlePaste(event) {
-        if (!this.hasVisionSupport()) return;
+        if (this.hasAsrSupport()) return;
         const items = event.clipboardData?.items;
         if (!items) return;
 
@@ -6813,10 +6890,16 @@
         stream.abortController = new AbortController();
         this.autoScrollEnabled = true;
               
-        if (stream.targetMessageId) {
+        if (stream.targetMessageId && !context._apiVariantChainId) {
             context._apiVariantChainId = stream.targetMessageId;
         }
         
+        const selectedHistory = this.getApiTurnMessages(
+            chatSession.messages,
+            context._excludeVariantsAtUserIndex,
+            context._excludeVariantsAtUserIndex != null && depth > 0
+                ? context._apiVariantChainId : null
+        ).slice();
         const requestBody = this.buildChatCompletionBody(chatSession.messages, context, depth);
         stream._toolRoundContent = '';
         this.setEngineStatus(context.chatId, { text: window.t('chat.status.starting') });
@@ -7001,6 +7084,7 @@
                 };
             }
 
+            stream.abortController.signal.throwIfAborted();
             const toolCalls = Object.values(toolCallsMap);
             if (toolCalls.length > 0) {
                 const maxToolRounds = this.normalizeMaxToolRounds(this.chatSettings.maxToolRounds);
@@ -7071,54 +7155,19 @@
                 };
                 this.attachThinkingToAssistantMessage(toolTurn, stream.streamingThinking);
                 chatSession.messages.push(toolTurn);
+                if (depth === 0) context._apiVariantChainId = toolTurn.id;
 
                 // Record per-tool start times for elapsed tracking
                 toolCalls.forEach((tc) => { stream._toolTimers[tc.function.name] = Date.now(); });
 
-                // Execute all tools in parallel
-                const results = await Promise.all(toolCalls.map(async (tc, i) => {
-                    const toolName = tc.function.name;
-                    let args = {};
-                    try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) { }
-                    try {
-                        const timeoutSignal = AbortSignal.timeout?.(this.TOOL_TIMEOUT_MS);
-                        const { signal: combinedSignal, dispose: disposeCombinedSignal } = this.combineAbortSignals([
-                            stream.abortController?.signal,
-                            timeoutSignal,
-                        ]);
-                        const webRoute = this.builtinWebRoute(toolName);
-                        let execResp;
-                        try {
-                            execResp = await fetch(webRoute || '/v1/mcp/execute', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.getApiKey()}` },
-                                body: JSON.stringify(webRoute ? args : { tool_name: toolName, arguments: args }),
-                                signal: combinedSignal,
-                            });
-                        } finally {
-                            disposeCombinedSignal();
-                        }
-                        const elapsed = ((Date.now() - (stream._toolTimers[toolName] || Date.now())) / 1000).toFixed(2);
-                        if (!execResp.ok) {
-                            return { content: `Error: HTTP ${execResp.status}`, error: true, toolName, elapsed };
-                        }
-                        const execData = await execResp.json();
-                        // /v1/web endpoints return the whole payload; MCP wraps it in .content
-                        const { content, images } = webRoute
-                            ? { content: JSON.stringify(execData), images: [] }
-                            : this.splitToolContent(execData.content ?? execData);
-                        const web = webRoute ? this.buildWebCard(toolName, args, execData) : null;
-                        return { content, error: false, toolName, elapsed, web, images };
-                    } catch (e) {
-                        const elapsed = ((Date.now() - (stream._toolTimers[toolName] || Date.now())) / 1000).toFixed(2);
-                        const isTimeout = e.name === 'TimeoutError';
-                        const msg = isTimeout ? `Error: Tool timed out after ${this.TOOL_TIMEOUT_MS / 1000}s` : `Error: ${e.message}`;
-                        const web = this.builtinWebRoute(toolName)
-                            ? this.buildWebCard(toolName, args, { ok: false, error: { message: msg } })
-                            : null;
-                        return { content: msg, error: true, toolName, elapsed, web };
-                    }
-                }));
+                const resultMessageIds = toolCalls.map(() => this.newMessageId());
+                const toolSignal = stream.abortController.signal;
+                const results = await Promise.all(toolCalls.map((tc, i) => this.executeChatTool(tc, {
+                    chatId: context.chatId,
+                    messages: selectedHistory,
+                    resultMessageId: resultMessageIds[i],
+                    signal: toolSignal,
+                })));
 
                 // Log each tool outcome to the status timeline
                 results.forEach((result) => {
@@ -7133,14 +7182,17 @@
                 // the transcript; built-in web tools additionally carry a
                 // parsed `_web` summary that renders as a source card.
                 toolCalls.forEach((tc, i) => {
+                    const result = toolSignal.aborted
+                        ? { content: 'Error: Tool execution stopped by user.' }
+                        : results[i];
                     chatSession.messages.push({
-                        id: this.newMessageId(),
+                        id: resultMessageIds[i],
                         role: 'tool',
                         tool_call_id: tc.id,
-                        content: results[i].content,
+                        content: result.content,
                         _ui: false,
-                        ...(results[i].web ? { _web: results[i].web } : {}),
-                        ...(results[i].images?.length ? { _images: results[i].images } : {}),
+                        ...(result.web ? { _web: result.web } : {}),
+                        ...(result.images?.length ? { _images: result.images } : {}),
                     });
                 });
 
