@@ -166,12 +166,7 @@ async def chat_page(request: Request, is_admin: bool = Depends(require_admin)):
 
 @router.get("/imagine", response_class=HTMLResponse)
 async def imagine_page(request: Request, is_admin: bool = Depends(require_admin)):
-    """Render image generation and editing with the host's API key."""
-    _sync_locale()
-    api_key = _host.main_api_key()
-    return templates.TemplateResponse(
-        request, "imagine.html", {"api_key": api_key or ""}
-    )
+    return RedirectResponse(url="/admin/chat", status_code=307)
 
 
 @router.get("/static/{path:path}")
