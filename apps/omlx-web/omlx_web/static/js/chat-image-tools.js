@@ -101,6 +101,30 @@ const ChatImageTools = (() => {
         return msg.content;
     }
 
+    function rebaseReferences(messages, fromChatId, toChatId) {
+        const prefix = `image:${encodeURIComponent(fromChatId)}:`;
+        const refs = new Map([...sources(fromChatId, messages).keys()].map(ref => [
+            ref, `image:${encodeURIComponent(toChatId)}:${ref.slice(prefix.length)}`,
+        ]));
+        const rebase = text => text.replace(
+            /image:[^:\s]+:[^:\s]+:(?:upload|tool):\d+/g,
+            ref => refs.get(ref) || ref,
+        );
+        for (const msg of messages) {
+            for (const field of ['content', 'reasoning_content', '_thinking']) {
+                if (typeof msg[field] === 'string') msg[field] = rebase(msg[field]);
+            }
+            if (Array.isArray(msg.content)) {
+                for (const part of msg.content) {
+                    if (part.type === 'text') part.text = rebase(part.text);
+                }
+            }
+            for (const tc of (msg.tool_calls || [])) {
+                tc.function.arguments = rebase(tc.function.arguments);
+            }
+        }
+    }
+
     async function readJson(url, init, scope) {
         scope.signal.throwIfAborted();
         const response = await fetch(url, { ...init, signal: scope.signal });
@@ -239,5 +263,5 @@ const ChatImageTools = (() => {
         return entry.execute(args, scope);
     }
 
-    return { owns, definitions, reference, renderReference, sources, project, execute, discover };
+    return { owns, definitions, reference, renderReference, sources, project, rebaseReferences, execute, discover };
 })();

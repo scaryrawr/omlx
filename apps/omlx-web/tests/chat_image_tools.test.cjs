@@ -143,6 +143,81 @@ test('image definitions always win MCP collisions while web toggling stays indep
     assert.notEqual(tools.find(t => t.function.name === 'web_search').function.description, 'MCP');
 });
 
+test('image tools follow the actual request model tool support, including aliases and overrides', async () => {
+    const app = appFixture();
+    global.fetch = async () => json({ models: [
+        { id: 'plain', model_alias: 'plain-alias', model_type: 'vlm', supports_tool_calling: false },
+        { id: 'capable', model_type: 'vlm', supports_tool_calling: true },
+        { id: 'text', model_type: 'llm' },
+    ] });
+    await app.fetchModelTypes();
+    app.aliasToGateway = { 'plain-alias': 'plain' };
+    const messages = app.chatSessions.owner.messages;
+    const context = { chatId: 'owner', model: 'plain-alias', systemPrompt: '' };
+    app.currentModel = 'capable';
+    assert.equal(Object.hasOwn(app.buildChatCompletionBody(messages, context), 'tools'), false);
+    assert.equal(app.buildChatCompletionBody(messages, { ...context, _modelOverride: 'capable' }).tools.length, 3);
+    assert.equal(app.buildChatCompletionBody(messages, { ...context, model: 'text' }).tools.length, 3);
+    assert.equal(Object.hasOwn(app.buildChatCompletionBody(messages, {
+        ...context, model: 'capable', _modelOverride: 'plain-alias',
+    }), 'tools'), false);
+
+    app.mcpTools = [call('existing_mcp_tool', {})];
+    assert.deepEqual(app.activeTools('plain'), app.mcpTools);
+});
+
+test('branching rebases copied image references without changing the parent or accepting foreign sources', async () => {
+    const uploadRef = images.reference('owner', upload.id, 'upload', 1);
+    const toolRef = images.reference('owner', 'result', 'tool', 0);
+    const foreignRef = images.reference('foreign', 'result', 'tool', 0);
+    const excludedRef = images.reference('owner', 'later', 'tool', 0);
+    const messages = [
+        structuredClone(upload),
+        { id: 'call', role: 'assistant', content: `Editing ${uploadRef}`,
+            tool_calls: [call('edit_image', { model: 'image', prompt: 'Edit', image_refs: [uploadRef] })] },
+        { id: 'result', role: 'tool', content: JSON.stringify({ outputs: [{ image_ref: toolRef }] }),
+            _images: ['data:image/png;base64,bmV3'] },
+        { id: 'reuse', role: 'user', content: [
+            { type: 'text', text: `Reuse ${toolRef}. Keep ${foreignRef} and ${excludedRef}.` },
+        ] },
+        { id: 'later', role: 'tool', content: 'Not copied', _images: [png] },
+    ];
+    const original = JSON.stringify(messages);
+    const app = appFixture(messages);
+    app.currentChatId = 'owner';
+    app.loadChat = chatId => { app.currentChatId = chatId; };
+    app.branchChat(3);
+
+    const branchId = app.currentChatId;
+    const branch = app.chatSessions[branchId].messages;
+    const branchUpload = images.reference(branchId, upload.id, 'upload', 1);
+    const branchTool = images.reference(branchId, 'result', 'tool', 0);
+    assert.equal(JSON.stringify(messages), original);
+    assert.equal(branch.length, 4);
+    assert.equal(branch[1].content, `Editing ${branchUpload}`);
+    assert.deepEqual(JSON.parse(branch[1].tool_calls[0].function.arguments).image_refs, [branchUpload]);
+    assert.equal(JSON.parse(branch[2].content).outputs[0].image_ref, branchTool);
+    assert.equal(branch[3].content[0].text, `Reuse ${branchTool}. Keep ${foreignRef} and ${excludedRef}.`);
+    app.reuseToolImage(branch[2], 0);
+    assert.equal(app.inputMessage, branchTool);
+    assert.ok(!JSON.stringify(app.chatHistory[0]).includes('base64'));
+
+    global.fetch = async (url, init) => {
+        assert.equal(url, '/v1/images/edits');
+        assert.deepEqual(await Promise.all(init.body.getAll('image').map(file => file.text())), ['source', 'new']);
+        return json({ data: [{ b64_json: 'ZWRpdA==' }] });
+    };
+    const scope = { ...controllerScope(branch), chatId: branchId };
+    await images.execute('edit_image', {
+        model: 'image', prompt: 'Edit copied sources', image_refs: [branchUpload, branchTool],
+    }, scope);
+    for (const ref of [uploadRef, toolRef, foreignRef, excludedRef]) {
+        await assert.rejects(images.execute('edit_image', {
+            model: 'image', prompt: 'Unavailable source', image_refs: [ref],
+        }, scope), /not in this chat/);
+    }
+});
+
 test('generation preserves unspecified defaults and edit resolves multipart bytes without altering sources', async () => {
     const scope = controllerScope();
     global.fetch = async (url, init) => {

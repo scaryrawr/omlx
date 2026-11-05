@@ -4984,6 +4984,10 @@ class EnginePool:
                     "engine_type": e.engine_type,
                     "model_type": e.model_type,
                     "config_model_type": e.config_model_type,
+                    "supports_tool_calling": (
+                        not self._entry_is_diffusion_model(e)
+                        or bool(getattr(e.engine, "supports_tool_calling", False))
+                    ),
                     "unavailable_reason": model_unavailable_reason(
                         e.config_model_type
                     ),
