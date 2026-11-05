@@ -121,14 +121,12 @@ class TestProtectedPages:
         assert resp.status_code == 200
         assert f'const serverApiKey = "{MAIN_KEY}";' in resp.text
 
-    def test_imagine_injects_main_key_and_locale(self, web):
+    def test_imagine_bookmarks_redirect_to_chat(self, web):
         client, _ = web
         _login(client)
         resp = client.get("/admin/imagine", headers=HTML)
-        assert resp.status_code == 200
-        assert f'const serverApiKey = "{MAIN_KEY}";' in resp.text
-        assert '<html lang="en">' in resp.text
-        assert "Imagine - oMLX Admin" in resp.text
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/admin/chat"
 
     def test_language_change_applies_to_next_render(self, web):
         client, _ = web
@@ -150,6 +148,7 @@ class TestStaticFiles:
         "path,media_type",
         [
             ("js/dashboard.js", "application/javascript"),
+            ("js/chat-image-tools.js", "application/javascript"),
             ("css/tailwind.css", "text/css"),
             ("favicon.svg", "image/svg+xml"),
             ("omlx_preset.json", "application/octet-stream"),

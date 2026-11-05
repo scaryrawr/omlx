@@ -653,6 +653,28 @@ class TestEnginePoolErrors:
 class TestEnginePoolStatus:
     """Tests for EnginePool status reporting."""
 
+    @pytest.mark.parametrize(
+        "config_model_type,loaded_tool_support,expected",
+        [
+            ("llama", None, True),
+            ("diffusion_gemma", None, False),
+            ("diffusion_gemma", False, False),
+            ("diffusion_gemma", True, True),
+        ],
+    )
+    def test_status_reports_diffusion_tool_support(
+        self, small_mock_model_dir, config_model_type, loaded_tool_support, expected
+    ):
+        pool = _make_pool()
+        pool.discover_models(str(small_mock_model_dir))
+        entry = pool.get_entry("model-a")
+        entry.config_model_type = config_model_type
+        if loaded_tool_support is not None:
+            entry.engine = SimpleNamespace(supports_tool_calling=loaded_tool_support)
+
+        model = next(m for m in pool.get_status()["models"] if m["id"] == "model-a")
+        assert model["supports_tool_calling"] is expected
+
     def test_get_status(self, small_mock_model_dir):
         """Test get_status returns correct information."""
         pool = _make_pool(ceiling=10 * 1024**3)
