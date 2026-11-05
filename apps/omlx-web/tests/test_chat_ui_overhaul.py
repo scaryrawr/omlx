@@ -35,6 +35,25 @@ def _section(source: str, start: str, end: str) -> str:
     return source.split(start, 1)[1].split(end, 1)[0]
 
 
+def _run_chat(method_names, body):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to exercise Chat JavaScript")
+    source = _template()
+    methods = [
+        re.search(
+            r"^( +)(?:async )?" + re.escape(name) + r"\([^\n]*\) \{.*?^\1\},",
+            source,
+            re.M | re.S,
+        ).group()
+        for name in method_names
+    ]
+    script = "const app = {" + "\n".join(methods) + "};\n" + body
+    return json.loads(
+        subprocess.check_output([node, "-e", script], text=True, timeout=30)
+    )
+
+
 def test_regeneration_overrides_survive_stream_context():
     stream = _section(
         _template(),
@@ -234,10 +253,6 @@ def test_right_panel_dialog_breakpoint_matches_the_stylesheet():
 
 
 def test_regeneration_hides_the_turn_until_the_new_variant_lands():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node.js is required to exercise Chat JavaScript")
-    source = _template()
     names = [
         "findUserIndexForMessage",
         "getTurnVariantsAt",
@@ -250,14 +265,7 @@ def test_regeneration_hides_the_turn_until_the_new_variant_lands():
         "getStreamSession",
         "currentStream",
     ]
-    methods = [
-        re.search(
-            r"^( +)" + name + r"\([^\n]*\) \{.*?^\1\},", source, re.M | re.S
-        ).group()
-        for name in names
-    ]
-    script = (
-        "const app = {" + "\n".join(methods) + "};\n" + """
+    result = _run_chat(names, """
 app.currentChatId = 'c';
 app.messages = [
     {id: 'u0', role: 'user'}, {id: 'a0', role: 'assistant'},
@@ -278,7 +286,6 @@ stream.isStreaming = false;
 console.log(JSON.stringify({during, activeTab, landed, after: visible()}));
 """
     )
-    result = json.loads(subprocess.check_output([node, "-e", script], text=True))
     assert result["during"] == ["u0", "a0", "u1"]
     assert result["activeTab"] is False
     assert result["landed"] == ["u0", "a0", "u1", "a3"]
@@ -286,10 +293,6 @@ console.log(JSON.stringify({during, activeTab, landed, after: visible()}));
 
 
 def test_profile_picks_where_sampling_values_come_from():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node.js is required to exercise Chat JavaScript")
-    source = _template()
     names = [
         "currentModelInfo",
         "thinkingModes",
@@ -301,16 +304,9 @@ def test_profile_picks_where_sampling_values_come_from():
         "samplingMode",
         "selectProfileOption",
     ]
-    methods = [
-        re.search(
-            r"^( +)" + name + r"\([^\n]*\) \{.*?^\1\},", source, re.M | re.S
-        ).group()
-        for name in names
-    ]
-    script = (
-        "const CUSTOM_PROFILE_OPTION = '__custom__';\n"
-        "window = {t: key => key};\n"
-        "const app = {" + "\n".join(methods) + "};\n" + """
+    result = _run_chat(names, """
+const CUSTOM_PROFILE_OPTION = '__custom__';
+globalThis.window = {t: key => key};
 app.currentModel = 'm';
 app.aliasToGateway = {};
 app._adminModelsList = [{id: 'm', thinking_modes: ['auto'],
@@ -333,7 +329,6 @@ console.log(JSON.stringify({model, writer, custom,
     seeded: app.snapshotGenerationSettings(), active: app.activePromptProfile}));
 """
     )
-    result = json.loads(subprocess.check_output([node, "-e", script], text=True))
     assert result["model"] is None
     assert result["writer"] == {"temperature": 1.1}
     assert result["custom"] == {"temperature": 0.2}
@@ -343,10 +338,6 @@ console.log(JSON.stringify({model, writer, custom,
 
 
 def test_a_new_turn_uses_the_panel_model_and_settings():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node.js is required to exercise Chat JavaScript")
-    source = _template()
     names = [
         "getTurnVariantsAt",
         "getActiveVariantForUser",
@@ -354,14 +345,7 @@ def test_a_new_turn_uses_the_panel_model_and_settings():
         "resolveApiModel",
         "resolveApiGenerationOverrides",
     ]
-    methods = [
-        re.search(
-            r"^( +)" + name + r"\([^\n]*\) \{.*?^\1\},", source, re.M | re.S
-        ).group()
-        for name in names
-    ]
-    script = (
-        "const app = {" + "\n".join(methods) + "};\n" + """
+    result = _run_chat(names, """
 app.resolveGatewayModelId = id => id;
 app.snapshotGenerationSettings = () => ({reasoning_effort: 'max'});
 const messages = [
@@ -377,7 +361,6 @@ console.log(JSON.stringify({
 }));
 """
     )
-    result = json.loads(subprocess.check_output([node, "-e", script], text=True))
     assert result == {
         "model": "new",
         "generation": {"reasoning_effort": "max"},
@@ -386,22 +369,9 @@ console.log(JSON.stringify({
 
 
 def test_picking_a_reply_restores_its_sampling_profile():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("Node.js is required to exercise Chat JavaScript")
-    source = _template()
     names = ["normalizeProfileName", "samplingFields", "applyVariantPanelSnapshot"]
-    methods = [
-        re.search(
-            r"^( +)(?:async )?" + name + r"\([^\n]*\) \{.*?^\1\},",
-            source,
-            re.M | re.S,
-        ).group()
-        for name in names
-    ]
-    script = (
-        "window = {t: key => key};\n"
-        "const app = {" + "\n".join(methods) + "};\n" + """
+    result = _run_chat(names, """
+globalThis.window = {t: key => key};
 app.variantModelMissing = () => false;
 app.resolveGatewayModelId = id => id;
 app.applyGenerationSnapshot = () => {};
@@ -424,7 +394,6 @@ const pick = async (meta) => {
 })();
 """
     )
-    result = json.loads(subprocess.check_output([node, "-e", script], text=True))
     assert result == {
         "custom": None,
         "model": "System Default",

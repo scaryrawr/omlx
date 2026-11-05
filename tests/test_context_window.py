@@ -41,35 +41,26 @@ class TestGetMaxContextWindow:
             result = get_max_context_window()
             assert result == 32768
 
-    def test_model_setting_overrides_global(self):
-        """Test model-specific setting takes priority over global."""
+    @pytest.mark.parametrize(
+        ("global_limit", "model_limit", "expected"),
+        [
+            pytest.param(32768, 4096, 4096, id="model-overrides-global"),
+            pytest.param(65536, None, 65536, id="unset-model-falls-back"),
+        ],
+    )
+    def test_model_setting_priority(self, global_limit, model_limit, expected):
         from omlx.server import get_max_context_window
 
-        state = self._make_server_state(global_max_ctx=32768)
+        state = self._make_server_state(global_max_ctx=global_limit)
         mock_manager = MagicMock()
         mock_manager.get_settings_for_request.return_value = ModelSettings(
-            max_context_window=4096
+            max_context_window=model_limit
         )
         state.settings_manager = mock_manager
 
         with patch("omlx.server._server_state", state):
             result = get_max_context_window("test-model")
-            assert result == 4096
-
-    def test_falls_back_to_global_when_model_not_set(self):
-        """Test falls back to global when model has no max_context_window."""
-        from omlx.server import get_max_context_window
-
-        state = self._make_server_state(global_max_ctx=65536)
-        mock_manager = MagicMock()
-        mock_manager.get_settings_for_request.return_value = ModelSettings(
-            max_context_window=None
-        )
-        state.settings_manager = mock_manager
-
-        with patch("omlx.server._server_state", state):
-            result = get_max_context_window("test-model")
-            assert result == 65536
+            assert result == expected
 
     def test_no_model_id_returns_global(self):
         """Test returns global when model_id is None."""
@@ -102,41 +93,25 @@ class TestGetMaxContextWindow:
         state.engine_pool = mock_pool
         return state
 
-    def test_policy_unset_native_wins_unchanged(self):
-        """With ``max_context_window_policy`` unset, the model's
-        native context length is returned verbatim — existing
-        installs see no behavior change after this PR."""
+    @pytest.mark.parametrize(
+        ("native_context", "policy_cap", "expected"),
+        [
+            pytest.param(262_144, None, 262_144, id="policy-unset"),
+            pytest.param(262_144, 128_000, 128_000, id="policy-clamps-native"),
+            pytest.param(32_768, 128_000, 32_768, id="native-below-policy"),
+            pytest.param(None, 16_000, 32_768, id="fallback-not-clamped"),
+        ],
+    )
+    def test_policy_only_caps_native_context(
+        self, native_context, policy_cap, expected
+    ):
         from omlx.server import get_max_context_window
 
         state = self._mount_native_and_policy(
-            native_ctx=262_144, policy_cap=None
+            native_ctx=native_context, policy_cap=policy_cap
         )
         with patch("omlx.server._server_state", state):
-            assert get_max_context_window("big-model") == 262_144
-
-    def test_policy_set_clamps_native(self):
-        """With ``max_context_window_policy=128_000`` and a model that
-        natively declares 256 K, the effective cap is the policy."""
-        from omlx.server import get_max_context_window
-
-        state = self._mount_native_and_policy(
-            native_ctx=262_144, policy_cap=128_000
-        )
-        with patch("omlx.server._server_state", state):
-            assert get_max_context_window("big-model") == 128_000, (
-                "Policy of 128k must clamp a model that natively declares 256k"
-            )
-
-    def test_policy_set_native_below_policy_wins(self):
-        """When the model's native length is already below the policy,
-        the native value wins — policy is a ceiling, not a floor."""
-        from omlx.server import get_max_context_window
-
-        state = self._mount_native_and_policy(
-            native_ctx=32_768, policy_cap=128_000
-        )
-        with patch("omlx.server._server_state", state):
-            assert get_max_context_window("small-model") == 32_768
+            assert get_max_context_window("test-model") == expected
 
     def test_per_model_override_escapes_policy(self):
         """A per-model override is the operator's explicit per-model
@@ -158,36 +133,23 @@ class TestGetMaxContextWindow:
                 "Per-model override must escape the policy clamp"
             )
 
-    def test_policy_does_not_apply_to_fallback_path(self):
-        """When the model has no discoverable native context AND no
-        per-model override, the fallback default applies — the policy
-        is documented as clamping the *native* path only. Existing
-        ``settings.json`` files with the historical 32768 fallback
-        therefore keep working unchanged even when a policy is later
-        added to the install."""
-        from omlx.server import get_max_context_window
-
-        # native_ctx=None: model config doesn't expose a context length
-        state = self._mount_native_and_policy(
-            native_ctx=None, policy_cap=16_000
-        )
-        with patch("omlx.server._server_state", state):
-            # Fallback (32768) returned, not the policy (16_000).
-            assert get_max_context_window("no-native-model") == 32_768
-
-    def test_loaded_engine_plan_lowers_the_limit(self):
+    @pytest.mark.parametrize(
+        ("engine_limit", "expected"),
+        [
+            pytest.param(77_817, 77_817, id="engine-lowers-native-limit"),
+            pytest.param(300_000, 262_144, id="engine-cannot-raise-native-limit"),
+        ],
+    )
+    def test_loaded_engine_plan_caps_the_limit(self, engine_limit, expected):
         """An engine that fits its context to memory (Splash) caps the limit,
         so a longer prompt gets the standard overflow error from oMLX."""
         from omlx.server import get_max_context_window
 
         state = self._mount_native_and_policy(native_ctx=262_144, policy_cap=None)
         engine = state.engine_pool.get_entry.return_value.engine
-        engine.max_context_tokens = 77_817
+        engine.max_context_tokens = engine_limit
         with patch("omlx.server._server_state", state):
-            assert get_max_context_window("splash-model") == 77_817
-        engine.max_context_tokens = 300_000
-        with patch("omlx.server._server_state", state):
-            assert get_max_context_window("splash-model") == 262_144
+            assert get_max_context_window("splash-model") == expected
 
 
 class TestValidateContextWindow:
@@ -201,23 +163,19 @@ class TestValidateContextWindow:
         state.settings_manager = None
         return state
 
-    def test_passes_when_under_limit(self):
-        """Test no exception when token count is under limit."""
+    @pytest.mark.parametrize(
+        "token_count",
+        [
+            pytest.param(500, id="under-limit"),
+            pytest.param(1000, id="exact-limit"),
+        ],
+    )
+    def test_passes_within_limit(self, token_count):
         from omlx.server import validate_context_window
 
         state = self._make_server_state(global_max_ctx=1000)
         with patch("omlx.server._server_state", state):
-            # Should not raise
-            validate_context_window(500)
-
-    def test_passes_at_exact_limit(self):
-        """Test no exception when token count equals limit."""
-        from omlx.server import validate_context_window
-
-        state = self._make_server_state(global_max_ctx=1000)
-        with patch("omlx.server._server_state", state):
-            # Should not raise (equal is OK)
-            validate_context_window(1000)
+            validate_context_window(token_count)
 
     def test_raises_when_over_limit(self):
         """Test HTTPException raised when token count exceeds limit."""

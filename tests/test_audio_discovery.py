@@ -11,6 +11,8 @@ All tests run without mlx-audio installed — only config.json parsing is tested
 import json
 from pathlib import Path
 
+import pytest
+
 from omlx.model_discovery import (
     AUDIO_STS_ARCHITECTURES,
     AUDIO_STS_MODEL_TYPES,
@@ -496,17 +498,39 @@ class TestDetectSTSModelType:
 class TestDiscoverModelsIncludesSTS:
     """discover_models() must return STS models with correct engine_type."""
 
-    def test_discover_sts_sam_audio_model(self, tmp_path):
-        """SAMAudio STS model included in discover_models results."""
-        sts_dir = tmp_path / "sam-audio-base"
-        _make_model(sts_dir, {
-            "model_type": "sam_audio",
-            "architectures": ["SAMAudio"],
-        })
+    @pytest.mark.parametrize(
+        ("name", "model_type", "architecture"),
+        [
+            pytest.param("sam-audio-base", "sam_audio", "SAMAudio", id="sam-audio"),
+            pytest.param(
+                "DeepFilterNet3",
+                "deepfilternet",
+                "DeepFilterNetModel",
+                id="deepfilternet",
+            ),
+            pytest.param(
+                "mossformer2-se-48k",
+                "mossformer2",
+                "MossFormer2SEModel",
+                id="mossformer2",
+            ),
+            pytest.param(
+                "LFM2.5-Audio-1B",
+                "lfm2_audio",
+                "LFM2AudioModel",
+                id="lfm2-audio",
+            ),
+        ],
+    )
+    def test_discover_sts_model(self, tmp_path, name, model_type, architecture):
+        _make_model(
+            tmp_path / name,
+            {"model_type": model_type, "architectures": [architecture]},
+        )
 
         models = discover_models(tmp_path)
-        assert "sam-audio-base" in models
-        assert models["sam-audio-base"].model_type == "audio_sts"
+        assert name in models
+        assert models[name].model_type == "audio_sts"
 
     def test_discover_sts_engine_type(self, tmp_path):
         """STS model has engine_type='audio_sts'."""
@@ -516,42 +540,6 @@ class TestDiscoverModelsIncludesSTS:
         models = discover_models(tmp_path)
         assert "deepfilternet3" in models
         assert models["deepfilternet3"].engine_type == "audio_sts"
-
-    def test_discover_sts_deepfilternet_model(self, tmp_path):
-        """DeepFilterNet STS model is discovered correctly."""
-        sts_dir = tmp_path / "DeepFilterNet3"
-        _make_model(sts_dir, {
-            "model_type": "deepfilternet",
-            "architectures": ["DeepFilterNetModel"],
-        })
-
-        models = discover_models(tmp_path)
-        assert "DeepFilterNet3" in models
-        assert models["DeepFilterNet3"].model_type == "audio_sts"
-
-    def test_discover_sts_mossformer2_model(self, tmp_path):
-        """MossFormer2 STS model is discovered correctly."""
-        sts_dir = tmp_path / "mossformer2-se-48k"
-        _make_model(sts_dir, {
-            "model_type": "mossformer2",
-            "architectures": ["MossFormer2SEModel"],
-        })
-
-        models = discover_models(tmp_path)
-        assert "mossformer2-se-48k" in models
-        assert models["mossformer2-se-48k"].model_type == "audio_sts"
-
-    def test_discover_lfm2_audio_model(self, tmp_path):
-        """LFM2 audio model (via LFM2AudioModel architecture) is discovered as audio_sts."""
-        sts_dir = tmp_path / "LFM2.5-Audio-1B"
-        _make_model(sts_dir, {
-            "model_type": "lfm2_audio",
-            "architectures": ["LFM2AudioModel"],
-        })
-
-        models = discover_models(tmp_path)
-        assert "LFM2.5-Audio-1B" in models
-        assert models["LFM2.5-Audio-1B"].model_type == "audio_sts"
 
     def test_discover_all_audio_types_together(self, tmp_path):
         """STT, TTS, and STS models coexist in the same discovery result."""
