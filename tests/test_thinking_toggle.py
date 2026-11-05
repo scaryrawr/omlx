@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the enable_thinking toggle and detect_thinking_default probe."""
 
 import json
@@ -78,15 +79,10 @@ class TestDetectThinkingDefault:
 
         assert detect_thinking_default(tmp_path) is True
 
-    def test_laguna_without_thinking_template_returns_none(self, tmp_path):
-        """A Laguna config alone is not evidence that its template accepts the flag."""
-        (tmp_path / "config.json").write_text(json.dumps({"model_type": "laguna"}))
-
-        assert detect_thinking_default(tmp_path) is None
-
-    def test_non_laguna_config_without_thinking_template_returns_none(self, tmp_path):
-        """Reading config metadata must not enable thinking for other models."""
-        (tmp_path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    @pytest.mark.parametrize("model_type", ["laguna", "llama"])
+    def test_config_without_thinking_template_returns_none(self, tmp_path, model_type):
+        """Config metadata alone is not evidence that a template accepts the flag."""
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
 
         assert detect_thinking_default(tmp_path) is None
 
