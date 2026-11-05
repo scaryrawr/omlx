@@ -1615,7 +1615,7 @@
                                         x-html="renderMarkdown(msg._thinking)"></div>
                                 </div>
                             </template>
-                            <div x-show="msg.content" class="message-body markdown-content" data-math-pending="true"
+                            <div x-show="getTextContent(msg.content).trim()" class="message-body markdown-content" data-math-pending="true"
                                 :data-math-version="typeof msg.content === 'string' ? String(msg.content.length) : '0'"
                                 x-html="renderMarkdown(getTextContent(msg.content))"></div>
                         </div>
@@ -3559,8 +3559,11 @@
                 // Tool-round turns and web tool cards are _ui:false for the
                 // API/variant machinery but still render, following their
                 // segment's final assistant variant.
-                if (msg._toolRound
-                    || (msg.role === 'tool' && (msg._web || msg._images || msg._imagesStripped))) {
+                if (msg.role === 'assistant' && msg._toolRound) {
+                    return (this.getTextContent(msg.content).trim().length > 0
+                        || this.hasVisibleThinking(msg._thinking)) && this.isToolFlowVisible(index);
+                }
+                if (msg.role === 'tool' && (msg._web || msg._images || msg._imagesStripped)) {
                     return this.isToolFlowVisible(index);
                 }
                 if (msg._ui === false) return false;

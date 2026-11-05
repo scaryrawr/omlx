@@ -859,6 +859,97 @@ for (const [label, turn, activeId, expected] of [
     });
 }
 
+for (const [label, content, thinking, visible] of [
+    ['null', null, null, false],
+    ['empty', '', '', false],
+    ['whitespace', ' \n\t ', ' \n ', false],
+    ['blank text arrays', [{ type: 'text', text: '' }, { type: 'text', text: '\n ' }], null, false],
+    ['plain text', ' \nEditing the hats.\n ', null, true],
+    ['literal JSON', '{"action":"edit_image","text":"Swap their hats"}', null, true],
+    ['text arrays', [{ type: 'text', text: ' ' }, { type: 'text', text: 'Editing' }], null, true],
+    ['reasoning only', null, 'Checking the source image.', true],
+    ['reasoning with whitespace', '\n', 'Checking the source image.', true],
+    ['reasoning with blank arrays', [{ type: 'text', text: ' \n' }], 'Checking the source image.', true],
+]) {
+    test(`tool-round visibility derives displayable ${label} without changing history`, () => {
+        const app = appFixture();
+
+        const round = {
+            id: 'round', role: 'assistant', content, _thinking: thinking,
+            _toolRound: true, _ui: false, tool_calls: [call('edit_image', {}, 'tc-1')],
+        };
+
+        const messages = [
+            { id: 'user', role: 'user', content: 'Swap their hats', _activeVariantId: 'final' },
+            round,
+            { id: 'result', role: 'tool', content: 'Edited', tool_call_id: 'tc-1', _ui: false, _images: [png] },
+            { id: 'final', role: 'assistant', content: 'Done' },
+            { id: 'other', role: 'assistant', content: 'Other variant' },
+        ];
+
+        app.messages = messages;
+        const before = structuredClone(messages);
+        const apiBefore = app.buildMessagesForApi(messages, '');
+        assert.equal(app.isMessageVisible(round, 1), visible, 'active variant');
+        assert.equal(app.isMessageVisible(messages[2], 2), true, 'image result stays visible');
+        assert.deepEqual(app.buildMessagesForApi(messages, ''), apiBefore);
+        assert.deepEqual(apiBefore.map(msg => msg.role), ['user', 'assistant', 'tool', 'assistant']);
+        assert.deepEqual(apiBefore[1].tool_calls, round.tool_calls);
+        assert.equal(apiBefore[2].tool_call_id, 'tc-1');
+        assert.deepEqual(messages, before, 'visibility never mutates protocol messages');
+
+        messages[0]._activeVariantId = 'other';
+        assert.equal(app.isMessageVisible(round, 1), false, 'inactive variant');
+        assert.equal(app.isMessageVisible(messages[2], 2), false, 'inactive image result');
+
+        app.messages = messages.slice(0, 3);
+        assert.equal(app.isMessageVisible(round, 1), visible, 'unfinished flow');
+        assert.equal(app.isMessageVisible(messages[2], 2), true, 'unfinished image result');
+    });
+}
+
+test('tool-round visibility preserves separate tool cards and ordinary assistants', () => {
+    const app = appFixture();
+    app.messages = [
+        { id: 'user', role: 'user', content: 'Edit' },
+        { role: 'tool', content: null, _ui: false, _web: { query: 'hats' } },
+        { role: 'tool', content: null, _ui: false, _imagesStripped: true },
+        { role: 'tool', content: null, _ui: false },
+        { id: 'final', role: 'assistant', content: null },
+    ];
+    assert.deepEqual(app.messages.map((msg, index) => app.isMessageVisible(msg, index)),
+        [true, true, true, false, true]);
+});
+
+test('tool-round body binding hides blank padding while preserving reasoning and content bytes', () => {
+    const app = appFixture();
+    const roundTemplate = template.split('x-show="msg.role === \'assistant\' && msg._toolRound"')[1]
+        .split('<!-- Built-in web tool activity card')[0];
+    const bodyShow = roundTemplate.match(/<div x-show="([^"]+)" class="message-body/)[1];
+    const bodyHtml = roundTemplate.match(/x-html="(renderMarkdown\(getTextContent\(msg.content\)\))"/)[1];
+    const thinkingShow = roundTemplate.match(/<template x-if="([^"]+)"/)[1];
+
+    for (const [content, expectedText] of [
+        [null, ''], [' \n\t ', ' \n\t '],
+        [[{ type: 'text', text: '' }, { type: 'text', text: ' ' }], '\n '],
+        [' \nEditing the hats.\n ', ' \nEditing the hats.\n '],
+        ['{"action":"edit_image","text":"Swap their hats"}', '{"action":"edit_image","text":"Swap their hats"}'],
+        [[{ type: 'text', text: 'First' }, { type: 'text', text: 'Second' }], 'First\nSecond'],
+    ]) {
+        const scope = {
+            msg: { content, _thinking: 'Checking the source image.' },
+            getTextContent: app.getTextContent.bind(app),
+            hasVisibleThinking: app.hasVisibleThinking.bind(app),
+            renderMarkdown: text => text,
+        };
+
+        assert.equal(Boolean(vm.runInNewContext(bodyShow, scope)), expectedText.trim().length > 0,
+            `body padding for ${JSON.stringify(content)}`);
+        assert.equal(vm.runInNewContext(thinkingShow, scope), true);
+        assert.equal(vm.runInNewContext(bodyHtml, scope), expectedText);
+    }
+});
+
 test('API message projection omits UI indicators but keeps tool calls and results', () => {
     const app = appFixture();
     const toolCalls = [call('search', { q: 'hello' }, 'tc-1')];
