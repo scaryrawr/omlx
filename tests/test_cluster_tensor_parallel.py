@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 from omlx.cluster.planner import (
     ModelLayout,
     NodeBudget,
@@ -74,13 +76,19 @@ def test_plan_hybrid_rank_mapping():
     assert by_rank[3].tensor_parallel_rank == 1
 
 
-def test_plan_hybrid_not_divisible():
-    """World size not divisible by TP size should raise PlanningError."""
+@pytest.mark.parametrize(
+    ("node_count", "heads"),
+    [
+        pytest.param(3, 32, id="world-size-not-divisible"),
+        pytest.param(4, 33, id="heads-not-divisible"),
+    ],
+)
+def test_plan_hybrid_not_divisible(node_count, heads):
     model = ModelLayout(
         source="test",
         fixed_weight_bytes=1 * 1024**3,
         layer_weight_bytes=(2 * 1024**3,) * 32,
-        tensor_parallel_heads=32,
+        tensor_parallel_heads=heads,
     )
     nodes = [
         NodeBudget(
@@ -89,39 +97,11 @@ def test_plan_hybrid_not_divisible():
             reserve_bytes=2 * 1024**3,
             rank=i,
         )
-        for i in range(3)
+        for i in range(node_count)
     ]
 
-    try:
+    with pytest.raises(PlanningError, match="not divisible"):
         plan_hybrid(model, nodes, tensor_parallel_size=2)
-        raise AssertionError("should have raised PlanningError")
-    except PlanningError as e:
-        assert "not divisible" in str(e)
-
-
-def test_plan_hybrid_heads_not_divisible():
-    """TP size that does not divide heads should raise PlanningError."""
-    model = ModelLayout(
-        source="test",
-        fixed_weight_bytes=1 * 1024**3,
-        layer_weight_bytes=(2 * 1024**3,) * 32,
-        tensor_parallel_heads=33,  # Not divisible by 2
-    )
-    nodes = [
-        NodeBudget(
-            node_id=f"node-{i}",
-            capacity_bytes=32 * 1024**3,
-            reserve_bytes=2 * 1024**3,
-            rank=i,
-        )
-        for i in range(4)
-    ]
-
-    try:
-        plan_hybrid(model, nodes, tensor_parallel_size=2)
-        raise AssertionError("should have raised PlanningError")
-    except PlanningError as e:
-        assert "not divisible" in str(e)
 
 
 def test_plan_hybrid_single_node():

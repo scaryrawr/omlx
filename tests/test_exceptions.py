@@ -316,34 +316,45 @@ class TestMCPExceptions:
 class TestIsCacheCorruptionError:
     """Test cases for is_cache_corruption_error helper function."""
 
-    def test_none_type_pattern(self):
-        """Test detection of NoneType subscript error."""
-        error = TypeError("'NoneType' object is not subscriptable")
-        assert is_cache_corruption_error(error) is True
-
-    def test_batch_kv_cache_pattern(self):
-        """Test detection of BatchKVCache error."""
-        error = RuntimeError("BatchKVCache.keys returned None")
-        assert is_cache_corruption_error(error) is True
-
-    def test_kv_cache_pattern(self):
-        """Test detection of KVCache error."""
-        error = ValueError("KVCache data is invalid")
-        assert is_cache_corruption_error(error) is True
-
-    def test_cache_keys_pattern(self):
-        """Test detection of cache.keys error."""
-        error = AttributeError("cache.keys is not available")
-        assert is_cache_corruption_error(error) is True
-
-    def test_cache_values_pattern(self):
-        """Test detection of cache.values error."""
-        error = AttributeError("cache.values returned empty")
-        assert is_cache_corruption_error(error) is True
-
-    def test_attribute_error_none_attribute(self):
-        """Test detection of NoneType attribute access error."""
-        error = AttributeError("'NoneType' object has no attribute 'shape'")
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(
+                TypeError("'NoneType' object is not subscriptable"),
+                id="none-subscript",
+            ),
+            pytest.param(
+                RuntimeError("BatchKVCache.keys returned None"), id="batch-kv-cache"
+            ),
+            pytest.param(ValueError("KVCache data is invalid"), id="kv-cache"),
+            pytest.param(
+                AttributeError("cache.keys is not available"), id="cache-keys"
+            ),
+            pytest.param(
+                AttributeError("cache.values returned empty"), id="cache-values"
+            ),
+            pytest.param(
+                AttributeError("'NoneType' object has no attribute 'shape'"),
+                id="none-attribute",
+            ),
+            pytest.param(
+                ValueError("Shapes (1,8,256,128) and (1,8,512,128) are not broadcastable"),
+                id="not-broadcastable",
+            ),
+            pytest.param(
+                ValueError(
+                    "[broadcast_shapes] Shapes (8,1,625,2674) and (8,8,625,3697) "
+                    "cannot be broadcast."
+                ),
+                id="mlx-broadcast-shapes-issue-79",
+            ),
+            pytest.param(
+                ValueError("shape mismatch in cache concatenation"),
+                id="shape-mismatch",
+            ),
+        ],
+    )
+    def test_corruption_patterns(self, error):
         assert is_cache_corruption_error(error) is True
 
     def test_none_type_not_iterable_pattern(self):
@@ -358,39 +369,18 @@ class TestIsCacheCorruptionError:
         error = TypeError("'NoneType' object is not iterable")
         assert is_cache_corruption_error(error) is True
 
-    def test_value_error_not_broadcastable(self):
-        """Test detection of shape broadcast error."""
-        error = ValueError(
-            "Shapes (1,8,256,128) and (1,8,512,128) are not broadcastable"
-        )
-        assert is_cache_corruption_error(error) is True
-
-    def test_value_error_cannot_be_broadcast(self):
-        """Test detection of MLX broadcast_shapes error (Issue #79)."""
-        error = ValueError(
-            "[broadcast_shapes] Shapes (8,1,625,2674) and (8,8,625,3697) "
-            "cannot be broadcast."
-        )
-        assert is_cache_corruption_error(error) is True
-
-    def test_value_error_shape_mismatch(self):
-        """Test detection of shape mismatch error."""
-        error = ValueError("shape mismatch in cache concatenation")
-        assert is_cache_corruption_error(error) is True
-
-    def test_non_corruption_error(self):
-        """Test that non-corruption errors return False."""
-        error = ValueError("Invalid temperature value")
-        assert is_cache_corruption_error(error) is False
-
-    def test_attribute_error_non_corruption(self):
-        """Non-corruption AttributeError should not match."""
-        error = AttributeError("'str' object has no attribute 'encode'")
-        assert is_cache_corruption_error(error) is False
-
-    def test_unrelated_error(self):
-        """Test completely unrelated error."""
-        error = FileNotFoundError("Model file not found")
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(ValueError("Invalid temperature value"), id="invalid-input"),
+            pytest.param(
+                AttributeError("'str' object has no attribute 'encode'"),
+                id="unrelated-attribute",
+            ),
+            pytest.param(FileNotFoundError("Model file not found"), id="missing-model"),
+        ],
+    )
+    def test_non_corruption_errors(self, error):
         assert is_cache_corruption_error(error) is False
 
 

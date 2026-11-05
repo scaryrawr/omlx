@@ -161,22 +161,19 @@ class TestGetMaxWorkingSetBytes:
 class TestIsAppleSilicon:
     """Test cases for is_apple_silicon function."""
 
-    def test_is_apple_silicon_true(self):
-        """Test is_apple_silicon returns True on macOS arm64."""
-        with patch.object(sys, "platform", "darwin"):
-            with patch.object(platform, "machine", return_value="arm64"):
-                assert is_apple_silicon() is True
-
-    def test_is_apple_silicon_false_wrong_platform(self):
-        """Test is_apple_silicon returns False on non-macOS."""
-        with patch.object(sys, "platform", "linux"):
-            assert is_apple_silicon() is False
-
-    def test_is_apple_silicon_false_wrong_arch(self):
-        """Test is_apple_silicon returns False on x86_64 macOS."""
-        with patch.object(sys, "platform", "darwin"):
-            with patch.object(platform, "machine", return_value="x86_64"):
-                assert is_apple_silicon() is False
+    @pytest.mark.parametrize(
+        "os_name, architecture, expected",
+        [
+            pytest.param("darwin", "arm64", True, id="apple-silicon"),
+            pytest.param("linux", "arm64", False, id="wrong-platform"),
+            pytest.param("darwin", "x86_64", False, id="wrong-architecture"),
+        ],
+    )
+    def test_is_apple_silicon(self, os_name, architecture, expected):
+        with patch.object(sys, "platform", os_name), patch.object(
+            platform, "machine", return_value=architecture
+        ):
+            assert is_apple_silicon() is expected
 
 
 class TestIsMlxAvailable:
@@ -187,50 +184,48 @@ class TestIsMlxAvailable:
         with patch("omlx.utils.hardware.is_apple_silicon", return_value=False):
             assert is_mlx_available() is False
 
-    def test_is_mlx_available_import_error(self):
-        """Test is_mlx_available handles import errors."""
-        with patch("omlx.utils.hardware.is_apple_silicon", return_value=True):
-            with patch.dict("sys.modules", {"mlx.core": None}):
-                # Force import to fail
-                import builtins
+    def test_is_mlx_available_without_mlx(self):
+        with patch("omlx.utils.hardware.is_apple_silicon", return_value=True), patch(
+            "omlx.utils.hardware.HAS_MLX", False
+        ):
+            assert is_mlx_available() is False
 
-                original_import = builtins.__import__
-
-                def mock_import(name, *args, **kwargs):
-                    if name == "mlx.core" or name.startswith("mlx"):
-                        raise ImportError("No module named mlx")
-                    return original_import(name, *args, **kwargs)
-
-                with patch.object(builtins, "__import__", mock_import):
-                    result = is_mlx_available()
-                    # May return True if mlx is already imported, False if not
-                    assert isinstance(result, bool)
+    @pytest.mark.parametrize(
+        "array_error, expected",
+        [
+            pytest.param(None, True, id="working-device"),
+            pytest.param(RuntimeError("device unavailable"), False, id="device-error"),
+        ],
+    )
+    def test_is_mlx_available_checks_device(self, array_error, expected):
+        with patch("omlx.utils.hardware.is_apple_silicon", return_value=True), patch(
+            "omlx.utils.hardware.HAS_MLX", True
+        ), patch("omlx.utils.hardware.mx") as mock_mx:
+            mock_mx.array.side_effect = array_error
+            assert is_mlx_available() is expected
+            mock_mx.array.assert_called_once_with([1.0, 2.0, 3.0])
 
 
 class TestFormatBytesHardware:
     """Test cases for format_bytes function in hardware module."""
 
-    def test_format_bytes_gb(self):
-        """Test formatting bytes to GB."""
-        assert format_bytes(1024**3) == "1.00 GB"
-        assert format_bytes(16 * 1024**3) == "16.00 GB"
-        assert format_bytes(48 * 1024**3) == "48.00 GB"
-
-    def test_format_bytes_mb(self):
-        """Test formatting bytes to MB."""
-        assert format_bytes(1024**2) == "1.00 MB"
-        assert format_bytes(512 * 1024**2) == "512.00 MB"
-
-    def test_format_bytes_kb(self):
-        """Test formatting bytes to KB."""
-        assert format_bytes(1024) == "1.00 KB"
-        assert format_bytes(512 * 1024) == "512.00 KB"
-
-    def test_format_bytes_small(self):
-        """Test formatting small byte values."""
-        assert format_bytes(0) == "0 B"
-        assert format_bytes(512) == "512 B"
-        assert format_bytes(1023) == "1023 B"
+    @pytest.mark.parametrize(
+        "size, expected",
+        [
+            (1024**3, "1.00 GB"),
+            (16 * 1024**3, "16.00 GB"),
+            (48 * 1024**3, "48.00 GB"),
+            (1024**2, "1.00 MB"),
+            (512 * 1024**2, "512.00 MB"),
+            (1024, "1.00 KB"),
+            (512 * 1024, "512.00 KB"),
+            (0, "0 B"),
+            (512, "512 B"),
+            (1023, "1023 B"),
+        ],
+    )
+    def test_format_bytes(self, size, expected):
+        assert format_bytes(size) == expected
 
 
 class TestDefaultMemoryBytes:
