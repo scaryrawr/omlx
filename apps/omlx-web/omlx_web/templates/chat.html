@@ -4421,9 +4421,10 @@
 
             // ===== VLM Detection =====
 
-            async fetchModelTypes() {
+            async fetchModelTypes(signal) {
         try {
             const resp = await fetch('/v1/models/status', {
+                signal,
                 headers: { 'Authorization': `Bearer ${this.getApiKey()}` }
             });
             if (!resp.ok) return;
@@ -6914,6 +6915,13 @@
         this.startPrefillPolling(context.chatId);
 
         try {
+            if (depth === 0 && this.modelToolSupportMap[requestBody.model] === false) {
+                await this.fetchModelTypes(stream.abortController.signal);
+                stream.abortController.signal.throwIfAborted();
+                const tools = this.activeTools(requestBody.model);
+                if (tools.length) requestBody.tools = tools;
+                else delete requestBody.tools;
+            }
             const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: {

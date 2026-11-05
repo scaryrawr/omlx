@@ -166,6 +166,66 @@ test('image tools follow the actual request model tool support, including aliase
     assert.deepEqual(app.activeTools('plain'), app.mcpTools);
 });
 
+test('new prompts refresh disabled tool support after a diffusion model loads in the same tab', async () => {
+    for (const supportsTools of [true, false]) {
+        const app = appFixture();
+        app.aliasToGateway = { 'diffusion-alias': 'diffusion' };
+        app.modelToolSupportMap = { diffusion: false };
+        let loaded = false;
+        let statusRequests = 0;
+        let completions = 0;
+        global.fetch = async (url, init) => {
+            if (url === '/v1/models/status') {
+                statusRequests++;
+                return json({ models: [{
+                    id: 'diffusion', model_type: 'vlm',
+                    supports_tool_calling: loaded && supportsTools,
+                }] });
+            }
+            assert.equal(url, '/v1/chat/completions');
+            const body = JSON.parse(init.body);
+            assert.equal(body.model, 'diffusion');
+            if (completions === 0 || !supportsTools) {
+                assert.equal(Object.hasOwn(body, 'tools'), false);
+            } else {
+                assert.deepEqual(body.tools.map(tool => tool.function.name), [
+                    'list_image_models', 'generate_image', 'edit_image',
+                ]);
+            }
+            completions++;
+            loaded = true;
+            return sse(null);
+        };
+        const context = { chatId: 'owner', model: 'text', _modelOverride: 'diffusion-alias', systemPrompt: '' };
+        await app.streamResponse(context);
+        app.chatSessions.owner.messages.push({ id: 'follow-up', role: 'user', content: 'Which image models can I use?' });
+        await app.streamResponse(context);
+        assert.equal(completions, 2);
+        assert.equal(statusRequests, 2);
+    }
+});
+
+test('Stop during a tool-support refresh prevents the chat completion request', async () => {
+    const app = appFixture();
+    app.modelToolSupportMap = { text: false };
+    const requests = [];
+    global.fetch = async (url, init) => {
+        requests.push(url);
+        assert.equal(url, '/v1/models/status');
+        return {
+            ok: true,
+            json: async () => {
+                app.stopChatStreaming('owner');
+                assert.equal(init.signal.aborted, true);
+                return { models: [{ id: 'text', supports_tool_calling: true }] };
+            },
+        };
+    };
+    await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    assert.deepEqual(requests, ['/v1/models/status']);
+    assert.equal(app.getStreamSession('owner').isStreaming, false);
+});
+
 test('branching rebases copied image references without changing the parent or accepting foreign sources', async () => {
     const uploadRef = images.reference('owner', upload.id, 'upload', 1);
     const toolRef = images.reference('owner', 'result', 'tool', 0);

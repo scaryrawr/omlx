@@ -651,7 +651,8 @@ Ask which image models are available, request an image, or upload an image
 and ask for an edit. Text-only chat models can use these tools without
 receiving image bytes. Vision models retain their normal image inputs.
 Chat omits image tools when the request model reports no tool-calling support.
-Unloaded diffusion chat models omit them until a loaded model reports support.
+Chat refreshes unavailable tool support before each new prompt, so loaded
+diffusion models can enable image tools without reopening the tab.
 Generated images appear inline with download and reuse controls. Reuse
 inserts an explicit image reference into the composer for a later edit.
 Branching a conversation updates references to copied images for the new chat.
