@@ -72,11 +72,26 @@ test('legacy missing-image placeholders are not converted into fabricated bytes'
     assert.deepEqual(await history.hydrate(packed.snapshot, []), legacy);
 });
 
-test('archive validation rejects message IDs that cannot own IndexedDB attachments', () => {
-    for (const id of [true, {}]) {
+test('archive and packing reject message IDs that cannot own IndexedDB attachments', () => {
+    for (const id of [true, false, {}, [], NaN, Infinity, -Infinity]) {
         const chat = fixture();
         chat.messages[0].id = id;
         assert.throws(() => history.parseArchive([chat]), /Invalid chat history archive/);
+        assert.throws(() => history.pack(chat), /Invalid chat history archive/);
+    }
+});
+
+test('legacy missing IDs and valid scalar IDs retain their attachment keys', async () => {
+    for (const id of [undefined, null, '', 'message', 0, 42, -1.5]) {
+        const chat = fixture();
+        chat.messages[0].id = id;
+        chat.messages[0].content.pop();
+        const archived = history.parseArchive([chat])[0];
+        const packed = history.pack(archived);
+        const messageId = id == null || id === '' ? 'legacy-0' : id;
+
+        assert.deepEqual(packed.attachments[0].key, ['owner', messageId, 'upload', 1]);
+        assert.deepEqual(await history.hydrate(packed.snapshot, packed.attachments), archived);
     }
 });
 

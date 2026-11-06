@@ -107,7 +107,7 @@ def test_chat_history_sorts_before_saving_and_storage_owns_eviction():
         "    startRenamingChat(chat)",
     )
 
-    assert save.index("this.sortChatHistory()") < save.index("this.saveChatHistory()")
+    assert save.index("this.sortChatHistory()") < save.index("this.saveChatHistory([chatId])")
     assert "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)" not in save
     assert "limit: MAX_CHAT_HISTORY_SIZE" in _template()
 

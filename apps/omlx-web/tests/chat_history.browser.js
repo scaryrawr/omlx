@@ -224,12 +224,13 @@ async function runChatHistoryBrowserTests() {
             await store.load();
             await store.save(chat());
             const restore = failAttachmentWrites(store.db);
-            let failed = false;
+            let failure;
 
-            try { await store.save(chat('owner', 2), { replace: true }); } catch { failed = true; }
+            try { await store.save(chat('owner', 2), { replace: true }); } catch (error) { failure = error; }
             finally { restore(); }
 
-            assert(failed, 'Synchronous attachment failure reported success');
+            assert(failure?.name === 'DataError', 'Rollback replaced the original attachment error');
+            assert(failure.message === 'Injected attachment write failure', 'Rollback lost the original error message');
 
             const reload = open({ name: store.name });
             const restored = await reload.load();
@@ -250,11 +251,12 @@ async function runChatHistoryBrowserTests() {
                 },
             };
             const failedStore = open({ storage: legacy, indexedDB: failingDB });
-            let failed = false;
+            let failure;
 
-            try { await failedStore.load(); } catch { failed = true; }
+            try { await failedStore.load(); } catch (error) { failure = error; }
 
-            assert(failed, 'Synchronous migration failure reported success');
+            assert(failure?.name === 'DataError', 'Migration rollback replaced the original attachment error');
+            assert(failure.message === 'Injected attachment write failure', 'Migration rollback lost the original error message');
             assert(legacy.getItem('omlx_chat_history'), 'Failed migration removed its source');
             failedStore.db.close();
 

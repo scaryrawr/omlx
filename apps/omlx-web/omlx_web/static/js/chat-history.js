@@ -20,19 +20,48 @@ const ChatHistory = (() => {
         return result;
     };
 
+    async function withTransaction(db, stores, body) {
+        const tx = db.transaction(stores, 'readwrite');
+        const done = completed(tx);
+
+        try {
+            const result = await body(tx);
+            await done;
+
+            return result;
+        } catch (error) {
+            try {
+                tx.abort();
+            } catch (abortError) {
+                if (abortError.name !== 'InvalidStateError') console.error('Chat history abort failed:', abortError);
+            }
+            await done.catch(() => {});
+            throw error;
+        }
+    }
+
+    function validateMessageId(id) {
+        if (id == null || typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id))) return;
+        throw new Error('Invalid chat history archive message ID');
+    }
+
     function parseArchive(value) {
         if (!Array.isArray(value) || value.some(chat =>
             !chat || typeof chat.id !== 'string' || !chat.id || !Array.isArray(chat.messages)
             || chat.messages.some(message => !message || typeof message.role !== 'string')
         )) throw new Error('Invalid chat history archive');
+        for (const chat of value) {
+            for (const message of chat.messages) validateMessageId(message.id);
+        }
         return copy(value);
     }
 
     function pack(chat) {
+        for (const message of chat.messages) validateMessageId(message.id);
         const snapshot = copy(chat);
         const attachments = [];
         snapshot.messages.forEach((message, index) => {
-            const messageId = message.id || `legacy-${index}`;
+            const messageId = message.id == null || message.id === '' ? `legacy-${index}` : message.id;
             const image = (url, kind, slot) => {
                 if (!url || !url.startsWith('data:')) return url;
                 const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(url);
@@ -146,24 +175,24 @@ const ChatHistory = (() => {
             };
             this.db.onclose = () => this.onError(new Error('Chat history storage connection closed unexpectedly.'));
             const legacy = this.storage.getItem(legacyKey);
-            const tx = this.db.transaction(['chats', 'attachments', 'metadata'], 'readwrite');
-            const done = completed(tx);
-            const metadata = tx.objectStore('metadata');
-            const marker = await request(metadata.get('migrated'));
-            this.epoch = await request(metadata.get('epoch')) || newId();
-            metadata.put(this.epoch, 'epoch');
-            if (!marker) {
-                const migrated = legacy ? parseArchive(JSON.parse(legacy)).map(pack) : [];
-                for (const entry of migrated) {
-                    const chats = tx.objectStore('chats');
-                    if (!await request(chats.get(entry.snapshot.id))) {
-                        chats.put({ id: entry.snapshot.id, revision: 1, chat: entry.snapshot });
-                        for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
+            this.epoch = await withTransaction(this.db, ['chats', 'attachments', 'metadata'], async tx => {
+                const metadata = tx.objectStore('metadata');
+                const marker = await request(metadata.get('migrated'));
+                const epoch = await request(metadata.get('epoch')) || newId();
+                metadata.put(epoch, 'epoch');
+                if (!marker) {
+                    const migrated = legacy ? parseArchive(JSON.parse(legacy)).map(pack) : [];
+                    for (const entry of migrated) {
+                        const chats = tx.objectStore('chats');
+                        if (!await request(chats.get(entry.snapshot.id))) {
+                            chats.put({ id: entry.snapshot.id, revision: 1, chat: entry.snapshot });
+                            for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
+                        }
                     }
+                    metadata.put(true, 'migrated');
                 }
-                metadata.put(true, 'migrated');
-            }
-            await done;
+                return epoch;
+            });
             if (legacy) this.storage.removeItem(legacyKey);
         }
 
@@ -208,60 +237,60 @@ const ChatHistory = (() => {
             const generation = this.generation;
             return this.enqueue(async () => {
                 if (generation !== this.generation || this.deleted.has(entry.snapshot.id)) return false;
-                const tx = this.db.transaction(['chats', 'attachments', 'metadata'], 'readwrite');
-                const done = completed(tx);
-                const chats = tx.objectStore('chats');
-                const epoch = await request(tx.objectStore('metadata').get('epoch'));
-                const existing = await request(chats.get(entry.snapshot.id));
-                if (replace && existing?.chat
-                    && (Date.parse(existing.chat.updatedAt) || 0) >= (Date.parse(entry.snapshot.updatedAt) || 0)) {
-                    await done;
-                    return false;
-                }
-                if (epoch !== this.epoch || (existing && (!existing.chat
-                    || (!replace && existing.revision !== this.revisions.get(entry.snapshot.id))))) {
-                    await done;
-                    if (existing && !existing.chat) this.deleted.add(entry.snapshot.id);
+                const result = await withTransaction(this.db, ['chats', 'attachments', 'metadata'], async tx => {
+                    const chats = tx.objectStore('chats');
+                    const epoch = await request(tx.objectStore('metadata').get('epoch'));
+                    const existing = await request(chats.get(entry.snapshot.id));
+                    if (replace && existing?.chat
+                        && (Date.parse(existing.chat.updatedAt) || 0) >= (Date.parse(entry.snapshot.updatedAt) || 0)) {
+                        return false;
+                    }
+                    if (epoch !== this.epoch || (existing && (!existing.chat
+                        || (!replace && existing.revision !== this.revisions.get(entry.snapshot.id))))) {
+                        return { kind: 'conflict', deleted: !!existing && !existing.chat };
+                    }
+                    const revision = (existing?.revision || 0) + 1;
+                    const records = await request(chats.getAll());
+                    const active = records.filter(record => record.chat && record.id !== entry.snapshot.id);
+                    active.push({ id: entry.snapshot.id, revision, chat: entry.snapshot });
+                    active.sort((a, b) =>
+                        Number(!!b.chat.pinned) - Number(!!a.chat.pinned)
+                        || (Date.parse(b.chat.updatedAt) || 0) - (Date.parse(a.chat.updatedAt) || 0)
+                    );
+                    const evicted = active.slice(this.limit);
+
+                    if (evicted.some(record => record.id === entry.snapshot.id || protectedIds.includes(record.id))) {
+                        throw new Error('Chat history is full. Close, unpin, or delete older chats before saving this conversation.');
+                    }
+
+                    await this.removeAttachments(tx, entry.snapshot.id);
+                    chats.put({ id: entry.snapshot.id, revision, chat: entry.snapshot });
+                    for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
+
+                    for (const record of evicted) {
+                        chats.put({ id: record.id, revision: record.revision + 1 });
+                        await this.removeAttachments(tx, record.id);
+                    }
+                    return { kind: 'saved', revision, evicted };
+                });
+                if (result === false) return false;
+                if (result.kind === 'conflict') {
+                    if (result.deleted) this.deleted.add(entry.snapshot.id);
 
                     throw new Error('Chat history changed in another tab. Reload before saving this chat.');
                 }
-                const revision = (existing?.revision || 0) + 1;
-                const records = await request(chats.getAll());
-                const active = records.filter(record => record.chat && record.id !== entry.snapshot.id);
-                active.push({ id: entry.snapshot.id, revision, chat: entry.snapshot });
-                active.sort((a, b) =>
-                    Number(!!b.chat.pinned) - Number(!!a.chat.pinned)
-                    || (Date.parse(b.chat.updatedAt) || 0) - (Date.parse(a.chat.updatedAt) || 0)
-                );
-                const evicted = active.slice(this.limit);
-
-                if (evicted.some(record => record.id === entry.snapshot.id || protectedIds.includes(record.id))) {
-                    await done;
-                    throw new Error('Chat history is full. Close, unpin, or delete older chats before saving this conversation.');
-                }
-
-                await this.removeAttachments(tx, entry.snapshot.id);
-                chats.put({ id: entry.snapshot.id, revision, chat: entry.snapshot });
-                for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
-
-                for (const record of evicted) {
-                    chats.put({ id: record.id, revision: record.revision + 1 });
-                    await this.removeAttachments(tx, record.id);
-                }
-                await done;
-                this.revisions.set(entry.snapshot.id, revision);
-                for (const record of evicted) this.deleted.add(record.id);
-                return evicted.map(record => record.id);
+                this.revisions.set(entry.snapshot.id, result.revision);
+                for (const record of result.evicted) this.deleted.add(record.id);
+                return result.evicted.map(record => record.id);
             });
         }
 
         delete(chatId) {
             return this.enqueue(async () => {
-                const tx = this.db.transaction(['chats', 'attachments'], 'readwrite');
-                const done = completed(tx);
-                tx.objectStore('chats').put({ id: chatId, revision: 0 });
-                await this.removeAttachments(tx, chatId);
-                await done;
+                await withTransaction(this.db, ['chats', 'attachments'], async tx => {
+                    tx.objectStore('chats').put({ id: chatId, revision: 0 });
+                    await this.removeAttachments(tx, chatId);
+                });
                 this.deleted.add(chatId);
             });
         }
@@ -271,13 +300,12 @@ const ChatHistory = (() => {
             const chatIds = new Set([...this.revisions.keys(), ...this.seen]);
 
             return this.enqueue(async () => {
-                const tx = this.db.transaction(['chats', 'attachments', 'metadata'], 'readwrite');
-                const done = completed(tx);
-                tx.objectStore('chats').clear();
-                tx.objectStore('attachments').clear();
                 const epoch = newId();
-                tx.objectStore('metadata').put(epoch, 'epoch');
-                await done;
+                await withTransaction(this.db, ['chats', 'attachments', 'metadata'], async tx => {
+                    tx.objectStore('chats').clear();
+                    tx.objectStore('attachments').clear();
+                    tx.objectStore('metadata').put(epoch, 'epoch');
+                });
                 for (const id of chatIds) this.deleted.add(id);
 
                 this.epoch = epoch;

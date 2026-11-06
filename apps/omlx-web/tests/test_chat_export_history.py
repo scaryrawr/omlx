@@ -22,6 +22,7 @@ METHODS = [
     "activeHistoryChatIds",
     "isChatStreaming",
     "saveChatHistory",
+    "isPendingHistoryRemoval",
     "sortChatHistory",
     "cloneData",
     "downloadChats",
@@ -118,7 +119,9 @@ console.warn = () => {};
 app.chatHistory = [];
 app.chatSessions = {};
 app.chatHistoryPending = false;
-app.historySnapshots = {};
+app.historyDirty = new Map();
+app.historyWriteVersion = 0;
+app.pendingHistoryRemovals = new Set();
 app.historyDeleted = new Set();
 app.historyStore = new HistoryStore();
 app.streamSessions = {};
@@ -229,7 +232,7 @@ app.chatSessions.chat_old = newSession();
 say('chat_old', 'earlier question');
 app.chatHistory.find(c => c.id === 'chat_old').pinned = true;
 app.sortChatHistory();
-app.saveChatHistory();
+app.saveChatHistory(['chat_old']);
 app.chatSessions.chat_1 = newSession();
 app.currentChatId = 'chat_1';
 say('chat_1', 'first');

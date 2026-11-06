@@ -28,6 +28,14 @@ vm.runInThisContext(fs.readFileSync(path.join(web, 'static/js/chat-history.js'),
 const script = template.split('{% block scripts %}')[1].match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace('{{ api_key | tojson }}', '""');
 const chatApp = vm.runInThisContext(script + '\nchatApp;');
+const alpineContext = {
+    window: { Element: class {} },
+    document: { createElement: () => ({}) },
+    MutationObserver: class {},
+    queueMicrotask: () => {},
+};
+vm.runInNewContext(fs.readFileSync(path.join(web, 'static/js/alpine.min.js'), 'utf8'), alpineContext);
+const reactive = alpineContext.window.Alpine.reactive;
 const png = 'data:image/png;base64,c291cmNl';
 const upload = { id: 'upload-1', role: 'user', content: [
     { type: 'text', text: 'Edit this' }, { type: 'image_url', image_url: { url: png } },
@@ -51,7 +59,7 @@ function sse(calls) {
 }
 
 function appFixture(messages = [structuredClone(upload)]) {
-    const app = chatApp();
+    const app = reactive(chatApp());
     app.currentChatId = 'foreground';
     app.currentModel = 'text';
     app.chatHistoryPending = false;
@@ -59,7 +67,7 @@ function appFixture(messages = [structuredClone(upload)]) {
     app.historyStore = {
         deleted: new Set(),
         save: chat => {
-            app.savedChats.set(chat.id, structuredClone(chat));
+            app.savedChats.set(chat.id, app.cloneData(chat));
             return Promise.resolve([]);
         },
         delete: id => {
@@ -86,6 +94,32 @@ function appFixture(messages = [structuredClone(upload)]) {
     return app;
 }
 
+function archiveFixture(t, app) {
+    const Reader = global.FileReader;
+    const alert = global.alert;
+    const alerts = [];
+    let reader;
+    global.FileReader = class {
+        constructor() { reader = this; }
+        readAsText() {}
+    };
+    global.alert = message => alerts.push(message);
+    t.after(() => {
+        global.FileReader = Reader;
+        global.alert = alert;
+    });
+    app.loadChatHistory = async () => {};
+    app.historyStore.generation = 0;
+
+    return {
+        alerts,
+        import(entries) {
+            app.importChats({ target: { files: [{}], value: 'archive.json' } });
+            return reader.onload({ target: { result: JSON.stringify(entries) } });
+        },
+    };
+}
+
 test('failed deletion keeps the chat available for export and retry', async () => {
     const app = appFixture();
     app.saveCurrentChat('owner');
@@ -110,7 +144,7 @@ test('failed deletion keeps the chat available for export and retry', async () =
     app.historyStore.delete = async () => {};
     await app.deleteChat('owner', { skipConfirm: true });
     assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
-    assert.equal(app.historySnapshots.owner, undefined);
+    assert.ok(!app.historyDirty.has('owner'));
 });
 
 test('failed deletion of the first message preserves context and images for later saves', async () => {
@@ -120,7 +154,7 @@ test('failed deletion of the first message preserves context and images for late
     ]);
     app.currentChatId = 'owner';
     app.messages = app.chatSessions.owner.messages;
-    const original = structuredClone(app.messages);
+    const original = app.cloneData(app.messages);
 
     app.saveCurrentChat('owner');
     await app.saveChatHistory();
@@ -201,7 +235,7 @@ test('failed clear retains live history instead of reporting an empty history', 
     assert.equal(reported, failure);
     assert.ok(app.chatHistory.some(chat => chat.id === 'owner'));
     assert.ok(app.chatSessions.owner);
-    assert.ok(app.historySnapshots.owner);
+    assert.deepEqual(app.savedChats.get('owner'), app.cloneData(app.chatHistory.find(chat => chat.id === 'owner')));
 
     assert.ok(!app.historyDeleted.has('owner'));
     assert.ok(app.historyDeleted.has('already-deleted'));
@@ -212,7 +246,331 @@ test('failed clear retains live history instead of reporting an empty history', 
     app.historyStore.clear = async () => {};
     app.startNewChat = async () => {};
     await app.clearAllHistory();
-    assert.deepEqual(app.historySnapshots, {});
+
+    assert.equal(app.historyDirty.size, 0);
+});
+
+for (const synchronous of [false, true]) {
+    test(`failed ${synchronous ? 'synchronous' : 'asynchronous'} writes retry only dirty IDs on an explicit flush`, async () => {
+        const app = appFixture();
+        const failure = new Error('Storage unavailable');
+        const writes = [];
+        let failing = true;
+        app.reportHistoryError = () => {};
+        app.historyStore.save = chat => {
+            writes.push(chat.id);
+            if (failing) {
+                if (synchronous) throw failure;
+                return Promise.reject(failure);
+            }
+            app.savedChats.set(chat.id, app.cloneData(chat));
+            return Promise.resolve([]);
+        };
+
+        app.saveCurrentChat('owner');
+        await app.historyDirty.get('owner')?.flight?.done;
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.deepEqual(writes, ['owner']);
+        assert.ok(app.historyDirty.has('owner'));
+        assert.equal(app.historyDirty.get('owner').flight, null);
+        failing = false;
+        await app.saveChatHistory();
+        await app.saveChatHistory();
+
+        assert.deepEqual(writes, ['owner', 'owner']);
+        assert.equal(app.historyDirty.size, 0);
+        assert.equal(app.savedChats.get('owner').messages[0].content[1].image_url.url, png);
+    });
+}
+
+for (const failFirst of [false, true]) {
+    test(`a newer mutation survives an older ${failFirst ? 'failed' : 'successful'} in-flight write`, async () => {
+        const app = appFixture();
+        const writes = [];
+        const releases = [];
+        app.reportHistoryError = () => {};
+        app.historyStore.save = chat => {
+            const snapshot = app.cloneData(chat);
+            writes.push(snapshot);
+            return new Promise((resolve, reject) => {
+                releases.push(() => {
+                    if (failFirst && writes.length === 1) reject(new Error('Storage unavailable'));
+                    else {
+                        app.savedChats.set(chat.id, snapshot);
+                        resolve([]);
+                    }
+                });
+            });
+        };
+
+        app.saveCurrentChat('owner');
+        const olderVersion = app.historyDirty.get('owner').version;
+        app.renameDraft = 'Newest title';
+        app.saveRenamedChat('owner');
+        app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Newest message' });
+        app.saveCurrentChat('owner');
+        const newerVersion = app.historyDirty.get('owner').version;
+        const flushing = app.saveChatHistory();
+
+        assert.ok(newerVersion > olderVersion);
+        assert.equal(writes.length, 1);
+        releases.shift()();
+        await new Promise(resolve => setImmediate(resolve));
+
+        if (failFirst) {
+            await flushing;
+            assert.equal(writes.length, 1);
+            assert.equal(app.historyDirty.get('owner').version, newerVersion);
+            assert.equal(app.historyDirty.get('owner').flight, null);
+        } else {
+            assert.equal(writes.length, 2);
+            assert.ok(app.historyDirty.has('owner'));
+        }
+        const retrying = failFirst ? app.saveChatHistory() : flushing;
+
+        assert.equal(writes.length, 2);
+        assert.equal(writes[1].title, 'Newest title');
+        assert.equal(writes[1].messages.at(-1).content, 'Newest message');
+        releases.shift()();
+        await retrying;
+        await app.saveChatHistory();
+
+        assert.equal(writes.length, 2);
+        assert.equal(app.historyDirty.size, 0);
+        assert.equal(app.savedChats.get('owner').messages.at(-1).content, 'Newest message');
+    });
+}
+
+test('overlapping failed removals release only their own membership', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const removals = [];
+    app.historyStore.delete = () => new Promise((resolve, reject) => removals.push({ resolve, reject }));
+    app.reportHistoryError = () => {};
+    let writes = 0;
+    const save = app.historyStore.save;
+    app.historyStore.save = chat => {
+        writes++;
+        return save(chat);
+    };
+
+    const first = app.deleteChat('owner', { skipConfirm: true });
+    const second = app.deleteChat('owner', { skipConfirm: true });
+    app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Retained while pending' });
+    app.saveCurrentChat('owner');
+
+    assert.equal(app.chatHistory[0].messages.at(-1).content, 'Retained while pending');
+    assert.equal(writes, 0);
+    removals[0].reject(new Error('First removal failed'));
+    await first;
+
+    assert.ok(app.isPendingHistoryRemoval('owner'));
+    assert.equal(writes, 0);
+    removals[1].reject(new Error('Second removal failed'));
+    await second;
+
+    assert.ok(!app.isPendingHistoryRemoval('owner'));
+    assert.equal(app.pendingHistoryRemovals.size, 0);
+    assert.equal(writes, 1);
+    assert.equal(app.savedChats.get('owner').messages.at(-1).content, 'Retained while pending');
+});
+
+for (const commitFirst of [false, true]) {
+    test(`a committed removal remains terminal when overlap fails ${commitFirst ? 'afterward' : 'first'}`, async () => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const removals = [];
+        app.historyStore.delete = () => new Promise((resolve, reject) => removals.push({ resolve, reject }));
+        app.reportHistoryError = () => {};
+        const first = app.deleteChat('owner', { skipConfirm: true });
+        const second = app.deleteChat('owner', { skipConfirm: true });
+        app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Pending export only' });
+        app.saveCurrentChat('owner');
+        const retained = app.chatSessions.owner;
+
+        if (commitFirst) {
+            removals[0].resolve();
+            await first;
+            removals[1].reject(new Error('Second removal failed'));
+            await second;
+        } else {
+            removals[1].reject(new Error('Second removal failed'));
+            await second;
+            removals[0].resolve();
+            await first;
+        }
+        app.saveCurrentChat('owner', retained.messages);
+        await app.saveChatHistory();
+
+        assert.ok(app.historyDeleted.has('owner'));
+        assert.ok(!app.isPendingHistoryRemoval('owner'));
+        assert.ok(!app.chatSessions.owner);
+        assert.ok(!app.historyDirty.has('owner'));
+        assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+    });
+}
+
+test('model settings and pin mutations persist only their owning chat', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const updatedAt = app.chatHistory[0].updatedAt;
+    const settings = { modelSettings: { temperature: 0.25 }, speculativeEngine: null, speculativeDraftModel: null };
+    app.captureSessionModelSettings = () => settings;
+    app.chatSessions.owner.systemPrompt = 'Changed settings';
+
+    app.persistChatSettingsToHistory('owner');
+    await app.saveChatHistory();
+    app.togglePinChat('owner');
+    await app.saveChatHistory();
+
+    const saved = app.savedChats.get('owner');
+
+    assert.equal(saved.updatedAt, updatedAt);
+    assert.equal(saved.systemPrompt, 'Changed settings');
+    assert.equal(saved.modelSettings.temperature, 0.25);
+    assert.equal(saved.pinned, true);
+    assert.equal(app.historyDirty.size, 0);
+});
+
+test('history loading writes normalized and early dirty rows but leaves restored image rows clean', async t => {
+    const app = appFixture();
+    const Store = ChatHistory.Store;
+    const writes = [];
+    const restored = [
+        { id: 'clean', title: 'Unchanged', model: 'text', messages: [app.cloneData(upload)] },
+        { id: 'normalized', title: 'chat.untitled.old', model: 'alias', messages: [],
+            modelSettingsByModel: { alias: { temperature: 0.25 } } },
+    ];
+    ChatHistory.Store = class {
+        constructor() {
+            this.generation = 0;
+            this.deleted = new Set();
+        }
+        async load() { return restored; }
+        async save(chat) {
+            writes.push(app.cloneData(chat));
+            return [];
+        }
+    };
+    t.after(() => { ChatHistory.Store = Store; });
+    app.resolveGatewayModelId = model => model === 'alias' ? 'text' : model;
+    app.untitledChatTitle = () => 'Untitled';
+    app.chatHistoryPending = true;
+    app.saveCurrentChat('owner');
+
+    assert.equal(writes.length, 0);
+    await app.loadChatHistory();
+    await app.saveChatHistory();
+
+    assert.deepEqual(writes.map(chat => chat.id).sort(), ['normalized', 'owner']);
+    const normalized = writes.find(chat => chat.id === 'normalized');
+
+    assert.equal(normalized.title, 'Untitled');
+    assert.equal(normalized.model, 'text');
+    assert.equal(normalized.modelSettingsByModel.text.temperature, 0.25);
+    assert.equal(app.chatHistory.find(chat => chat.id === 'clean').messages[0].content[1].image_url.url, png);
+    assert.equal(app.historyDirty.size, 0);
+});
+
+for (const outcome of ['saved', 'skipped', 'failed']) {
+    test(`imported replacements use dirty ownership when storage reports ${outcome}`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const prior = app.cloneData(app.chatHistory[0]);
+        const archive = archiveFixture(t, app);
+        const imported = {
+            ...prior, title: 'Imported', updatedAt: '2099-01-01T00:00:00.000Z',
+            messages: [{ id: 'generated', role: 'tool', content: 'Imported image', _images: [png] }],
+        };
+        const writes = [];
+        let failing = outcome === 'failed';
+        app.reportHistoryError = () => {};
+        app.historyStore.save = async (chat, options) => {
+            writes.push({ chat: app.cloneData(chat), replace: options.replace });
+            if (failing) throw new Error('Storage unavailable');
+            if (outcome === 'skipped') return false;
+            app.savedChats.set(chat.id, app.cloneData(chat));
+            return [];
+        };
+
+        await archive.import([imported]);
+
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].replace, true);
+        if (outcome === 'skipped') {
+            assert.deepEqual(app.cloneData(app.chatHistory[0]), prior);
+            assert.equal(app.historyDirty.size, 0);
+            assert.equal(archive.alerts.length, 1);
+        } else {
+            assert.equal(app.chatHistory[0].title, 'Imported');
+            assert.equal(app.chatHistory[0].messages[0]._images[0], png);
+            if (outcome === 'failed') {
+                assert.equal(archive.alerts.length, 0);
+                assert.equal(app.historyDirty.get('owner').mode, 'replace');
+                failing = false;
+                await app.saveChatHistory();
+
+                assert.equal(writes.length, 2);
+                assert.equal(writes[1].replace, true);
+            }
+            assert.equal(app.savedChats.get('owner').messages[0]._images[0], png);
+            assert.equal(app.historyDirty.size, 0);
+        }
+    });
+}
+
+test('a skipped import cannot restore its prior row over a newer mutation', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const archive = archiveFixture(t, app);
+    const imported = { ...app.cloneData(app.chatHistory[0]), title: 'Imported', updatedAt: '2099-01-01T00:00:00.000Z' };
+    let finishImport;
+    let started;
+    const saving = new Promise(resolve => { started = resolve; });
+    app.historyStore.save = () => new Promise(resolve => {
+        finishImport = () => resolve(false);
+        started();
+    });
+    const importing = archive.import([imported]);
+    await saving;
+    app.saveCurrentChat('owner', [{ id: 'later', role: 'user', content: 'Newer local context' }]);
+    const version = app.historyDirty.get('owner').version;
+    finishImport();
+    await importing;
+
+    assert.equal(app.chatHistory[0].messages[0].content, 'Newer local context');
+    assert.equal(app.historyDirty.get('owner').version, version);
+    assert.equal(app.historyDirty.get('owner').mode, 'save');
+    app.historyStore.save = async chat => {
+        app.savedChats.set(chat.id, app.cloneData(chat));
+        return [];
+    };
+    await app.saveChatHistory();
+
+    assert.equal(app.savedChats.get('owner').messages[0].content, 'Newer local context');
+    assert.equal(app.historyDirty.size, 0);
+});
+
+test('import skips lifetimes still owned by a pending removal', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const archive = archiveFixture(t, app);
+    const prior = app.cloneData(app.chatHistory[0]);
+    const removal = app.beginHistoryRemoval(['owner']);
+
+    await archive.import([{ ...prior, title: 'Do not import', updatedAt: '2099-01-01T00:00:00.000Z' }]);
+    await app.finishHistoryRemoval(removal, false);
+
+    assert.deepEqual(app.cloneData(app.chatHistory[0]), prior);
+    assert.deepEqual(app.savedChats.get('owner'), prior);
+    assert.equal(app.historyDirty.size, 0);
 });
 
 test('conflicted saves keep subsequent messages available in exported history', async () => {
@@ -822,6 +1180,58 @@ for (const action of ['delete', 'clear']) {
 }
 
 for (const action of ['delete', 'clear']) {
+    test(`pending ${action} rejects image results but retains matched cancellation context on failure`, async t => {
+        const app = appFixture();
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        let bodyStarted;
+        const started = new Promise(resolve => { bodyStarted = resolve; });
+        let releaseBody;
+        let rounds = 0;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                rounds++;
+                return sse([call('generate_image', { model: 'image', prompt: 'Canceled' })]);
+            }
+            return {
+                ok: true,
+                json: () => new Promise(resolve => {
+                    releaseBody = () => resolve({ data: [{ b64_json: 'bGF0ZQ==' }] });
+                    bodyStarted();
+                }),
+            };
+        };
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await started;
+        let rejectRemoval;
+        app.historyStore[action] = () => new Promise((resolve, reject) => { rejectRemoval = reject; });
+        app.reportHistoryError = () => {};
+        const removing = action === 'delete'
+            ? app.deleteChat('owner', { skipConfirm: true })
+            : app.clearAllHistory();
+        releaseBody();
+        await pending;
+
+        assert.ok(app.isPendingHistoryRemoval('owner'));
+        rejectRemoval(new Error('Storage unavailable'));
+        await removing;
+        const exported = app.chatHistory.find(chat => chat.id === 'owner');
+        const body = app.buildChatCompletionBody(exported.messages, { chatId: 'owner', model: 'text', systemPrompt: '' });
+        const calls = body.messages.flatMap(message => message.tool_calls || []);
+        const results = body.messages.filter(message => message.role === 'tool');
+
+        assert.equal(rounds, 1);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls.map(tc => tc.id), results.map(result => result.tool_call_id));
+        assert.match(results[0].content, /stopped by user/);
+        assert.ok(!JSON.stringify(exported).includes('bGF0ZQ=='));
+        assert.equal(exported.messages[0].content[1].image_url.url, png);
+        assert.deepEqual(app.cloneData(exported), app.savedChats.get('owner'));
+    });
+}
+
+for (const action of ['delete', 'clear']) {
     test(`failed ${action} retains finalized partial text and reasoning in exports`, async t => {
         const app = appFixture();
         app.saveCurrentChat('owner');
@@ -911,9 +1321,104 @@ test('successful clearing preserves a conversation sent while storage is pending
     assert.ok(!app.chatSessions.owner);
 });
 
+test('successful clearing preserves a newer composer, uploads, and active stream', async t => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+    let finishClearing;
+    app.historyStore.clear = () => new Promise(resolve => { finishClearing = resolve; });
+    const clearing = app.clearAllHistory();
+    await app.startNewChat();
+    const id = app.currentChatId;
+    const stream = app.getStreamSession(id, true);
+    stream.isStreaming = true;
+    stream.streamingContent = 'New response in progress';
+    stream.abortController = new AbortController();
+    app.inputMessage = 'Unsent draft';
+    app.uploadImages = [{ id: 'new-upload', base64: png }];
+    app.uploadDocuments = [{ id: 'new-document', base64: 'document' }];
+    const messages = app.messages;
+
+    finishClearing();
+    await clearing;
+
+    assert.equal(app.currentChatId, id);
+    assert.equal(app.messages, messages);
+    assert.equal(app.inputMessage, 'Unsent draft');
+    assert.equal(app.uploadImages[0].base64, png);
+    assert.equal(app.uploadDocuments[0].base64, 'document');
+    assert.equal(app.getStreamSession(id), stream);
+    assert.equal(stream.isStreaming, true);
+    assert.equal(stream.streamingContent, 'New response in progress');
+    assert.equal(stream.abortController.signal.aborted, false);
+    assert.ok(!app.chatSessions.owner);
+});
+
+for (const action of ['delete', 'clear']) {
+    test(`failed ${action} persists partial context even when storage fails before stream finalization`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        const chunk = new TextEncoder().encode(`data: ${JSON.stringify({
+            choices: [{ delta: { content: 'Retained answer', reasoning_content: 'Retained reasoning' } }],
+        })}\n\n`);
+        let finishReading;
+        let waiting;
+        const reading = new Promise(resolve => { waiting = resolve; });
+        let first = true;
+        const reader = {
+            read() {
+                if (first) {
+                    first = false;
+                    return Promise.resolve({ value: chunk, done: false });
+                }
+                return new Promise((resolve, reject) => {
+                    finishReading = () => reject(new DOMException('Stopped', 'AbortError'));
+                    waiting();
+                });
+            },
+            cancel: () => Promise.resolve(),
+        };
+        global.fetch = async () => ({ ok: true, body: { getReader: () => reader } });
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await reading;
+        app.historyStore[action] = async () => { throw new Error('Storage unavailable'); };
+        app.reportHistoryError = () => {};
+        const stream = app.getStreamSession('owner');
+        const controller = stream.abortController;
+
+        if (action === 'delete') await app.deleteChat('owner', { skipConfirm: true });
+        else await app.clearAllHistory();
+
+        assert.equal(controller.signal.aborted, true);
+        assert.equal(stream.abortController, controller);
+        assert.equal(stream.streamingContent, 'Retained answer');
+        assert.equal(stream.streamingThinking, 'Retained reasoning');
+        assert.equal(stream.isStreaming, true);
+        finishReading();
+        await pending;
+        await app.saveChatHistory();
+        const saved = app.savedChats.get('owner');
+        const exported = app.chatHistory.find(chat => chat.id === 'owner');
+
+        assert.equal(saved.messages.at(-1).content, 'Retained answer');
+        assert.equal(saved.messages.at(-1).reasoning_content, 'Retained reasoning');
+        assert.deepEqual(app.cloneData(exported), saved);
+        assert.equal(stream.isStreaming, false);
+    });
+}
+
 test('renaming a chat does not serialize unchanged image histories', async () => {
     const app = appFixture();
-    app.chatSessions.unchanged = structuredClone(app.chatSessions.owner);
+    app.chatSessions.unchanged = app.cloneData(app.chatSessions.owner);
     app.saveCurrentChat('owner');
     app.saveCurrentChat('unchanged');
     await app.saveChatHistory();

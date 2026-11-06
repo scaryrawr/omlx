@@ -664,6 +664,10 @@ Branches own their copied images. Deleting a chat, truncating messages, or
 removing a variant removes images no longer owned by that history.
 If the history limit would discard an active chat, saving reports a warning
 instead; live messages and images remain available for export.
+Failed saves remain available for a later retry. If deleting or clearing history
+fails, messages received before cancellation remain available for export.
+Canceled inference does not restart. Clearing removes only the chats present
+when it starts, so chats created while storage is busy remain available.
 Download chats includes image bytes in the JSON archive; importing older JSON
 archives remains supported. Images stripped by older versions cannot be recovered.
 Temporary chats are not saved. Browser storage is not a backup and can be cleared
