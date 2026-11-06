@@ -19,11 +19,16 @@ METHODS = [
     "createThinkingState",
     "messageForStorage",
     "saveCurrentChat",
+    "activeHistoryChatIds",
+    "isChatStreaming",
     "saveChatHistory",
+    "isPendingHistoryRemoval",
     "sortChatHistory",
     "cloneData",
     "downloadChats",
+    "normalizeChatHistory",
     "loadChatHistory",
+    "reportHistoryError",
 ]
 
 
@@ -31,7 +36,7 @@ def _sources():
     source = CHAT_TEMPLATE.read_text()
     consts = [
         re.search(r"^ *const " + name + r" = [^\n]*;$", source, re.M).group()
-        for name in ("MAX_CHAT_HISTORY_SIZE", "CHAT_HISTORY_STORAGE_KEY")
+        for name in ("MAX_CHAT_HISTORY_SIZE",)
     ]
     methods = [
         re.search(
@@ -53,6 +58,7 @@ def _run(body: str):
         consts
         + """
 const store = new Map();
+const CHAT_HISTORY_STORAGE_KEY = 'omlx_chat_history';
 const localStorage = {
     quota: Infinity,
     getItem: key => (store.has(key) ? store.get(key) : null),
@@ -65,6 +71,38 @@ const localStorage = {
         store.set(key, String(value));
     },
 };
+const navigator = {storage: {}};
+const window = {t: key => key};
+const alert = () => {};
+const durable = new Map();
+class HistoryStore {
+    constructor() {
+        this.deleted = new Set();
+        this.generation = 0;
+        this.queue = Promise.resolve();
+    }
+    async load() {
+        return structuredClone([...durable.values()]);
+    }
+    save(chat) {
+        const snapshot = structuredClone(chat);
+        const operation = this.queue.then(() => {
+            if (this.deleted.has(snapshot.id)) return [];
+            if (localStorage.quota === 0) throw new Error('QuotaExceededError');
+            durable.set(snapshot.id, snapshot);
+            return [];
+        });
+        this.queue = operation.catch(() => {});
+        return operation;
+    }
+    delete(id) {
+        this.deleted.add(id);
+        const operation = this.queue.then(() => { durable.delete(id); });
+        this.queue = operation.catch(() => {});
+        return operation;
+    }
+}
+const ChatHistory = {Store: HistoryStore, newId: () => crypto.randomUUID()};
 let exported = null;
 const URL = {createObjectURL: blob => { exported = blob; return 'blob:chats'; },
              revokeObjectURL() {}};
@@ -81,6 +119,12 @@ console.warn = () => {};
         + """
 app.chatHistory = [];
 app.chatSessions = {};
+app.chatHistoryPending = false;
+app.historyDirty = new Map();
+app.historyWriteVersion = 0;
+app.pendingHistoryRemovals = new Set();
+app.historyDeleted = new Set();
+app.historyStore = new HistoryStore();
 app.streamSessions = {};
 app.getStreamSession = id => app.streamSessions[id] || null;
 app.cancelStreamTransport = () => {};
@@ -114,12 +158,15 @@ const session = {messages: [], model: 'model', systemPrompt, modelSettingsByMode
 app.chatSessions.chat_1 = session;
 app.systemPrompt = systemPrompt;
 app.saveCurrentChat('chat_1');
-localStorage.quota = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY).length + 100;
+await app.saveChatHistory();
+await app.historyStore.queue;
+localStorage.quota = 0;
 session.messages.push({id: 'u1', role: 'user', content: 'question'});
 session.messages.push({id: 'a1', role: 'assistant', content: 'answer',
                        meta: {systemPrompt}});
 app.saveCurrentChat('chat_1', session.messages, session.model, systemPrompt);
-const stored = JSON.parse(localStorage.getItem(CHAT_HISTORY_STORAGE_KEY));
+await app.historyStore.queue;
+const stored = [...durable.values()];
 const chats = await exportedChats();
 console.log(JSON.stringify({
     storedMessages: stored[0].messages.length,
@@ -158,7 +205,8 @@ app.discardTemporaryChat('chat_1');
 app.currentChatId = 'chat_2';
 app.saveCurrentChat('chat_1', session.messages, 'model', '');
 app.resetStreamSession(stream);
-const stored = JSON.parse(localStorage.getItem(CHAT_HISTORY_STORAGE_KEY));
+await app.historyStore.queue;
+const stored = [...durable.values()];
 const chats = await exportedChats();
 console.log(JSON.stringify({stored: stored.map(c => c.id),
                             exported: chats.map(c => c.id),
@@ -185,11 +233,11 @@ app.chatSessions.chat_old = newSession();
 say('chat_old', 'earlier question');
 app.chatHistory.find(c => c.id === 'chat_old').pinned = true;
 app.sortChatHistory();
-app.saveChatHistory();
+app.saveChatHistory(['chat_old']);
 app.chatSessions.chat_1 = newSession();
 app.currentChatId = 'chat_1';
 say('chat_1', 'first');
-localStorage.quota = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY).length + 100;
+localStorage.quota = 0;
 say('chat_1', 'second');
 const chats = await exportedChats();
 console.log(JSON.stringify({chats}));
@@ -205,18 +253,17 @@ console.log(JSON.stringify({chats}));
 def test_chat_started_before_history_loads_keeps_saved_chats():
     """New Chat can save before init() has loaded the history."""
     result = _run("""
-localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify([
+for (const chat of [
     {id: 'chat_a', title: 'A', messages: [], updatedAt: '2026-01-02T00:00:00Z'},
     {id: 'chat_b', title: 'B', messages: [], updatedAt: '2026-01-01T00:00:00Z'},
-]));
+]) durable.set(chat.id, chat);
 app.chatHistoryPending = true;
 app.chatSessions.chat_1 = {messages: [], model: 'model', systemPrompt: '',
                            modelSettingsByModel: {}};
 app.saveCurrentChat('chat_1');
-const ids = () => JSON.parse(localStorage.getItem(CHAT_HISTORY_STORAGE_KEY))
-    .map(c => c.id);
+const ids = () => [...durable.keys()].sort();
 const beforeLoad = ids();
-app.loadChatHistory();
+await app.loadChatHistory();
 console.log(JSON.stringify({beforeLoad, after: ids()}));
 """)
     assert result == {
