@@ -15,7 +15,11 @@ def test_chat_image_tools_javascript():
     if node is None:
         pytest.skip("Node.js is required to exercise production chat JavaScript")
     result = subprocess.run(
-        [node, "--test", str(Path(__file__).with_name("chat_image_tools.test.cjs"))],
+        [
+            node, "--test",
+            str(Path(__file__).with_name("chat_image_tools.test.cjs")),
+            str(Path(__file__).with_name("chat_history.test.cjs")),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -33,5 +37,6 @@ def test_image_tools_replace_imagine_navigation_and_locales():
         translations = json.loads(locale.read_text())
         assert translations["chat.image_download"]
         assert translations["chat.image_reuse"]
+        assert translations["chat.error.history_storage"]
         assert not any(key.startswith("imagine.") for key in translations)
         assert "navbar.tab.imagine" not in translations
