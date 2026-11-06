@@ -24,6 +24,7 @@ global.DOMPurify = { sanitize: html => html };
 const images = vm.runInThisContext(
     fs.readFileSync(path.join(web, 'static/js/chat-image-tools.js'), 'utf8') + '\nChatImageTools;'
 );
+vm.runInThisContext(fs.readFileSync(path.join(web, 'static/js/chat-history.js'), 'utf8'));
 const script = template.split('{% block scripts %}')[1].match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace('{{ api_key | tojson }}', '""');
 const chatApp = vm.runInThisContext(script + '\nchatApp;');
@@ -54,6 +55,22 @@ function appFixture(messages = [structuredClone(upload)]) {
     app.currentChatId = 'foreground';
     app.currentModel = 'text';
     app.chatHistoryPending = false;
+    app.savedChats = new Map();
+    app.historyStore = {
+        deleted: new Set(),
+        save: chat => {
+            app.savedChats.set(chat.id, structuredClone(chat));
+            return Promise.resolve([]);
+        },
+        delete: id => {
+            app.savedChats.delete(id);
+            return Promise.resolve();
+        },
+        clear: () => {
+            app.savedChats.clear();
+            return Promise.resolve();
+        },
+    };
     app.modelTypeMap = { text: 'llm', vision: 'vlm' };
     app.availableModels = [{ id: 'text', name: 'text' }, { id: 'vision', name: 'vision' }];
     app.chatSessions.owner = {
@@ -68,6 +85,72 @@ function appFixture(messages = [structuredClone(upload)]) {
     ]) app[name] = () => {};
     return app;
 }
+
+test('failed deletion keeps the chat available for export and retry', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    const failure = new Error('Storage write failed');
+    let reported;
+    app.historyStore.delete = async () => { throw failure; };
+    app.reportHistoryError = error => { reported = error; };
+
+    await app.deleteChat('owner', { skipConfirm: true });
+
+    assert.equal(reported, failure);
+    assert.ok(app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.ok(app.chatSessions.owner);
+
+    app.historyStore.delete = async () => {};
+    await app.deleteChat('owner', { skipConfirm: true });
+    assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.equal(app.historySnapshots.owner, undefined);
+});
+
+test('failed clear retains live history instead of reporting an empty history', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    const failure = new Error('Storage clear failed');
+    let reported;
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+    app.historyStore.clear = async () => { throw failure; };
+    app.reportHistoryError = error => { reported = error; };
+
+    await app.clearAllHistory();
+
+    assert.equal(reported, failure);
+    assert.ok(app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.ok(app.chatSessions.owner);
+    assert.ok(app.historySnapshots.owner);
+
+    app.historyStore.clear = async () => {};
+    app.startNewChat = async () => {};
+    await app.clearAllHistory();
+    assert.deepEqual(app.historySnapshots, {});
+});
+
+test('clearing history invalidates an import still reading its file', async t => {
+    const app = appFixture();
+    const Reader = global.FileReader;
+    let reader;
+    global.FileReader = class {
+        constructor() { reader = this; }
+        readAsText() {}
+    };
+    t.after(() => { global.FileReader = Reader; });
+    app.historyStore.generation = 0;
+    app.loadChatHistory = async () => {};
+    app.importChats({ target: { files: [{}], value: 'archive.json' } });
+    app.historyStore.generation++;
+
+    await reader.onload({ target: { result: JSON.stringify([
+        { id: 'late-import', messages: [] },
+    ]) } });
+
+    assert.equal(app.chatHistory.length, 0);
+    assert.equal(app.savedChats.size, 0);
+});
 
 test('Markdown image references render as escaped text instead of broken URLs', () => {
     const ref = images.reference('owner', 'result', 'tool', 0);
@@ -260,7 +343,7 @@ test('branching rebases copied image references without changing the parent or a
     assert.equal(branch[3].content[0].text, `Reuse ${branchTool}. Keep ${foreignRef} and ${excludedRef}.`);
     app.reuseToolImage(branch[2], 0);
     assert.equal(app.inputMessage, branchTool);
-    assert.ok(!JSON.stringify(app.chatHistory[0]).includes('base64'));
+    assert.ok(JSON.stringify(app.chatHistory[0]).includes('base64'));
 
     global.fetch = async (url, init) => {
         assert.equal(url, '/v1/images/edits');
@@ -324,11 +407,10 @@ test('request projection follows the actual model override and preserves VLM inp
     assert.equal(vision.model, 'vision');
     assert.equal(vision.messages[0].content.find(part => part.type === 'image_url').image_url.url, png);
     assert.ok(!JSON.stringify(vision.messages[1]).includes('base64'));
-    const stripped = messages.map(msg => app.messageForStorage(msg));
-    assert.ok(!JSON.stringify(stripped).includes('base64'));
-    assert.equal(stripped[1]._imagesStripped, 1);
-    assert.equal(stripped[0].id, messages[0].id);
-    assert.ok(!JSON.stringify(app.buildChatCompletionBody(stripped, context).messages).includes('base64'));
+    const saved = messages.map(msg => app.messageForStorage(msg));
+    assert.equal(saved[1]._images[0], png);
+    assert.equal(saved[0].id, messages[0].id);
+    assert.ok(!JSON.stringify(app.buildChatCompletionBody(saved, context).messages).includes('base64'));
 });
 
 test('missing, foreign, excluded-variant and stripped image refs fail at the source', async () => {
@@ -355,7 +437,12 @@ test('missing, foreign, excluded-variant and stripped image refs fail at the sou
     ]) {
         await assert.rejects(images.execute('edit_image', { model: 'm', prompt: 'p', image_refs: [ref] }, scope), /not in this chat's selected history/);
     }
-    const stripped = variants.map(msg => app.messageForStorage(msg));
+    const stripped = structuredClone(variants);
+    stripped[0].content[1].image_url.url = '';
+    for (const msg of stripped.filter(msg => msg._images)) {
+        msg._imagesStripped = msg._images.length;
+        delete msg._images;
+    }
     const ref = images.reference('owner', 'upload-1', 'upload', 1);
     await assert.rejects(images.execute('edit_image', { model: 'm', prompt: 'p', image_refs: [ref] }, controllerScope(stripped)), /unavailable after reload or export/);
     const mcpRef = images.reference('owner', 'new-image', 'tool', 0);
@@ -404,7 +491,7 @@ test('streamResponse performs discovery, generation, edit and final synthesis in
     assert.equal(messages.filter(msg => msg._images?.length).length, 2);
     assert.equal(messages.at(-1).content, 'Done');
     assert.equal(new Set(messages.map(msg => msg.id)).size, messages.length);
-    assert.ok(!localStorage.getItem('omlx_chat_history').includes('base64'));
+    assert.ok(JSON.stringify(app.savedChats.get('owner')).includes('base64'));
     assert.equal(app.getStreamSession('owner').isStreaming, false);
 });
 
@@ -474,9 +561,46 @@ test('Stop remains active through delayed response bodies and blocks registratio
     const nextRequest = app.buildChatCompletionBody(messages, { chatId: 'owner', model: 'text', systemPrompt: '' });
     const calls = nextRequest.messages.flatMap(msg => msg.tool_calls || []);
     assert.deepEqual(calls.map(tc => tc.id), nextRequest.messages.flatMap(msg => msg.role === 'tool' ? [msg.tool_call_id] : []));
-    assert.ok(!localStorage.getItem('omlx_chat_history').includes('bGF0ZQ=='));
+    assert.ok(!JSON.stringify(app.savedChats.get('owner')).includes('bGF0ZQ=='));
     assert.equal(app.getStreamSession('owner').isStreaming, false);
 });
+
+for (const action of ['delete', 'clear']) {
+    test(`${action} prevents delayed tool finalizers from resurrecting chat history`, async () => {
+        const app = appFixture();
+        let bodyStarted;
+        const started = new Promise(resolve => { bodyStarted = resolve; });
+        let releaseBody;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                return sse([call('generate_image', { model: 'image', prompt: 'Delayed' })]);
+            }
+            assert.equal(url, '/v1/images/generations');
+            return {
+                ok: true,
+                json: () => new Promise(resolve => {
+                    releaseBody = () => resolve({ data: [{ b64_json: 'bGF0ZQ==' }] });
+                    bodyStarted();
+                }),
+            };
+        };
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await started;
+        const retained = app.chatSessions.owner;
+        if (action === 'delete') {
+            await app.deleteChat('owner', { skipConfirm: true });
+        } else {
+            global.confirm = () => true;
+            app.startNewChat = async () => {};
+            await app.clearAllHistory();
+        }
+        releaseBody();
+        await pending;
+        app.saveCurrentChat('owner', retained.messages, retained.model, retained.systemPrompt);
+        assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+        assert.ok(!app.savedChats.has('owner'));
+    });
+}
 
 test('Stop preserves text already streamed before any tool call', async () => {
     const app = appFixture();
@@ -722,7 +846,7 @@ for (const [label, content, urls, text] of [
         assert.deepEqual(app.getImageUrls(content), urls);
         assert.equal(app.getTextContent(content), text);
         const stored = app.messageForStorage(app.messages[0]);
-        assert.deepEqual(app.getImageUrls(stored.content), []);
+        assert.deepEqual(app.getImageUrls(stored.content), urls);
         assert.equal(app.getTextContent(stored.content), text);
         assert.deepEqual(app.getImageUrls(content), urls);
 

@@ -2130,6 +2130,7 @@
   "chat.confirm_clear_all": "確定要刪除所有對話記錄嗎？此操作無法復原。",
   "chat.error.incorrect_api_key": "API 金鑰不正確，請重新輸入。",
   "chat.error.import_invalid": "無效的聊天記錄檔案。",
+  "chat.error.history_storage": "無法儲存或還原聊天記錄。請保持此分頁開啟並下載聊天記錄，以保留尚未儲存的內容。重新載入前請檢查瀏覽器儲存空間及其他開啟的分頁。",
   "chat.upload_image": "上傳圖片",
   "chat.upload_document": "附加文件",
   "chat.upload_audio": "附加音訊/影片檔案",

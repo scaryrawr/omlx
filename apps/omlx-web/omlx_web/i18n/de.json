@@ -2120,6 +2120,7 @@
   "chat.confirm_clear_all": "Sind Sie sicher, dass Sie den gesamten Chat-Verlauf löschen möchten? Dies kann nicht rückgängig gemacht werden.",
   "chat.error.incorrect_api_key": "API-Schlüssel ist falsch. Bitte geben Sie Ihren API-Schlüssel erneut ein.",
   "chat.error.import_invalid": "Ungültige Chatverlaufsdatei.",
+  "chat.error.history_storage": "Der Chatverlauf konnte nicht gespeichert oder wiederhergestellt werden. Lassen Sie diesen Tab geöffnet und laden Sie Ihre Chats herunter, um ungespeicherte Arbeit zu sichern. Prüfen Sie vor dem Neuladen den Browserspeicher und andere offene Tabs.",
   "chat.upload_image": "Bild hochladen",
   "chat.upload_document": "Dokument anhängen",
   "chat.upload_audio": "Audio- oder Videodatei anhängen",

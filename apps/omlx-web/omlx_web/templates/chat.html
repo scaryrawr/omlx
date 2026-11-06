@@ -2805,6 +2805,7 @@
 
 {% block scripts %}
 <script src="{{ static('js/chat-image-tools.js') }}"></script>
+<script src="{{ static('js/chat-history.js') }}"></script>
 <script>
     // Configure marked.js
     marked.use({
@@ -2828,7 +2829,6 @@
 
     const CHAT_UNTITLED_I18N_KEY = 'chat.untitled_title';
     const MAX_CHAT_HISTORY_SIZE = 100;
-    const CHAT_HISTORY_STORAGE_KEY = 'omlx_chat_history';
     const API_KEY_STORAGE_KEY = 'omlx_chat_api_key';
     const THEME_STORAGE_KEY = 'omlx-chat-theme';
     const ALLOW_SVG_STORAGE_KEY = 'omlx-chat-allow-svg';
@@ -2897,6 +2897,11 @@
             currentChatId: null,
             chatHistory: [],
             chatHistoryPending: true,
+            historyStore: null,
+            historyLoading: null,
+            historySnapshots: {},
+            historyDeleted: new Set(),
+            historyErrorShown: false,
             _thinkingDomSeq: 0,
             _adminModelsList: null,
             _adminModelsListPromise: null,
@@ -4336,6 +4341,7 @@
 
             async init() {
 
+        this.loadChatHistory();
         this.loadPromptProfiles();
         this.resetProfileParamsDraft();
         this.$watch('activePromptProfile', () => this.resetProfileParamsDraft());
@@ -5163,7 +5169,6 @@
     },
 
     async downloadChats() {
-        // localStorage can hold an older snapshot after a quota failure.
         const chats = this.chatHistory || [];
         if (!chats.length) {
             alert(window.t('chat.no_chats_to_export'));
@@ -5181,7 +5186,7 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         } catch (e) {
-            console.error('Failed to download chats:', e);
+            this.reportHistoryError(e);
         }
     },
 
@@ -5190,19 +5195,19 @@
         // Reset so selecting the same file again re-fires the change event
         event.target.value = '';
         if (!file) return;
+        const historyGeneration = this.historyStore?.generation;
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             let imported;
             try {
-                imported = JSON.parse(e.target.result);
+                imported = ChatHistory.parseArchive(JSON.parse(e.target.result));
+                await this.loadChatHistory();
             } catch {
                 alert(window.t('chat.error.import_invalid'));
                 return;
             }
-            const valid = Array.isArray(imported)
-                ? imported.filter(c => c && typeof c.id === 'string' && c.id && Array.isArray(c.messages))
-                : [];
-            if (!valid.length) {
+            if (historyGeneration !== this.historyStore?.generation) return;
+            if (!imported.length) {
                 alert(window.t('chat.error.import_invalid'));
                 return;
             }
@@ -5211,8 +5216,14 @@
                 return Number.isNaN(t) ? 0 : t;
             };
             const byId = new Map(this.chatHistory.map(c => [c.id, c]));
+            const previous = new Map(byId);
             const changed = new Set();
-            for (const entry of valid) {
+            for (const entry of imported) {
+                if (this.historyDeleted.has(entry.id) || this.historyStore?.deleted.has(entry.id)) {
+                    const oldId = entry.id;
+                    entry.id = 'chat_' + ChatHistory.newId();
+                    ChatImageTools.rebaseReferences(entry.messages, oldId, entry.id);
+                }
                 const existing = byId.get(entry.id);
                 if (existing) {
                     // Never overwrite the open or streaming chat; its live state is the truth
@@ -5224,10 +5235,35 @@
                 changed.add(entry.id);
             }
             this.chatHistory = [...byId.values()]
-                .sort((a, b) => ts(b) - ts(a))
-                .slice(0, MAX_CHAT_HISTORY_SIZE);
-            this.saveChatHistory();
-            alert(window.t('chat.import_success').replace('{count}', changed.size));
+                .sort((a, b) => ts(b) - ts(a));
+            let failed = false;
+            let count = 0;
+            for (const id of changed) {
+                if (historyGeneration !== this.historyStore?.generation) return;
+                if (this.historyDeleted.has(id)) continue;
+                const chat = byId.get(id);
+                try {
+                    const evicted = await this.historyStore.save(chat, { replace: true });
+                    if (evicted === false) {
+                        const prior = previous.get(id);
+                        this.chatHistory = this.chatHistory.flatMap(entry =>
+                            entry.id === id ? (prior ? [prior] : []) : [entry]);
+                        continue;
+                    }
+                    this.historySnapshots[id] = JSON.stringify(chat);
+                    count++;
+                    const removed = new Set(evicted);
+                    for (const evictedId of removed) {
+                        this.historyDeleted.add(evictedId);
+                        delete this.historySnapshots[evictedId];
+                    }
+                    this.chatHistory = this.chatHistory.filter(chat => !removed.has(chat.id));
+                } catch (error) {
+                    failed = true;
+                    this.reportHistoryError(error);
+                }
+            }
+            if (!failed) alert(window.t('chat.import_success').replace('{count}', count));
         };
         reader.onerror = () => alert(window.t('chat.error.import_invalid'));
         reader.readAsText(file);
@@ -5873,20 +5909,35 @@
         }
     },
 
+    reportHistoryError(error) {
+        console.error('Chat history storage failed:', error);
+        if (!this.historyErrorShown) {
+            this.historyErrorShown = true;
+            alert(window.t('chat.error.history_storage'));
+        }
+    },
+
     loadChatHistory() {
-        // init() awaits the model list first, so a chat can start before this runs.
-        const early = this.chatHistoryPending ? this.chatHistory.splice(0) : [];
-        this.chatHistoryPending = false;
-        const history = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
-        if (history) {
+        if (this.historyLoading) return this.historyLoading;
+        this.historyStore = new ChatHistory.Store({
+            onError: error => this.reportHistoryError(error), limit: MAX_CHAT_HISTORY_SIZE,
+        });
+        const generation = this.historyStore.generation;
+        this.historyLoading = (async () => {
             try {
-                this.chatHistory = JSON.parse(history);
+                const restored = await this.historyStore.load();
+                const loaded = generation === this.historyStore.generation ? restored : [];
+                for (const chat of loaded) {
+                    this.historySnapshots[chat.id] = JSON.stringify(chat);
+                }
+                const early = new Map(this.chatHistory.map(chat => [chat.id, chat]));
+                this.chatHistory = loaded.filter(chat =>
+                    !early.has(chat.id) && !this.historyDeleted.has(chat.id));
+                this.chatHistory.push(...early.values());
                 this.sortChatHistory();
-                let migrated = false;
                 for (const chat of this.chatHistory) {
                     if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
                         chat.title = this.untitledChatTitle();
-                        migrated = true;
                     }
                     const gatewayId = this.resolveGatewayModelId(chat.model);
                     if (gatewayId && gatewayId !== chat.model) {
@@ -5898,54 +5949,46 @@
                                 chat.modelSettingsByModel[chat.model];
                         }
                         chat.model = gatewayId;
-                        migrated = true;
                     }
                 }
-                if (migrated) {
-                    this.saveChatHistory();
+                this.chatHistoryPending = false;
+                await this.saveChatHistory();
+                if (navigator.storage?.persist) {
+                    navigator.storage.persist().catch(error => console.warn('Persistent browser storage was not granted:', error));
                 }
-            } catch (e) {
-                this.chatHistory = [];
+            } catch (error) {
+                this.reportHistoryError(error);
             }
-        }
-        const ids = new Set(this.chatHistory.map(c => c.id));
-        const unsaved = early.filter(c => !ids.has(c.id));
-        if (unsaved.length) {
-            this.chatHistory.unshift(...unsaved);
-            this.sortChatHistory();
-            this.saveChatHistory();
-        }
+        })();
+        return this.historyLoading;
     },
 
     saveChatHistory() {
-        // Writing before the history is loaded would replace it.
         if (this.chatHistoryPending) return;
-        const key = CHAT_HISTORY_STORAGE_KEY;
-        // Trim only the stored copy; the sidebar and export keep every chat.
-        const toStore = this.chatHistory.slice();
-        const persist = () => localStorage.setItem(key, JSON.stringify(toStore));
-        try {
-            persist();
-        } catch (e) {
-            if (e?.name !== 'QuotaExceededError' && !/quota/i.test(String(e?.message || ''))) {
-                console.error('Failed to save chat history:', e);
-                return;
-            }
-            while (toStore.length > 1) {
-                toStore.pop();
-                try {
-                    persist();
-                    console.warn('Chat history trimmed to fit localStorage quota');
-                    return;
-                } catch (retryErr) {
-                    if (retryErr?.name !== 'QuotaExceededError' && !/quota/i.test(String(retryErr?.message || ''))) {
-                        console.error('Failed to save trimmed chat history:', retryErr);
-                        return;
+        const writes = [];
+        for (const chat of this.chatHistory) {
+            if (this.historyDeleted.has(chat.id)) continue;
+            const snapshot = JSON.stringify(chat);
+            if (this.historySnapshots[chat.id] === snapshot) continue;
+            this.historySnapshots[chat.id] = snapshot;
+            try {
+                writes.push(this.historyStore.save(chat).then(evicted => {
+                    const removed = new Set(evicted || []);
+                    for (const id of removed) {
+                        this.historyDeleted.add(id);
+                        delete this.historySnapshots[id];
                     }
-                }
+                    this.chatHistory = this.chatHistory.filter(entry => !removed.has(entry.id));
+                }).catch(error => {
+                    delete this.historySnapshots[chat.id];
+                    this.reportHistoryError(error);
+                }));
+            } catch (error) {
+                delete this.historySnapshots[chat.id];
+                this.reportHistoryError(error);
             }
-            console.error('Chat history too large for localStorage even after trimming');
         }
+        return Promise.all(writes);
     },
 
     isTemporaryChat(chatId = this.currentChatId) {
@@ -5957,6 +6000,7 @@
     // save out of history; resetStreamSession() drops it when that ends.
     discardTemporaryChat(chatId) {
         if (!this.isTemporaryChat(chatId)) return false;
+        this.historyDeleted.add(chatId);
         const stream = this.getStreamSession(chatId, false);
         const busy = stream?.isStreaming || this.micSession?.chatId === chatId;
         this.cancelStreamTransport(stream);
@@ -5980,9 +6024,14 @@
         const session = this.getChatSession(this.currentChatId, true);
         session.temporary = !session.temporary;
         if (session.temporary) {
+            this.historyDeleted.add(this.currentChatId);
             this.chatHistory = this.chatHistory.filter(c => c.id !== this.currentChatId);
-            this.saveChatHistory();
+            await this.historyStore?.delete(this.currentChatId).catch(error => this.reportHistoryError(error));
         } else {
+            const oldId = this.currentChatId;
+            this.currentChatId = 'chat_' + ChatHistory.newId();
+            this.chatSessions[this.currentChatId] = session;
+            delete this.chatSessions[oldId];
             this.saveCurrentChat(this.currentChatId);
         }
     },
@@ -6007,7 +6056,7 @@
             }
         }
 
-        const chatId = 'chat_' + Date.now();
+        const chatId = 'chat_' + ChatHistory.newId();
         const sysDefault = this.promptProfiles.find(p => p.name === 'System Default');
         const systemPrompt = preserveDraft
             ? draftSystemPrompt
@@ -6135,22 +6184,12 @@
         this.sidebarOpen = window.innerWidth >= 768;
     },
 
-    // Payloads too large for localStorage: base64 uploads inside content
-    // arrays, and images an MCP tool returned (~1MB each as a data URL). The
-    // image count survives so a reloaded chat can say one was there.
     messageForStorage(msg) {
-        let out = msg;
-        if (out._images?.length) {
-            const { _images, ...rest } = out;
-            out = { ...rest, _imagesStripped: _images.length };
-        }
+        const out = this.cloneData(msg);
         if (!Array.isArray(out.content)) return out;
         return {
             ...out,
             content: out.content.map(part => {
-                if (part.type === 'image_url') {
-                    return { type: 'image_url', image_url: { url: '' } };
-                }
                 if (part.type === 'file') {
                     return {
                         type: 'file',
@@ -6175,7 +6214,7 @@
     ) {
         const session = this.getChatSession(chatId, false);
         const messagesToSave = messages ?? session?.messages ?? (chatId === this.currentChatId ? this.messages : []);
-        if (!chatId) return;
+        if (!chatId || this.historyDeleted.has(chatId) || this.historyStore?.deleted.has(chatId)) return;
 
         const existingIndex = this.chatHistory.findIndex(c => c.id === chatId);
         const existingChat = existingIndex >= 0 ? this.chatHistory[existingIndex] : null;
@@ -6238,8 +6277,6 @@
         }
 
         this.sortChatHistory();
-        // Keep only last MAX_CHAT_HISTORY_SIZE chats
-        this.chatHistory = this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE);
         this.saveChatHistory();
     },
 
@@ -7186,6 +7223,7 @@
                     resultMessageId: resultMessageIds[i],
                     signal: toolSignal,
                 })));
+                if (this.historyDeleted.has(context.chatId)) return;
 
                 // Log each tool outcome to the status timeline
                 results.forEach((result) => {
@@ -7215,7 +7253,7 @@
                 });
 
                 this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
-                if (stream.abortController?.signal.aborted) {
+                if (toolSignal.aborted) {
                     return;
                 }
 
@@ -7597,7 +7635,7 @@
         const originalChat = this.chatHistory.find(c => c.id === this.currentChatId);
         const branchName = 'Branch of ' + (originalChat?.title || this.untitledChatTitle());
 
-        const branchId = 'chat_' + Date.now();
+        const branchId = 'chat_' + ChatHistory.newId();
         const branchMessages = session.messages.slice(0, index + 1).map(msg => this.cloneData(msg));
         this.ensureMessageIds(branchMessages);
         ChatImageTools.rebaseReferences(branchMessages, this.currentChatId, branchId);
@@ -7788,14 +7826,22 @@
     // Delete chat
     async deleteChat(chatId, { skipConfirm = false } = {}) {
         if (!skipConfirm && !confirm(window.t('chat.confirm_delete_chat'))) return;
+        this.historyDeleted.add(chatId);
+        const deleting = this.historyStore?.delete(chatId);
 
         this.cancelStreamTransport(this.getStreamSession(chatId, false));
+        try {
+            await deleting;
+        } catch (error) {
+            this.reportHistoryError(error);
+            return;
+        }
         delete this.streamSessions[chatId];
         delete this.chatSessions[chatId];
 
         const wasCurrent = this.currentChatId === chatId;
         this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
-        this.saveChatHistory();
+        delete this.historySnapshots[chatId];
 
         if (!wasCurrent) return;
 
@@ -7833,11 +7879,21 @@
     async clearAllHistory() {
         if (!confirm(window.t('chat.confirm_clear_all'))) return;
 
+        for (const id of [...Object.keys(this.chatSessions), ...this.chatHistory.map(chat => chat.id)]) {
+            this.historyDeleted.add(id);
+        }
+        const clearing = this.historyStore?.clear();
         this.stopAllStreams();
+        try {
+            await clearing;
+        } catch (error) {
+            this.reportHistoryError(error);
+            return;
+        }
         this.chatHistory = [];
+        this.historySnapshots = {};
         this.chatSessions = {};
         this.streamSessions = {};
-        this.saveChatHistory();
         await this.startNewChat();
 
     },

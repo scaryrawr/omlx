@@ -2130,6 +2130,7 @@
   "chat.confirm_clear_all": "确定要删除所有对话历史吗？此操作无法撤销。",
   "chat.error.incorrect_api_key": "API 密钥不正确，请重新输入。",
   "chat.error.import_invalid": "无效的聊天记录文件。",
+  "chat.error.history_storage": "无法保存或恢复聊天记录。请保持此标签页打开并下载聊天记录，以保留尚未保存的内容。重新加载前请检查浏览器存储空间及其他打开的标签页。",
   "chat.upload_image": "上传图像",
   "chat.upload_document": "附加文档",
   "chat.upload_audio": "附加音频/视频文件",

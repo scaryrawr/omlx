@@ -100,17 +100,16 @@ def test_wheel_listener_is_registered_only_during_scroll_setup():
     assert "addEventListener('wheel'" not in scroll
 
 
-def test_chat_history_is_sorted_before_it_is_trimmed():
+def test_chat_history_sorts_before_saving_and_storage_owns_eviction():
     save = _section(
         _template(),
         "    saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
-    assert save.index("this.sortChatHistory()") < save.index(
-        "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)"
-    )
-    assert "this.saveChatHistory()" in save
+    assert save.index("this.sortChatHistory()") < save.index("this.saveChatHistory()")
+    assert "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)" not in save
+    assert "limit: MAX_CHAT_HISTORY_SIZE" in _template()
 
 
 def test_chat_navigation_preserves_the_previous_chat_timestamp():
