@@ -221,7 +221,8 @@ const ChatHistory = (() => {
                 if (epoch !== this.epoch || (existing && (!existing.chat
                     || (!replace && existing.revision !== this.revisions.get(entry.snapshot.id))))) {
                     await done;
-                    this.deleted.add(entry.snapshot.id);
+                    if (existing && !existing.chat) this.deleted.add(entry.snapshot.id);
+
                     throw new Error('Chat history changed in another tab. Reload before saving this chat.');
                 }
                 const revision = (existing?.revision || 0) + 1;
@@ -246,19 +247,20 @@ const ChatHistory = (() => {
         }
 
         delete(chatId) {
-            this.deleted.add(chatId);
             return this.enqueue(async () => {
                 const tx = this.db.transaction(['chats', 'attachments'], 'readwrite');
                 const done = completed(tx);
                 tx.objectStore('chats').put({ id: chatId, revision: 0 });
                 await this.removeAttachments(tx, chatId);
                 await done;
+                this.deleted.add(chatId);
             });
         }
 
         clear() {
             this.generation++;
-            for (const id of [...this.revisions.keys(), ...this.seen]) this.deleted.add(id);
+            const chatIds = new Set([...this.revisions.keys(), ...this.seen]);
+
             return this.enqueue(async () => {
                 const tx = this.db.transaction(['chats', 'attachments', 'metadata'], 'readwrite');
                 const done = completed(tx);
@@ -267,6 +269,8 @@ const ChatHistory = (() => {
                 const epoch = newId();
                 tx.objectStore('metadata').put(epoch, 'epoch');
                 await done;
+                for (const id of chatIds) this.deleted.add(id);
+
                 this.epoch = epoch;
                 this.revisions.clear();
             });

@@ -107,12 +107,14 @@ async function runChatHistoryBrowserTests() {
             let failed = false;
             try { await second.save(stale); } catch { failed = true; }
             assert(failed, 'Stale revision replaced a newer chat');
+            assert(!second.deleted.has('owner'), 'Revision conflict marked a live chat deleted');
             const third = open({ name: first.name });
             await third.load();
             await first.delete('owner');
             failed = false;
             try { await third.save(stale); } catch { failed = true; }
             assert(failed, 'Stale tab resurrected deleted chat');
+            assert(third.deleted.has('owner'), 'Actual tombstone was not retained');
             const fourth = open({ name: first.name });
             await fourth.load();
             await first.clear();
@@ -183,6 +185,42 @@ async function runChatHistoryBrowserTests() {
             assert((await store.load())[0].messages.length === 3, 'Aborted save replaced the chat');
             assert((await images(store)).length === 3, 'Aborted save deleted image bytes');
         });
+        for (const action of ['delete', 'clear']) {
+            await check(`failed ${action} preserves live chats and previously deleted markers`, async () => {
+                const store = open();
+                await store.load();
+                await store.save(chat());
+                await store.delete('already-deleted');
+
+                const transaction = store.db.transaction.bind(store.db);
+                store.db.transaction = (...args) => {
+                    const tx = transaction(...args);
+                    if (args[1] === 'readwrite') {
+                        tx.objectStore('chats').get('owner').onsuccess = () => tx.abort();
+                    }
+
+                    return tx;
+                };
+
+                let failed = false;
+                try {
+                    await store[action]('owner');
+                } catch {
+                    failed = true;
+                } finally {
+                    store.db.transaction = transaction;
+                }
+
+                assert(failed, 'Aborted deletion reported success');
+                assert(!store.deleted.has('owner'), 'Failed deletion marked the live chat deleted');
+                assert(store.deleted.has('already-deleted'), 'Failed deletion revived an old tombstone');
+                assert((await images(store)).length === 3, 'Aborted deletion lost image bytes');
+
+                await store.save(chat('owner', 2));
+                const restored = (await store.load()).find(entry => entry.id === 'owner');
+                assert(restored.updatedAt === chat('owner', 2).updatedAt, 'Live chat did not save after deletion failed');
+            });
+        }
         return results;
     } finally {
         for (const store of stores) store.db?.close();

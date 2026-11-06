@@ -6024,7 +6024,6 @@
         const session = this.getChatSession(this.currentChatId, true);
         session.temporary = !session.temporary;
         if (session.temporary) {
-            this.historyDeleted.add(this.currentChatId);
             this.chatHistory = this.chatHistory.filter(c => c.id !== this.currentChatId);
             await this.historyStore?.delete(this.currentChatId).catch(error => this.reportHistoryError(error));
         } else {
@@ -7826,6 +7825,7 @@
     // Delete chat
     async deleteChat(chatId, { skipConfirm = false } = {}) {
         if (!skipConfirm && !confirm(window.t('chat.confirm_delete_chat'))) return;
+        const wasDeleted = this.historyDeleted.has(chatId);
         this.historyDeleted.add(chatId);
         const deleting = this.historyStore?.delete(chatId);
 
@@ -7833,6 +7833,7 @@
         try {
             await deleting;
         } catch (error) {
+            if (!wasDeleted) this.historyDeleted.delete(chatId);
             this.reportHistoryError(error);
             return;
         }
@@ -7879,14 +7880,15 @@
     async clearAllHistory() {
         if (!confirm(window.t('chat.confirm_clear_all'))) return;
 
-        for (const id of [...Object.keys(this.chatSessions), ...this.chatHistory.map(chat => chat.id)]) {
-            this.historyDeleted.add(id);
-        }
+        const chatIds = new Set([...Object.keys(this.chatSessions), ...this.chatHistory.map(chat => chat.id)]
+            .filter(id => !this.historyDeleted.has(id)));
+        for (const id of chatIds) this.historyDeleted.add(id);
         const clearing = this.historyStore?.clear();
         this.stopAllStreams();
         try {
             await clearing;
         } catch (error) {
+            for (const id of chatIds) this.historyDeleted.delete(id);
             this.reportHistoryError(error);
             return;
         }
