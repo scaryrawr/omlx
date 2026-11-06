@@ -72,6 +72,8 @@ function appFixture(messages = [structuredClone(upload)]) {
         },
         delete: id => {
             app.savedChats.delete(id);
+            app.historyStore.deleted.add(id);
+
             return Promise.resolve();
         },
         clear: () => {
@@ -214,7 +216,57 @@ test('history writes protect the current chat, streams, and recordings but allow
     app.saveCurrentChat('owner');
     await app.saveChatHistory();
 
-    assert.deepEqual(options.protectedIds, ['owner', 'other', 'recording']);
+    assert.deepEqual(options.protectedIds(), ['owner', 'other', 'recording']);
+});
+
+test('a failed image save remains protected after navigating to a smaller chat', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.reportHistoryError = () => {};
+    app.historyStore.save = async (chat, options) => {
+        if (chat.id === 'owner') throw new Error('Image quota exceeded');
+        if (options.protectedIds().includes('owner')) throw new Error('Chat history is full');
+
+        app.historyStore.deleted.add('owner');
+
+        return ['owner'];
+    };
+    app.messages.push({ id: 'later', role: 'user', content: 'Keep my unsaved context' });
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.currentChatId = 'smaller';
+    app.chatSessions.smaller = { messages: [], model: 'text', modelSettingsByModel: {} };
+    app.saveCurrentChat('smaller');
+    await app.saveChatHistory();
+
+    assert.ok(app.historyDirty.has('owner'));
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.equal(app.savedChats.get('owner').messages.length, 1);
+
+    const exported = JSON.parse(JSON.stringify(app.chatHistory)).find(chat => chat.id === 'owner');
+
+    assert.equal(exported.messages.at(-1).content, 'Keep my unsaved context');
+    assert.equal(exported.messages[0].content[1].image_url.url, png);
+});
+
+test('queued writes resolve protection from the latest navigation and dirty ownership', async () => {
+    const app = appFixture();
+    let options;
+    app.historyStore.save = async (chat, value) => {
+        options = value;
+        return [];
+    };
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.currentChatId = 'newly-open';
+    app.historyDirty.set('failed-image', { version: 99, mode: 'save', flight: null });
+    const protectedIds = options.protectedIds();
+
+    assert.ok(protectedIds.includes('newly-open'));
+    assert.ok(protectedIds.includes('failed-image'));
 });
 
 test('failed clear retains live history instead of reporting an empty history', async t => {
@@ -476,6 +528,68 @@ test('history loading writes normalized and early dirty rows but leaves restored
     assert.equal(app.historyDirty.size, 0);
 });
 
+for (const trigger of ['load', 'save']) {
+    test(`failed initialization retries through a later ${trigger} and merges only dirty live rows`, async t => {
+        const app = appFixture();
+        const Store = ChatHistory.Store;
+        const writes = [];
+        let attempts = 0;
+        app.reportHistoryError = () => {};
+        ChatHistory.Store = class {
+            constructor() {
+                this.generation = 0;
+                this.deleted = new Set();
+                this.attempt = ++attempts;
+            }
+            async load() {
+                if (this.attempt === 1) throw new Error('Storage upgrade blocked');
+                return [
+                    { id: 'durable', title: 'Saved image', model: 'text', messages: [structuredClone(upload)] },
+                    { id: 'owner', title: 'Older durable owner', model: 'text', messages: [] },
+                ];
+            }
+            async save(chat) {
+                writes.push(app.cloneData(chat));
+                return [];
+            }
+        };
+        t.after(() => { ChatHistory.Store = Store; });
+        app.chatHistoryPending = true;
+        await app.loadChatHistory();
+        assert.equal(attempts, 1, 'Initialization must not retry itself');
+        assert.ok(app.chatHistoryPending);
+        app.chatHistory.push({
+            id: 'owner', title: 'Early live context', model: 'text',
+            messages: [structuredClone(upload)],
+        });
+        app.historyDirty.set('owner', { version: 1, mode: 'save', flight: null });
+        if (trigger === 'load') await app.loadChatHistory();
+        else await app.saveChatHistory(['owner']);
+        await app.saveChatHistory();
+
+        assert.equal(attempts, 2);
+        assert.equal(app.chatHistoryPending, false);
+        assert.deepEqual(writes.map(chat => chat.id), ['owner']);
+        assert.equal(app.chatHistory.find(chat => chat.id === 'owner').title, 'Early live context');
+        assert.equal(app.chatHistory.find(chat => chat.id === 'durable').messages[0].content[1].image_url.url, png);
+        assert.equal(app.historyDirty.size, 0);
+        await app.loadChatHistory();
+        assert.equal(attempts, 2, 'Successful initialization should remain loaded');
+    });
+}
+
+test('import does not report success while history initialization is still failed', async t => {
+    const app = appFixture();
+    const archive = archiveFixture(t, app);
+    app.chatHistoryPending = true;
+
+    await archive.import([{ id: 'imported', title: 'Image', messages: [structuredClone(upload)] }]);
+
+    assert.ok(!archive.alerts.some(message => message.startsWith('chat.import_success')));
+    assert.equal(app.savedChats.size, 0);
+    assert.equal(app.chatHistory.length, 0);
+});
+
 for (const outcome of ['saved', 'skipped', 'failed']) {
     test(`imported replacements use dirty ownership when storage reports ${outcome}`, async t => {
         const app = appFixture();
@@ -599,6 +713,7 @@ for (const tool of ['generate_image', 'mcp-image']) {
         app.messages = app.chatSessions.owner.messages;
         app.saveCurrentChat('owner');
         await app.toggleTemporaryChat();
+        assert.ok(app.historyStore.deleted.has('owner'));
         let rounds = 0;
         global.fetch = async url => {
             if (url === '/v1/chat/completions') {
@@ -621,6 +736,10 @@ for (const tool of ['generate_image', 'mcp-image']) {
         assert.ok(app.isTemporaryChat('owner'));
         assert.ok(!app.savedChats.has('owner'));
         assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+        const finalMessages = [...messages, { id: 'final', role: 'assistant', content: 'Finalized in memory' }];
+        app.saveCurrentChat('owner', finalMessages);
+        assert.equal(app.chatSessions.owner.messages.at(-1).content, 'Finalized in memory');
+        assert.ok(!app.savedChats.has('owner'));
     });
 }
 

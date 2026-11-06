@@ -196,6 +196,66 @@ async function runChatHistoryBrowserTests() {
             const evicted = await store.save(chat('new', 3));
             assert(evicted.includes('open'), 'Closed history could no longer be evicted');
         });
+        for (const phase of ['queued', 'replacement attachments', 'eviction attachments']) {
+            await check(`navigation protects the oldest chat during ${phase}`, async () => {
+                const limit = phase === 'queued' ? 100 : 2;
+                const store = open({ limit });
+                await store.load();
+                for (let index = 0; index < limit; index++) {
+                    await store.save(chat(`saved-${index}`, index + 1));
+                }
+                let currentChatId = `saved-${limit - 1}`;
+                const protectedIds = () => [currentChatId];
+                let release;
+                if (phase === 'queued') {
+                    store.queue = new Promise(resolve => { release = resolve; });
+                } else {
+                    const remove = store.removeAttachments.bind(store);
+                    store.removeAttachments = async (tx, id) => {
+                        await remove(tx, id);
+                        if (id === (phase === 'replacement attachments' ? 'new' : 'saved-0')) {
+                            currentChatId = 'saved-0';
+                        }
+                    };
+                }
+                const saving = store.save(chat('new', limit + 1), { protectedIds });
+                if (release) {
+                    currentChatId = 'saved-0';
+                    release();
+                }
+                let failure;
+                try { await saving; } catch (error) { failure = error; }
+
+                assert(failure?.message.includes('Chat history is full'), 'Navigation did not reject eviction through capacity protection');
+                assert(!store.deleted.has('saved-0'), 'Navigation tombstoned the newly active chat');
+                const restored = await store.load();
+                assert(restored.length === limit && !restored.some(entry => entry.id === 'new'), 'Rejected eviction committed a partial chat');
+                assert(restored.find(entry => entry.id === 'saved-0').messages[2]._images[0] === image, 'Navigation lost retained export images');
+                assert((await images(store)).length === limit * 3, 'Rejected eviction changed image ownership');
+                await store.save(chat('saved-0', limit + 2), { protectedIds });
+                assert((await store.load()).find(entry => entry.id === 'saved-0').updatedAt === chat('saved-0', limit + 2).updatedAt, 'Newly active chat could not save after rejected eviction');
+            });
+        }
+        await check('late dirty ownership protects a chat before eviction commits', async () => {
+            const store = open({ limit: 2 });
+            await store.load();
+            await store.save(chat('dirty', 1));
+            await store.save(chat('closed', 2));
+            const dirtyIds = new Set();
+            const remove = store.removeAttachments.bind(store);
+            store.removeAttachments = async (tx, id) => {
+                await remove(tx, id);
+                dirtyIds.add('dirty');
+            };
+            let failure;
+            try {
+                await store.save(chat('new', 3), { protectedIds: () => [...dirtyIds] });
+            } catch (error) { failure = error; }
+
+            assert(failure?.message.includes('Chat history is full'), 'Late dirty ownership allowed eviction');
+            assert(!store.deleted.has('dirty'), 'Failed capacity save invalidated dirty ownership');
+            assert((await store.load()).find(entry => entry.id === 'dirty').messages[2]._images[0] === image, 'Dirty durable images were lost');
+        });
         await check('queued snapshots and clear invalidate pre-clear creates', async () => {
             const store = open();
             await store.load();
@@ -258,7 +318,9 @@ async function runChatHistoryBrowserTests() {
             assert(failure?.name === 'DataError', 'Migration rollback replaced the original attachment error');
             assert(failure.message === 'Injected attachment write failure', 'Migration rollback lost the original error message');
             assert(legacy.getItem('omlx_chat_history'), 'Failed migration removed its source');
-            failedStore.db.close();
+            let closed = false;
+            try { failedStore.db.transaction('chats'); } catch (error) { closed = error.name === 'InvalidStateError'; }
+            assert(closed, 'Failed migration retained an open database connection');
 
             const retry = open({ name: failedStore.name, storage: legacy });
             const restored = await retry.load();
