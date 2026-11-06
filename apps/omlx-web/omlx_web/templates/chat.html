@@ -5197,6 +5197,7 @@
             try {
                 imported = ChatHistory.parseArchive(JSON.parse(e.target.result));
                 await this.loadChatHistory();
+                if (this.chatHistoryPending) return;
             } catch {
                 alert(window.t('chat.error.import_invalid'));
                 return;
@@ -5906,6 +5907,7 @@
 
     loadChatHistory() {
         if (this.historyLoading) return this.historyLoading;
+        if (!this.chatHistoryPending) return Promise.resolve();
         this.historyStore = new ChatHistory.Store({
             onError: error => this.reportHistoryError(error), limit: MAX_CHAT_HISTORY_SIZE,
         });
@@ -5950,14 +5952,20 @@
                 }
             } catch (error) {
                 this.reportHistoryError(error);
+            } finally {
+                this.historyLoading = null;
             }
         })();
         return this.historyLoading;
     },
 
     activeHistoryChatIds() {
-        return Object.keys(this.chatSessions).filter(id =>
-            id === this.currentChatId || this.isChatStreaming(id) || this.micSession?.chatId === id);
+        const protectedIds = new Set(this.historyDirty.keys());
+        if (this.currentChatId) protectedIds.add(this.currentChatId);
+        for (const id of Object.keys(this.chatSessions)) {
+            if (this.isChatStreaming(id) || this.micSession?.chatId === id) protectedIds.add(id);
+        }
+        return [...protectedIds];
     },
 
     async saveChatHistory(changedIds = [], options = {}) {
@@ -5968,7 +5976,10 @@
             entry.mode = options.replace ? 'replace' : 'save';
             this.historyDirty.set(id, entry);
         }
-        if (this.chatHistoryPending) return new Map();
+        if (this.chatHistoryPending) {
+            if (!this.historyLoading) await this.loadChatHistory();
+            return new Map();
+        }
         const writes = [];
         for (const [id, entry] of this.historyDirty) {
             if (this.historyDeleted.has(id) || this.historyStore?.deleted.has(id)) {
@@ -5992,7 +6003,7 @@
                             try {
                                 evicted = await this.historyStore.save(chat, {
                                     replace: entry.mode === 'replace',
-                                    protectedIds: this.activeHistoryChatIds(),
+                                    protectedIds: () => this.activeHistoryChatIds(),
                                 });
                             } catch (error) {
                                 this.reportHistoryError(error);
@@ -6276,7 +6287,8 @@
     ) {
         const session = this.getChatSession(chatId, false);
         const messagesToSave = messages ?? session?.messages ?? (chatId === this.currentChatId ? this.messages : []);
-        if (!chatId || this.historyDeleted.has(chatId) || this.historyStore?.deleted.has(chatId)) return;
+        if (!chatId || this.historyDeleted.has(chatId)
+            || (!session?.temporary && this.historyStore?.deleted.has(chatId))) return;
 
         const existingIndex = this.chatHistory.findIndex(c => c.id === chatId);
         const existingChat = existingIndex >= 0 ? this.chatHistory[existingIndex] : null;
@@ -7285,7 +7297,8 @@
                     resultMessageId: resultMessageIds[i],
                     signal: toolSignal,
                 })));
-                if (this.historyDeleted.has(context.chatId) || this.historyStore?.deleted.has(context.chatId)) return;
+                if (this.historyDeleted.has(context.chatId)
+                    || (!chatSession.temporary && this.historyStore?.deleted.has(context.chatId))) return;
                 const toolStopped = toolSignal.aborted || this.isPendingHistoryRemoval(context.chatId);
 
                 // Log each tool outcome to the status timeline

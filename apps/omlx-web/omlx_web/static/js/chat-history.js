@@ -145,7 +145,10 @@ const ChatHistory = (() => {
             this.deleted = new Set();
             this.generation = 0;
             this.queue = Promise.resolve();
-            this.ready = this.open();
+            this.ready = this.open().catch(error => {
+                this.db?.close();
+                throw error;
+            });
         }
 
         async open() {
@@ -232,6 +235,7 @@ const ChatHistory = (() => {
         }
 
         save(chat, { replace = false, protectedIds = [] } = {}) {
+            const resolveProtectedIds = typeof protectedIds === 'function' ? protectedIds : () => protectedIds;
             const entry = pack(chat);
             this.seen.add(entry.snapshot.id);
             const generation = this.generation;
@@ -259,9 +263,13 @@ const ChatHistory = (() => {
                     );
                     const evicted = active.slice(this.limit);
 
-                    if (evicted.some(record => record.id === entry.snapshot.id || protectedIds.includes(record.id))) {
-                        throw new Error('Chat history is full. Close, unpin, or delete older chats before saving this conversation.');
-                    }
+                    const checkCapacity = () => {
+                        const protectedChatIds = resolveProtectedIds();
+                        if (evicted.some(record => record.id === entry.snapshot.id || protectedChatIds.includes(record.id))) {
+                            throw new Error('Chat history is full. Close, unpin, or delete older chats before saving this conversation.');
+                        }
+                    };
+                    checkCapacity();
 
                     await this.removeAttachments(tx, entry.snapshot.id);
                     chats.put({ id: entry.snapshot.id, revision, chat: entry.snapshot });
@@ -271,6 +279,8 @@ const ChatHistory = (() => {
                         chats.put({ id: record.id, revision: record.revision + 1 });
                         await this.removeAttachments(tx, record.id);
                     }
+                    checkCapacity();
+                    tx.commit();
                     return { kind: 'saved', revision, evicted };
                 });
                 if (result === false) return false;
