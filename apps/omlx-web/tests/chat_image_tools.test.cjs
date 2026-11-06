@@ -24,9 +24,18 @@ global.DOMPurify = { sanitize: html => html };
 const images = vm.runInThisContext(
     fs.readFileSync(path.join(web, 'static/js/chat-image-tools.js'), 'utf8') + '\nChatImageTools;'
 );
+vm.runInThisContext(fs.readFileSync(path.join(web, 'static/js/chat-history.js'), 'utf8'));
 const script = template.split('{% block scripts %}')[1].match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace('{{ api_key | tojson }}', '""');
 const chatApp = vm.runInThisContext(script + '\nchatApp;');
+const alpineContext = {
+    window: { Element: class {} },
+    document: { createElement: () => ({}) },
+    MutationObserver: class {},
+    queueMicrotask: () => {},
+};
+vm.runInNewContext(fs.readFileSync(path.join(web, 'static/js/alpine.min.js'), 'utf8'), alpineContext);
+const reactive = alpineContext.window.Alpine.reactive;
 const png = 'data:image/png;base64,c291cmNl';
 const upload = { id: 'upload-1', role: 'user', content: [
     { type: 'text', text: 'Edit this' }, { type: 'image_url', image_url: { url: png } },
@@ -50,10 +59,28 @@ function sse(calls) {
 }
 
 function appFixture(messages = [structuredClone(upload)]) {
-    const app = chatApp();
+    const app = reactive(chatApp());
     app.currentChatId = 'foreground';
     app.currentModel = 'text';
     app.chatHistoryPending = false;
+    app.savedChats = new Map();
+    app.historyStore = {
+        deleted: new Set(),
+        save: chat => {
+            app.savedChats.set(chat.id, app.cloneData(chat));
+            return Promise.resolve([]);
+        },
+        delete: id => {
+            app.savedChats.delete(id);
+            app.historyStore.deleted.add(id);
+
+            return Promise.resolve();
+        },
+        clear: () => {
+            app.savedChats.clear();
+            return Promise.resolve();
+        },
+    };
     app.modelTypeMap = { text: 'llm', vision: 'vlm' };
     app.availableModels = [{ id: 'text', name: 'text' }, { id: 'vision', name: 'vision' }];
     app.chatSessions.owner = {
@@ -68,6 +95,792 @@ function appFixture(messages = [structuredClone(upload)]) {
     ]) app[name] = () => {};
     return app;
 }
+
+function archiveFixture(t, app) {
+    const Reader = global.FileReader;
+    const alert = global.alert;
+    const alerts = [];
+    let reader;
+    global.FileReader = class {
+        constructor() { reader = this; }
+        readAsText() {}
+    };
+    global.alert = message => alerts.push(message);
+    t.after(() => {
+        global.FileReader = Reader;
+        global.alert = alert;
+    });
+    app.loadChatHistory = async () => {};
+    app.historyStore.generation = 0;
+
+    return {
+        alerts,
+        import(entries) {
+            app.importChats({ target: { files: [{}], value: 'archive.json' } });
+            return reader.onload({ target: { result: JSON.stringify(entries) } });
+        },
+    };
+}
+
+test('failed deletion keeps the chat available for export and retry', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    app.historyDeleted.add('already-deleted');
+    const failure = new Error('Storage write failed');
+    let reported;
+    app.historyStore.delete = async () => { throw failure; };
+    app.reportHistoryError = error => { reported = error; };
+
+    await app.deleteChat('owner', { skipConfirm: true });
+
+    assert.equal(reported, failure);
+    assert.ok(app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.ok(app.chatSessions.owner);
+
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.ok(app.historyDeleted.has('already-deleted'));
+    app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Keep this after failure' });
+    app.saveCurrentChat('owner');
+    assert.equal(JSON.parse(JSON.stringify(app.chatHistory))[0].messages.at(-1).content, 'Keep this after failure');
+
+    app.historyStore.delete = async () => {};
+    await app.deleteChat('owner', { skipConfirm: true });
+    assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.ok(!app.historyDirty.has('owner'));
+});
+
+test('failed deletion of the first message preserves context and images for later saves', async () => {
+    const app = appFixture([
+        structuredClone(upload),
+        { id: 'result', role: 'tool', content: 'Generated image', _images: [png] },
+    ]);
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    const original = app.cloneData(app.messages);
+
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    app.historyStore.delete = async () => { throw new Error('Storage unavailable'); };
+
+    app.reportHistoryError = () => {};
+
+    await app.deleteMessage(0);
+
+    assert.deepEqual(app.chatSessions.owner.messages, original);
+    assert.equal(app.messages, app.chatSessions.owner.messages);
+    app.messages.push({ id: 'later', role: 'user', content: 'Continue with these images' });
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    const saved = app.savedChats.get('owner');
+
+    assert.deepEqual(saved.messages.slice(0, 2), original);
+    assert.equal(saved.messages.at(-1).content, 'Continue with these images');
+    assert.deepEqual(JSON.parse(JSON.stringify(app.chatHistory))[0].messages, saved.messages);
+});
+
+for (const temporary of [false, true]) {
+    test(`an active microphone keeps its chat identity while temporary is ${temporary}`, async () => {
+        const app = appFixture([]);
+        app.currentChatId = 'owner';
+        app.messages = app.chatSessions.owner.messages;
+        app.chatSessions.owner.temporary = temporary;
+        app.micSession = { chatId: 'owner' };
+
+        await app.toggleTemporaryChat();
+
+        assert.equal(app.currentChatId, 'owner');
+        assert.equal(app.isTemporaryChat('owner'), temporary);
+        assert.ok(app.chatSessions.owner);
+        assert.equal(app.messages, app.chatSessions.owner.messages);
+    });
+}
+
+test('history writes protect the current chat, streams, and recordings but allow inactive eviction', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.chatSessions.other = { messages: [] };
+    app.chatSessions.recording = { messages: [] };
+    app.chatSessions.inactive = { messages: [] };
+    app.getStreamSession('other', true).isStreaming = true;
+    app.micSession = { chatId: 'recording' };
+    let options;
+
+    app.historyStore.save = async (chat, saveOptions) => {
+        options = saveOptions;
+
+        return [];
+    };
+
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    assert.deepEqual(options.protectedIds(), ['owner', 'other', 'recording']);
+});
+
+test('a failed image save remains protected after navigating to a smaller chat', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.reportHistoryError = () => {};
+    app.historyStore.save = async (chat, options) => {
+        if (chat.id === 'owner') throw new Error('Image quota exceeded');
+        if (options.protectedIds().includes('owner')) throw new Error('Chat history is full');
+
+        app.historyStore.deleted.add('owner');
+
+        return ['owner'];
+    };
+    app.messages.push({ id: 'later', role: 'user', content: 'Keep my unsaved context' });
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.currentChatId = 'smaller';
+    app.chatSessions.smaller = { messages: [], model: 'text', modelSettingsByModel: {} };
+    app.saveCurrentChat('smaller');
+    await app.saveChatHistory();
+
+    assert.ok(app.historyDirty.has('owner'));
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.equal(app.savedChats.get('owner').messages.length, 1);
+
+    const exported = JSON.parse(JSON.stringify(app.chatHistory)).find(chat => chat.id === 'owner');
+
+    assert.equal(exported.messages.at(-1).content, 'Keep my unsaved context');
+    assert.equal(exported.messages[0].content[1].image_url.url, png);
+});
+
+test('queued writes resolve protection from the latest navigation and dirty ownership', async () => {
+    const app = appFixture();
+    let options;
+    app.historyStore.save = async (chat, value) => {
+        options = value;
+        return [];
+    };
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    app.currentChatId = 'newly-open';
+    app.historyDirty.set('failed-image', { version: 99, mode: 'save', flight: null });
+    const protectedIds = options.protectedIds();
+
+    assert.ok(protectedIds.includes('newly-open'));
+    assert.ok(protectedIds.includes('failed-image'));
+});
+
+test('failed clear retains live history instead of reporting an empty history', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    app.historyDeleted.add('already-deleted');
+    app.chatSessions['already-deleted'] = { messages: [] };
+    const failure = new Error('Storage clear failed');
+    let reported;
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+    app.historyStore.clear = async () => { throw failure; };
+    app.reportHistoryError = error => { reported = error; };
+
+    await app.clearAllHistory();
+
+    assert.equal(reported, failure);
+    assert.ok(app.chatHistory.some(chat => chat.id === 'owner'));
+    assert.ok(app.chatSessions.owner);
+    assert.deepEqual(app.savedChats.get('owner'), app.cloneData(app.chatHistory.find(chat => chat.id === 'owner')));
+
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.ok(app.historyDeleted.has('already-deleted'));
+    app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Keep this after failure' });
+    app.saveCurrentChat('owner');
+    assert.equal(JSON.parse(JSON.stringify(app.chatHistory))[0].messages.at(-1).content, 'Keep this after failure');
+
+    app.historyStore.clear = async () => {};
+    app.startNewChat = async () => {};
+    await app.clearAllHistory();
+
+    assert.equal(app.historyDirty.size, 0);
+});
+
+for (const synchronous of [false, true]) {
+    test(`failed ${synchronous ? 'synchronous' : 'asynchronous'} writes retry only dirty IDs on an explicit flush`, async () => {
+        const app = appFixture();
+        const failure = new Error('Storage unavailable');
+        const writes = [];
+        let failing = true;
+        app.reportHistoryError = () => {};
+        app.historyStore.save = chat => {
+            writes.push(chat.id);
+            if (failing) {
+                if (synchronous) throw failure;
+                return Promise.reject(failure);
+            }
+            app.savedChats.set(chat.id, app.cloneData(chat));
+            return Promise.resolve([]);
+        };
+
+        app.saveCurrentChat('owner');
+        await app.historyDirty.get('owner')?.flight?.done;
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.deepEqual(writes, ['owner']);
+        assert.ok(app.historyDirty.has('owner'));
+        assert.equal(app.historyDirty.get('owner').flight, null);
+        failing = false;
+        await app.saveChatHistory();
+        await app.saveChatHistory();
+
+        assert.deepEqual(writes, ['owner', 'owner']);
+        assert.equal(app.historyDirty.size, 0);
+        assert.equal(app.savedChats.get('owner').messages[0].content[1].image_url.url, png);
+    });
+}
+
+for (const failFirst of [false, true]) {
+    test(`a newer mutation survives an older ${failFirst ? 'failed' : 'successful'} in-flight write`, async () => {
+        const app = appFixture();
+        const writes = [];
+        const releases = [];
+        app.reportHistoryError = () => {};
+        app.historyStore.save = chat => {
+            const snapshot = app.cloneData(chat);
+            writes.push(snapshot);
+            return new Promise((resolve, reject) => {
+                releases.push(() => {
+                    if (failFirst && writes.length === 1) reject(new Error('Storage unavailable'));
+                    else {
+                        app.savedChats.set(chat.id, snapshot);
+                        resolve([]);
+                    }
+                });
+            });
+        };
+
+        app.saveCurrentChat('owner');
+        const olderVersion = app.historyDirty.get('owner').version;
+        app.renameDraft = 'Newest title';
+        app.saveRenamedChat('owner');
+        app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Newest message' });
+        app.saveCurrentChat('owner');
+        const newerVersion = app.historyDirty.get('owner').version;
+        const flushing = app.saveChatHistory();
+
+        assert.ok(newerVersion > olderVersion);
+        assert.equal(writes.length, 1);
+        releases.shift()();
+        await new Promise(resolve => setImmediate(resolve));
+
+        if (failFirst) {
+            await flushing;
+            assert.equal(writes.length, 1);
+            assert.equal(app.historyDirty.get('owner').version, newerVersion);
+            assert.equal(app.historyDirty.get('owner').flight, null);
+        } else {
+            assert.equal(writes.length, 2);
+            assert.ok(app.historyDirty.has('owner'));
+        }
+        const retrying = failFirst ? app.saveChatHistory() : flushing;
+
+        assert.equal(writes.length, 2);
+        assert.equal(writes[1].title, 'Newest title');
+        assert.equal(writes[1].messages.at(-1).content, 'Newest message');
+        releases.shift()();
+        await retrying;
+        await app.saveChatHistory();
+
+        assert.equal(writes.length, 2);
+        assert.equal(app.historyDirty.size, 0);
+        assert.equal(app.savedChats.get('owner').messages.at(-1).content, 'Newest message');
+    });
+}
+
+test('overlapping failed removals release only their own membership', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const removals = [];
+    app.historyStore.delete = () => new Promise((resolve, reject) => removals.push({ resolve, reject }));
+    app.reportHistoryError = () => {};
+    let writes = 0;
+    const save = app.historyStore.save;
+    app.historyStore.save = chat => {
+        writes++;
+        return save(chat);
+    };
+
+    const first = app.deleteChat('owner', { skipConfirm: true });
+    const second = app.deleteChat('owner', { skipConfirm: true });
+    app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Retained while pending' });
+    app.saveCurrentChat('owner');
+
+    assert.equal(app.chatHistory[0].messages.at(-1).content, 'Retained while pending');
+    assert.equal(writes, 0);
+    removals[0].reject(new Error('First removal failed'));
+    await first;
+
+    assert.ok(app.isPendingHistoryRemoval('owner'));
+    assert.equal(writes, 0);
+    removals[1].reject(new Error('Second removal failed'));
+    await second;
+
+    assert.ok(!app.isPendingHistoryRemoval('owner'));
+    assert.equal(app.pendingHistoryRemovals.size, 0);
+    assert.equal(writes, 1);
+    assert.equal(app.savedChats.get('owner').messages.at(-1).content, 'Retained while pending');
+});
+
+for (const commitFirst of [false, true]) {
+    test(`a committed removal remains terminal when overlap fails ${commitFirst ? 'afterward' : 'first'}`, async () => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const removals = [];
+        app.historyStore.delete = () => new Promise((resolve, reject) => removals.push({ resolve, reject }));
+        app.reportHistoryError = () => {};
+        const first = app.deleteChat('owner', { skipConfirm: true });
+        const second = app.deleteChat('owner', { skipConfirm: true });
+        app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Pending export only' });
+        app.saveCurrentChat('owner');
+        const retained = app.chatSessions.owner;
+
+        if (commitFirst) {
+            removals[0].resolve();
+            await first;
+            removals[1].reject(new Error('Second removal failed'));
+            await second;
+        } else {
+            removals[1].reject(new Error('Second removal failed'));
+            await second;
+            removals[0].resolve();
+            await first;
+        }
+        app.saveCurrentChat('owner', retained.messages);
+        await app.saveChatHistory();
+
+        assert.ok(app.historyDeleted.has('owner'));
+        assert.ok(!app.isPendingHistoryRemoval('owner'));
+        assert.ok(!app.chatSessions.owner);
+        assert.ok(!app.historyDirty.has('owner'));
+        assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+    });
+}
+
+test('model settings and pin mutations persist only their owning chat', async () => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const updatedAt = app.chatHistory[0].updatedAt;
+    const settings = { modelSettings: { temperature: 0.25 }, speculativeEngine: null, speculativeDraftModel: null };
+    app.captureSessionModelSettings = () => settings;
+    app.chatSessions.owner.systemPrompt = 'Changed settings';
+
+    app.persistChatSettingsToHistory('owner');
+    await app.saveChatHistory();
+    app.togglePinChat('owner');
+    await app.saveChatHistory();
+
+    const saved = app.savedChats.get('owner');
+
+    assert.equal(saved.updatedAt, updatedAt);
+    assert.equal(saved.systemPrompt, 'Changed settings');
+    assert.equal(saved.modelSettings.temperature, 0.25);
+    assert.equal(saved.pinned, true);
+    assert.equal(app.historyDirty.size, 0);
+});
+
+test('history loading writes normalized and early dirty rows but leaves restored image rows clean', async t => {
+    const app = appFixture();
+    const Store = ChatHistory.Store;
+    const writes = [];
+    const restored = [
+        { id: 'clean', title: 'Unchanged', model: 'text', messages: [app.cloneData(upload)] },
+        { id: 'normalized', title: 'chat.untitled.old', model: 'alias', messages: [],
+            modelSettingsByModel: { alias: { temperature: 0.25 } } },
+    ];
+    ChatHistory.Store = class {
+        constructor() {
+            this.generation = 0;
+            this.deleted = new Set();
+        }
+        async load() { return restored; }
+        async save(chat) {
+            writes.push(app.cloneData(chat));
+            return [];
+        }
+    };
+    t.after(() => { ChatHistory.Store = Store; });
+    app.resolveGatewayModelId = model => model === 'alias' ? 'text' : model;
+    app.untitledChatTitle = () => 'Untitled';
+    app.chatHistoryPending = true;
+    app.saveCurrentChat('owner');
+
+    assert.equal(writes.length, 0);
+    await app.loadChatHistory();
+    await app.saveChatHistory();
+
+    assert.deepEqual(writes.map(chat => chat.id).sort(), ['normalized', 'owner']);
+    const normalized = writes.find(chat => chat.id === 'normalized');
+
+    assert.equal(normalized.title, 'Untitled');
+    assert.equal(normalized.model, 'text');
+    assert.equal(normalized.modelSettingsByModel.text.temperature, 0.25);
+    assert.equal(app.chatHistory.find(chat => chat.id === 'clean').messages[0].content[1].image_url.url, png);
+    assert.equal(app.historyDirty.size, 0);
+});
+
+for (const modelsFirst of [false, true]) {
+    test(`model discovery normalizes unopened histories when ${modelsFirst ? 'models finish' : 'history finishes'} first`, async t => {
+        const app = appFixture();
+        const Store = ChatHistory.Store;
+        const fetch = global.fetch;
+        const writes = [];
+        let opened = 0;
+        let release;
+
+        const restored = [
+            { id: 'alias-chat', title: 'Alias', model: 'friendly', updatedAt: '2020-01-01T00:00:00.000Z',
+                messages: [app.cloneData(upload)], modelSettingsByModel: { friendly: { temperature: 0.25 } } },
+            { id: 'deployment-chat', title: 'Deployment', model: 'private-handle', updatedAt: '2020-01-01T00:00:00.000Z',
+                messages: [], modelSettingsByModel: { 'private-handle': { temperature: 0.5 } } },
+            { id: 'clean', title: 'Unchanged image', model: 'model', messages: [app.cloneData(upload)] },
+        ];
+
+        ChatHistory.Store = class {
+            constructor() {
+                opened++;
+                this.generation = 0;
+                this.deleted = new Set();
+            }
+            load() {
+                return modelsFirst
+                    ? new Promise(resolve => { release = () => resolve(restored); })
+                    : Promise.resolve(restored);
+            }
+            async save(chat) {
+                writes.push(app.cloneData(chat));
+
+                return [];
+            }
+        };
+        t.after(() => {
+            ChatHistory.Store = Store;
+            global.fetch = fetch;
+        });
+
+        const responses = {
+            '/v1/models': { data: [{ id: 'friendly' }] },
+            '/admin/api/models': { models: [
+                { id: 'model', model_path: '/models/model', settings: { model_alias: 'friendly' } },
+            ] },
+            '/admin/api/cluster/deployments': { deployments: [
+                { deployment_id: 'private-handle', model: '/models/model' },
+            ] },
+            '/health': { default_model: 'model' },
+            '/admin/api/global-settings': {},
+        };
+
+        global.fetch = async url => json(responses[url]);
+        app.fetchModelTypes = async () => {};
+        app.reconcileCurrentModelAfterLoad = () => {};
+        app.chatHistoryPending = true;
+
+        const loading = app.loadChatHistory();
+
+        if (!modelsFirst) await loading;
+
+        await app.loadModels();
+        if (modelsFirst) release();
+        await loading;
+        await app.saveChatHistory();
+
+        assert.deepEqual(writes.map(chat => chat.id).sort(), ['alias-chat', 'deployment-chat']);
+
+        for (const chat of writes) {
+            assert.equal(chat.model, 'model');
+            assert.equal(chat.updatedAt, '2020-01-01T00:00:00.000Z');
+        }
+
+        assert.equal(writes.find(chat => chat.id === 'alias-chat').modelSettingsByModel.model.temperature, 0.25);
+        assert.equal(writes.find(chat => chat.id === 'deployment-chat').modelSettingsByModel.model.temperature, 0.5);
+        assert.equal(writes.find(chat => chat.id === 'alias-chat').messages[0].content[1].image_url.url, png);
+        await app.loadModels();
+        await app.saveChatHistory();
+
+        assert.equal(opened, 1);
+        assert.equal(writes.length, 2);
+        assert.equal(app.historyDirty.size, 0);
+    });
+}
+
+for (const trigger of ['load', 'save']) {
+    test(`failed initialization retries through a later ${trigger} and merges only dirty live rows`, async t => {
+        const app = appFixture();
+        const Store = ChatHistory.Store;
+        const writes = [];
+        let attempts = 0;
+        app.reportHistoryError = () => {};
+        ChatHistory.Store = class {
+            constructor() {
+                this.generation = 0;
+                this.deleted = new Set();
+                this.attempt = ++attempts;
+            }
+            async load() {
+                if (this.attempt === 1) throw new Error('Storage upgrade blocked');
+                return [
+                    { id: 'durable', title: 'Saved image', model: 'text', messages: [structuredClone(upload)] },
+                    { id: 'owner', title: 'Older durable owner', model: 'text', messages: [] },
+                ];
+            }
+            async save(chat) {
+                writes.push(app.cloneData(chat));
+                return [];
+            }
+        };
+        t.after(() => { ChatHistory.Store = Store; });
+        app.chatHistoryPending = true;
+        await app.loadChatHistory();
+        assert.equal(attempts, 1, 'Initialization must not retry itself');
+        assert.ok(app.chatHistoryPending);
+        app.chatHistory.push({
+            id: 'owner', title: 'Early live context', model: 'text',
+            messages: [structuredClone(upload)],
+        });
+        app.historyDirty.set('owner', { version: 1, mode: 'save', flight: null });
+        if (trigger === 'load') await app.loadChatHistory();
+        else await app.saveChatHistory(['owner']);
+        await app.saveChatHistory();
+
+        assert.equal(attempts, 2);
+        assert.equal(app.chatHistoryPending, false);
+        assert.deepEqual(writes.map(chat => chat.id), ['owner']);
+        assert.equal(app.chatHistory.find(chat => chat.id === 'owner').title, 'Early live context');
+        assert.equal(app.chatHistory.find(chat => chat.id === 'durable').messages[0].content[1].image_url.url, png);
+        assert.equal(app.historyDirty.size, 0);
+        await app.loadChatHistory();
+        assert.equal(attempts, 2, 'Successful initialization should remain loaded');
+    });
+}
+
+test('import does not report success while history initialization is still failed', async t => {
+    const app = appFixture();
+    const archive = archiveFixture(t, app);
+    app.chatHistoryPending = true;
+
+    await archive.import([{ id: 'imported', title: 'Image', messages: [structuredClone(upload)] }]);
+
+    assert.ok(!archive.alerts.some(message => message.startsWith('chat.import_success')));
+    assert.equal(app.savedChats.size, 0);
+    assert.equal(app.chatHistory.length, 0);
+});
+
+for (const outcome of ['saved', 'skipped', 'failed']) {
+    test(`imported replacements use dirty ownership when storage reports ${outcome}`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const prior = app.cloneData(app.chatHistory[0]);
+        const archive = archiveFixture(t, app);
+        const imported = {
+            ...prior, title: 'Imported', updatedAt: '2099-01-01T00:00:00.000Z',
+            messages: [{ id: 'generated', role: 'tool', content: 'Imported image', _images: [png] }],
+        };
+        const writes = [];
+        let failing = outcome === 'failed';
+        app.reportHistoryError = () => {};
+        app.historyStore.save = async (chat, options) => {
+            writes.push({ chat: app.cloneData(chat), replace: options.replace });
+            if (failing) throw new Error('Storage unavailable');
+            if (outcome === 'skipped') return false;
+            app.savedChats.set(chat.id, app.cloneData(chat));
+            return [];
+        };
+
+        await archive.import([imported]);
+
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].replace, true);
+        if (outcome === 'skipped') {
+            assert.deepEqual(app.cloneData(app.chatHistory[0]), prior);
+            assert.equal(app.historyDirty.size, 0);
+            assert.equal(archive.alerts.length, 1);
+        } else {
+            assert.equal(app.chatHistory[0].title, 'Imported');
+            assert.equal(app.chatHistory[0].messages[0]._images[0], png);
+            if (outcome === 'failed') {
+                assert.equal(archive.alerts.length, 0);
+                assert.equal(app.historyDirty.get('owner').mode, 'replace');
+                failing = false;
+                await app.saveChatHistory();
+
+                assert.equal(writes.length, 2);
+                assert.equal(writes[1].replace, true);
+            }
+            assert.equal(app.savedChats.get('owner').messages[0]._images[0], png);
+            assert.equal(app.historyDirty.size, 0);
+        }
+    });
+}
+
+test('a skipped import cannot restore its prior row over a newer mutation', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const archive = archiveFixture(t, app);
+    const imported = { ...app.cloneData(app.chatHistory[0]), title: 'Imported', updatedAt: '2099-01-01T00:00:00.000Z' };
+    let finishImport;
+    let started;
+    const saving = new Promise(resolve => { started = resolve; });
+    app.historyStore.save = () => new Promise(resolve => {
+        finishImport = () => resolve(false);
+        started();
+    });
+    const importing = archive.import([imported]);
+    await saving;
+    app.saveCurrentChat('owner', [{ id: 'later', role: 'user', content: 'Newer local context' }]);
+    const version = app.historyDirty.get('owner').version;
+    finishImport();
+    await importing;
+
+    assert.equal(app.chatHistory[0].messages[0].content, 'Newer local context');
+    assert.equal(app.historyDirty.get('owner').version, version);
+    assert.equal(app.historyDirty.get('owner').mode, 'save');
+    app.historyStore.save = async chat => {
+        app.savedChats.set(chat.id, app.cloneData(chat));
+        return [];
+    };
+    await app.saveChatHistory();
+
+    assert.equal(app.savedChats.get('owner').messages[0].content, 'Newer local context');
+    assert.equal(app.historyDirty.size, 0);
+});
+
+test('import skips lifetimes still owned by a pending removal', async t => {
+    const app = appFixture();
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const archive = archiveFixture(t, app);
+    const prior = app.cloneData(app.chatHistory[0]);
+    const removal = app.beginHistoryRemoval(['owner']);
+
+    await archive.import([{ ...prior, title: 'Do not import', updatedAt: '2099-01-01T00:00:00.000Z' }]);
+    await app.finishHistoryRemoval(removal, false);
+
+    assert.deepEqual(app.cloneData(app.chatHistory[0]), prior);
+    assert.deepEqual(app.savedChats.get('owner'), prior);
+    assert.equal(app.historyDirty.size, 0);
+});
+
+test('conflicted saves keep subsequent messages available in exported history', async () => {
+    const app = appFixture();
+    const failure = new Error('Chat history changed in another tab');
+    let reported;
+
+    app.historyStore.save = async () => { throw failure; };
+
+    app.reportHistoryError = error => { reported = error; };
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    app.chatSessions.owner.messages.push({ id: 'later', role: 'user', content: 'Keep my local changes' });
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    assert.equal(reported, failure);
+    assert.equal(JSON.parse(JSON.stringify(app.chatHistory))[0].messages.at(-1).content, 'Keep my local changes');
+});
+
+for (const tool of ['generate_image', 'mcp-image']) {
+    test(`making an empty chat temporary preserves ${tool} results and the follow-up answer`, async () => {
+        const app = appFixture([]);
+        app.currentChatId = 'owner';
+        app.messages = app.chatSessions.owner.messages;
+        app.saveCurrentChat('owner');
+        await app.toggleTemporaryChat();
+        assert.ok(app.historyStore.deleted.has('owner'));
+        let rounds = 0;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                return rounds++ ? sse(null) : sse([call(tool, { model: 'image', prompt: 'Temporary' })]);
+            }
+
+            if (url === '/v1/images/generations') return json({ data: [{ b64_json: 'c291cmNl' }] });
+
+            assert.equal(url, '/v1/mcp/execute');
+
+            return json({ content: [{ type: 'image', data: 'c291cmNl', mimeType: 'image/png' }] });
+        };
+
+        await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+
+        const messages = app.chatSessions.owner.messages;
+        assert.equal(rounds, 2);
+        assert.equal(messages.find(msg => msg.role === 'tool')._images[0], png);
+        assert.equal(messages.at(-1).content, 'Done');
+        assert.ok(app.isTemporaryChat('owner'));
+        assert.ok(!app.savedChats.has('owner'));
+        assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+        const finalMessages = [...messages, { id: 'final', role: 'assistant', content: 'Finalized in memory' }];
+        app.saveCurrentChat('owner', finalMessages);
+        assert.equal(app.chatSessions.owner.messages.at(-1).content, 'Finalized in memory');
+        assert.ok(!app.savedChats.has('owner'));
+    });
+}
+
+test('capacity failures keep generated images and the follow-up answer available for export', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    const failure = new Error('Chat history is full');
+    let reported;
+    let rounds = 0;
+
+    app.historyStore.save = async () => { throw failure; };
+
+    app.reportHistoryError = error => { reported = error; };
+
+    global.fetch = async url => {
+        if (url === '/v1/chat/completions') {
+            return rounds++ ? sse(null) : sse([call('generate_image', { model: 'image', prompt: 'Keep this' })]);
+        }
+
+        assert.equal(url, '/v1/images/generations');
+
+        return json({ data: [{ b64_json: 'c291cmNl' }] });
+    };
+
+    await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    await app.saveChatHistory();
+
+    const exported = JSON.parse(JSON.stringify(app.chatHistory))[0];
+
+    assert.equal(reported, failure);
+    assert.equal(rounds, 2);
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.equal(exported.messages.find(msg => msg.role === 'tool')._images[0], png);
+    assert.equal(exported.messages.at(-1).content, 'Done');
+});
+
+test('clearing history invalidates an import still reading its file', async t => {
+    const app = appFixture();
+    const Reader = global.FileReader;
+    let reader;
+    global.FileReader = class {
+        constructor() { reader = this; }
+        readAsText() {}
+    };
+    t.after(() => { global.FileReader = Reader; });
+    app.historyStore.generation = 0;
+    app.loadChatHistory = async () => {};
+    app.importChats({ target: { files: [{}], value: 'archive.json' } });
+    app.historyStore.generation++;
+
+    await reader.onload({ target: { result: JSON.stringify([
+        { id: 'late-import', messages: [] },
+    ]) } });
+
+    assert.equal(app.chatHistory.length, 0);
+    assert.equal(app.savedChats.size, 0);
+});
 
 test('Markdown image references render as escaped text instead of broken URLs', () => {
     const ref = images.reference('owner', 'result', 'tool', 0);
@@ -260,7 +1073,7 @@ test('branching rebases copied image references without changing the parent or a
     assert.equal(branch[3].content[0].text, `Reuse ${branchTool}. Keep ${foreignRef} and ${excludedRef}.`);
     app.reuseToolImage(branch[2], 0);
     assert.equal(app.inputMessage, branchTool);
-    assert.ok(!JSON.stringify(app.chatHistory[0]).includes('base64'));
+    assert.ok(JSON.stringify(app.chatHistory[0]).includes('base64'));
 
     global.fetch = async (url, init) => {
         assert.equal(url, '/v1/images/edits');
@@ -324,11 +1137,10 @@ test('request projection follows the actual model override and preserves VLM inp
     assert.equal(vision.model, 'vision');
     assert.equal(vision.messages[0].content.find(part => part.type === 'image_url').image_url.url, png);
     assert.ok(!JSON.stringify(vision.messages[1]).includes('base64'));
-    const stripped = messages.map(msg => app.messageForStorage(msg));
-    assert.ok(!JSON.stringify(stripped).includes('base64'));
-    assert.equal(stripped[1]._imagesStripped, 1);
-    assert.equal(stripped[0].id, messages[0].id);
-    assert.ok(!JSON.stringify(app.buildChatCompletionBody(stripped, context).messages).includes('base64'));
+    const saved = messages.map(msg => app.messageForStorage(msg));
+    assert.equal(saved[1]._images[0], png);
+    assert.equal(saved[0].id, messages[0].id);
+    assert.ok(!JSON.stringify(app.buildChatCompletionBody(saved, context).messages).includes('base64'));
 });
 
 test('missing, foreign, excluded-variant and stripped image refs fail at the source', async () => {
@@ -355,7 +1167,12 @@ test('missing, foreign, excluded-variant and stripped image refs fail at the sou
     ]) {
         await assert.rejects(images.execute('edit_image', { model: 'm', prompt: 'p', image_refs: [ref] }, scope), /not in this chat's selected history/);
     }
-    const stripped = variants.map(msg => app.messageForStorage(msg));
+    const stripped = structuredClone(variants);
+    stripped[0].content[1].image_url.url = '';
+    for (const msg of stripped.filter(msg => msg._images)) {
+        msg._imagesStripped = msg._images.length;
+        delete msg._images;
+    }
     const ref = images.reference('owner', 'upload-1', 'upload', 1);
     await assert.rejects(images.execute('edit_image', { model: 'm', prompt: 'p', image_refs: [ref] }, controllerScope(stripped)), /unavailable after reload or export/);
     const mcpRef = images.reference('owner', 'new-image', 'tool', 0);
@@ -404,7 +1221,7 @@ test('streamResponse performs discovery, generation, edit and final synthesis in
     assert.equal(messages.filter(msg => msg._images?.length).length, 2);
     assert.equal(messages.at(-1).content, 'Done');
     assert.equal(new Set(messages.map(msg => msg.id)).size, messages.length);
-    assert.ok(!localStorage.getItem('omlx_chat_history').includes('base64'));
+    assert.ok(JSON.stringify(app.savedChats.get('owner')).includes('base64'));
     assert.equal(app.getStreamSession('owner').isStreaming, false);
 });
 
@@ -474,8 +1291,360 @@ test('Stop remains active through delayed response bodies and blocks registratio
     const nextRequest = app.buildChatCompletionBody(messages, { chatId: 'owner', model: 'text', systemPrompt: '' });
     const calls = nextRequest.messages.flatMap(msg => msg.tool_calls || []);
     assert.deepEqual(calls.map(tc => tc.id), nextRequest.messages.flatMap(msg => msg.role === 'tool' ? [msg.tool_call_id] : []));
-    assert.ok(!localStorage.getItem('omlx_chat_history').includes('bGF0ZQ=='));
+    assert.ok(!JSON.stringify(app.savedChats.get('owner')).includes('bGF0ZQ=='));
     assert.equal(app.getStreamSession('owner').isStreaming, false);
+});
+
+for (const action of ['delete', 'clear']) {
+    test(`${action} prevents delayed tool finalizers from resurrecting chat history`, async () => {
+        const app = appFixture();
+        let bodyStarted;
+        const started = new Promise(resolve => { bodyStarted = resolve; });
+        let releaseBody;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                return sse([call('generate_image', { model: 'image', prompt: 'Delayed' })]);
+            }
+            assert.equal(url, '/v1/images/generations');
+            return {
+                ok: true,
+                json: () => new Promise(resolve => {
+                    releaseBody = () => resolve({ data: [{ b64_json: 'bGF0ZQ==' }] });
+                    bodyStarted();
+                }),
+            };
+        };
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await started;
+        const retained = app.chatSessions.owner;
+        if (action === 'delete') {
+            await app.deleteChat('owner', { skipConfirm: true });
+        } else {
+            global.confirm = () => true;
+            app.startNewChat = async () => {};
+            await app.clearAllHistory();
+        }
+        releaseBody();
+        await pending;
+        app.saveCurrentChat('owner', retained.messages, retained.model, retained.systemPrompt);
+        assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
+        assert.ok(!app.savedChats.has('owner'));
+    });
+}
+
+for (const action of ['delete', 'clear']) {
+    test(`failed ${action} keeps new messages exportable without reviving cancelled image work`, async t => {
+        const app = appFixture();
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        app.historyStore[action] = async () => { throw new Error('Storage unavailable'); };
+        app.reportHistoryError = () => {};
+
+        let bodyStarted;
+        const started = new Promise(resolve => { bodyStarted = resolve; });
+        let releaseBody;
+        let rounds = 0;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                rounds++;
+
+                return sse([call('generate_image', { model: 'image', prompt: 'Delayed' })]);
+            }
+
+            assert.equal(url, '/v1/images/generations');
+
+            return {
+                ok: true,
+                json: () => new Promise(resolve => {
+                    releaseBody = () => resolve({ data: [{ b64_json: 'bGF0ZQ==' }] });
+                    bodyStarted();
+                }),
+            };
+        };
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await started;
+
+        if (action === 'delete') await app.deleteChat('owner', { skipConfirm: true });
+        else await app.clearAllHistory();
+
+        releaseBody();
+        await pending;
+
+        assert.equal(rounds, 1);
+        const messages = app.chatSessions.owner.messages;
+        assert.ok(messages.filter(msg => msg.role === 'tool').every(msg => !msg._images?.length));
+
+        messages.push({ id: 'later', role: 'user', content: 'Continue after failure' });
+        app.saveCurrentChat('owner');
+        assert.equal(JSON.parse(JSON.stringify(app.chatHistory))[0].messages.at(-1).content, 'Continue after failure');
+        assert.ok(!JSON.stringify(app.chatHistory).includes('bGF0ZQ=='));
+    });
+}
+
+for (const action of ['delete', 'clear']) {
+    test(`pending ${action} rejects image results but retains matched cancellation context on failure`, async t => {
+        const app = appFixture();
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        let bodyStarted;
+        const started = new Promise(resolve => { bodyStarted = resolve; });
+        let releaseBody;
+        let rounds = 0;
+        global.fetch = async url => {
+            if (url === '/v1/chat/completions') {
+                rounds++;
+                return sse([call('generate_image', { model: 'image', prompt: 'Canceled' })]);
+            }
+            return {
+                ok: true,
+                json: () => new Promise(resolve => {
+                    releaseBody = () => resolve({ data: [{ b64_json: 'bGF0ZQ==' }] });
+                    bodyStarted();
+                }),
+            };
+        };
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await started;
+        let rejectRemoval;
+        app.historyStore[action] = () => new Promise((resolve, reject) => { rejectRemoval = reject; });
+        app.reportHistoryError = () => {};
+        const removing = action === 'delete'
+            ? app.deleteChat('owner', { skipConfirm: true })
+            : app.clearAllHistory();
+        releaseBody();
+        await pending;
+
+        assert.ok(app.isPendingHistoryRemoval('owner'));
+        rejectRemoval(new Error('Storage unavailable'));
+        await removing;
+        const exported = app.chatHistory.find(chat => chat.id === 'owner');
+        const body = app.buildChatCompletionBody(exported.messages, { chatId: 'owner', model: 'text', systemPrompt: '' });
+        const calls = body.messages.flatMap(message => message.tool_calls || []);
+        const results = body.messages.filter(message => message.role === 'tool');
+
+        assert.equal(rounds, 1);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls.map(tc => tc.id), results.map(result => result.tool_call_id));
+        assert.match(results[0].content, /stopped by user/);
+        assert.ok(!JSON.stringify(exported).includes('bGF0ZQ=='));
+        assert.equal(exported.messages[0].content[1].image_url.url, png);
+        assert.deepEqual(app.cloneData(exported), app.savedChats.get('owner'));
+    });
+}
+
+for (const action of ['delete', 'clear']) {
+    test(`failed ${action} retains finalized partial text and reasoning in exports`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        let tokensSent;
+        const sent = new Promise(resolve => { tokensSent = resolve; });
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        global.fetch = async () => new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+                    choices: [{ delta: { content: 'Partial answer', reasoning_content: 'Partial reasoning' } }],
+                })}\n\n`));
+                tokensSent();
+            },
+        }));
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await sent;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(app.getStreamSession('owner').streamingContent, 'Partial answer');
+        let rejectRemoval;
+
+        app.historyStore[action] = () => new Promise((resolve, reject) => { rejectRemoval = reject; });
+
+        app.reportHistoryError = () => {};
+
+        const removing = action === 'delete'
+            ? app.deleteChat('owner', { skipConfirm: true })
+            : app.clearAllHistory();
+
+        await pending;
+        rejectRemoval(new Error('Storage unavailable'));
+        await removing;
+
+        const live = app.chatSessions.owner.messages.at(-1);
+        const exported = JSON.parse(JSON.stringify(app.chatHistory)).find(chat => chat.id === 'owner');
+        assert.equal(live.content, 'Partial answer');
+        assert.equal(live.reasoning_content, 'Partial reasoning');
+        assert.equal(exported.messages.at(-1).content, 'Partial answer');
+        assert.equal(exported.messages.at(-1).reasoning_content, 'Partial reasoning');
+        assert.equal(exported.messages[0].content[1].image_url.url, png);
+    });
+}
+
+test('successful clearing preserves a conversation sent while storage is pending', async t => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const oldIds = new Set(app.savedChats.keys());
+    let finishClearing;
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+
+    app.historyStore.clear = () => new Promise(resolve => {
+        finishClearing = () => {
+            for (const id of oldIds) app.savedChats.delete(id);
+
+            resolve();
+        };
+    });
+
+    app.ensureSessionModelSettings = async () => {};
+
+    app.saveModelSettingsForModel = () => {};
+
+    app.forceScrollToBottom = () => {};
+    const clearing = app.clearAllHistory();
+    await app.startNewChat();
+    const newId = app.currentChatId;
+    app.inputMessage = 'Sent during pending clear';
+    global.fetch = async () => sse(null);
+    await app.sendMessage();
+
+    finishClearing();
+    await clearing;
+    await app.saveChatHistory();
+
+    assert.equal(app.currentChatId, newId);
+    assert.equal(app.chatSessions[newId].messages[0].content, 'Sent during pending clear');
+    assert.equal(app.chatHistory.find(chat => chat.id === newId).messages.at(-1).content, 'Done');
+    assert.equal(app.savedChats.get(newId).messages.at(-1).content, 'Done');
+    assert.ok(!app.savedChats.has('owner'));
+    assert.ok(!app.chatSessions.owner);
+});
+
+test('successful clearing preserves a newer composer, uploads, and active stream', async t => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+    let finishClearing;
+    app.historyStore.clear = () => new Promise(resolve => { finishClearing = resolve; });
+    const clearing = app.clearAllHistory();
+    await app.startNewChat();
+    const id = app.currentChatId;
+    const stream = app.getStreamSession(id, true);
+    stream.isStreaming = true;
+    stream.streamingContent = 'New response in progress';
+    stream.abortController = new AbortController();
+    app.inputMessage = 'Unsent draft';
+    app.uploadImages = [{ id: 'new-upload', base64: png }];
+    app.uploadDocuments = [{ id: 'new-document', base64: 'document' }];
+    const messages = app.messages;
+
+    finishClearing();
+    await clearing;
+
+    assert.equal(app.currentChatId, id);
+    assert.equal(app.messages, messages);
+    assert.equal(app.inputMessage, 'Unsent draft');
+    assert.equal(app.uploadImages[0].base64, png);
+    assert.equal(app.uploadDocuments[0].base64, 'document');
+    assert.equal(app.getStreamSession(id), stream);
+    assert.equal(stream.isStreaming, true);
+    assert.equal(stream.streamingContent, 'New response in progress');
+    assert.equal(stream.abortController.signal.aborted, false);
+    assert.ok(!app.chatSessions.owner);
+});
+
+for (const action of ['delete', 'clear']) {
+    test(`failed ${action} persists partial context even when storage fails before stream finalization`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        const chunk = new TextEncoder().encode(`data: ${JSON.stringify({
+            choices: [{ delta: { content: 'Retained answer', reasoning_content: 'Retained reasoning' } }],
+        })}\n\n`);
+        let finishReading;
+        let waiting;
+        const reading = new Promise(resolve => { waiting = resolve; });
+        let first = true;
+        const reader = {
+            read() {
+                if (first) {
+                    first = false;
+                    return Promise.resolve({ value: chunk, done: false });
+                }
+                return new Promise((resolve, reject) => {
+                    finishReading = () => reject(new DOMException('Stopped', 'AbortError'));
+                    waiting();
+                });
+            },
+            cancel: () => Promise.resolve(),
+        };
+        global.fetch = async () => ({ ok: true, body: { getReader: () => reader } });
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await reading;
+        app.historyStore[action] = async () => { throw new Error('Storage unavailable'); };
+        app.reportHistoryError = () => {};
+        const stream = app.getStreamSession('owner');
+        const controller = stream.abortController;
+
+        if (action === 'delete') await app.deleteChat('owner', { skipConfirm: true });
+        else await app.clearAllHistory();
+
+        assert.equal(controller.signal.aborted, true);
+        assert.equal(stream.abortController, controller);
+        assert.equal(stream.streamingContent, 'Retained answer');
+        assert.equal(stream.streamingThinking, 'Retained reasoning');
+        assert.equal(stream.isStreaming, true);
+        finishReading();
+        await pending;
+        await app.saveChatHistory();
+        const saved = app.savedChats.get('owner');
+        const exported = app.chatHistory.find(chat => chat.id === 'owner');
+
+        assert.equal(saved.messages.at(-1).content, 'Retained answer');
+        assert.equal(saved.messages.at(-1).reasoning_content, 'Retained reasoning');
+        assert.deepEqual(app.cloneData(exported), saved);
+        assert.equal(stream.isStreaming, false);
+    });
+}
+
+test('renaming a chat does not serialize unchanged image histories', async () => {
+    const app = appFixture();
+    app.chatSessions.unchanged = app.cloneData(app.chatSessions.owner);
+    app.saveCurrentChat('owner');
+    app.saveCurrentChat('unchanged');
+    await app.saveChatHistory();
+    const unchanged = app.chatHistory.find(chat => chat.id === 'unchanged');
+    const stringify = JSON.stringify;
+    let serialized = 0;
+
+    JSON.stringify = (value, ...args) => {
+        if (value === unchanged) serialized++;
+
+        return stringify(value, ...args);
+    };
+    try {
+        app.renameDraft = 'Renamed';
+        app.saveRenamedChat('owner');
+        await app.saveChatHistory();
+    } finally {
+        JSON.stringify = stringify;
+    }
+
+    assert.equal(serialized, 0);
+    assert.equal(app.savedChats.get('owner').title, 'Renamed');
+    assert.equal(app.savedChats.get('unchanged').messages[0].content[1].image_url.url, png);
 });
 
 test('Stop preserves text already streamed before any tool call', async () => {
@@ -722,7 +1891,7 @@ for (const [label, content, urls, text] of [
         assert.deepEqual(app.getImageUrls(content), urls);
         assert.equal(app.getTextContent(content), text);
         const stored = app.messageForStorage(app.messages[0]);
-        assert.deepEqual(app.getImageUrls(stored.content), []);
+        assert.deepEqual(app.getImageUrls(stored.content), urls);
         assert.equal(app.getTextContent(stored.content), text);
         assert.deepEqual(app.getImageUrls(content), urls);
 
