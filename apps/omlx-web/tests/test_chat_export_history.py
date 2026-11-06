@@ -26,6 +26,7 @@ METHODS = [
     "sortChatHistory",
     "cloneData",
     "downloadChats",
+    "normalizeChatHistory",
     "loadChatHistory",
     "reportHistoryError",
 ]

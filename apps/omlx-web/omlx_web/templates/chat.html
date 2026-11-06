@@ -5431,6 +5431,7 @@
             }
 
             this.reconcileCurrentModelAfterLoad(defaultModel);
+            await this.saveChatHistory(this.normalizeChatHistory());
         } catch (error) {
             console.error('Error loading models:', error);
         }
@@ -5905,6 +5906,34 @@
         }
     },
 
+    normalizeChatHistory() {
+        const changed = [];
+        for (const chat of this.chatHistory) {
+            let normalized = false;
+            if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
+                const title = this.untitledChatTitle();
+                if (title !== chat.title) {
+                    chat.title = title;
+                    normalized = true;
+                }
+            }
+            const gatewayId = this.resolveGatewayModelId(chat.model);
+            if (gatewayId && gatewayId !== chat.model) {
+                if (
+                    chat.modelSettingsByModel?.[chat.model]
+                    && !chat.modelSettingsByModel[gatewayId]
+                ) {
+                    chat.modelSettingsByModel[gatewayId] =
+                        chat.modelSettingsByModel[chat.model];
+                }
+                chat.model = gatewayId;
+                normalized = true;
+            }
+            if (normalized) changed.push(chat.id);
+        }
+        return changed;
+    },
+
     loadChatHistory() {
         if (this.historyLoading) return this.historyLoading;
         if (!this.chatHistoryPending) return Promise.resolve();
@@ -5921,30 +5950,7 @@
                     !early.has(chat.id) && !this.historyDeleted.has(chat.id));
                 this.chatHistory.push(...early.values());
                 this.sortChatHistory();
-                const changed = [];
-                for (const chat of this.chatHistory) {
-                    let normalized = false;
-                    if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
-                        const title = this.untitledChatTitle();
-                        if (title !== chat.title) {
-                            chat.title = title;
-                            normalized = true;
-                        }
-                    }
-                    const gatewayId = this.resolveGatewayModelId(chat.model);
-                    if (gatewayId && gatewayId !== chat.model) {
-                        if (
-                            chat.modelSettingsByModel?.[chat.model]
-                            && !chat.modelSettingsByModel[gatewayId]
-                        ) {
-                            chat.modelSettingsByModel[gatewayId] =
-                                chat.modelSettingsByModel[chat.model];
-                        }
-                        chat.model = gatewayId;
-                        normalized = true;
-                    }
-                    if (normalized) changed.push(chat.id);
-                }
+                const changed = this.normalizeChatHistory();
                 this.chatHistoryPending = false;
                 await this.saveChatHistory(changed);
                 if (navigator.storage?.persist) {
