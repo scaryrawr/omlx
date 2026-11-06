@@ -658,8 +658,20 @@ inserts an explicit image reference into the composer for a later edit.
 Branching a conversation updates references to copied images for the new chat.
 These references are identifiers, not URLs; references in assistant Markdown
 render as text, while the tool result contains the image preview.
-Images remain in the open conversation only. Saved and exported histories
-strip image bytes, so their references cannot be edited after reload.
+Chats and uploaded, generated, and MCP images are saved locally in the browser's
+IndexedDB storage. Reloaded images remain available for VLM prompts and edits.
+Branches own their copied images. Deleting a chat, truncating messages, or
+removing a variant removes images no longer owned by that history.
+If the history limit would discard an active chat, saving reports a warning
+instead; live messages and images remain available for export.
+Failed saves remain available for a later retry. If deleting or clearing history
+fails, messages received before cancellation remain available for export.
+Canceled inference does not restart. Clearing removes only the chats present
+when it starts, so chats created while storage is busy remain available.
+Download chats includes image bytes in the JSON archive; importing older JSON
+archives remains supported. Images stripped by older versions cannot be recovered.
+Temporary chats are not saved. Browser storage is not a backup and can be cleared
+by the browser or user. Export important chats, especially after a storage warning.
 Image inference has a ten-minute browser deadline. Stop prevents later
 tool results and follow-up chat requests, but does not guarantee immediate
 GPU preemption.

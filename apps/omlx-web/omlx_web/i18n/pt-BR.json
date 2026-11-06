@@ -2130,6 +2130,7 @@
   "chat.confirm_clear_all": "Tem certeza de que deseja apagar TODO o histórico de conversa? Esta ação não pode ser desfeita.",
   "chat.error.incorrect_api_key": "Chave de API incorreta. Insira novamente sua chave de API.",
   "chat.error.import_invalid": "Arquivo de histórico de chat inválido.",
+  "chat.error.history_storage": "Não foi possível salvar ou restaurar o histórico. Mantenha esta aba aberta e baixe seus chats para preservar o trabalho não salvo. Verifique o armazenamento do navegador e as outras abas antes de recarregar.",
   "chat.upload_image": "Enviar imagem",
   "chat.upload_document": "Anexar documento",
   "chat.upload_audio": "Anexar arquivo de áudio ou vídeo",

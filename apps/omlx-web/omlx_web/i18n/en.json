@@ -2130,6 +2130,7 @@
   "chat.confirm_clear_all": "Are you sure you want to delete ALL chat history? This cannot be undone.",
   "chat.error.incorrect_api_key": "API key is incorrect. Please re-enter your API key.",
   "chat.error.import_invalid": "Invalid chat history file.",
+  "chat.error.history_storage": "Chat history could not be saved or restored. Keep this tab open and download your chats to preserve unsaved work. Check browser storage and other open tabs before reloading.",
   "chat.upload_image": "Upload image",
   "chat.upload_document": "Attach document",
   "chat.upload_audio": "Attach audio or video file",
