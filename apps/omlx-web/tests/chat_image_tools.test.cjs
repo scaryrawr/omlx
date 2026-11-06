@@ -821,6 +821,124 @@ for (const action of ['delete', 'clear']) {
     });
 }
 
+for (const action of ['delete', 'clear']) {
+    test(`failed ${action} retains finalized partial text and reasoning in exports`, async t => {
+        const app = appFixture();
+        app.saveCurrentChat('owner');
+        await app.saveChatHistory();
+        let tokensSent;
+        const sent = new Promise(resolve => { tokensSent = resolve; });
+        const confirm = global.confirm;
+        global.confirm = () => true;
+        t.after(() => { global.confirm = confirm; });
+        global.fetch = async () => new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+                    choices: [{ delta: { content: 'Partial answer', reasoning_content: 'Partial reasoning' } }],
+                })}\n\n`));
+                tokensSent();
+            },
+        }));
+        const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+        await sent;
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(app.getStreamSession('owner').streamingContent, 'Partial answer');
+        let rejectRemoval;
+
+        app.historyStore[action] = () => new Promise((resolve, reject) => { rejectRemoval = reject; });
+
+        app.reportHistoryError = () => {};
+
+        const removing = action === 'delete'
+            ? app.deleteChat('owner', { skipConfirm: true })
+            : app.clearAllHistory();
+
+        await pending;
+        rejectRemoval(new Error('Storage unavailable'));
+        await removing;
+
+        const live = app.chatSessions.owner.messages.at(-1);
+        const exported = JSON.parse(JSON.stringify(app.chatHistory)).find(chat => chat.id === 'owner');
+        assert.equal(live.content, 'Partial answer');
+        assert.equal(live.reasoning_content, 'Partial reasoning');
+        assert.equal(exported.messages.at(-1).content, 'Partial answer');
+        assert.equal(exported.messages.at(-1).reasoning_content, 'Partial reasoning');
+        assert.equal(exported.messages[0].content[1].image_url.url, png);
+    });
+}
+
+test('successful clearing preserves a conversation sent while storage is pending', async t => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+    const oldIds = new Set(app.savedChats.keys());
+    let finishClearing;
+    const confirm = global.confirm;
+    global.confirm = () => true;
+    t.after(() => { global.confirm = confirm; });
+
+    app.historyStore.clear = () => new Promise(resolve => {
+        finishClearing = () => {
+            for (const id of oldIds) app.savedChats.delete(id);
+
+            resolve();
+        };
+    });
+
+    app.ensureSessionModelSettings = async () => {};
+
+    app.saveModelSettingsForModel = () => {};
+
+    app.forceScrollToBottom = () => {};
+    const clearing = app.clearAllHistory();
+    await app.startNewChat();
+    const newId = app.currentChatId;
+    app.inputMessage = 'Sent during pending clear';
+    global.fetch = async () => sse(null);
+    await app.sendMessage();
+
+    finishClearing();
+    await clearing;
+    await app.saveChatHistory();
+
+    assert.equal(app.currentChatId, newId);
+    assert.equal(app.chatSessions[newId].messages[0].content, 'Sent during pending clear');
+    assert.equal(app.chatHistory.find(chat => chat.id === newId).messages.at(-1).content, 'Done');
+    assert.equal(app.savedChats.get(newId).messages.at(-1).content, 'Done');
+    assert.ok(!app.savedChats.has('owner'));
+    assert.ok(!app.chatSessions.owner);
+});
+
+test('renaming a chat does not serialize unchanged image histories', async () => {
+    const app = appFixture();
+    app.chatSessions.unchanged = structuredClone(app.chatSessions.owner);
+    app.saveCurrentChat('owner');
+    app.saveCurrentChat('unchanged');
+    await app.saveChatHistory();
+    const unchanged = app.chatHistory.find(chat => chat.id === 'unchanged');
+    const stringify = JSON.stringify;
+    let serialized = 0;
+
+    JSON.stringify = (value, ...args) => {
+        if (value === unchanged) serialized++;
+
+        return stringify(value, ...args);
+    };
+    try {
+        app.renameDraft = 'Renamed';
+        app.saveRenamedChat('owner');
+        await app.saveChatHistory();
+    } finally {
+        JSON.stringify = stringify;
+    }
+
+    assert.equal(serialized, 0);
+    assert.equal(app.savedChats.get('owner').title, 'Renamed');
+    assert.equal(app.savedChats.get('unchanged').messages[0].content[1].image_url.url, png);
+});
+
 test('Stop preserves text already streamed before any tool call', async () => {
     const app = appFixture();
     let tokensSent;

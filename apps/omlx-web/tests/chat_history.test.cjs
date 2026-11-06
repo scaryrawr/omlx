@@ -72,6 +72,14 @@ test('legacy missing-image placeholders are not converted into fabricated bytes'
     assert.deepEqual(await history.hydrate(packed.snapshot, []), legacy);
 });
 
+test('archive validation rejects message IDs that cannot own IndexedDB attachments', () => {
+    for (const id of [true, {}]) {
+        const chat = fixture();
+        chat.messages[0].id = id;
+        assert.throws(() => history.parseArchive([chat]), /Invalid chat history archive/);
+    }
+});
+
 test('invalid archive and missing attachment failures are explicit', async () => {
     assert.throws(() => history.parseArchive({ chats: [] }), /Invalid chat history archive/);
     assert.throws(() => history.parseArchive([{ id: '', messages: [] }]), /Invalid chat history archive/);

@@ -38,6 +38,32 @@ async function runChatHistoryBrowserTests() {
             read.onerror = () => reject(read.error);
         });
     };
+    const failAttachmentWrites = db => {
+        const transaction = db.transaction.bind(db);
+
+        db.transaction = (...args) => {
+            const tx = transaction(...args);
+
+            if (args[1] === 'readwrite') {
+                const objectStore = tx.objectStore.bind(tx);
+
+                tx.objectStore = name => {
+                    const store = objectStore(name);
+
+                    if (name === 'attachments') {
+                        store.put = () => { throw new DOMException('Injected attachment write failure', 'DataError'); };
+                    }
+
+                    return store;
+                };
+            }
+
+            return tx;
+        };
+
+        return () => { db.transaction = transaction; };
+    };
+
     const check = async (name, action) => {
         try {
             await action();
@@ -192,6 +218,51 @@ async function runChatHistoryBrowserTests() {
             replacement.messages = replacement.messages.slice(0, 1);
             await store.save(replacement, { replace: true });
             assert((await images(store)).length === 1, 'Import replacement left old variant images');
+        });
+        await check('synchronous attachment errors roll back a replacement and retain its original images', async () => {
+            const store = open();
+            await store.load();
+            await store.save(chat());
+            const restore = failAttachmentWrites(store.db);
+            let failed = false;
+
+            try { await store.save(chat('owner', 2), { replace: true }); } catch { failed = true; }
+            finally { restore(); }
+
+            assert(failed, 'Synchronous attachment failure reported success');
+
+            const reload = open({ name: store.name });
+            const restored = await reload.load();
+
+            assert(restored[0].updatedAt === chat().updatedAt, 'Failed replacement changed the prior chat');
+            assert(restored[0].messages[2]._images[0] === image, 'Failed replacement lost old image bytes');
+            assert((await images(reload)).length === 3, 'Failed replacement changed attachment ownership');
+        });
+        await check('synchronous migration errors retain the complete source until a successful retry', async () => {
+            const legacy = storage();
+            legacy.setItem('omlx_chat_history', JSON.stringify([chat('legacy')]));
+            const failingDB = {
+                open(...args) {
+                    const request = indexedDB.open(...args);
+                    request.addEventListener('success', () => failAttachmentWrites(request.result));
+
+                    return request;
+                },
+            };
+            const failedStore = open({ storage: legacy, indexedDB: failingDB });
+            let failed = false;
+
+            try { await failedStore.load(); } catch { failed = true; }
+
+            assert(failed, 'Synchronous migration failure reported success');
+            assert(legacy.getItem('omlx_chat_history'), 'Failed migration removed its source');
+            failedStore.db.close();
+
+            const retry = open({ name: failedStore.name, storage: legacy });
+            const restored = await retry.load();
+
+            assert(restored[0].messages[2]._images[0] === image, 'Migration retry could not restore source image bytes');
+            assert(!legacy.getItem('omlx_chat_history'), 'Successful migration retained the old source');
         });
         await check('aborted transactions retain the previous chat and image bytes', async () => {
             const store = open();
