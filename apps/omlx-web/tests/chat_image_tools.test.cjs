@@ -528,6 +528,90 @@ test('history loading writes normalized and early dirty rows but leaves restored
     assert.equal(app.historyDirty.size, 0);
 });
 
+for (const modelsFirst of [false, true]) {
+    test(`model discovery normalizes unopened histories when ${modelsFirst ? 'models finish' : 'history finishes'} first`, async t => {
+        const app = appFixture();
+        const Store = ChatHistory.Store;
+        const fetch = global.fetch;
+        const writes = [];
+        let opened = 0;
+        let release;
+
+        const restored = [
+            { id: 'alias-chat', title: 'Alias', model: 'friendly', updatedAt: '2020-01-01T00:00:00.000Z',
+                messages: [app.cloneData(upload)], modelSettingsByModel: { friendly: { temperature: 0.25 } } },
+            { id: 'deployment-chat', title: 'Deployment', model: 'private-handle', updatedAt: '2020-01-01T00:00:00.000Z',
+                messages: [], modelSettingsByModel: { 'private-handle': { temperature: 0.5 } } },
+            { id: 'clean', title: 'Unchanged image', model: 'model', messages: [app.cloneData(upload)] },
+        ];
+
+        ChatHistory.Store = class {
+            constructor() {
+                opened++;
+                this.generation = 0;
+                this.deleted = new Set();
+            }
+            load() {
+                return modelsFirst
+                    ? new Promise(resolve => { release = () => resolve(restored); })
+                    : Promise.resolve(restored);
+            }
+            async save(chat) {
+                writes.push(app.cloneData(chat));
+
+                return [];
+            }
+        };
+        t.after(() => {
+            ChatHistory.Store = Store;
+            global.fetch = fetch;
+        });
+
+        const responses = {
+            '/v1/models': { data: [{ id: 'friendly' }] },
+            '/admin/api/models': { models: [
+                { id: 'model', model_path: '/models/model', settings: { model_alias: 'friendly' } },
+            ] },
+            '/admin/api/cluster/deployments': { deployments: [
+                { deployment_id: 'private-handle', model: '/models/model' },
+            ] },
+            '/health': { default_model: 'model' },
+            '/admin/api/global-settings': {},
+        };
+
+        global.fetch = async url => json(responses[url]);
+        app.fetchModelTypes = async () => {};
+        app.reconcileCurrentModelAfterLoad = () => {};
+        app.chatHistoryPending = true;
+
+        const loading = app.loadChatHistory();
+
+        if (!modelsFirst) await loading;
+
+        await app.loadModels();
+        if (modelsFirst) release();
+        await loading;
+        await app.saveChatHistory();
+
+        assert.deepEqual(writes.map(chat => chat.id).sort(), ['alias-chat', 'deployment-chat']);
+
+        for (const chat of writes) {
+            assert.equal(chat.model, 'model');
+            assert.equal(chat.updatedAt, '2020-01-01T00:00:00.000Z');
+        }
+
+        assert.equal(writes.find(chat => chat.id === 'alias-chat').modelSettingsByModel.model.temperature, 0.25);
+        assert.equal(writes.find(chat => chat.id === 'deployment-chat').modelSettingsByModel.model.temperature, 0.5);
+        assert.equal(writes.find(chat => chat.id === 'alias-chat').messages[0].content[1].image_url.url, png);
+        await app.loadModels();
+        await app.saveChatHistory();
+
+        assert.equal(opened, 1);
+        assert.equal(writes.length, 2);
+        assert.equal(app.historyDirty.size, 0);
+    });
+}
+
 for (const trigger of ['load', 'save']) {
     test(`failed initialization retries through a later ${trigger} and merges only dirty live rows`, async t => {
         const app = appFixture();
