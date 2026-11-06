@@ -2094,6 +2094,7 @@
   "chat.confirm_clear_all": "すべてのチャット履歴を削除しますか？この操作は元に戻せません。",
   "chat.error.incorrect_api_key": "APIキーが正しくありません。再入力してください。",
   "chat.error.import_invalid": "チャット履歴ファイルが無効です。",
+  "chat.error.history_storage": "チャット履歴を保存または復元できませんでした。未保存の内容を保護するため、このタブを開いたままチャットをダウンロードしてください。再読み込みの前にブラウザーのストレージと他のタブを確認してください。",
   "chat.upload_image": "画像をアップロード",
   "chat.upload_document": "Attach document",
   "chat.upload_audio": "音声/動画ファイルを添付",

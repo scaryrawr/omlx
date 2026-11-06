@@ -2094,6 +2094,7 @@
   "chat.confirm_clear_all": "Êtes-vous sûr(e) de vouloir supprimer TOUT l'historique de chat ? Cela ne peut pas être annulé.",
   "chat.error.incorrect_api_key": "La clé API est incorrecte. Veuillez réentrer votre clé API.",
   "chat.error.import_invalid": "Fichier d'historique de discussion invalide.",
+  "chat.error.history_storage": "L’historique n’a pas pu être enregistré ou restauré. Gardez cet onglet ouvert et téléchargez vos discussions pour préserver le travail non enregistré. Vérifiez le stockage du navigateur et les autres onglets avant de recharger.",
   "chat.upload_image": "Télécharger une image",
   "chat.upload_document": "Attach document",
   "chat.upload_audio": "Joindre un fichier audio ou vidéo",

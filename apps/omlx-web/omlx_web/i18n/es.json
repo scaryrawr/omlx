@@ -2094,6 +2094,7 @@
   "chat.confirm_clear_all": "¿Estás seguro de que quieres eliminar TODO el historial de chat? Esto no se puede deshacer.",
   "chat.error.incorrect_api_key": "La clave API es incorrecta. Por favor ingrésala nuevamente.",
   "chat.error.import_invalid": "Archivo de historial de chat no válido.",
+  "chat.error.history_storage": "No se pudo guardar o restaurar el historial. Mantén esta pestaña abierta y descarga tus chats para conservar el trabajo sin guardar. Revisa el almacenamiento del navegador y las otras pestañas antes de recargar.",
   "chat.upload_image": "Subir imagen",
   "chat.upload_document": "Attach document",
   "chat.upload_audio": "Adjuntar archivo de audio o vídeo",

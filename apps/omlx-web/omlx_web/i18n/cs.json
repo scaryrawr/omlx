@@ -2094,6 +2094,7 @@
   "chat.confirm_clear_all": "Opravdu chcete smazat CELOU historii chatů? Tuto akci nelze vrátit zpět.",
   "chat.error.incorrect_api_key": "API klíč není správný. Zadejte jej znovu.",
   "chat.error.import_invalid": "Neplatný soubor s historií chatů.",
+  "chat.error.history_storage": "Historii chatu se nepodařilo uložit nebo obnovit. Nechte tuto kartu otevřenou a stáhněte si chaty, abyste zachovali neuloženou práci. Před obnovením stránky zkontrolujte úložiště prohlížeče a ostatní otevřené karty.",
   "chat.upload_image": "Nahrát obrázek",
   "chat.upload_document": "Přiložit dokument",
   "chat.upload_audio": "Přiložit audio nebo video soubor",
