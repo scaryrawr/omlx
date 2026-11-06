@@ -136,6 +136,40 @@ async function runChatHistoryBrowserTests() {
             assert(evicted.includes('a'), 'Oldest chat not evicted');
             assert((await images(first)).length === 6, 'Eviction left orphaned attachments');
         });
+        await check('a full pinned history rejects new saves without discarding live images', async () => {
+            const store = open({ limit: 100 });
+            await store.load();
+            for (let index = 0; index < 100; index++) {
+                await store.save({ ...chat(`pinned-${index}`, index + 1), pinned: true });
+            }
+
+            let failed = false;
+            try { await store.save(chat('owner', 101)); } catch { failed = true; }
+            assert(failed, 'Full pinned history silently evicted the chat being saved');
+            assert(!store.deleted.has('owner'), 'Capacity failure invalidated the live chat');
+            assert((await store.load()).length === 100, 'Capacity failure changed pinned history');
+            assert((await images(store)).length === 300, 'Capacity failure lost existing image bytes');
+
+            await store.delete('pinned-0');
+            await store.save(chat('owner', 102));
+            const restored = (await store.load()).find(entry => entry.id === 'owner');
+            assert(restored.messages[2]._images[0] === image, 'Live images could not be saved after freeing capacity');
+        });
+        await check('saving cannot evict another open chat', async () => {
+            const store = open({ limit: 2 });
+            await store.load();
+            await store.save(chat('open', 1));
+            await store.save(chat('closed', 2));
+            let failed = false;
+            try { await store.save(chat('new', 3), { protectedIds: ['open'] }); } catch { failed = true; }
+            assert(failed, 'Saving evicted a protected chat');
+            assert(!store.deleted.has('open'), 'Capacity failure invalidated another live chat');
+            assert((await store.load()).some(entry => entry.id === 'open'), 'Capacity failure lost open history');
+            assert((await images(store)).length === 6, 'Capacity failure changed image ownership');
+
+            const evicted = await store.save(chat('new', 3));
+            assert(evicted.includes('open'), 'Closed history could no longer be evicted');
+        });
         await check('queued snapshots and clear invalidate pre-clear creates', async () => {
             const store = open();
             await store.load();

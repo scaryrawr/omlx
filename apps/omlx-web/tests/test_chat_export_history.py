@@ -19,6 +19,8 @@ METHODS = [
     "createThinkingState",
     "messageForStorage",
     "saveCurrentChat",
+    "activeHistoryChatIds",
+    "isChatStreaming",
     "saveChatHistory",
     "sortChatHistory",
     "cloneData",

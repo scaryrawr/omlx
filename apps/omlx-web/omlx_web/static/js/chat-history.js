@@ -202,7 +202,7 @@ const ChatHistory = (() => {
             for (const key of keys) store.delete(key);
         }
 
-        save(chat, { replace = false } = {}) {
+        save(chat, { replace = false, protectedIds = [] } = {}) {
             const entry = pack(chat);
             this.seen.add(entry.snapshot.id);
             const generation = this.generation;
@@ -226,15 +226,24 @@ const ChatHistory = (() => {
                     throw new Error('Chat history changed in another tab. Reload before saving this chat.');
                 }
                 const revision = (existing?.revision || 0) + 1;
-                await this.removeAttachments(tx, entry.snapshot.id);
-                chats.put({ id: entry.snapshot.id, revision, chat: entry.snapshot });
-                for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
                 const records = await request(chats.getAll());
-                const active = records.filter(record => record.chat).sort((a, b) =>
+                const active = records.filter(record => record.chat && record.id !== entry.snapshot.id);
+                active.push({ id: entry.snapshot.id, revision, chat: entry.snapshot });
+                active.sort((a, b) =>
                     Number(!!b.chat.pinned) - Number(!!a.chat.pinned)
                     || (Date.parse(b.chat.updatedAt) || 0) - (Date.parse(a.chat.updatedAt) || 0)
                 );
                 const evicted = active.slice(this.limit);
+
+                if (evicted.some(record => record.id === entry.snapshot.id || protectedIds.includes(record.id))) {
+                    await done;
+                    throw new Error('Chat history is full. Close, unpin, or delete older chats before saving this conversation.');
+                }
+
+                await this.removeAttachments(tx, entry.snapshot.id);
+                chats.put({ id: entry.snapshot.id, revision, chat: entry.snapshot });
+                for (const attachment of entry.attachments) tx.objectStore('attachments').put(attachment);
+
                 for (const record of evicted) {
                     chats.put({ id: record.id, revision: record.revision + 1 });
                     await this.removeAttachments(tx, record.id);

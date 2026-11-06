@@ -1400,7 +1400,7 @@
             <i data-lucide="settings" class="w-5 h-5"></i>
         </button>
 
-        <button @click="toggleTemporaryChat()" :disabled="messages.length > 0"
+        <button @click="toggleTemporaryChat()" :disabled="messages.length > 0 || micSession?.chatId === currentChatId"
             class="absolute p-1.5 bg-surface hover:bg-surface-muted rounded-lg border border-line z-[100] shadow-sm disabled:cursor-not-allowed"
             :class="{ 'disabled:opacity-40': !isTemporaryChat() }"
             style="top: 1rem; right: 3.75rem; color: var(--text-primary);"
@@ -5243,7 +5243,9 @@
                 if (this.historyDeleted.has(id)) continue;
                 const chat = byId.get(id);
                 try {
-                    const evicted = await this.historyStore.save(chat, { replace: true });
+                    const evicted = await this.historyStore.save(chat, {
+                        replace: true, protectedIds: this.activeHistoryChatIds(),
+                    });
                     if (evicted === false) {
                         const prior = previous.get(id);
                         this.chatHistory = this.chatHistory.flatMap(entry =>
@@ -5963,6 +5965,11 @@
         return this.historyLoading;
     },
 
+    activeHistoryChatIds() {
+        return Object.keys(this.chatSessions).filter(id =>
+            id === this.currentChatId || this.isChatStreaming(id) || this.micSession?.chatId === id);
+    },
+
     saveChatHistory() {
         if (this.chatHistoryPending) return;
         const writes = [];
@@ -5972,7 +5979,7 @@
             if (this.historySnapshots[chat.id] === snapshot) continue;
             this.historySnapshots[chat.id] = snapshot;
             try {
-                writes.push(this.historyStore.save(chat).then(evicted => {
+                writes.push(this.historyStore.save(chat, { protectedIds: this.activeHistoryChatIds() }).then(evicted => {
                     const removed = new Set(evicted || []);
                     for (const id of removed) {
                         this.historyDeleted.add(id);
@@ -6013,7 +6020,7 @@
     // Only an empty chat can switch; once it has messages it stays as it is.
     // A renamed or pinned chat keeps its entry and gets a new temporary chat.
     async toggleTemporaryChat() {
-        if (this.messages.length > 0) return;
+        if (this.messages.length > 0 || this.micSession?.chatId === this.currentChatId) return;
         const saved = this.chatHistory.find(c => c.id === this.currentChatId);
         if (!this.currentChatId || saved?.manualTitle || saved?.pinned) {
             const draft = this.inputMessage;
@@ -7559,11 +7566,12 @@
         const session = this.getChatSession(this.currentChatId, true);
         if (!session) return;
         const chatId = this.currentChatId;
-        session.messages = this.sliceBeforeMessage(session.messages, index);
-        if (session.messages.length === 0) {
-            this.deleteChat(chatId, { skipConfirm: true });
-            return;
+        const messages = this.sliceBeforeMessage(session.messages, index);
+        if (messages.length === 0) {
+            return this.deleteChat(chatId, { skipConfirm: true });
         }
+
+        session.messages = messages;
         this.messages = session.messages;
         this.syncFooterStatsFromMessages(session.messages);
         this.saveCurrentChat(chatId);

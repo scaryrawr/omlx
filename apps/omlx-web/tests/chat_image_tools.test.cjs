@@ -113,6 +113,76 @@ test('failed deletion keeps the chat available for export and retry', async () =
     assert.equal(app.historySnapshots.owner, undefined);
 });
 
+test('failed deletion of the first message preserves context and images for later saves', async () => {
+    const app = appFixture([
+        structuredClone(upload),
+        { id: 'result', role: 'tool', content: 'Generated image', _images: [png] },
+    ]);
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    const original = structuredClone(app.messages);
+
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    app.historyStore.delete = async () => { throw new Error('Storage unavailable'); };
+
+    app.reportHistoryError = () => {};
+
+    await app.deleteMessage(0);
+
+    assert.deepEqual(app.chatSessions.owner.messages, original);
+    assert.equal(app.messages, app.chatSessions.owner.messages);
+    app.messages.push({ id: 'later', role: 'user', content: 'Continue with these images' });
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    const saved = app.savedChats.get('owner');
+
+    assert.deepEqual(saved.messages.slice(0, 2), original);
+    assert.equal(saved.messages.at(-1).content, 'Continue with these images');
+    assert.deepEqual(JSON.parse(JSON.stringify(app.chatHistory))[0].messages, saved.messages);
+});
+
+for (const temporary of [false, true]) {
+    test(`an active microphone keeps its chat identity while temporary is ${temporary}`, async () => {
+        const app = appFixture([]);
+        app.currentChatId = 'owner';
+        app.messages = app.chatSessions.owner.messages;
+        app.chatSessions.owner.temporary = temporary;
+        app.micSession = { chatId: 'owner' };
+
+        await app.toggleTemporaryChat();
+
+        assert.equal(app.currentChatId, 'owner');
+        assert.equal(app.isTemporaryChat('owner'), temporary);
+        assert.ok(app.chatSessions.owner);
+        assert.equal(app.messages, app.chatSessions.owner.messages);
+    });
+}
+
+test('history writes protect the current chat, streams, and recordings but allow inactive eviction', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    app.chatSessions.other = { messages: [] };
+    app.chatSessions.recording = { messages: [] };
+    app.chatSessions.inactive = { messages: [] };
+    app.getStreamSession('other', true).isStreaming = true;
+    app.micSession = { chatId: 'recording' };
+    let options;
+
+    app.historyStore.save = async (chat, saveOptions) => {
+        options = saveOptions;
+
+        return [];
+    };
+
+    app.saveCurrentChat('owner');
+    await app.saveChatHistory();
+
+    assert.deepEqual(options.protectedIds, ['owner', 'other', 'recording']);
+});
+
 test('failed clear retains live history instead of reporting an empty history', async t => {
     const app = appFixture();
     app.saveCurrentChat('owner');
@@ -195,6 +265,39 @@ for (const tool of ['generate_image', 'mcp-image']) {
         assert.ok(!app.chatHistory.some(chat => chat.id === 'owner'));
     });
 }
+
+test('capacity failures keep generated images and the follow-up answer available for export', async () => {
+    const app = appFixture();
+    app.currentChatId = 'owner';
+    const failure = new Error('Chat history is full');
+    let reported;
+    let rounds = 0;
+
+    app.historyStore.save = async () => { throw failure; };
+
+    app.reportHistoryError = error => { reported = error; };
+
+    global.fetch = async url => {
+        if (url === '/v1/chat/completions') {
+            return rounds++ ? sse(null) : sse([call('generate_image', { model: 'image', prompt: 'Keep this' })]);
+        }
+
+        assert.equal(url, '/v1/images/generations');
+
+        return json({ data: [{ b64_json: 'c291cmNl' }] });
+    };
+
+    await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    await app.saveChatHistory();
+
+    const exported = JSON.parse(JSON.stringify(app.chatHistory))[0];
+
+    assert.equal(reported, failure);
+    assert.equal(rounds, 2);
+    assert.ok(!app.historyDeleted.has('owner'));
+    assert.equal(exported.messages.find(msg => msg.role === 'tool')._images[0], png);
+    assert.equal(exported.messages.at(-1).content, 'Done');
+});
 
 test('clearing history invalidates an import still reading its file', async t => {
     const app = appFixture();

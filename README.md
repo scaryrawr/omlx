@@ -662,6 +662,8 @@ Chats and uploaded, generated, and MCP images are saved locally in the browser's
 IndexedDB storage. Reloaded images remain available for VLM prompts and edits.
 Branches own their copied images. Deleting a chat, truncating messages, or
 removing a variant removes images no longer owned by that history.
+If the history limit would discard an active chat, saving reports a warning
+instead; live messages and images remain available for export.
 Download chats includes image bytes in the JSON archive; importing older JSON
 archives remains supported. Images stripped by older versions cannot be recovered.
 Temporary chats are not saved. Browser storage is not a backup and can be cleared
