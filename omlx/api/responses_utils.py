@@ -9,6 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from ..exceptions import InvalidRequestError
 from .media_inputs import responses_input_file_to_file_part
 from .responses_models import (
     InputItem,
@@ -589,6 +590,13 @@ def convert_responses_tools(
         return None
 
     defer_tools = tool_search_enabled and any(t.type == "tool_search" for t in tools)
+    if defer_tools and any(
+        tool.type == "function" and tool.name == TOOL_SEARCH_TOOL_NAME for tool in tools
+    ):
+        raise InvalidRequestError(
+            "Function name 'tool_search' is reserved when tool search is enabled.",
+            field="tools",
+        )
     result = []
     taken = {
         tool.name
@@ -1054,7 +1062,11 @@ def normalize_response_output_to_messages(
                 }
             )
         elif item_type == "tool_search_output":
-            _flush_pending_tool_calls(messages, pending_tool_calls)
+            pending_reasoning = _flush_pending_tool_calls(
+                messages,
+                pending_tool_calls,
+                pending_reasoning=pending_reasoning,
+            )
             messages.append(
                 {
                     "role": "tool",

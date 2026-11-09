@@ -1135,6 +1135,55 @@ class TestHostedSearchContinuation:
         assert "exceeds context" in events[-1]["response"]["error"]["message"]
         assert len(engine.recorded) == 1
 
+    def test_continuation_engine_failure_retains_completed_output(
+        self, make_client, monkeypatch
+    ):
+        from omlx import server
+
+        client, engine = make_client([])
+
+        async def stream_chat(messages, **kwargs):
+            engine.recorded.append({"messages": list(messages), "kwargs": kwargs})
+            if len(engine.recorded) == 2:
+                raise RuntimeError("continuation generation failed")
+            yield MockOutput(
+                text="<think>Find the calendar.</think>Searching.",
+                tool_calls=[
+                    {
+                        "id": "s1",
+                        "name": "tool_search",
+                        "arguments": '{"query":"calendar"}',
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(engine, "stream_chat", stream_chat)
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "test-model",
+                "input": "find calendar",
+                "stream": True,
+                "store": True,
+                "tools": [CALENDAR_DEFERRED, {"type": "tool_search"}],
+            },
+        )
+        events = _events(response)
+        completed_items = [
+            event["item"]
+            for event in events
+            if event["type"] == "response.output_item.done"
+        ]
+        assert any(item["type"] == "tool_search_output" for item in completed_items)
+        assert len(engine.recorded) == 2
+        assert events[-1]["type"] == "response.failed"
+        assert events[-1]["response"]["output"] == completed_items
+        assert events[-1]["response"]["error"] == {
+            "code": "server_error",
+            "message": "continuation generation failed",
+        }
+        assert len(server._server_state.responses_store) == 0
+
     @pytest.mark.parametrize("stream", [False, True])
     def test_native_response_format_survives_search_continuation(
         self, make_client, monkeypatch, stream
@@ -1191,6 +1240,64 @@ def test_responses_route_is_registered_once():
 
 class TestHistoryReplayPromotesTools:
     """Full-history replay (the Codex pattern) keeps loaded tools active."""
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_tool_choice_none_preserves_loaded_tools_for_the_next_turn(
+        self, make_client, stream
+    ):
+        client, engine = make_client(
+            [MockOutput(text="No tool call needed."), MockOutput(text="Ready.")]
+        )
+        loaded_spec = {
+            "type": "namespace",
+            "name": "planning_center",
+            "tools": [CALENDAR_DEFERRED["tools"][0]],
+        }
+        first = _body(
+            client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": [
+                        {"role": "user", "content": "find calendar"},
+                        {
+                            "type": "tool_search_call",
+                            "call_id": "s1",
+                            "execution": "client",
+                            "arguments": {"query": "calendar"},
+                        },
+                        {
+                            "type": "tool_search_output",
+                            "call_id": "s1",
+                            "execution": "client",
+                            "tools": [loaded_spec],
+                        },
+                    ],
+                    "tools": [TOOL_SEARCH_DECL],
+                    "tool_choice": "none",
+                    "store": True,
+                    "stream": stream,
+                },
+            ),
+            stream,
+        )
+        assert not engine.recorded[0]["kwargs"].get("tools")
+        _body(
+            client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": "Use the discovered calendar tool.",
+                    "previous_response_id": first["id"],
+                    "tools": [TOOL_SEARCH_DECL],
+                    "stream": stream,
+                },
+            ),
+            stream,
+        )
+        assert "planning_center__calendar_events" in _tool_names(
+            engine.recorded[1]["kwargs"].get("tools")
+        )
 
     def test_history_tool_search_output_loads_tools(self, make_client):
         client, engine = make_client([MockOutput(text="Youth Night is booked.")])

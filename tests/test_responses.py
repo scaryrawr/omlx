@@ -1517,6 +1517,24 @@ def _deferred_ns_tool(name="calendar_events", description=None):
 
 class TestDeferredToolConversion:
     @pytest.mark.parametrize("enabled", [False, True])
+    @pytest.mark.parametrize("declared", [False, True])
+    @pytest.mark.parametrize("deferred", [False, True])
+    def test_flat_tool_search_name_cannot_collide_with_enabled_discovery(
+        self, enabled, declared, deferred
+    ):
+        from omlx.exceptions import InvalidRequestError
+
+        tools = [ResponsesTool(name="tool_search", defer_loading=deferred)]
+        if declared:
+            tools.append(ResponsesTool(type="tool_search"))
+        if enabled and declared:
+            with pytest.raises(InvalidRequestError, match="reserved"):
+                convert_responses_tools(tools, tool_search_enabled=enabled)
+        else:
+            active = convert_responses_tools(tools, tool_search_enabled=enabled)
+            assert [tool["function"]["name"] for tool in active] == ["tool_search"]
+
+    @pytest.mark.parametrize("enabled", [False, True])
     def test_deferral_requires_an_enabled_search_declaration(self, enabled):
         from omlx.api.responses_tool_search import DeferredToolSet
 
@@ -1731,6 +1749,53 @@ def _tool(name, namespace, description):
 
 
 class TestToolSearchHistory:
+    @pytest.mark.parametrize("answer_reasoning", ["", "Prepare the answer."])
+    def test_hosted_search_reasoning_stays_with_its_assistant_turn(
+        self, answer_reasoning
+    ):
+        items = [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "Find the calendar tool."}
+                ],
+            },
+            {
+                "type": "tool_search_call",
+                "id": "search1",
+                "call_id": None,
+                "execution": "server",
+                "arguments": {"query": "calendar"},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": None,
+                "execution": "server",
+                "tools": [_deferred_ns_tool()],
+            },
+        ]
+        if answer_reasoning:
+            items.append(
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": answer_reasoning}],
+                }
+            )
+        items.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Found it."}],
+            }
+        )
+        stored = normalize_response_output_to_messages(items)
+        replayed = convert_responses_input_to_messages(
+            [InputItem(**item) for item in items]
+        )
+        assert stored == replayed
+        assert stored[0]["reasoning_content"] == "Find the calendar tool."
+        assert stored[-1].get("reasoning_content", "") == answer_reasoning
+
     def test_hosted_search_with_null_call_ids_replays_as_paired_history(self):
         items = [
             {

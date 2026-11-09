@@ -9261,6 +9261,8 @@ async def create_response(
             getattr(engine, "is_diffusion_model", False)
             and not getattr(engine, "supports_tool_calling", False)
         )
+        if tools_disabled and ts_state is not None:
+            ts_state.enabled = False
         effective_tools = None if tools_disabled else openai_tools
         if (
             _server_state.mcp_manager
@@ -9447,9 +9449,7 @@ async def create_response(
                                 response_format=response_format,
                                 namespace_aliases=namespace_aliases,
                                 stream_state=stream_state,
-                                tool_search_state=(
-                                    ts_state if not tools_disabled else None
-                                ),
+                                tool_search_state=ts_state,
                                 **chat_kwargs,
                             ),
                             http_request=http_request,
@@ -9835,7 +9835,7 @@ async def stream_responses_api(
     reasoning_output_index: int | None = None  # captured when reasoning opens
     msg_output_index: int | None = None  # captured when message opens
 
-    # Build initial response object (in_progress, empty output)
+    # Build initial response object (in_progress).
     initial_response = continuation.response or ResponseObject(
         id=response_id,
         model=request.model,
@@ -9849,7 +9849,8 @@ async def stream_responses_api(
         previous_response_id=request.previous_response_id,
     )
     initial_data = initial_response.model_dump(exclude_none=True)
-    stream_state.response = {**initial_data, "output": list(continuation.output)}
+    initial_data["output"] = list(continuation.output)
+    stream_state.response = initial_data.copy()
 
     if continuation.response is None:
         continuation.response = initial_response
