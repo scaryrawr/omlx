@@ -9270,6 +9270,14 @@ async def create_response(
             and mcp_tools_exposed()
         ):
             effective_tools = _server_state.mcp_manager.get_merged_tools(openai_tools)
+            unloaded_names = {
+                tool.wire_name for tool in deferred_tools.tools()
+            } - {tool["function"]["name"] for tool in openai_tools or []}
+            effective_tools = [
+                tool
+                for tool in effective_tools
+                if tool.get("function", {}).get("name") not in unloaded_names
+            ]
 
         # Convert tools for chat template
         tools_for_template = (

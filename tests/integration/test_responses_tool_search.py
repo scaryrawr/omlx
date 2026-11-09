@@ -292,6 +292,64 @@ class TestServerSideToolSearch:
     """Non-streaming: oMLX executes tool_search and continues in-request."""
 
     @pytest.mark.parametrize("stream", [False, True])
+    def test_deferred_client_schema_takes_precedence_over_server_mcp(
+        self, make_client, monkeypatch, stream
+    ):
+        from omlx import server
+        from omlx.mcp.tools import merge_tools
+        from omlx.mcp.types import MCPTool
+
+        client, engine = make_client(
+            [
+                MockOutput(
+                    tool_calls=[
+                        {
+                            "id": "s1",
+                            "name": "tool_search",
+                            "arguments": '{"query":"calendar"}',
+                        }
+                    ]
+                ),
+                MockOutput(text="Ready."),
+            ]
+        )
+        native = MCPTool(
+            server_name="planning_center",
+            name="calendar_events",
+            description="Server-side calendar lookup",
+            input_schema={
+                "type": "object",
+                "properties": {"native_arg": {"type": "string"}},
+            },
+        )
+        monkeypatch.setattr(server, "mcp_tools_exposed", lambda: True)
+        server._server_state.mcp_manager = SimpleNamespace(
+            get_merged_tools=lambda tools: merge_tools([native], tools)
+        )
+        _body(
+            client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": "find calendar",
+                    "stream": stream,
+                    "tools": [CALENDAR_DEFERRED, {"type": "tool_search"}],
+                },
+            ),
+            stream,
+        )
+        assert "planning_center__calendar_events" not in _tool_names(
+            engine.recorded[0]["kwargs"].get("tools")
+        )
+        loaded = {
+            tool["function"]["name"]: tool["function"]
+            for tool in engine.recorded[1]["kwargs"]["tools"]
+        }
+        assert set(
+            loaded["planning_center__calendar_events"]["parameters"]["properties"]
+        ) == {"name"}
+
+    @pytest.mark.parametrize("stream", [False, True])
     def test_search_round_trip_loads_tools(self, make_client, stream):
         client, engine = make_client(
             [
@@ -1240,6 +1298,96 @@ def test_responses_route_is_registered_once():
 
 class TestHistoryReplayPromotesTools:
     """Full-history replay (the Codex pattern) keeps loaded tools active."""
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_chain_keeps_flat_tool_identity_when_a_namespace_reuses_its_wire(
+        self, make_client, stream
+    ):
+        flat_name = "planning_center__calendar_events"
+        parameters = {"type": "object", "properties": {"flat_arg": {"type": "string"}}}
+        client, engine = make_client(
+            [
+                MockOutput(
+                    tool_calls=[
+                        {
+                            "id": "s1",
+                            "name": "tool_search",
+                            "arguments": '{"query":"calendar"}',
+                        }
+                    ]
+                ),
+                MockOutput(
+                    tool_calls=[{"id": "flat1", "name": flat_name, "arguments": "{}"}]
+                ),
+                MockOutput(
+                    tool_calls=[
+                        {"id": "flat2", "name": f"{flat_name}_2", "arguments": "{}"}
+                    ]
+                ),
+            ]
+        )
+        first = _body(
+            client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": "find calendar",
+                    "stream": stream,
+                    "store": True,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": flat_name,
+                            "parameters": parameters,
+                            "defer_loading": True,
+                        },
+                        {"type": "tool_search"},
+                    ],
+                },
+            ),
+            stream,
+        )
+        namespace = {
+            **CALENDAR_DEFERRED,
+            "tools": [{**CALENDAR_DEFERRED["tools"][0], "defer_loading": False}],
+        }
+        second = _body(
+            client.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "flat1",
+                            "output": "Found the event.",
+                        }
+                    ],
+                    "previous_response_id": first["id"],
+                    "stream": stream,
+                    "tools": [namespace, {"type": "tool_search"}],
+                },
+            ),
+            stream,
+        )
+        call = next(
+            item for item in second["output"] if item["type"] == "function_call"
+        )
+        assert call["name"] == flat_name
+        assert call.get("namespace") is None
+        tools = {
+            tool["function"]["name"]: tool["function"]
+            for tool in engine.recorded[2]["kwargs"]["tools"]
+        }
+        assert set(tools[f"{flat_name}_2"]["parameters"]["properties"]) == {"flat_arg"}
+        assert set(tools[flat_name]["parameters"]["properties"]) == {"name"}
+        history_call = next(
+            call
+            for message in engine.recorded[2]["messages"]
+            for call in message.get("tool_calls", [])
+            if call["id"] == "flat1"
+        )
+        assert history_call["function"]["name"] == f"{flat_name}_2"
 
     @pytest.mark.parametrize("stream", [False, True])
     def test_tool_choice_none_preserves_loaded_tools_for_the_next_turn(

@@ -24,6 +24,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ..exceptions import InvalidRequestError
+
 TOOL_SEARCH_TOOL_NAME = "tool_search"
 TOOL_SEARCH_DEFAULT_LIMIT = 8
 TOOL_SEARCH_MAX_LIMIT = 32
@@ -36,6 +38,21 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 # BM25 parameters (Okapi defaults, matching the bm25 crate's English preset).
 _BM25_K1 = 1.2
 _BM25_B = 0.75
+
+
+def validate_tool_search_name(
+    name: str | None, namespace: str | None, enabled: bool
+) -> None:
+    """Reject function identities reserved for active discovery."""
+    if (
+        enabled
+        and namespace in (None, DEFAULT_FUNCTION_NAMESPACE)
+        and name == TOOL_SEARCH_TOOL_NAME
+    ):
+        raise InvalidRequestError(
+            "Function name 'tool_search' is reserved when tool search is enabled.",
+            field="tools",
+        )
 
 
 def _tokenize(text: str) -> list[str]:
@@ -394,14 +411,22 @@ class ToolSearchState:
     def restore_loaded(
         self,
         specs: Iterable[dict[str, Any]],
-        aliases: dict[str, tuple[str, str]],
+        aliases: dict[str, tuple[str | None, str]],
         eager_tools: list[dict[str, Any]],
     ) -> None:
         """Reconcile replayed schemas with current request bindings."""
         taken = {tool["function"]["name"] for tool in eager_tools} | set(aliases)
         taken.update(tool.wire_name for tool in self.pool.tools())
+        eager_identities: set[tuple[str | None, str]] = set()
+        for tool in eager_tools:
+            wire = tool["function"]["name"]
+            namespace, name = aliases.get(wire, (None, wire))
+            if namespace == DEFAULT_FUNCTION_NAMESPACE:
+                namespace = None
+            eager_identities.add((namespace, name))
         declared = {tool.wire_name for tool in self.pool.tools()}
         for restored in parse_loadable_specs(specs):
+            validate_tool_search_name(restored.name, restored.namespace, self.enabled)
             current = next(
                 (
                     tool
@@ -412,17 +437,7 @@ class ToolSearchState:
                 None,
             )
             if current is None:
-                wire = next(
-                    (
-                        name
-                        for name, identity in aliases.items()
-                        if identity == (restored.namespace, restored.name)
-                    ),
-                    None,
-                )
-                if wire is not None or (
-                    restored.namespace is None and restored.name in taken
-                ):
+                if (restored.namespace, restored.name) in eager_identities:
                     continue  # An eager request tool already supplies this identity.
                 wire = allocate_tool_wire_name(restored.namespace, restored.name, taken)
                 current = replace(restored, wire_name=wire)
@@ -432,7 +447,7 @@ class ToolSearchState:
                 current = replace(restored, wire_name=current.wire_name)
                 self.pool.add(current)
             self.loaded.add(current.wire_name)
-            if current.is_namespace_member:
+            if current.is_namespace_member or current.wire_name != current.name:
                 aliases[current.wire_name] = (current.namespace, current.name)
 
     def mark_loaded(self, tools: Iterable[DeferredTool]) -> None:

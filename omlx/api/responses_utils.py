@@ -9,7 +9,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from ..exceptions import InvalidRequestError
 from .media_inputs import responses_input_file_to_file_part
 from .responses_models import (
     InputItem,
@@ -26,6 +25,7 @@ from .responses_tool_search import (
     DeferredTool,
     DeferredToolSet,
     allocate_tool_wire_name,
+    validate_tool_search_name,
 )
 from .shared_models import IDPrefix, generate_id
 
@@ -562,7 +562,7 @@ def _tool_search_declaration(
 
 def convert_responses_tools(
     tools: list[ResponsesTool] | None,
-    aliases: dict[str, tuple[str, str]] | None = None,
+    aliases: dict[str, tuple[str | None, str]] | None = None,
     *,
     deferred: DeferredToolSet | None = None,
     tool_search_enabled: bool = False,
@@ -590,13 +590,6 @@ def convert_responses_tools(
         return None
 
     defer_tools = tool_search_enabled and any(t.type == "tool_search" for t in tools)
-    if defer_tools and any(
-        tool.type == "function" and tool.name == TOOL_SEARCH_TOOL_NAME for tool in tools
-    ):
-        raise InvalidRequestError(
-            "Function name 'tool_search' is reserved when tool search is enabled.",
-            field="tools",
-        )
     result = []
     taken = {
         tool.name
@@ -620,6 +613,7 @@ def convert_responses_tools(
                     or not member.name
                 ):
                     continue
+                validate_tool_search_name(member.name, tool.name, defer_tools)
                 wire = allocate_tool_wire_name(tool.name, member.name, taken)
                 if defer_tools and _tool_defer_loading(member):
                     taken.add(wire)
@@ -648,6 +642,8 @@ def convert_responses_tools(
                         aliases[wire] = (tool.name, member.name)
                     result.append(converted)
             continue
+        if tool.type == "function":
+            validate_tool_search_name(tool.name, None, defer_tools)
         if (
             defer_tools
             and _tool_defer_loading(tool)
@@ -676,11 +672,11 @@ def convert_responses_tools(
 
 def split_namespace_tool_name(
     name: str,
-    aliases: dict[str, tuple[str, str]] | None = None,
+    aliases: dict[str, tuple[str | None, str]] | None = None,
 ) -> tuple[str | None, str]:
     """Restore ``(namespace, name)`` for a call made by wire name.
 
-    Flat tools are unaffected: they return ``(None, name)``.
+    Flat tools return ``(None, original_name)``.
     """
     if aliases:
         entry = aliases.get(name)
@@ -691,19 +687,25 @@ def split_namespace_tool_name(
 
 def apply_namespace_tool_aliases(
     messages: list[dict[str, Any]],
-    aliases: dict[str, tuple[str, str]],
+    aliases: dict[str, tuple[str | None, str]],
 ) -> None:
     """Map preserved history identities to the current request's tool names."""
-    wire_names = {identity: wire for wire, identity in aliases.items()}
+    wire_names = {
+        (None if namespace == DEFAULT_FUNCTION_NAMESPACE else namespace, name): wire
+        for wire, (namespace, name) in aliases.items()
+    }
     for message in messages:
         for call in message.get("tool_calls", []):
             function = call.get("function", {})
             namespace = function.pop("namespace", None)
-            if namespace:
-                name = function["name"]
-                function["name"] = wire_names.get(
-                    (namespace, name), allocate_tool_wire_name(namespace, name, set())
-                )
+            if namespace == DEFAULT_FUNCTION_NAMESPACE:
+                namespace = None
+            name = function.get("name", "")
+            wire = wire_names.get((namespace, name))
+            if wire is not None:
+                function["name"] = wire
+            elif namespace:
+                function["name"] = allocate_tool_wire_name(namespace, name, set())
 
 
 # =============================================================================
