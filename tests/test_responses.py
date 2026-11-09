@@ -1910,6 +1910,15 @@ class TestToolSearchHistory:
         specs = collect_tool_search_results(items)
         assert [s["name"] for s in specs] == ["a", "b"]
 
+    def test_collect_tool_search_results_does_not_scan_plain_text(self):
+        from omlx.api.responses_tool_search import collect_tool_search_results
+
+        class PlainText(str):
+            def __iter__(self):
+                raise AssertionError("Plain text must not be scanned as response items")
+
+        assert collect_tool_search_results(PlainText("Find calendar events")) == []
+
     def test_store_record_preserves_loaded_specs(self):
         record = build_response_store_record(
             {"id": "resp_1"},

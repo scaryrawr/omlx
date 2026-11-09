@@ -273,6 +273,8 @@ def collect_tool_search_results(
     Accepts pydantic ``InputItem``s or raw dicts (whichever layer hands the
     items over) and returns the LoadableToolSpec dicts to re-index.
     """
+    if isinstance(input_items, str):
+        return []
     specs: list[dict[str, Any]] = []
     for item in input_items or []:
         item_type = _get(item, "type")
