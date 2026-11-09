@@ -1482,3 +1482,612 @@ class TestResponsesRequest:
         assert len(req.tools) == 2
         assert req.tools[0].type == "local_shell"
         assert req.tools[1].name == "read_file"
+
+
+# =============================================================================
+# Deferred tools + tool_search
+# =============================================================================
+
+
+def _deferred_ns_tool(name="calendar_events", description=None):
+    return {
+        "type": "namespace",
+        "name": "planning_center",
+        "description": "Tools in the planning_center namespace.",
+        "tools": [
+            {
+                "type": "function",
+                "name": name,
+                "description": description
+                or f"Search calendar events via {name.replace('_', ' ')}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Event name filter",
+                        }
+                    },
+                },
+                "defer_loading": True,
+            }
+        ],
+    }
+
+
+class TestDeferredToolConversion:
+    def test_default_namespace_tool_search_cannot_collide_with_discovery(self):
+        from omlx.exceptions import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError, match="reserved"):
+            convert_responses_tools(
+                [
+                    ResponsesTool(
+                        type="namespace",
+                        name="functions",
+                        tools=[{"type": "function", "name": "tool_search"}],
+                    ),
+                    ResponsesTool(type="tool_search"),
+                ],
+                tool_search_enabled=True,
+            )
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    @pytest.mark.parametrize("declared", [False, True])
+    @pytest.mark.parametrize("deferred", [False, True])
+    def test_flat_tool_search_name_cannot_collide_with_enabled_discovery(
+        self, enabled, declared, deferred
+    ):
+        from omlx.exceptions import InvalidRequestError
+
+        tools = [ResponsesTool(name="tool_search", defer_loading=deferred)]
+        if declared:
+            tools.append(ResponsesTool(type="tool_search"))
+        if enabled and declared:
+            with pytest.raises(InvalidRequestError, match="reserved"):
+                convert_responses_tools(tools, tool_search_enabled=enabled)
+        else:
+            active = convert_responses_tools(tools, tool_search_enabled=enabled)
+            assert [tool["function"]["name"] for tool in active] == ["tool_search"]
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_deferral_requires_an_enabled_search_declaration(self, enabled):
+        from omlx.api.responses_tool_search import DeferredToolSet
+
+        pool = DeferredToolSet()
+        active = convert_responses_tools(
+            [
+                ResponsesTool(**_deferred_ns_tool()),
+                ResponsesTool(
+                    name="flat_tool",
+                    defer_loading=True,
+                ),
+            ],
+            deferred=pool,
+            tool_search_enabled=enabled,
+        )
+        assert {tool["function"]["name"] for tool in active} == {
+            "planning_center__calendar_events",
+            "flat_tool",
+        }
+        assert not pool
+
+    def test_namespace_deferred_members_excluded_and_indexed(self):
+        from omlx.api.responses_tool_search import DeferredToolSet
+
+        deferred = DeferredToolSet()
+        tools = [
+            {"type": "function", "name": "shell", "parameters": {}},
+            _deferred_ns_tool(),
+            {"type": "tool_search"},
+        ]
+        aliases: dict = {}
+        active = convert_responses_tools(
+            [ResponsesTool(**t) for t in tools],
+            aliases,
+            deferred=deferred,
+            tool_search_enabled=True,
+        )
+        names = {t["function"]["name"] for t in active}
+        assert names == {"shell", "tool_search"}
+        assert deferred  # indexed for tool_search
+        tool = deferred.get("planning_center__calendar_events")
+        assert tool is not None and tool.namespace == "planning_center"
+        # Return-path alias still resolves the deferred wire name.
+        assert split_namespace_tool_name(
+            "planning_center__calendar_events", aliases
+        ) == ("planning_center", "calendar_events")
+
+    def test_flat_deferred_function_excluded(self):
+        from omlx.api.responses_tool_search import DeferredToolSet
+
+        deferred = DeferredToolSet()
+        active = convert_responses_tools(
+            [
+                ResponsesTool(
+                    **{
+                        "type": "function",
+                        "name": "secret_tool",
+                        "defer_loading": True,
+                    }
+                ),
+                ResponsesTool(**{"type": "function", "name": "visible"}),
+                ResponsesTool(type="tool_search"),
+            ],
+            deferred=deferred,
+            tool_search_enabled=True,
+        )
+        assert [t["function"]["name"] for t in active] == ["visible", "tool_search"]
+        assert "secret_tool" in deferred
+
+    def test_mixed_namespace_keeps_active_members(self):
+        from omlx.api.responses_tool_search import DeferredToolSet
+
+        ns = _deferred_ns_tool("deferred_one")
+        ns["tools"].append({"type": "function", "name": "eager_two", "parameters": {}})
+        deferred = DeferredToolSet()
+        active = convert_responses_tools(
+            [ResponsesTool(**ns), ResponsesTool(type="tool_search")],
+            deferred=deferred,
+            tool_search_enabled=True,
+        )
+        assert [t["function"]["name"] for t in active] == [
+            "planning_center__eager_two",
+            "tool_search",
+        ]
+        assert "planning_center__deferred_one" in deferred
+
+    def test_tool_search_declaration_rendered_when_enabled(self):
+        declared = {
+            "type": "tool_search",
+            "execution": "client",
+            "description": "# Tool discovery",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+        active = convert_responses_tools(
+            [ResponsesTool(**declared)], tool_search_enabled=True
+        )
+        assert active and active[0]["function"]["name"] == "tool_search"
+        assert active[0]["function"]["description"] == "# Tool discovery"
+
+    def test_tool_search_declaration_skipped_when_disabled(self):
+        active = convert_responses_tools(
+            [ResponsesTool(**{"type": "tool_search", "execution": "client"})],
+            tool_search_enabled=False,
+        )
+        assert active is None
+
+
+class TestToolSearchBM25:
+    def _set(self):
+        from omlx.api.responses_tool_search import DeferredToolSet
+
+        return DeferredToolSet(
+            [
+                _tool("calendar_events", "planning_center", "Search calendar events"),
+                _tool("people_search", "planning_center", "Search people profiles"),
+                _tool("give_fireball", "mage", "Cast a fireball spell"),
+            ]
+        )
+
+    def test_ranks_name_matches_first(self):
+        hits = self._set().search("calendar events")
+        assert [h.name for h in hits][0] == "calendar_events"
+
+    def test_limit_respected_and_default_eight(self):
+        from omlx.api.responses_tool_search import DeferredTool, DeferredToolSet
+
+        tools = [
+            DeferredTool(f"ns__t{i}", "ns", f"t{i}", f"tool number {i} search")
+            for i in range(12)
+        ]
+        result = DeferredToolSet(tools).search("tool number search")
+        assert len(result) == 8
+
+    def test_empty_query_returns_nothing(self):
+        assert self._set().search("   ") == []
+
+    def test_parameter_descriptions_are_searchable(self):
+        from omlx.api.responses_tool_search import DeferredTool, DeferredToolSet
+
+        tool = DeferredTool(
+            "get_records",
+            None,
+            "get_records",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filter": {"type": "string", "description": "anniversary"}
+                },
+            },
+        )
+        assert DeferredToolSet([tool]).search("anniversary") == [tool]
+
+    def test_results_coalesce_namespaces(self):
+        from omlx.api.responses_tool_search import build_tool_search_results
+
+        hits = self._set().search("search")
+        results = build_tool_search_results(hits)
+        assert len(results) == 1
+        spec = results[0]
+        assert spec["type"] == "namespace"
+        assert spec["name"] == "planning_center"
+        assert all(t["defer_loading"] is True for t in spec["tools"])
+
+    def test_parse_loadable_specs_roundtrip(self):
+        from omlx.api.responses_tool_search import (
+            build_tool_search_results,
+            parse_loadable_specs,
+        )
+
+        hits = self._set().search("fireball")
+        specs = build_tool_search_results(hits)
+        parsed = parse_loadable_specs(specs)
+        assert [t.wire_name for t in parsed] == ["mage__give_fireball"]
+
+    def test_extend_specs_adds_new_only(self):
+        from omlx.api.responses_tool_search import build_tool_search_results
+
+        ts = self._set()
+        # A spec whose tool is already registered adds nothing new.
+        spec = build_tool_search_results([ts.get("planning_center__people_search")])
+        assert ts.extend_specs(spec) == []
+        # A previously unseen spec (Codex-only shape, e.g. from history) is
+        # indexed and reported as newly loaded.
+        fresh = [
+            {
+                "type": "namespace",
+                "name": "planning_center",
+                "description": "Tools in the planning_center namespace.",
+                "tools": [
+                    {"type": "function", "name": "giving_donations", "parameters": {}}
+                ],
+            }
+        ]
+        added = ts.extend_specs(fresh)
+        assert [t.name for t in added] == ["giving_donations"]
+
+
+def _tool(name, namespace, description):
+    from omlx.api.responses_tool_search import DeferredTool
+
+    return DeferredTool(
+        wire_name=f"{namespace}__{name}",
+        namespace=namespace,
+        name=name,
+        description=description,
+        parameters={"type": "object", "properties": {}},
+    )
+
+
+class TestToolSearchHistory:
+    @pytest.mark.parametrize("eager", [False, True])
+    def test_restored_flat_identity_survives_a_namespace_wire_collision(self, eager):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+        from omlx.api.responses_utils import apply_namespace_tool_aliases
+
+        pool, aliases = DeferredToolSet(), {}
+        namespace = _deferred_ns_tool()
+        namespace["tools"][0]["defer_loading"] = not eager
+        active = convert_responses_tools(
+            [ResponsesTool(**namespace), ResponsesTool(type="tool_search")],
+            aliases,
+            deferred=pool,
+            tool_search_enabled=True,
+        )
+        flat_name = "planning_center__calendar_events"
+        parameters = {"type": "object", "properties": {"flat_arg": {"type": "string"}}}
+        state = ToolSearchState(enabled=True, pool=pool)
+        state.restore_loaded(
+            [{"type": "function", "name": flat_name, "parameters": parameters}],
+            aliases,
+            active,
+        )
+        loaded = state.loaded_tool_defs()
+        assert len(loaded) == 1
+        wire = loaded[0]["function"]["name"]
+        assert wire != flat_name
+        assert loaded[0]["function"]["parameters"] == parameters
+        assert split_namespace_tool_name(wire, aliases) == (None, flat_name)
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"function": {"name": flat_name}},
+                    {
+                        "function": {
+                            "namespace": "planning_center",
+                            "name": "calendar_events",
+                        }
+                    },
+                ],
+            }
+        ]
+        apply_namespace_tool_aliases(messages, aliases)
+        calls = messages[0]["tool_calls"]
+        assert calls[0]["function"]["name"] == wire
+        assert calls[1]["function"]["name"] == flat_name
+
+    @pytest.mark.parametrize("namespace", [None, "functions"])
+    def test_restored_flat_schema_does_not_override_an_eager_identity(self, namespace):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+
+        parameters = {"type": "object", "properties": {"current": {"type": "string"}}}
+        function = {"type": "function", "name": "lookup", "parameters": parameters}
+        tool = (
+            {"type": "namespace", "name": namespace, "tools": [function]}
+            if namespace
+            else function
+        )
+        aliases, pool = {}, DeferredToolSet()
+        eager = convert_responses_tools(
+            [ResponsesTool(**tool)], aliases, deferred=pool, tool_search_enabled=True
+        )
+        state = ToolSearchState(enabled=True, pool=pool)
+        state.restore_loaded(
+            [{"type": "function", "name": "lookup", "parameters": {}}],
+            aliases,
+            eager,
+        )
+        assert state.loaded_tool_defs() == []
+        assert eager[0]["function"]["parameters"] == parameters
+
+    def test_restored_flat_tool_search_cannot_replace_discovery(self):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+        from omlx.exceptions import InvalidRequestError
+
+        state = ToolSearchState(enabled=True, pool=DeferredToolSet())
+        with pytest.raises(InvalidRequestError, match="reserved"):
+            state.restore_loaded(
+                [{"type": "function", "name": "tool_search", "parameters": {}}],
+                {},
+                [{"type": "function", "function": {"name": "tool_search"}}],
+            )
+
+    @pytest.mark.parametrize("answer_reasoning", ["", "Prepare the answer."])
+    def test_hosted_search_reasoning_stays_with_its_assistant_turn(
+        self, answer_reasoning
+    ):
+        items = [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "Find the calendar tool."}
+                ],
+            },
+            {
+                "type": "tool_search_call",
+                "id": "search1",
+                "call_id": None,
+                "execution": "server",
+                "arguments": {"query": "calendar"},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": None,
+                "execution": "server",
+                "tools": [_deferred_ns_tool()],
+            },
+        ]
+        if answer_reasoning:
+            items.append(
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": answer_reasoning}],
+                }
+            )
+        items.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Found it."}],
+            }
+        )
+        stored = normalize_response_output_to_messages(items)
+        replayed = convert_responses_input_to_messages(
+            [InputItem(**item) for item in items]
+        )
+        assert stored == replayed
+        assert stored[0]["reasoning_content"] == "Find the calendar tool."
+        assert stored[-1].get("reasoning_content", "") == answer_reasoning
+
+    def test_hosted_search_with_null_call_ids_replays_as_paired_history(self):
+        items = [
+            {
+                "type": "tool_search_call",
+                "id": "search1",
+                "call_id": None,
+                "execution": "server",
+                "arguments": {"query": "calendar"},
+            },
+            {
+                "type": "tool_search_output",
+                "id": "result1",
+                "call_id": None,
+                "execution": "server",
+                "tools": [_deferred_ns_tool()],
+            },
+        ]
+        stored = normalize_response_output_to_messages(items)
+        replayed = convert_responses_input_to_messages(
+            [InputItem(**item) for item in items]
+        )
+        assert stored == replayed
+        assert stored[0]["tool_calls"][0]["id"] == "search1"
+        assert stored[1]["tool_call_id"] == "search1"
+
+    def test_loaded_snapshot_preserves_schemas_and_current_collision_aliases(self):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+
+        pool, aliases = DeferredToolSet(), {}
+        tool = _deferred_ns_tool()
+        tool["tools"][0]["strict"] = True
+        eager = convert_responses_tools(
+            [
+                ResponsesTool(name="planning_center__calendar_events"),
+                ResponsesTool(**tool),
+                ResponsesTool(type="tool_search"),
+            ],
+            aliases,
+            deferred=pool,
+            tool_search_enabled=True,
+        )
+        state = ToolSearchState(enabled=True, pool=pool)
+        state.run_search({"query": "calendar"})
+        restored = ToolSearchState(enabled=True, pool=pool)
+        restored.restore_loaded(state.serialize_loaded_specs(), aliases, eager)
+        loaded = restored.loaded_tool_defs()
+        assert len(loaded) == 1
+        assert loaded[0]["function"]["name"] == "planning_center__calendar_events_2"
+        assert loaded[0]["function"]["parameters"] == tool["tools"][0]["parameters"]
+        assert loaded[0]["function"]["strict"] is True
+        assert aliases["planning_center__calendar_events_2"] == (
+            "planning_center",
+            "calendar_events",
+        )
+
+    def test_restored_schema_uses_current_request_definition(self):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+
+        current = _tool("calendar_events", "planning_center", "current description")
+        state = ToolSearchState(enabled=True, pool=DeferredToolSet([current]))
+        state.restore_loaded(
+            [_deferred_ns_tool(description="stale description")], {}, []
+        )
+        assert (
+            state.loaded_tool_defs()[0]["function"]["description"]
+            == "current description"
+        )
+
+    def test_flat_tools_roundtrip_through_default_namespace(self):
+        from omlx.api.responses_tool_search import (
+            DeferredTool,
+            DeferredToolSet,
+            ToolSearchState,
+        )
+
+        tool = DeferredTool("lookup", None, "lookup", "Look up calendars", strict=False)
+        state = ToolSearchState(
+            enabled=True, pool=DeferredToolSet([tool]), loaded={"lookup"}
+        )
+        restored = ToolSearchState(enabled=True, pool=DeferredToolSet())
+        restored.restore_loaded(state.serialize_loaded_specs(), {}, [])
+        assert restored.loaded_tool_defs() == state.loaded_tool_defs()
+
+    def test_explicit_default_namespace_restores_to_its_original_wire_name(self):
+        from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+
+        pool = DeferredToolSet()
+        namespace = _deferred_ns_tool()
+        namespace["name"] = "functions"
+        aliases = {}
+        eager = convert_responses_tools(
+            [
+                ResponsesTool(**namespace),
+                ResponsesTool(type="tool_search"),
+            ],
+            aliases,
+            deferred=pool,
+            tool_search_enabled=True,
+        )
+        state = ToolSearchState(enabled=True, pool=pool)
+        state.run_search({"query": "calendar"})
+        restored = ToolSearchState(enabled=True, pool=pool)
+        restored.restore_loaded(state.serialize_loaded_specs(), aliases, eager)
+        assert [tool["function"]["name"] for tool in restored.loaded_tool_defs()] == [
+            "calendar_events"
+        ]
+
+    def test_call_and_output_items_become_messages(self):
+        items = [
+            InputItem(type="message", role="user", content="find events"),
+            InputItem(
+                **{
+                    "type": "tool_search_call",
+                    "call_id": "call_1",
+                    "execution": "client",
+                    "arguments": {"query": "calendar", "limit": 5},
+                }
+            ),
+            InputItem(
+                **{
+                    "type": "tool_search_output",
+                    "call_id": "call_1",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [{"type": "namespace", "name": "ns", "tools": []}],
+                }
+            ),
+        ]
+        messages = convert_responses_input_to_messages(items)
+        assert messages[0] == {"role": "user", "content": "find events"}
+        assert messages[1]["role"] == "assistant"
+        call = messages[1]["tool_calls"][0]
+        assert call["function"]["name"] == "tool_search"
+        # Arguments arrive as an object and must survive as parsed JSON.
+        assert call["function"]["arguments"] == {"query": "calendar", "limit": 5}
+        assert messages[2]["role"] == "tool"
+        assert messages[2]["tool_call_id"] == "call_1"
+        assert json.loads(messages[2]["content"])["tools"]
+
+    def test_stored_output_items_normalize(self):
+        output_items = [
+            {
+                "type": "tool_search_call",
+                "call_id": "c1",
+                "execution": "server",
+                "arguments": {"query": "people"},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "c1",
+                "execution": "server",
+                "tools": [{"type": "function", "name": "people_search"}],
+            },
+        ]
+        messages = normalize_response_output_to_messages(output_items)
+        assert messages[0]["role"] == "assistant"
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "tool_search"
+        assert messages[1]["role"] == "tool"
+        assert "people_search" in messages[1]["content"]
+
+    def test_collect_tool_search_results(self):
+        from omlx.api.responses_tool_search import collect_tool_search_results
+
+        items = [
+            InputItem(type="message", role="user", content="x"),
+            InputItem(
+                **{
+                    "type": "tool_search_output",
+                    "tools": [{"type": "function", "name": "a"}],
+                }
+            ),
+            {
+                "type": "tool_search_output",
+                "tools": [{"type": "function", "name": "b"}],
+            },
+        ]
+        specs = collect_tool_search_results(items)
+        assert [s["name"] for s in specs] == ["a", "b"]
+
+    def test_collect_tool_search_results_does_not_scan_plain_text(self):
+        from omlx.api.responses_tool_search import collect_tool_search_results
+
+        class PlainText(str):
+            def __iter__(self):
+                raise AssertionError("Plain text must not be scanned as response items")
+
+        assert collect_tool_search_results(PlainText("Find calendar events")) == []
+
+    def test_store_record_preserves_loaded_specs(self):
+        record = build_response_store_record(
+            {"id": "resp_1"},
+            input_messages=[],
+            output_messages=[],
+            loaded_tool_specs=[{"wire_name": "a", "name": "a", "namespace": None}],
+        )
+        assert record["loaded_tool_specs"][0]["wire_name"] == "a"
