@@ -80,8 +80,11 @@ def _has_cli_overrides(args) -> bool:
     if any(getattr(args, field, None) is not None for field in persisted_fields):
         return True
 
-    # --no-cache is the only persistable boolean flag with a False default.
-    return bool(getattr(args, "no_cache", False))
+    # --no-cache is the only persistable boolean flag with a False default
+    # besides --responses-tool-search.
+    return bool(getattr(args, "no_cache", False)) or bool(
+        getattr(args, "responses_tool_search", False)
+    )
 
 
 def _migrate_saved_network_auth(settings, args) -> None:
@@ -1373,6 +1376,15 @@ Example directory structure:
         "protocol-aware no-op events compatible with strict clients like "
         "OpenClaw / WorkBuddy; 'comment' emits the legacy ': keep-alive' SSE "
         "comment; 'off' disables keepalive entirely",
+    )
+    serve_parser.add_argument(
+        "--responses-tool-search",
+        action="store_true",
+        default=None,
+        help="Enable Responses API deferred-tool loading and tool_search "
+        "(BM25 over tools flagged defer_loading, executed server-side). "
+        "Required for Codex lazy MCP tool loading; also gates the "
+        "supports_search_tool flag in the generated Codex model catalog",
     )
     serve_parser.add_argument(
         "--max-audio-upload-size",
