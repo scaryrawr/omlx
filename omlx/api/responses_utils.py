@@ -18,6 +18,14 @@ from .responses_models import (
     ResponsesTool,
     ResponseUsage,
 )
+from .responses_tool_search import (
+    DEFAULT_FUNCTION_NAMESPACE,
+    TOOL_SEARCH_DEFAULT_LIMIT,
+    TOOL_SEARCH_TOOL_NAME,
+    DeferredTool,
+    DeferredToolSet,
+    allocate_tool_wire_name,
+)
 from .shared_models import IDPrefix, generate_id
 
 logger = logging.getLogger(__name__)
@@ -263,6 +271,7 @@ def convert_responses_input_to_messages(
     # Process input items
     # Track pending tool calls for grouping into a single assistant message
     pending_tool_calls: list[dict[str, Any]] = []
+    hosted_search_ids: list[str] = []
     # Track reasoning content to attach to the next assistant message
     pending_reasoning: str = ""
     # Track images extracted from function_call_output lists; flushed as a
@@ -399,6 +408,43 @@ def convert_responses_input_to_messages(
                 }
             )
 
+        elif item_type == "tool_search_call":
+            # Server- or client-executed tool discovery call. Replay it as
+            # the assistant call the model actually made so the search
+            # result below lines up in the prompt.
+            call_id = item.call_id or item.id or f"call_{uuid.uuid4().hex[:8]}"
+            if item.call_id is None:
+                hosted_search_ids.append(call_id)
+            pending_tool_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": TOOL_SEARCH_TOOL_NAME,
+                        "arguments": _try_parse_json(item.arguments or "{}"),
+                    },
+                }
+            )
+
+        elif item_type == "tool_search_output":
+            # The tool_search result: matched tool specs become the tool
+            # message content so the model can see (and later call) them.
+            pending_reasoning = _flush_pending_tool_calls(
+                messages,
+                pending_tool_calls,
+                min_merge_index=current_message_start,
+                pending_reasoning=pending_reasoning,
+            )
+            tools = getattr(item, "tools", None) or []
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.call_id
+                    or (hosted_search_ids.pop(0) if hosted_search_ids else ""),
+                    "content": json.dumps({"tools": tools}, ensure_ascii=False),
+                }
+            )
+
         elif item.type == "function_call_output":
             # Flush pending tool calls first. Any pending reasoning gets
             # attached to the synthesized assistant tool_calls message.
@@ -453,20 +499,6 @@ def convert_responses_input_to_messages(
 # =============================================================================
 
 
-def _namespace_wire_name(namespace: str, name: str, taken: set) -> str:
-    """Join a namespace and a child name the way Codex's join_tool_name() does.
-
-    A name a flat tool already holds is suffixed rather than shadowing it.
-    """
-    joined = f"{namespace.rstrip('_')}__{name.lstrip('_')}"
-    wire = joined
-    suffix = 2
-    while wire in taken:
-        wire = f"{joined}_{suffix}"
-        suffix += 1
-    return wire
-
-
 def _convert_function_tool(
     tool: ResponsesTool, name: str | None = None
 ) -> dict[str, Any] | None:
@@ -483,9 +515,56 @@ def _convert_function_tool(
     return {"type": "function", "function": func_def}
 
 
+def _tool_defer_loading(tool: ResponsesTool) -> bool:
+    """True for tools flagged ``defer_loading`` (extra attrs included)."""
+    if tool.defer_loading:
+        return True
+    extra = getattr(tool, "model_extra", None) or {}
+    return bool(extra.get("defer_loading"))
+
+
+def _tool_search_declaration(
+    tool: ResponsesTool, enabled: bool
+) -> dict[str, Any] | None:
+    """Render a declared tool_search tool as a model-visible function.
+
+    Deferred tools are unreachable without the discovery round trip, so the
+    declaration is only surfaced when Responses tool search is enabled.
+    """
+    if not enabled:
+        return None
+    func_def: dict[str, Any] = {"name": TOOL_SEARCH_TOOL_NAME}
+    func_def["description"] = tool.description or (
+        "Search for deferred tools by name, description, or parameter. "
+        "Matching tools become available for subsequent calls."
+    )
+    parameters = tool.parameters or {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query for deferred tools.",
+            },
+            "limit": {
+                "type": "number",
+                "description": (
+                    f"Maximum number of tools to return. Defaults to "
+                    f"{TOOL_SEARCH_DEFAULT_LIMIT}."
+                ),
+            },
+        },
+        "required": ["query"],
+    }
+    func_def["parameters"] = parameters
+    return {"type": "function", "function": func_def}
+
+
 def convert_responses_tools(
     tools: list[ResponsesTool] | None,
     aliases: dict[str, tuple[str, str]] | None = None,
+    *,
+    deferred: DeferredToolSet | None = None,
+    tool_search_enabled: bool = False,
 ) -> list[dict[str, Any]] | None:
     """Convert Responses API flat tool format to Chat Completions nested format.
 
@@ -498,28 +577,86 @@ def convert_responses_tools(
     ``aliases`` is given it is filled with ``wire_name -> (namespace, name)``
     so a resulting call can be returned with its namespace intact (#3371).
 
-    Non-function tool types (local_shell, mcp, web_search, etc.) are skipped
-    since they are not supported by local model chat templates.
+    With tool search enabled and declared, tools flagged ``defer_loading``
+    are excluded from the active list. When ``deferred`` is supplied they are
+    registered there for tool_search instead, and their wire-name alias is
+    still recorded so a later call resolves to (namespace, name).
+    ``tool_search_enabled`` renders a declared tool_search tool as a callable
+    function. Non-function tool types (local_shell, mcp, web_search, etc.)
+    are skipped since they are not supported by local model chat templates.
     """
     if not tools:
         return None
 
+    defer_tools = tool_search_enabled and any(t.type == "tool_search" for t in tools)
     result = []
-    taken = {tool.name for tool in tools if tool.type == "function" and tool.name}
+    taken = {
+        tool.name
+        for tool in tools
+        if tool.type in ("function", "tool_search") and tool.name
+    }
+    taken.add(TOOL_SEARCH_TOOL_NAME)
     for tool in tools:
+        if tool.type == "tool_search":
+            declared = _tool_search_declaration(tool, tool_search_enabled)
+            if declared:
+                result.append(declared)
+            continue
         if tool.type == "namespace" and tool.name:
             for member in getattr(tool, "tools", None) or []:
                 if isinstance(member, dict):
                     member = ResponsesTool(**member)
-                if not isinstance(member, ResponsesTool) or not member.name:
+                if (
+                    not isinstance(member, ResponsesTool)
+                    or member.type != "function"
+                    or not member.name
+                ):
                     continue
-                wire = _namespace_wire_name(tool.name, member.name, taken)
+                wire = allocate_tool_wire_name(tool.name, member.name, taken)
+                if defer_tools and _tool_defer_loading(member):
+                    taken.add(wire)
+                    if aliases is not None:
+                        aliases[wire] = (tool.name, member.name)
+                    if deferred is not None:
+                        deferred.add(
+                            DeferredTool(
+                                wire_name=wire,
+                                namespace=(
+                                    tool.name
+                                    if tool.name != DEFAULT_FUNCTION_NAMESPACE
+                                    else None
+                                ),
+                                name=member.name,
+                                description=member.description or "",
+                                parameters=member.parameters,
+                                strict=member.strict,
+                            )
+                        )
+                    continue
                 converted = _convert_function_tool(member, name=wire)
                 if converted:
                     taken.add(wire)
                     if aliases is not None:
                         aliases[wire] = (tool.name, member.name)
                     result.append(converted)
+            continue
+        if (
+            defer_tools
+            and _tool_defer_loading(tool)
+            and tool.type == "function"
+            and tool.name
+        ):
+            if deferred is not None:
+                deferred.add(
+                    DeferredTool(
+                        wire_name=tool.name,
+                        namespace=None,
+                        name=tool.name,
+                        description=tool.description or "",
+                        parameters=tool.parameters,
+                        strict=tool.strict,
+                    )
+                )
             continue
         converted = _convert_function_tool(tool)
         if converted:
@@ -557,7 +694,7 @@ def apply_namespace_tool_aliases(
             if namespace:
                 name = function["name"]
                 function["name"] = wire_names.get(
-                    (namespace, name), _namespace_wire_name(namespace, name, set())
+                    (namespace, name), allocate_tool_wire_name(namespace, name, set())
                 )
 
 
@@ -855,6 +992,7 @@ def normalize_response_output_to_messages(
     """Convert response output items to assistant/tool-call history messages."""
     messages: list[dict[str, Any]] = []
     pending_tool_calls: list[dict[str, Any]] = []
+    hosted_search_ids: list[str] = []
     pending_reasoning: str = ""
 
     for item in output_items:
@@ -896,6 +1034,37 @@ def normalize_response_output_to_messages(
                     },
                 }
             )
+        elif item_type == "tool_search_call":
+            call_id = (
+                item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+            )
+            if item.get("call_id") is None:
+                hosted_search_ids.append(call_id)
+            arguments = item.get("arguments", "{}")
+            if isinstance(arguments, str):
+                arguments = _try_parse_json(arguments)
+            pending_tool_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": TOOL_SEARCH_TOOL_NAME,
+                        "arguments": arguments,
+                    },
+                }
+            )
+        elif item_type == "tool_search_output":
+            _flush_pending_tool_calls(messages, pending_tool_calls)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id")
+                    or (hosted_search_ids.pop(0) if hosted_search_ids else ""),
+                    "content": json.dumps(
+                        {"tools": item.get("tools") or []}, ensure_ascii=False
+                    ),
+                }
+            )
 
     _flush_pending_tool_calls(
         messages,
@@ -909,9 +1078,16 @@ def build_response_store_record(
     public_response: dict[str, Any],
     input_messages: list[dict[str, Any]],
     output_messages: list[dict[str, Any]],
+    loaded_tool_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build a persisted response-state record."""
-    return {
+    """Build a persisted response-state record.
+
+    ``loaded_tool_specs`` carries the deferred tools a response chain has
+    promoted into the active tool set via tool_search, so chains that
+    resume through ``previous_response_id`` (rather than full history
+    replay) keep them visible.
+    """
+    record = {
         "response_id": public_response.get("id", ""),
         "previous_response_id": public_response.get("previous_response_id"),
         "input_messages": copy.deepcopy(input_messages),
@@ -919,3 +1095,6 @@ def build_response_store_record(
         "public_response": copy.deepcopy(public_response),
         "created_at": public_response.get("created_at", 0),
     }
+    if loaded_tool_specs:
+        record["loaded_tool_specs"] = copy.deepcopy(loaded_tool_specs)
+    return record

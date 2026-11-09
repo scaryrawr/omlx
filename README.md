@@ -367,6 +367,16 @@ values, and existing thinking defaults remain unchanged. This also lets Codex
 Desktop's low-effort background title generator prefer the launch-default model
 instead of loading another checkpoint solely for its effort metadata.
 
+Deferred tool loading is opt-in. Start the server with `--responses-tool-search`
+(or set `server.responses_tool_search` to `true` in `settings.json`), then relaunch
+Codex through oMLX to refresh its `supports_search_tool` catalog capability.
+Deferred function schemas stay out of the model prompt until discovered.
+Hosted `tool_search` runs BM25 search on the server (eight results by default);
+explicit `execution: "client"` searches are handed back to Codex. Loaded tools
+remain available through `previous_response_id` chains or replayed
+`tool_search_output` history. With the setting off, declared functions remain
+eagerly loaded and the catalog does not advertise search support.
+
 Requires a Codex version supporting
 [`model_catalog_json`](https://developers.openai.com/codex/config-reference/#model_catalog_json).
 The catalog is loaded at startup: relaunch through oMLX after adding or removing

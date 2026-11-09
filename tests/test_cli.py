@@ -143,8 +143,8 @@ class TestLifecycleCommand:
 
     def test_app_bundle_stop_without_running_app_is_success(self, monkeypatch, capsys):
         """`omlx stop` must not launch the macOS app just to stop it."""
-        from omlx import cli
         import omlx.utils.install as install
+        from omlx import cli
 
         monkeypatch.setattr(install, "is_app_bundle", lambda: True)
         monkeypatch.setattr(install, "is_homebrew", lambda: False)
@@ -157,8 +157,8 @@ class TestLifecycleCommand:
 
     def test_app_bundle_start_sends_command_and_waits(self, monkeypatch):
         """`omlx start` asks the app to start and waits for a running state."""
-        from omlx import cli
         import omlx.utils.install as install
+        from omlx import cli
 
         monkeypatch.setattr(install, "is_app_bundle", lambda: True)
         monkeypatch.setattr(install, "is_homebrew", lambda: False)
@@ -173,8 +173,8 @@ class TestLifecycleCommand:
 
     def test_homebrew_start_delegates_to_brew_services(self, monkeypatch):
         """Homebrew installs use the Homebrew service supervisor."""
-        from omlx import cli
         import omlx.utils.install as install
+        from omlx import cli
 
         monkeypatch.setattr(install, "is_app_bundle", lambda: False)
         monkeypatch.setattr(install, "is_homebrew", lambda: True)
@@ -1845,9 +1845,9 @@ class TestServeCommandFunctions:
         """Successful serve startup should pass the pre-bound socket into uvicorn."""
         import os
 
-        import omlx
         import uvicorn
 
+        import omlx
         from omlx.cli import serve_command
 
         host, port = "127.0.0.1", 0
@@ -2006,6 +2006,7 @@ class TestHasCliOverrides:
             ("paged_ssd_cache_max_size", "2GB"),
             ("hot_cache_max_size", "1GB"),
             ("no_cache", True),
+            ("responses_tool_search", True),
             ("initial_cache_blocks", 64),
         ],
     )
