@@ -86,6 +86,7 @@ class TestServerSettings:
             "auto_start_on_launch": True,
             "burst_decode_mode": "balanced",
             "preserve_mid_system_cache": True,
+            "responses_tool_search": False,
             "distributed_inference_enabled": False,
             "max_audio_upload_size": "100MB",
             "max_image_upload_size": "50MB",
@@ -103,6 +104,12 @@ class TestServerSettings:
             ).distributed_inference_enabled
             is True
         )
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_responses_tool_search_roundtrip(self, enabled):
+        settings = ServerSettings.from_dict({"responses_tool_search": enabled})
+        assert settings.responses_tool_search is enabled
+        assert settings.to_dict()["responses_tool_search"] is enabled
 
     def test_from_dict_sse_keepalive_mode(self):
         """sse_keepalive_mode round-trips through from_dict / to_dict."""
