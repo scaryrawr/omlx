@@ -4,8 +4,9 @@
 import json
 import struct
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import mlx.core as mx
 import pytest
@@ -477,6 +478,60 @@ def _chunked_scheduler_rig(mock_tokenizer, tmp_path, kind):
     # decoding rows finish before the chunked prefill reaches its probe point.
     scheduler._decode_fairness = False
     return model, scheduler, prefix
+
+
+@pytest.mark.asyncio
+async def test_hosted_search_admission_while_previous_cache_save_is_pending(
+    mock_tokenizer, tmp_path
+):
+    from omlx.api.responses_tool_search import DeferredToolSet, ToolSearchState
+    from omlx.server import _prepare_tool_search_continuation
+
+    _, scheduler, _ = _chunked_scheduler_rig(mock_tokenizer, tmp_path, "gdn")
+    release_store = Event()
+    scheduler._store_cache_executor.submit(release_store.wait)
+    request = Request(
+        request_id="hosted-search",
+        prompt=list(range(3, 10)),
+        sampling_params=SamplingParams(max_tokens=1, temperature=0),
+    )
+    try:
+        scheduler.add_request(request)
+        for _ in range(50):
+            scheduler.step()
+            if request.is_finished():
+                break
+        assert request.is_finished()
+        assert request.request_id in scheduler.requests
+        assert not scheduler._inflight_store_futures[request.request_id].done()
+
+        engine = SimpleNamespace(
+            model_type="llama",
+            count_chat_tokens=lambda *_args, **_kwargs: 8,
+            preflight_chat=AsyncMock(),
+        )
+        kwargs = await _prepare_tool_search_continuation(
+            engine,
+            [{"role": "user", "content": "continue after discovery"}],
+            ToolSearchState(enabled=True, pool=DeferredToolSet()),
+            {"_request_id": request.request_id, "max_tokens": 16},
+            "test-model",
+            remaining_tokens=15,
+            search_rounds=1,
+        )
+        next_request = Request(
+            request_id=kwargs["_request_id"],
+            prompt=list(range(3, 10)),
+            sampling_params=SamplingParams(max_tokens=1, temperature=0),
+        )
+        scheduler.add_request(next_request)
+        assert scheduler.requests[request.request_id] is request
+        assert scheduler.requests[next_request.request_id] is next_request
+        assert next_request.request_id != request.request_id
+    finally:
+        release_store.set()
+        scheduler.shutdown()
+        scheduler.batch_generator = None
 
 
 @pytest.mark.parametrize("kind", ["gdn", "rotating", "deepseek_v41"])

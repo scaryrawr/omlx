@@ -104,6 +104,16 @@ from .api.claude_gateway import (
     claude_gateway_model_id,
     claude_gateway_served_id,
 )
+from .api.decisions import (
+    READOUT_TEMPLATE_KWARGS,
+    DecisionsRequestError,
+    decide,
+    decisions_request,
+    from_systemone,
+    systemone_answers,
+    to_systemone,
+)
+from .api.decisions_models import DecisionRequest
 from .api.embedding_models import (
     EmbeddingData,
     EmbeddingRequest,
@@ -174,6 +184,13 @@ from .api.responses_models import (
     ResponseObject,
     ResponsesRequest,
 )
+from .api.responses_tool_search import (
+    TOOL_SEARCH_MAX_ROUNDS,
+    TOOL_SEARCH_TOOL_NAME,
+    DeferredToolSet,
+    ToolSearchState,
+    collect_tool_search_results,
+)
 from .api.responses_utils import (
     ResponseStateCorruptError,
     ResponseStateNotFoundError,
@@ -191,16 +208,6 @@ from .api.responses_utils import (
     normalize_response_output_to_messages,
     split_namespace_tool_name,
 )
-from .api.decisions import (
-    READOUT_TEMPLATE_KWARGS,
-    DecisionsRequestError,
-    decide,
-    decisions_request,
-    from_systemone,
-    systemone_answers,
-    to_systemone,
-)
-from .api.decisions_models import DecisionRequest
 from .api.systemone_models import SystemOneRequest
 from .api.thinking import (
     ThinkingParser,
@@ -2939,6 +2946,7 @@ class _ResponsesStreamState:
     sequence_number: int = 0
     response: dict | None = None
     prefilling: bool = True
+    request_id: str | None = None
 
     def next_sequence(self) -> int:
         self.sequence_number += 1
@@ -3129,9 +3137,9 @@ async def _with_request_disconnect_abort(
     generator: AsyncIterator[str],
     http_request: FastAPIRequest,
     engine: BaseEngine,
-    request_id: str,
+    request_id: str | Callable[[], str],
 ) -> AsyncIterator[str]:
-    """Bind one public response transport to one inference request."""
+    """Bind one public response transport to its active inference request."""
 
     signal = http_request.scope.get(_DISCONNECT_SIGNAL_SCOPE_KEY)
     abort = getattr(engine, "abort_request", None)
@@ -3144,7 +3152,7 @@ async def _with_request_disconnect_abort(
 
         async def abort_disconnected_request() -> None:
             await abort(
-                request_id,
+                request_id() if callable(request_id) else request_id,
                 reason="public client transport disconnected",
                 error_code="client_disconnected",
             )
@@ -4201,6 +4209,7 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
         m["max_context_window"] = get_max_context_window(model_id)
         # The chat UI's stops, for clients that offer effort per model.
         m["reasoning_levels"] = reasoning_levels(m)
+        m["responses_tool_search"] = _responses_tool_search_enabled()
         source_model_id = m.get("source_model_id") or model_id
 
         # Let clients advertise thinking per model/profile instead of guessing
@@ -8851,6 +8860,7 @@ def _resolve_previous_response_messages(previous_response_id: str) -> list[dict]
 def _store_response_state(
     public_response: dict,
     input_messages: list[dict],
+    loaded_tool_specs: list[dict] | None = None,
 ) -> None:
     """Persist the response object and the normalized conversation state."""
     output_messages = normalize_response_output_to_messages(
@@ -8860,8 +8870,188 @@ def _store_response_state(
         public_response,
         input_messages=input_messages,
         output_messages=output_messages,
+        loaded_tool_specs=loaded_tool_specs,
     )
     _server_state.responses_store.put(public_response["id"], record)
+
+
+def _responses_tool_search_enabled() -> bool:
+    """Global Responses deferred-tool/tool_search feature flag."""
+    return bool(
+        getattr(
+            getattr(_server_state.global_settings, "server", None),
+            "responses_tool_search",
+            False,
+        )
+    )
+
+
+def _resolve_chain_loaded_tool_specs(previous_response_id: str) -> list[dict]:
+    """Walk a previous_response_id chain collecting loaded deferred specs."""
+    snapshots: list[list[dict]] = []
+    seen: set[str] = set()
+    current: str | None = previous_response_id
+    store = _server_state.responses_store
+    while current and current not in seen:
+        seen.add(current)
+        record = store.get_record(current)
+        if record is None:
+            break
+        loaded = record.get("loaded_tool_specs")
+        if isinstance(loaded, list):
+            snapshots.append([item for item in loaded if isinstance(item, dict)])
+        current = record.get("previous_response_id")
+    return [spec for snapshot in reversed(snapshots) for spec in snapshot]
+
+
+def _tool_search_call_item(call_id: str, raw_arguments, execution: str) -> dict:
+    """tool_search_call output item from a model call's raw arguments."""
+    from .api.responses_tool_search import tool_search_call_item
+
+    arguments = (
+        json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+    )
+    if not isinstance(arguments, dict):
+        raise ValueError("tool_search arguments must be a JSON object")
+    return tool_search_call_item(call_id, arguments, execution=execution)
+
+
+def _run_tool_search_round(
+    tool_calls: list,
+    ts_state: ToolSearchState,
+    messages: list[dict],
+    text: str = "",
+    reasoning: str = "",
+) -> tuple[list, list[dict]]:
+    """Execute tool_search calls server-side inside a response.
+
+    Appends the assistant call + synthesized result to ``messages`` so
+    generation can continue with the loaded tools visible. Returns the
+    remaining (client-executed) tool calls and the Responses output items
+    for the searches performed.
+    """
+    remaining: list = []
+    items: list[dict] = []
+    calls: list[dict] = []
+    results: list[dict] = []
+    for tc in tool_calls:
+        if hasattr(tc, "function"):
+            call_id = tc.id or f"call_{uuid.uuid4().hex[:8]}"
+            name = tc.function.name
+            raw_arguments = tc.function.arguments
+        elif isinstance(tc, dict):
+            call_id = (
+                tc.get("call_id") or tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+            )
+            name = tc.get("name", "")
+            raw_arguments = tc.get("arguments", "{}")
+        else:
+            remaining.append(tc)
+            continue
+        if name != TOOL_SEARCH_TOOL_NAME:
+            remaining.append(tc)
+            continue
+        call_item, out_item = ts_state.run_search(raw_arguments)
+        arguments = call_item["arguments"]
+        calls.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": TOOL_SEARCH_TOOL_NAME, "arguments": arguments},
+            }
+        )
+        results.append(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": json.dumps({"tools": out_item["tools"]}, ensure_ascii=False),
+            }
+        )
+        items.extend([call_item, out_item])
+    if calls:
+        assistant = {"role": "assistant", "content": text, "tool_calls": calls}
+        if reasoning:
+            assistant["reasoning_content"] = reasoning
+        messages.extend([assistant, *results])
+    return remaining, items
+
+
+async def _prepare_tool_search_continuation(
+    engine: BaseEngine,
+    messages: list[dict],
+    state: ToolSearchState,
+    chat_kwargs: dict,
+    model: str,
+    remaining_tokens: int,
+    search_rounds: int,
+    resolved_model: str | None = None,
+) -> dict:
+    """Rebuild and validate the model context after hosted discovery."""
+    if engine.model_type == "gpt_oss":
+        for message in messages:
+            message.pop("reasoning_content", None)
+    updated = {
+        key: value for key, value in chat_kwargs.items() if key != "_prepared_prompt"
+    }
+    updated["_request_id"] = str(uuid.uuid4())
+    tools = list(updated.get("tools") or [])
+    names = {tool["function"]["name"] for tool in tools}
+    tools.extend(
+        tool
+        for tool in convert_tools_for_template(state.loaded_tool_defs()) or []
+        if tool["function"]["name"] not in names
+    )
+    if search_rounds >= TOOL_SEARCH_MAX_ROUNDS:
+        tools = [
+            tool for tool in tools if tool["function"]["name"] != TOOL_SEARCH_TOOL_NAME
+        ]
+    if "gemma" in (resolved_model or model).lower():
+        tools = enrich_tool_params_for_gemma4(tools)
+    updated["tools"] = tools
+    updated["max_tokens"] = remaining_tokens
+    tokens, prepared = await _prepare_chat_prompt_for_request(
+        engine,
+        messages,
+        tools,
+        chat_template_kwargs=updated.get("chat_template_kwargs"),
+        mm_processor_kwargs=updated.get("mm_processor_kwargs"),
+    )
+    validate_context_window(tokens, model)
+    if prepared is not None:
+        updated["_prepared_prompt"] = prepared
+    await engine.preflight_chat(messages, **updated)
+    return updated
+
+
+def _tool_search_output_items(spec_items: list[dict]) -> list:
+    """Convert executed-search dicts into typed OutputItem models."""
+    from .api.responses_models import OutputItem
+
+    items = []
+    for item in spec_items:
+        if item.get("type") == "tool_search_call":
+            items.append(
+                OutputItem(
+                    type="tool_search_call",
+                    id=item.get("id"),
+                    call_id=item.get("call_id"),
+                    status=item.get("status", "completed"),
+                    execution=item.get("execution"),
+                    search_arguments=item.get("arguments"),
+                )
+            )
+        else:
+            items.append(
+                OutputItem(
+                    type="tool_search_output",
+                    id=item.get("id"),
+                    call_id=item.get("call_id"),
+                    status=item.get("status", "completed"),
+                    execution=item.get("execution"),
+                    tools=item.get("tools"),
+                )
+            )
+    return items
 
 
 @app.post("/v1/responses")
@@ -8928,8 +9118,42 @@ async def create_response(
 
         # Convert tools: flat → nested. namespace_aliases maps each expanded
         # namespace member's wire name back for the return path.
+        search_enabled = _responses_tool_search_enabled()
         namespace_aliases: dict = {}
-        openai_tools = convert_responses_tools(request.tools, namespace_aliases)
+        deferred_tools = DeferredToolSet()
+        openai_tools = convert_responses_tools(
+            request.tools,
+            namespace_aliases,
+            deferred=deferred_tools,
+            tool_search_enabled=search_enabled,
+        )
+
+        ts_state: ToolSearchState | None = None
+        if search_enabled:
+            # Tools loaded by earlier tool_search rounds: Codex replays
+            # tool_search_output items in full history, while
+            # previous_response_id chains carry them in stored state.
+            loaded_specs = collect_tool_search_results(request.input)
+            if request.previous_response_id:
+                loaded_specs = (
+                    _resolve_chain_loaded_tool_specs(request.previous_response_id)
+                    + loaded_specs
+                )
+            declaration = next(
+                (tool for tool in request.tools or [] if tool.type == "tool_search"),
+                None,
+            )
+            ts_state = ToolSearchState(
+                enabled=declaration is not None,
+                pool=deferred_tools,
+                execution=getattr(declaration, "execution", None) or "server",
+            )
+            ts_state.restore_loaded(loaded_specs, namespace_aliases, openai_tools or [])
+            # Loaded tools become part of the active tool set — rendered with
+            # full schemas from this turn onward.
+            loaded_defs = ts_state.loaded_tool_defs()
+            if loaded_defs:
+                openai_tools = (openai_tools or []) + loaded_defs
         apply_namespace_tool_aliases(messages, namespace_aliases)
         if (
             getattr(engine, "is_diffusion_model", False)
@@ -9038,6 +9262,8 @@ async def create_response(
             getattr(engine, "is_diffusion_model", False)
             and not getattr(engine, "supports_tool_calling", False)
         )
+        if tools_disabled and ts_state is not None:
+            ts_state.enabled = False
         effective_tools = None if tools_disabled else openai_tools
         if (
             _server_state.mcp_manager
@@ -9045,6 +9271,14 @@ async def create_response(
             and mcp_tools_exposed()
         ):
             effective_tools = _server_state.mcp_manager.get_merged_tools(openai_tools)
+            unloaded_names = {
+                tool.wire_name for tool in deferred_tools.tools()
+            } - {tool["function"]["name"] for tool in openai_tools or []}
+            effective_tools = [
+                tool
+                for tool in effective_tools
+                if tool.get("function", {}).get("name") not in unloaded_names
+            ]
 
         # Convert tools for chat template
         tools_for_template = (
@@ -9208,7 +9442,7 @@ async def create_response(
             }
             if response_format_warning:
                 sse_headers["Warning"] = response_format_warning
-            stream_state = _ResponsesStreamState()
+            stream_state = _ResponsesStreamState(request_id=inference_request_id)
             return StreamingResponse(
                 _release_after_stream(
                     _with_request_disconnect_abort(
@@ -9224,6 +9458,7 @@ async def create_response(
                                 response_format=response_format,
                                 namespace_aliases=namespace_aliases,
                                 stream_state=stream_state,
+                                tool_search_state=ts_state,
                                 **chat_kwargs,
                             ),
                             http_request=http_request,
@@ -9233,7 +9468,7 @@ async def create_response(
                         ),
                         http_request,
                         engine,
-                        inference_request_id,
+                        lambda: stream_state.request_id or inference_request_id,
                     ),
                     lease,
                 ),
@@ -9250,106 +9485,196 @@ async def create_response(
         async def _build_responses_api():
             await _raise_if_llm_lease_abort_requested(lease)
             start_time = time.perf_counter()
-            output = await engine.chat(messages=messages, **chat_kwargs)
+            max_search_rounds = TOOL_SEARCH_MAX_ROUNDS
+            search_rounds = 0
+            total_prompt_tokens = 0
+            total_completion_tokens = 0
+            total_cached_tokens = 0
+            prefill_duration = 0.0
+            reasoning_parts: list[str] = []
+            output_items: list[OutputItem] = []
+            active_chat_kwargs = chat_kwargs
+            while True:
+                round_items: list[dict] = []
+                output = await engine.chat(messages=messages, **active_chat_kwargs)
+                if prefill_duration == 0.0:
+                    first_token_at = getattr(output, "first_token_at", None)
+                    if first_token_at is not None:
+                        prefill_duration = first_token_at - start_time
+                total_prompt_tokens += output.prompt_tokens
+                total_completion_tokens += output.completion_tokens
+                total_cached_tokens += output.cached_tokens
 
-            elapsed = time.perf_counter() - start_time
-            tokens_per_sec = output.completion_tokens / elapsed if elapsed > 0 else 0
-            logger.info(
-                f"Responses API: model={resolved_model}, "
-                f"{output.completion_tokens} tokens in {elapsed:.2f}s "
-                f"({tokens_per_sec:.1f} tok/s)"
-            )
-
-            first_token_at = getattr(output, "first_token_at", None)
-            prefill_duration = (
-                (first_token_at - start_time)
-                if first_token_at is not None
-                else 0.0
-            )
-            gen_duration = elapsed - prefill_duration if prefill_duration > 0 else elapsed
-            get_server_metrics().record_request_complete(
-                prompt_tokens=output.prompt_tokens,
-                completion_tokens=output.completion_tokens,
-                cached_tokens=output.cached_tokens,
-                prefill_duration=prefill_duration,
-                generation_duration=gen_duration,
-                model_id=resolved_model,
-                request_duration=elapsed,
-            )
-
-            # Process output text
-            raw_text = clean_special_tokens(output.text) if output.text else ""
-            thinking_content, regular_content = extract_thinking(
-                raw_text,
-                leading_only=_leading_thinking_only(engine),
-                truncated=output.finish_reason == "length",
-                start_in_thinking=_chat_prompt_opens_thinking(
-                    engine, messages, chat_kwargs
-                ),
-            )
-
-            # Parse tool calls
-            if output.tool_calls:
-                tool_calls = _convert_parser_tool_calls(output.tool_calls)
-                cleaned_text = regular_content
-                cleaned_thinking = sanitize_tool_call_markup(
-                    thinking_content, engine.tokenizer
+                elapsed = time.perf_counter() - start_time
+                tokens_per_sec = (
+                    output.completion_tokens / elapsed if elapsed > 0 else 0
                 )
-            else:
-                extraction = extract_tool_calls_with_thinking(
-                    thinking_content,
-                    regular_content,
-                    tokenizer=engine.tokenizer,
-                    tools=tools_for_template,
-                    finish_reason=output.finish_reason,
+                logger.info(
+                    f"Responses API: model={resolved_model}, "
+                    f"{output.completion_tokens} tokens in {elapsed:.2f}s "
+                    f"({tokens_per_sec:.1f} tok/s)"
                 )
-                cleaned_text = extraction.cleaned_text
-                tool_calls = extraction.tool_calls
-                recovered, withheld_payload = _nonstream_recovery_text(
-                    extraction,
-                    regular_content,
-                    output,
-                    engine.tokenizer,
-                    tools_for_template,
+
+                # Process output text
+                raw_text = clean_special_tokens(output.text) if output.text else ""
+                thinking_content, regular_content = extract_thinking(
+                    raw_text,
+                    leading_only=_leading_thinking_only(engine),
+                    truncated=output.finish_reason == "length",
+                    start_in_thinking=_chat_prompt_opens_thinking(
+                        engine, messages, active_chat_kwargs
+                    ),
                 )
-                if recovered is not None:
-                    cleaned_text = recovered
-                elif failure := _tool_call_failure(
-                    extraction,
-                    withheld_payload=withheld_payload,
-                    finish_reason=output.finish_reason,
+
+                # Parse tool calls
+                if output.tool_calls:
+                    tool_calls = _convert_parser_tool_calls(output.tool_calls)
+                    cleaned_text = regular_content
+                    cleaned_thinking = sanitize_tool_call_markup(
+                        thinking_content, engine.tokenizer
+                    )
+                else:
+                    extraction = extract_tool_calls_with_thinking(
+                        thinking_content,
+                        regular_content,
+                        tokenizer=engine.tokenizer,
+                        tools=active_chat_kwargs.get("tools"),
+                        finish_reason=output.finish_reason,
+                    )
+                    cleaned_text = extraction.cleaned_text
+                    tool_calls = extraction.tool_calls
+                    recovered, withheld_payload = _nonstream_recovery_text(
+                        extraction,
+                        regular_content,
+                        output,
+                        engine.tokenizer,
+                        active_chat_kwargs.get("tools"),
+                    )
+                    if recovered is not None:
+                        cleaned_text = recovered
+                    elif failure := _tool_call_failure(
+                        extraction,
+                        withheld_payload=withheld_payload,
+                        finish_reason=output.finish_reason,
+                    ):
+                        raise _ToolCallGenerationError(failure["error"])
+                    cleaned_thinking = extraction.cleaned_thinking
+
+                # Reverse Gemma 4 parameter renaming
+                if tool_calls and "gemma" in (resolved_model or "").lower():
+                    for tc in tool_calls:
+                        fn = getattr(tc, "function", None)
+                        if fn and fn.arguments:
+                            try:
+                                args = json.loads(fn.arguments)
+                                args = restore_gemma4_param_names(args)
+                                fn.arguments = json.dumps(args, ensure_ascii=False)
+                            except (json.JSONDecodeError, AttributeError):
+                                pass
+
+                if (
+                    ts_state is not None
+                    and ts_state.enabled
+                    and ts_state.execution == "server"
+                    and search_rounds >= max_search_rounds
+                    and any(
+                        tc.function.name == TOOL_SEARCH_TOOL_NAME
+                        for tc in tool_calls or []
+                    )
                 ):
-                    raise _ToolCallGenerationError(failure["error"])
-                cleaned_thinking = extraction.cleaned_thinking
+                    raise _ToolCallGenerationError(
+                        {
+                            "code": "tool_search_limit_exceeded",
+                            "message": "The model exceeded the hosted tool search round limit.",
+                        }
+                    )
 
-            # Reverse Gemma 4 parameter renaming
-            if tool_calls and "gemma" in (resolved_model or "").lower():
-                for tc in tool_calls:
-                    fn = getattr(tc, "function", None)
-                    if fn and fn.arguments:
-                        try:
-                            args = json.loads(fn.arguments)
-                            args = restore_gemma4_param_names(args)
-                            fn.arguments = json.dumps(args, ensure_ascii=False)
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
+                # Server-side tool_search: execute discovery rounds without
+                # ending the response, then continue generation with the
+                # matched tools promoted into the active tool set.
+                if (
+                    not tools_disabled
+                    and ts_state is not None
+                    and ts_state.enabled
+                    and ts_state.execution == "server"
+                    and tool_calls
+                    and search_rounds < max_search_rounds
+                    and any(
+                        (
+                            getattr(getattr(tc, "function", None), "name", None)
+                            or (tc.get("name") if isinstance(tc, dict) else None)
+                        )
+                        == TOOL_SEARCH_TOOL_NAME
+                        for tc in tool_calls
+                    )
+                ):
+                    tool_calls, round_items = _run_tool_search_round(
+                        tool_calls, ts_state, messages, cleaned_text, cleaned_thinking
+                    )
+                    search_rounds += 1
+                    if round_items:
+                        if cleaned_thinking:
+                            reasoning_parts.append(cleaned_thinking)
+                            output_items.append(
+                                build_reasoning_output_item(cleaned_thinking)
+                            )
+                        if cleaned_text and cleaned_text.strip():
+                            output_items.append(
+                                build_message_output_item(cleaned_text.strip())
+                            )
+                        output_items.extend(_tool_search_output_items(round_items))
+                        if (
+                            tool_calls
+                            or total_completion_tokens >= max_tokens
+                            or output.finish_reason == "length"
+                        ):
+                            break
+                        active_chat_kwargs = await _prepare_tool_search_continuation(
+                            engine,
+                            messages,
+                            ts_state,
+                            active_chat_kwargs,
+                            request.model,
+                            max_tokens - total_completion_tokens,
+                            search_rounds,
+                            resolved_model=resolved_model,
+                        )
+                        await _raise_if_llm_lease_abort_requested(lease)
+                        continue
 
-            # Process response_format if specified
-            if response_format and not tool_calls:
-                cleaned_text, _, is_valid, error = parse_json_output(
-                    cleaned_text or regular_content, response_format
-                )
-                if not is_valid:
-                    logger.warning(f"JSON validation failed: {error}")
+                # Process response_format if specified
+                if response_format and not tool_calls:
+                    cleaned_text, _, is_valid, error = parse_json_output(
+                        cleaned_text or regular_content, response_format
+                    )
+                    if not is_valid:
+                        logger.warning(f"JSON validation failed: {error}")
+
+                if cleaned_thinking:
+                    reasoning_parts.append(cleaned_thinking)
+                break
+
+            total_duration = time.perf_counter() - start_time
+            get_server_metrics().record_request_complete(
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                cached_tokens=total_cached_tokens,
+                prefill_duration=prefill_duration,
+                generation_duration=(
+                    total_duration - prefill_duration
+                    if prefill_duration > 0
+                    else total_duration
+                ),
+                model_id=resolved_model,
+                request_duration=total_duration,
+            )
 
             # Build output items
-            output_items: list[OutputItem] = []
-            reasoning_text = (cleaned_thinking or "").strip()
-            if reasoning_text:
-                output_items.append(build_reasoning_output_item(reasoning_text))
-            output_items.append(
-                build_message_output_item(cleaned_text.strip() if cleaned_text else "")
-            )
+            reasoning_text = "\n\n".join(reasoning_parts).strip()
+            if not round_items:
+                if cleaned_thinking:
+                    output_items.append(build_reasoning_output_item(cleaned_thinking))
+                output_items.append(build_message_output_item(cleaned_text or ""))
 
             if tool_calls:
                 for tc in tool_calls:
@@ -9366,6 +9691,20 @@ async def create_response(
                     else:
                         continue
                     namespace, name = split_namespace_tool_name(name, namespace_aliases)
+                    if (
+                        ts_state is not None
+                        and ts_state.enabled
+                        and ts_state.execution == "client"
+                        and namespace is None
+                        and name == TOOL_SEARCH_TOOL_NAME
+                    ):
+                        item = _tool_search_call_item(
+                            call_id or f"call_{uuid.uuid4().hex[:8]}",
+                            arguments,
+                            "client",
+                        )
+                        output_items.extend(_tool_search_output_items([item]))
+                        continue
                     output_items.append(
                         build_function_call_output_item(
                             name=name,
@@ -9379,16 +9718,18 @@ async def create_response(
                 len(engine.tokenizer.encode(reasoning_text)) if reasoning_text else 0
             )
             usage = build_response_usage(
-                input_tokens=output.prompt_tokens,
-                output_tokens=output.completion_tokens,
+                input_tokens=total_prompt_tokens,
+                output_tokens=total_completion_tokens,
                 reasoning_tokens=reasoning_token_count,
-                cached_tokens=output.cached_tokens,
+                cached_tokens=total_cached_tokens,
             )
 
             # Surface max_output_tokens truncation so clients can tell an
             # incomplete turn from a natural stop. The Responses API has no
             # finish_reason field; status + incomplete_details is the signal.
-            truncated = getattr(output, "finish_reason", None) == "length"
+            truncated = getattr(output, "finish_reason", None) == "length" or bool(
+                round_items and total_completion_tokens >= max_tokens
+            )
             response_obj = ResponseObject(
                 model=request.model,
                 status="incomplete" if truncated else "completed",
@@ -9408,6 +9749,9 @@ async def create_response(
                 _store_response_state(
                     response_obj.model_dump(exclude_none=True),
                     input_messages=current_input_messages,
+                    loaded_tool_specs=(
+                        ts_state.serialize_loaded_specs() if ts_state else None
+                    ),
                 )
 
             return response_obj.model_dump_json()
@@ -9424,6 +9768,18 @@ async def create_response(
         raise
 
 
+@dataclass
+class _ResponsesSearchContinuation:
+    response: ResponseObject | None = None
+    output: list[dict] = field(default_factory=list)
+    rounds: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    start_time: float = field(default_factory=time.perf_counter)
+    first_token_time: float | None = None
+
+
 async def stream_responses_api(
     engine: BaseEngine,
     messages: list,
@@ -9435,13 +9791,16 @@ async def stream_responses_api(
     response_format=None,
     namespace_aliases: Optional[dict] = None,
     stream_state: _ResponsesStreamState | None = None,
+    tool_search_state: ToolSearchState | None = None,
+    _continuation: _ResponsesSearchContinuation | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream Responses API events (SSE with named event types)."""
     from .api.shared_models import IDPrefix, generate_id
 
-    start_time = time.perf_counter()
-    first_token_time = None
+    continuation = _continuation or _ResponsesSearchContinuation()
+    start_time = continuation.start_time
+    first_token_time = continuation.first_token_time
     last_output = None
     accumulated_text = ""
     accumulated_reasoning = ""
@@ -9469,7 +9828,11 @@ async def stream_responses_api(
     stream_state = stream_state or _ResponsesStreamState()
     seq = 0
 
-    response_id = generate_id(IDPrefix.RESPONSE)
+    response_id = (
+        continuation.response.id
+        if continuation.response
+        else generate_id(IDPrefix.RESPONSE)
+    )
     msg_id = generate_id(IDPrefix.MESSAGE)
     reasoning_id = generate_id(IDPrefix.REASONING)
 
@@ -9477,12 +9840,12 @@ async def stream_responses_api(
     reasoning_opened = False
     reasoning_closed = False
     message_opened = False
-    next_output_index = 0
+    next_output_index = len(continuation.output)
     reasoning_output_index: int | None = None  # captured when reasoning opens
     msg_output_index: int | None = None  # captured when message opens
 
-    # Build initial response object (in_progress, empty output)
-    initial_response = ResponseObject(
+    # Build initial response object (in_progress).
+    initial_response = continuation.response or ResponseObject(
         id=response_id,
         model=request.model,
         status="in_progress",
@@ -9495,29 +9858,21 @@ async def stream_responses_api(
         previous_response_id=request.previous_response_id,
     )
     initial_data = initial_response.model_dump(exclude_none=True)
-    stream_state.response = initial_data
+    initial_data["output"] = list(continuation.output)
+    stream_state.response = initial_data.copy()
 
-    # 1. response.created
-    seq = stream_state.next_sequence()
-    yield format_sse_event(
-        "response.created",
-        {
-            "type": "response.created",
-            "response": initial_data,
-            "sequence_number": seq,
-        },
-    )
-
-    # 2. response.in_progress
-    seq = stream_state.next_sequence()
-    yield format_sse_event(
-        "response.in_progress",
-        {
-            "type": "response.in_progress",
-            "response": initial_data,
-            "sequence_number": seq,
-        },
-    )
+    if continuation.response is None:
+        continuation.response = initial_response
+        for event_type in ("response.created", "response.in_progress"):
+            seq = stream_state.next_sequence()
+            yield format_sse_event(
+                event_type,
+                {
+                    "type": event_type,
+                    "response": initial_data,
+                    "sequence_number": seq,
+                },
+            )
 
     # --- helper closures for lazy item emission ----------------------
     def _open_reasoning():
@@ -10022,7 +10377,7 @@ async def stream_responses_api(
     )
 
     # Build output items for final response
-    output_items = []
+    output_items = list(continuation.output)
     reasoning_text = accumulated_reasoning
     if reasoning_text:
         output_items.append(
@@ -10043,7 +10398,52 @@ async def stream_responses_api(
         }
     )
 
-    # Emit function call items if present
+    search_items: list[dict] = []
+    if (
+        tool_search_state is not None
+        and tool_search_state.enabled
+        and tool_search_state.execution == "server"
+        and continuation.rounds >= TOOL_SEARCH_MAX_ROUNDS
+        and any(tc.function.name == TOOL_SEARCH_TOOL_NAME for tc in tool_calls or [])
+    ):
+        tool_failure = {
+            "error": {
+                "code": "tool_search_limit_exceeded",
+                "message": "The model exceeded the hosted tool search round limit.",
+            }
+        }
+        tool_calls = None
+    if (
+        tool_search_state is not None
+        and tool_search_state.enabled
+        and tool_search_state.execution == "server"
+        and continuation.rounds < TOOL_SEARCH_MAX_ROUNDS
+        and tool_calls
+        and not tool_failure
+    ):
+        tool_calls, search_items = _run_tool_search_round(
+            tool_calls, tool_search_state, messages, final_text, reasoning_text
+        )
+        if search_items:
+            continuation.rounds += 1
+            for item in search_items:
+                for event_type, status in (
+                    ("response.output_item.added", "in_progress"),
+                    ("response.output_item.done", "completed"),
+                ):
+                    yield format_sse_event(
+                        event_type,
+                        {
+                            "type": event_type,
+                            "output_index": next_output_index,
+                            "item": {**item, "status": status},
+                            "sequence_number": stream_state.next_sequence(),
+                        },
+                    )
+                output_items.append(item)
+                next_output_index += 1
+
+    # Emit client-executed calls without consuming or losing mixed batches.
     if tool_calls:
         output_index = next_output_index
         for tc in tool_calls:
@@ -10061,6 +10461,31 @@ async def stream_responses_api(
                 continue
 
             namespace, name = split_namespace_tool_name(name, namespace_aliases)
+            if (
+                tool_search_state is not None
+                and tool_search_state.enabled
+                and tool_search_state.execution == "client"
+                and namespace is None
+                and name == TOOL_SEARCH_TOOL_NAME
+            ):
+                item = _tool_search_call_item(call_id, arguments, "client")
+                for event_type, status in (
+                    ("response.output_item.added", "in_progress"),
+                    ("response.output_item.done", "completed"),
+                ):
+                    yield format_sse_event(
+                        event_type,
+                        {
+                            "type": event_type,
+                            "output_index": output_index,
+                            "item": {**item, "status": status},
+                            "sequence_number": stream_state.next_sequence(),
+                        },
+                    )
+                output_items.append(item)
+                output_index += 1
+                next_output_index = output_index
+                continue
             fc_id = generate_id(IDPrefix.FUNCTION_CALL)
             fc_item = {
                 "type": "function_call",
@@ -10154,9 +10579,88 @@ async def stream_responses_api(
         )
         return
 
+    budget_exhausted = bool(
+        last_output
+        and last_output.completion_tokens >= kwargs.get("max_tokens", float("inf"))
+    )
+    if (
+        search_items
+        and not tool_calls
+        and not budget_exhausted
+        and (last_output and last_output.finish_reason != "length")
+    ):
+        continuation.output = output_items
+        continuation.prompt_tokens += last_output.prompt_tokens
+        continuation.completion_tokens += last_output.completion_tokens
+        continuation.cached_tokens += last_output.cached_tokens
+        continuation.first_token_time = first_token_time
+        try:
+            next_kwargs = await _prepare_tool_search_continuation(
+                engine,
+                messages,
+                tool_search_state,
+                kwargs,
+                request.model,
+                kwargs["max_tokens"] - last_output.completion_tokens,
+                continuation.rounds,
+                resolved_model=resolved_model,
+            )
+        except Exception as exc:
+            if isinstance(exc, PrefillMemoryExceededError):
+                error = _prefill_memory_openai_error_body(exc)["error"]
+                failure_error = {
+                    "code": error.get("omlx_code", "prefill_memory_exceeded"),
+                    "message": error["message"],
+                }
+            else:
+                failure_error = {"code": "server_error", "message": str(exc)}
+            yield format_sse_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "response": {
+                        **initial_data,
+                        "status": "failed",
+                        "output": output_items,
+                        "error": failure_error,
+                    },
+                    "sequence_number": stream_state.next_sequence(),
+                },
+            )
+            return
+        stream_state.prefilling = True
+        stream_state.request_id = next_kwargs["_request_id"]
+        next_kwargs.pop("response_format", None)
+        next_stream = stream_responses_api(
+            engine,
+            messages,
+            request,
+            input_messages=input_messages,
+            store_response=store_response,
+            model_load_duration=model_load_duration,
+            resolved_model=resolved_model,
+            response_format=response_format,
+            namespace_aliases=namespace_aliases,
+            stream_state=stream_state,
+            tool_search_state=tool_search_state,
+            _continuation=continuation,
+            **next_kwargs,
+        )
+        try:
+            async for event in next_stream:
+                yield event
+        finally:
+            await _aclose_async_iterator(next_stream)
+        return
+
     # Record metrics
     usage_data = None
     if last_output and last_output.finished:
+        prompt_tokens = continuation.prompt_tokens + last_output.prompt_tokens
+        completion_tokens = (
+            continuation.completion_tokens + last_output.completion_tokens
+        )
+        cached_tokens = continuation.cached_tokens + last_output.cached_tokens
         end_time = time.perf_counter()
         total_duration = end_time - start_time
         ttft = (first_token_time - start_time) if first_token_time else total_duration
@@ -10166,9 +10670,9 @@ async def stream_responses_api(
             gen_duration = end_time - (first_token_time or start_time)
         serving_model = resolved_model or request.model
         get_server_metrics().record_request_complete(
-            prompt_tokens=last_output.prompt_tokens,
-            completion_tokens=last_output.completion_tokens,
-            cached_tokens=last_output.cached_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
             prefill_duration=ttft,
             generation_duration=gen_duration,
             model_id=serving_model,
@@ -10182,19 +10686,27 @@ async def stream_responses_api(
             f"{last_output.completion_tokens} tokens in {total_duration:.2f}s "
             f"({tokens_per_sec:.1f} tok/s)"
         )
+        all_reasoning = "\n\n".join(
+            part.get("text", "")
+            for item in output_items
+            if item["type"] == "reasoning"
+            for part in item.get("summary", [])
+        )
         reasoning_token_count = (
-            len(engine.tokenizer.encode(reasoning_text)) if reasoning_text else 0
+            len(engine.tokenizer.encode(all_reasoning)) if all_reasoning else 0
         )
         usage_data = {
-            "input_tokens": last_output.prompt_tokens,
-            "output_tokens": last_output.completion_tokens,
-            "total_tokens": last_output.prompt_tokens + last_output.completion_tokens,
-            "input_tokens_details": {"cached_tokens": last_output.cached_tokens},
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "input_tokens_details": {"cached_tokens": cached_tokens},
             "output_tokens_details": {"reasoning_tokens": reasoning_token_count},
         }
 
     # 13. Emit the terminal event matching the final response status.
-    truncated = getattr(last_output, "finish_reason", None) == "length"
+    truncated = getattr(last_output, "finish_reason", None) == "length" or bool(
+        search_items and budget_exhausted
+    )
     terminal_event = "response.incomplete" if truncated else "response.completed"
     final_response = {
         "id": response_id,
@@ -10219,6 +10731,16 @@ async def stream_responses_api(
     if request.previous_response_id:
         final_response["previous_response_id"] = request.previous_response_id
 
+    if store_response:
+        _store_response_state(
+            final_response,
+            input_messages=input_messages or [],
+            loaded_tool_specs=(
+                tool_search_state.serialize_loaded_specs()
+                if tool_search_state
+                else None
+            ),
+        )
     seq = stream_state.next_sequence()
     yield format_sse_event(
         terminal_event,
@@ -10228,10 +10750,6 @@ async def stream_responses_api(
             "sequence_number": seq,
         },
     )
-
-    # Store for future previous_response_id usage
-    if store_response:
-        _store_response_state(final_response, input_messages=input_messages or [])
 
 
 @app.get("/v1/responses/{response_id}")
