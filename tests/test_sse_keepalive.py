@@ -182,6 +182,37 @@ async def test_cancelled_response_scope_lets_upstream_cleanup_finish(wrapper):
 
 
 @pytest.mark.asyncio
+async def test_disconnect_abort_resolves_the_active_round_request_id():
+    signal = server._ClientDisconnectSignal()
+    request = SimpleNamespace(scope={server._DISCONNECT_SIGNAL_SCOPE_KEY: signal})
+    aborted = asyncio.Event()
+    current_request_id = "initial-round"
+
+    async def abort(request_id, **_kwargs):
+        assert request_id == "continuation-round"
+        aborted.set()
+
+    engine = SimpleNamespace(supports_request_scoped_abort=True, abort_request=abort)
+
+    async def rounds():
+        nonlocal current_request_id
+        yield "first round"
+        current_request_id = "continuation-round"
+        yield "next round"
+
+    stream = _with_request_disconnect_abort(
+        rounds(), request, engine, lambda: current_request_id
+    )
+    try:
+        assert await anext(stream) == "first round"
+        assert await anext(stream) == "next round"
+        signal.disconnect()
+        await asyncio.wait_for(aborted.wait(), timeout=2)
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_real_uvicorn_socket_disconnect_aborts_only_its_request():
     """Exercise the real Uvicorn/Starlette receive race, not a mocked Request."""
 
