@@ -391,6 +391,17 @@ class TestCodexIntegration:
 
 
 class TestCodexModelCatalog:
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_tool_search_capability_follows_server_metadata(self, enabled):
+        catalog = codex_model_catalog(
+            ctx(
+                model="local-model",
+                models_status_map={"local-model": {"responses_tool_search": enabled}},
+            )
+        )
+        assert catalog["models"][0]["supports_search_tool"] is enabled
+
     def test_preserves_ids_and_per_model_capabilities(self):
         catalog = codex_model_catalog(
             ctx(

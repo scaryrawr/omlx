@@ -214,6 +214,10 @@ class ServerSettings:
     # large resident models). Ticks stop after 5 minutes without requests.
     # 0 disables.
     gpu_keep_warm_interval: float = 0.5
+    # Responses API deferred-tool loading + server-side tool_search for
+    # Codex-style clients. Off until validated end to end; the generated
+    # Codex catalog advertises supports_search_tool only when this is on.
+    responses_tool_search: bool = False
 
     def max_audio_upload_bytes(self) -> int:
         """Configured audio upload limit in bytes. Non-positive sizes raise ValueError."""
@@ -263,6 +267,7 @@ class ServerSettings:
             max_request_body_size=data.get("max_request_body_size", "512MB"),
             max_image_side_length=data.get("max_image_side_length", 2048),
             gpu_keep_warm_interval=float(data.get("gpu_keep_warm_interval", 0.5)),
+            responses_tool_search=bool(data.get("responses_tool_search", False)),
         )
 
 
@@ -1403,6 +1408,8 @@ class GlobalSettings:
             self.server.log_level = args.log_level
         if hasattr(args, "sse_keepalive_mode") and args.sse_keepalive_mode is not None:
             self.server.sse_keepalive_mode = args.sse_keepalive_mode
+        if getattr(args, "responses_tool_search", False):
+            self.server.responses_tool_search = True
         if (
             hasattr(args, "max_audio_upload_size")
             and args.max_audio_upload_size is not None

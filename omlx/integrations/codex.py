@@ -198,7 +198,11 @@ def codex_model_catalog(
                 "supports_reasoning_summary_parameter": False,
                 "support_verbosity": False,
                 "supports_parallel_tool_calls": False,
-                "supports_search_tool": False,
+                # Deferred MCP tool loading (tool_search round trips) works
+                # when the server reports the feature enabled.
+                "supports_search_tool": bool(
+                    ctx.models_status_map.get(model.id, {}).get("responses_tool_search")
+                ),
                 "prefer_websockets": False,
                 "experimental_supported_tools": [],
                 "truncation_policy": {
