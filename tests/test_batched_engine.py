@@ -1439,13 +1439,13 @@ class TestBatchedEngineMoeOffloadWiring:
 
         seen: dict = {}
 
-        class _Abort(Exception):
+        class _AbortError(Exception):
             """Unwinds start() once the call site has been observed."""
 
         def _recorder(model, model_name, fraction, **kwargs):
             seen["kwargs"] = kwargs
             seen["args"] = (model_name, fraction)
-            raise _Abort
+            raise _AbortError
 
         engine = BatchedEngine(
             model_name="test-model",
@@ -1468,9 +1468,9 @@ class TestBatchedEngineMoeOffloadWiring:
                 "omlx.patches.moe_expert_offload.apply_moe_expert_offload", _recorder
             ),
             patch("omlx.engine_core.get_mlx_executor", return_value=None),
+            pytest.raises(_AbortError),
         ):
-            with pytest.raises(_Abort):
-                await engine.start()
+            await engine.start()
 
         assert seen["kwargs"] == {"mtp_resident": expected}
         assert seen["args"] == (
@@ -1499,7 +1499,7 @@ class TestBatchedEngineToolParserRepair:
         from omlx.engine.batched import BatchedEngine
         from omlx.model_settings import ModelSettings
 
-        class _Abort(Exception):
+        class _AbortError(Exception):
             """Unwinds start() right after the model load."""
 
         tokenizer = TokenizerWrapper.__new__(TokenizerWrapper)
@@ -1522,12 +1522,12 @@ class TestBatchedEngineToolParserRepair:
             ),
             patch(
                 "omlx.utils.model_loading.apply_post_load_transforms",
-                side_effect=_Abort,
+                side_effect=_AbortError,
             ),
             patch("omlx.engine_core.get_mlx_executor", return_value=None),
+            pytest.raises(_AbortError),
         ):
-            with pytest.raises(_Abort):
-                await engine.start()
+            await engine.start()
 
         assert engine.tokenizer is tokenizer
         assert tokenizer.tool_parser.__module__ == f"mlx_lm.tool_parsers.{expected}"
