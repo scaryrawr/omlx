@@ -11,6 +11,7 @@ oMLX runs DFlash inside its standard engines. `BatchedEngine` (mlx-lm text model
 | Family | Engine | Speculation |
 |---|---|---|
 | Qwen3.5 / Qwen3.6 / Qwen3.8 (`qwen3_5`, `qwen3_5_moe`) | VLM or text | concurrent rows |
+| Qwen3.8 Flash Next (`qwen4_exp`) | VLM | concurrent rows |
 | Qwen3, Qwen3-MoE (`qwen3`, `qwen3_moe`) | text | single row |
 | Laguna (`laguna`) | text | single row |
 | MiMo V2 (`mimo_v2`, `mimo_v2_flash`) | text | single row |
@@ -22,6 +23,20 @@ oMLX runs DFlash inside its standard engines. `BatchedEngine` (mlx-lm text model
 "Single row" means a request speculates while it decodes alone; a batch of two or more decodes normally, since rows that accept different counts would need a ragged rollback of sliding-window caches. MiMo V2 checkpoints with the omnimodal vision sidecar load on the VLM engine and run without DFlash; other model types also load without DFlash and log a warning. The gate lives in `omlx/utils/model_loading.py` (`dflash_batched_supported`, `dflash_compatibility`).
 
 MiniCPM uses `DSparkDrafter` through the same loader and scheduler, but keeps the native helper's proposal probabilities and full context. It requires an explicit local paired helper and fixed verification through `dflash_verify_mode="dflash"` or an unset mode. Adaptive verification, draft window overrides, SpecPrefill, and grammar constraints are unsupported. An incompatible helper fails the model load rather than silently disabling DSpark.
+
+Qwen3.8 Flash Next uses the vendored Qwen4 runtime, not the Qwen3.5 runtime.
+Its paired DFlash2 checkpoint reads the plain arithmetic mean across the
+hyperstreams of each completed, zero-based layer output, in request order.
+Pending residual writes are applied before averaging; the target's learned
+RMS-normalized, gated mixer is not used for these features. This matches the
+[checkpoint's training capture patch](https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2/blob/main/patches/qwen38-dflash2-capture.patch).
+Each capture has width `hidden_size`. For the 48-layer target with
+`hidden_size=2560`, captures `[5, 15, 25, 35, 45]` form a 12800-wide draft input.
+Native Lightning MTP still reads the separate 10240-wide residual with four
+hyperstreams. DFlash verification uses Qwen4's existing cache transaction and
+PLE rollback, including unequal acceptance counts across rows.
+Prefill captures and scoped ordinary-decode observations do not start a
+speculative transaction. Native MTP can remain disabled when DFlash is enabled.
 
 ## Settings
 
@@ -42,7 +57,7 @@ Removed with the external engine: the dflash-mlx L1/L2 prefix caches (`dflash_in
 1. **Prefill.** The scheduler runs the prompt through the target in chunks and asks for the drafter's target layers (`capture_layer_ids`). The captures seed the request's drafter context. After a prefix-cache hit, the drafter restores the projected context of a recently finished request with the same prefix.
 2. **Draft.** The drafter projects new captures (`fc` + norm), writes them into a per-row context ring, and drafts a block from `[anchor, mask, ..., mask]`. Rows of a batch draft in one forward with per-row RoPE offsets and masks.
 3. **Verify.** Lightning MTP verifies the drafts with one target forward, which also returns the captures for the verified positions. Greedy rows accept by prefix match; sampled rows use the draft distribution for Leviathan acceptance.
-4. **Rollback.** Rejected positions are trimmed from the target caches (KV trim with an undo log for rotating and pooling caches, GDN state replay for Qwen3.5).
+4. **Rollback.** Rejected positions are trimmed from the target caches (KV trim with an undo log for rotating and pooling caches, GDN state replay for Qwen3.5, and Qwen4's QSA, GDN, and PLE rollback).
 5. **Ordinary decode.** When a step decodes normally (for example a batch of single-row targets), the same forward feeds the committed token's captures to the drafter, so speculation can resume without a gap.
 
 ## Code map
@@ -56,6 +71,7 @@ Removed with the external engine: the dflash-mlx L1/L2 prefix caches (`dflash_in
 | `omlx/speculative/dflash/selection.py`, `kernels.py` | Proposal sampling, the DFlash2 candidate selector and its Metal kernels. |
 | `omlx/patches/mlx_lm_mtp/` | Lightning MTP verify, acceptance, rollback and depth controllers; `drafter_target.py` adds captures and rollback to plain-attention targets (Qwen3, Laguna, MiMo V2, Muse Glimmer). |
 | `omlx/patches/mlx_vlm_mtp/*_vlm_runtime.py` | Captures for Qwen3.5, GLM-5.3 and Gemma 4 VLM targets. |
+| `omlx/patches/mlx_vlm_qwen4_exp_compat/vendor/mlx_vlm/models/qwen4_exp/language.py` | Ordered completed-layer stream-mean captures, ordinary-decode observation, and cache transactions for Qwen3.8 Flash Next. |
 | `omlx/scheduler.py` | Prefill capture and seeding (`_dflash_prefill_capture`, `_dflash_seed_prefill`). |
 | `omlx/engine_pool.py` | Gate, drafter load after engine start, memory estimate. |
 
