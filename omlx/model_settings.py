@@ -1926,7 +1926,7 @@ class ModelSettingsManager:
             self._templates = data.get("templates", {}) or {}
             ui_default_depth = isinstance(version, int) and version < 2
             # Migration: strip ttl_seconds from existing template settings
-            for name, template in self._templates.items():
+            for template in self._templates.values():
                 settings = template.get("settings")
                 if settings and "ttl_seconds" in settings:
                     del settings["ttl_seconds"]
