@@ -4815,16 +4815,41 @@ class Qwen4ExpModel(nn.Module):
             ):
                 mx.async_eval(hidden_states, *(write or ()))
             if hidden_sink is not None and index in capture:
+                # DFlash2 was trained on each target layer's output once the
+                # layer finished (residual write included), averaged over the
+                # hyper-connection streams. The mixer below is a different
+                # feature: it RMS-normalizes every stream and weights them with
+                # learned gates before combining. Lightning MTP and the v1
+                # drafters consume that mixed representation, so the plain mean
+                # is opt-in per drafter.
+                mean_capture = bool(
+                    getattr(self, "_omlx_dflash_capture_mean", False)
+                )
                 if write is None:
-                    mixed = self.hyper_connection_mixer(
-                        hidden_states, target_verify=target_verify
-                    )
+                    if mean_capture:
+                        completed = hidden_states
+                    else:
+                        mixed = self.hyper_connection_mixer(
+                            hidden_states, target_verify=target_verify
+                        )
                 else:
-                    mixed, hidden_states = self.hyper_connection_mixer(
-                        hidden_states, target_verify=target_verify, write=write
-                    )
+                    if mean_capture:
+                        completed = _hc_write(hidden_states, *write)
+                    else:
+                        mixed, completed = self.hyper_connection_mixer(
+                            hidden_states, target_verify=target_verify, write=write
+                        )
+                    hidden_states = completed
                     write = None
-                captured[index] = mixed
+                if mean_capture:
+                    completed = completed.reshape(
+                        *completed.shape[:-1],
+                        self.args.hc_count,
+                        self.args.hidden_size,
+                    ).mean(axis=-2)
+                    captured[index] = completed
+                else:
+                    captured[index] = mixed
 
         mixed = None
         if write is not None:

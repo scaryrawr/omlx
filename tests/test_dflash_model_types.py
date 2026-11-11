@@ -41,3 +41,24 @@ def test_unsupported_targets_report_their_model_type(model_type, engine_type):
     assert not supported
     assert f"model_type='{model_type or ''}'" in reason
     assert "MiniCPM-V 4.7" in reason
+
+
+def test_dflash2_attachment_requests_the_hc_mean_capture():
+    """Qwen3.8-Flash-Next-DFlash2 was trained on the target's hc-stream mean;
+    v1/Laguna/Muse drafters keep the mixer representation."""
+    from types import SimpleNamespace
+
+    from omlx.speculative.dflash import attach_drafter, detach_drafter
+
+    language_model = SimpleNamespace(model=SimpleNamespace())
+    drafter = SimpleNamespace(kind="dflash2", depth=3, clear=lambda: None)
+    attach_drafter(language_model, drafter)
+    assert language_model._omlx_dflash_capture_mean is True
+    assert language_model.model._omlx_dflash_capture_mean is True
+    detach_drafter(language_model)
+    assert language_model.model._omlx_dflash_capture_mean is False
+
+    language_model = SimpleNamespace(model=SimpleNamespace())
+    drafter = SimpleNamespace(kind="dflash", depth=3, clear=lambda: None)
+    attach_drafter(language_model, drafter)
+    assert language_model._omlx_dflash_capture_mean is False
