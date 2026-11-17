@@ -78,11 +78,24 @@ def codex_model_catalog(
         models_from_status = []
         for model_id in model_ids:
             info = ctx.models_status_map.get(model_id, {})
-            model = known_models.get(model_id) or IntegrationModel(id=model_id)
+            model = known_models.get(model_id)
+            if model is None:
+                model = (
+                    IntegrationModel(
+                        id=model_id,
+                        context_window=ctx.context_window,
+                        model_type=ctx.model_type,
+                        reasoning=ctx.reasoning,
+                        reasoning_effort_options=ctx.reasoning_effort_options,
+                        reasoning_effort_default=ctx.reasoning_effort_default,
+                    )
+                    if model_id == ctx.model
+                    else IntegrationModel(id=model_id)
+                )
             models_from_status.append(
                 replace(
                     model,
-                    context_window=info.get("max_context_window", model.context_window),
+                    context_window=info.get("max_context_window") or model.context_window,
                     model_type=info.get("model_type", model.model_type),
                     reasoning=info.get("reasoning", model.reasoning),
                     reasoning_effort_options=tuple(
@@ -190,6 +203,8 @@ def codex_model_catalog(
                 "base_instructions": instructions,
                 "shell_type": "shell_command",
                 "context_window": context_window,
+                "max_context_window": context_window,
+                "auto_compact_token_limit": context_window * 9 // 10,
                 "input_modalities": (
                     ["text", "image"] if model.model_type == "vlm" else ["text"]
                 ),
@@ -457,8 +472,8 @@ def write_codex_config(
     in_any_section = False
     in_omlx_section = False
 
-    # Model-specific limits and capabilities belong in the catalog so switching
-    # models does not retain the launch model's context or thinking settings.
+    # Context and capabilities belong in the catalog; preserve user compaction
+    # limits, which may reserve extra headroom for local memory constraints.
     top_level_overrides = {
         "model": json.dumps(ctx.model or "select-a-model", ensure_ascii=False),
         "model_provider": '"omlx"',
@@ -466,7 +481,6 @@ def write_codex_config(
     }
     managed_keys = {
         "model_context_window",
-        "model_auto_compact_token_limit",
         "model_reasoning_effort",
         "model_reasoning_summary",
         "model_supports_reasoning_summaries",
