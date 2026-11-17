@@ -3188,6 +3188,7 @@ async def update_model_settings(
             detail="vlm_mtp_enabled and KV cache compression cannot both be enabled.",
         )
     prev_engine_type = entry.engine_type  # Track for requires_reload check
+    previous_settings = ModelSettings.from_dict(current_settings.to_dict())
     prev_load_signature = engine_pool._engine_runtime_signature(
         model_id, current_settings
     )
@@ -3838,9 +3839,19 @@ async def update_model_settings(
     current_load_signature = engine_pool._engine_runtime_signature(
         model_id, current_settings
     )
+    persisted_splash_context_changed = "max_context_window" in sent and (
+        _persisted_splash_context_changed(
+            engine_pool,
+            entry,
+            model_id,
+            previous_settings,
+            current_settings,
+        )
+    )
     if entry.load_failed and (
         prev_engine_type != entry.engine_type
         or prev_load_signature != current_load_signature
+        or persisted_splash_context_changed
     ):
         engine_pool._clear_load_failure(entry)
         logger.info(
@@ -3856,6 +3867,7 @@ async def update_model_settings(
         # catches Qwen ANE controls (and future signature additions) without
         # requiring a second hand-maintained field list here.
         or prev_load_signature != current_load_signature
+        or persisted_splash_context_changed
         # Only an unload releases a SpecPrefill draft that is no longer used.
         or (
             prev_specprefill_draft
@@ -3876,29 +3888,12 @@ async def update_model_settings(
         # an already-loaded engine has no effect until reload.
         or "trust_remote_code" in sent
     )
-    auto_unloaded = False
-    auto_reloaded = False
-    reload_deferred = False
-    if requires_reload:
-        was_pinned = entry.is_pinned
-        try:
-            logger.info(
-                f"Settings changed for loaded model {model_id}, auto-unloading."
-            )
-            # Busy engines (requests, benchmark runs) unload after they drain.
-            auto_unloaded = await engine_pool.request_unload(
-                model_id, reason="settings changed", abort_active=False
-            )
-            reload_deferred = not auto_unloaded
-        except Exception as e:
-            logger.warning(f"Auto-unload failed for {model_id}: {e}")
-        if auto_unloaded and was_pinned:
-            try:
-                await engine_pool._load_engine(model_id)
-                auto_reloaded = True
-                logger.info(f"Auto-reloaded pinned model {model_id} with new settings.")
-            except Exception as e:
-                logger.warning(f"Auto-reload failed for pinned model {model_id}: {e}")
+    # Busy engines (requests, benchmark runs) unload after they drain.
+    auto_unloaded, auto_reloaded, reload_deferred = (
+        await _reload_after_persisted_settings_change(
+            engine_pool, entry, model_id, requires_reload
+        )
+    )
 
     return {
         "success": True,
@@ -4096,6 +4091,76 @@ def _validate_model_settings(entry, settings):
             raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def _persisted_splash_context_changed(
+    engine_pool,
+    entry,
+    model_id: str,
+    previous: ModelSettings,
+    current: ModelSettings,
+) -> bool:
+    return (
+        previous.max_context_window != current.max_context_window
+        and (
+            isinstance(entry.engine, SplashEngine)
+            or engine_pool.external_engine_id(model_id, current) == "splash"
+        )
+    )
+
+
+async def _reload_after_persisted_settings_change(
+    engine_pool,
+    entry,
+    model_id: str,
+    requires_reload: bool,
+) -> tuple[bool, bool, bool]:
+    if not requires_reload:
+        return False, False, False
+
+    auto_unloaded = False
+    auto_reloaded = False
+    reload_deferred = False
+    was_pinned = entry.is_pinned
+    try:
+        logger.info(f"Settings changed for loaded model {model_id}, auto-unloading.")
+        auto_unloaded = await engine_pool.request_unload(
+            model_id, reason="settings changed", abort_active=False
+        )
+        reload_deferred = not auto_unloaded
+    except Exception as e:
+        logger.warning(f"Auto-unload failed for {model_id}: {e}")
+    if auto_unloaded and was_pinned:
+        try:
+            await engine_pool._load_engine(model_id)
+            auto_reloaded = True
+            logger.info(f"Auto-reloaded pinned model {model_id} with new settings.")
+        except Exception as e:
+            logger.warning(f"Auto-reload failed for pinned model {model_id}: {e}")
+    return auto_unloaded, auto_reloaded, reload_deferred
+
+
+async def _reconcile_persisted_splash_context(
+    engine_pool,
+    entry,
+    model_id: str,
+    previous: ModelSettings,
+    current: ModelSettings,
+) -> None:
+    changed = _persisted_splash_context_changed(
+        engine_pool, entry, model_id, previous, current
+    )
+    if not changed:
+        return
+    if entry.load_failed:
+        engine_pool._clear_load_failure(entry)
+        logger.info(
+            "Cleared cached load failure for %s after load-time settings changed.",
+            model_id,
+        )
+    await _reload_after_persisted_settings_change(
+        engine_pool, entry, model_id, entry.engine is not None
+    )
+
+
 @router.get("/api/models/{model_id}/profiles")
 async def list_model_profiles(
     model_id: str,
@@ -4245,6 +4310,7 @@ async def apply_model_profile(
 ):
     mgr = _require_settings_manager()
     entry = _require_model(model_id)
+    previous = mgr.get_settings(model_id)
     stored = mgr.get_profile(model_id, name)
     if stored is None:
         raise HTTPException(status_code=404, detail=f"Profile not found: {name}")
@@ -4272,6 +4338,9 @@ async def apply_model_profile(
     if is_diffusion_model:
         _sanitize_diffusion_model_settings(applied)
         mgr.set_settings(model_id, applied)
+    await _reconcile_persisted_splash_context(
+        _get_engine_pool(), entry, model_id, previous, applied
+    )
     return {"model_id": model_id, "settings": applied.to_dict()}
 
 
@@ -4283,6 +4352,7 @@ async def apply_model_template(
 ):
     mgr = _require_settings_manager()
     entry = _require_model(model_id)
+    previous = mgr.get_settings(model_id)
 
     def sanitizer(settings):
         if _entry_is_diffusion_model(entry):
@@ -4295,6 +4365,9 @@ async def apply_model_template(
         raise HTTPException(status_code=400, detail=str(error)) from error
     if applied is None:
         raise HTTPException(status_code=404, detail=f"Template not found: {name}")
+    await _reconcile_persisted_splash_context(
+        _get_engine_pool(), entry, model_id, previous, applied
+    )
     return {"model_id": model_id, "settings": applied.to_dict()}
 
 
