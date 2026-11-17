@@ -663,18 +663,23 @@ test('Newest model-list request owns visible settings and loading state', async 
 
     const older = state.loadModels();
     const newer = state.loadModels();
+    let olderSettled = false;
+    older.then(() => { olderSettled = true; });
     pending[0]({
         ok: true,
         json: async () => ({models: [{id: 'model-a', settings: {max_context_window: null}}]}),
     });
-    await older;
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(olderSettled, false);
     assert.equal(state.loadingModels, true);
 
     pending[1]({
         ok: true,
         json: async () => ({models: [{id: 'model-a', settings: {max_context_window: 49152}}]}),
     });
-    await newer;
+    await Promise.all([older, newer]);
+    assert.equal(olderSettled, true);
     assert.equal(state.models[0].settings.max_context_window, 49152);
     assert.equal(state.loadingModels, false);
 
