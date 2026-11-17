@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 import omlx.server  # noqa: F401 - ensure server module is imported first
 from omlx.admin import routes as admin_routes
+from omlx.engine.splash import SplashEngine
 from omlx.engine_pool import EngineEntry, EnginePool
 from omlx.model_settings import ModelSettings
 
@@ -374,6 +375,56 @@ def _idle_engine() -> MagicMock:
     engine.scheduler = None
     engine._engine = None
     return engine
+
+
+def _idle_splash_engine() -> MagicMock:
+    engine = MagicMock(spec=SplashEngine)
+    engine.has_active_requests.return_value = False
+    engine.scheduler = None
+    engine._engine = None
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_changed_persisted_splash_context_reloads_loaded_engine():
+    pool, entry = _failed_pool()
+    entry.engine = _idle_splash_engine()
+    entry.load_failed = False
+    pool._unload_engine = AsyncMock()
+
+    result = await _update_settings(
+        pool,
+        ModelSettings(external_engine="splash", max_context_window=32768),
+        admin_routes.ModelSettingsRequest(max_context_window=49152),
+    )
+
+    assert result["requires_reload"] is True
+    assert result["auto_unloaded"] is True
+    assert result["reload_deferred"] is False
+    pool._unload_engine.assert_awaited_once_with("ling")
+
+
+@pytest.mark.asyncio
+async def test_unchanged_or_omitted_splash_context_keeps_loaded_engine():
+    pool, entry = _failed_pool()
+    entry.engine = _idle_splash_engine()
+    entry.load_failed = False
+    pool._unload_engine = AsyncMock()
+
+    unchanged = await _update_settings(
+        pool,
+        ModelSettings(external_engine="splash", max_context_window=32768),
+        admin_routes.ModelSettingsRequest(max_context_window=32768),
+    )
+    omitted = await _update_settings(
+        pool,
+        ModelSettings(external_engine="splash", max_context_window=32768),
+        admin_routes.ModelSettingsRequest(temperature=0.5),
+    )
+
+    assert unchanged["requires_reload"] is False
+    assert omitted["requires_reload"] is False
+    pool._unload_engine.assert_not_awaited()
 
 
 @pytest.mark.asyncio

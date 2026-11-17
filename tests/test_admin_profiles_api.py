@@ -6,6 +6,7 @@ import json
 import re
 import zlib
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -42,6 +43,8 @@ class _FakePool:
     def __init__(self):
         self._entries = {"model-a": _FakeEntry("model-a")}
         self.recommended_sampling = {}
+        self.request_unload = AsyncMock(return_value=True)
+        self._load_engine = AsyncMock()
 
     def get_entry(self, model_id):
         return self._entries.get(model_id)
@@ -67,6 +70,9 @@ class _FakePool:
 
     def _engine_runtime_signature(self, model_id, runtime_settings=None):
         return ()
+
+    def external_engine_id(self, model_id, model_settings):
+        return model_settings.external_engine
 
     def splash_target(self, model_id, model_settings):
         return None, ""
@@ -477,6 +483,96 @@ class TestProfileRoutes:
         r = c.post("/admin/api/models/model-a/profiles/coding/apply")
         assert r.status_code == 200
         assert r.json()["settings"]["active_profile_name"] == "coding"
+
+    @pytest.mark.parametrize("kind", ["profile", "template"])
+    def test_persisted_context_apply_unloads_loaded_splash(self, client, kind):
+        c, mgr = client
+        pool = admin_routes._get_engine_pool()
+        entry = pool.get_entry("model-a")
+        entry.engine = MagicMock()
+        mgr.set_settings(
+            "model-a",
+            ModelSettings(external_engine="splash", max_context_window=32768),
+        )
+        if kind == "profile":
+            mgr.save_profile(
+                "model-a",
+                "large",
+                "Large",
+                None,
+                {"max_context_window": 49152},
+            )
+            path = "/admin/api/models/model-a/profiles/large/apply"
+        else:
+            mgr.save_template(
+                "large",
+                "Large",
+                None,
+                {"max_context_window": 49152},
+            )
+            path = "/admin/api/models/model-a/profile-templates/large/apply"
+
+        response = c.post(path)
+
+        assert response.status_code == 200, response.text
+        assert mgr.get_settings("model-a").max_context_window == 49152
+        pool.request_unload.assert_awaited_once_with(
+            "model-a", reason="settings changed", abort_active=False
+        )
+        pool._load_engine.assert_not_awaited()
+
+    def test_persisted_context_apply_defers_busy_splash_unload(self, client):
+        c, mgr = client
+        pool = admin_routes._get_engine_pool()
+        pool.get_entry("model-a").engine = MagicMock()
+        pool.request_unload.return_value = False
+        mgr.set_settings(
+            "model-a",
+            ModelSettings(external_engine="splash", max_context_window=32768),
+        )
+        mgr.save_profile(
+            "model-a",
+            "large",
+            "Large",
+            None,
+            {"max_context_window": 49152},
+        )
+
+        response = c.post("/admin/api/models/model-a/profiles/large/apply")
+
+        assert response.status_code == 200, response.text
+        assert mgr.get_settings("model-a").max_context_window == 49152
+        assert pool.get_entry("model-a").engine is not None
+        pool.request_unload.assert_awaited_once_with(
+            "model-a", reason="settings changed", abort_active=False
+        )
+        pool._load_engine.assert_not_awaited()
+
+    def test_transient_profile_context_does_not_persist_or_unload(self, client):
+        _, mgr = client
+        pool = admin_routes._get_engine_pool()
+        pool.get_entry("model-a").engine = MagicMock()
+        mgr.set_settings(
+            "model-a",
+            ModelSettings(external_engine="splash", max_context_window=32768),
+        )
+        mgr.save_profile(
+            "model-a",
+            "request-only",
+            "Request only",
+            None,
+            {"max_context_window": 49152},
+            expose_as_model=True,
+        )
+
+        model_id, runtime = mgr.get_exposed_profile_runtime_settings_for_request(
+            "model-a:request-only"
+        )
+
+        assert model_id == "model-a"
+        assert runtime.max_context_window == 49152
+        assert mgr.get_settings("model-a").max_context_window == 32768
+        pool.request_unload.assert_not_awaited()
 
     def test_apply_profile_resolves_vlm_mtp_processor_conflict(self, client):
         c, mgr = client
