@@ -436,6 +436,54 @@ class TestCodexModelCatalog:
         assert all(model["base_instructions"] for model in models)
         assert all(not model["prefer_websockets"] for model in models)
 
+    def test_context_and_compaction_limits_follow_each_served_model(self):
+        catalog = codex_model_catalog(
+            ctx(
+                model="flash-next",
+                context_window=262144,
+                models=(
+                    IntegrationModel("flash-next", 262144, "llm"),
+                    IntegrationModel("small", 8192, "llm"),
+                ),
+                models_status_map={
+                    "flash-next": {
+                        "model_context_length": 262144,
+                        "max_context_window": 204800,
+                    },
+                },
+            ),
+            ["flash-next", "small"],
+        )
+
+        assert [
+            (
+                model["slug"],
+                model["context_window"],
+                model["max_context_window"],
+                model["auto_compact_token_limit"],
+            )
+            for model in catalog["models"]
+        ] == [
+            ("flash-next", 204800, 204800, 184320),
+            ("small", 8192, 8192, 7372),
+        ]
+
+    @pytest.mark.parametrize("status", [{}, {"max_context_window": None}])
+    def test_selected_model_context_survives_catalog_reconstruction(self, status):
+        catalog = codex_model_catalog(
+            ctx(
+                model="flash-next",
+                context_window=204800,
+                models_status_map={"flash-next": status},
+            ),
+            ["flash-next", "unknown"],
+        )
+
+        assert [model["context_window"] for model in catalog["models"]] == [
+            204800,
+            32768,
+        ]
+
     @pytest.mark.parametrize("listed", [True, False])
     @pytest.mark.parametrize("reasoning", [True, False, None])
     def test_models_without_native_efforts_advertise_compatibility_levels(
@@ -662,7 +710,6 @@ class TestCodexConfigWriter:
         config_path = tmp_path / "config.toml"
         config_path.write_text(
             "model_context_window = 999999\n"
-            "model_auto_compact_token_limit = 900000\n"
             'model_reasoning_effort = "high"\n'
             'model_reasoning_summary = "auto"\n'
             "model_supports_reasoning_summaries = true\n"
@@ -690,6 +737,39 @@ class TestCodexConfigWriter:
         assert models[0]["context_window"] == 8192
         assert config["model_providers"]["omlx"]["wire_api"] == "responses"
         assert config["model_providers"]["omlx"]["supports_websockets"] is False
+
+    def test_preserves_user_compaction_settings_across_reconfiguration(self, tmp_path):
+        config_path = tmp_path / "config.toml"
+        compaction_settings = (
+            "model_auto_compact_token_limit = 200000 # user safety margin\n"
+            "model_post_turn_compact_threshold_percent = 80\n"
+        )
+        config_path.write_text(
+            compaction_settings + '[model_providers.other]\nname = "Other"\n'
+        )
+
+        for model, context_window in (("first", 262144), ("second", 204800)):
+            write_codex_config(
+                config_path,
+                ctx(
+                    model=model,
+                    models=(IntegrationModel(model, context_window, "llm"),),
+                ),
+            )
+
+            content = config_path.read_text()
+            config = tomllib.loads(content)
+            assert compaction_settings in content
+            assert config["model_auto_compact_token_limit"] == 200000
+            assert config["model_post_turn_compact_threshold_percent"] == 80
+            assert config["model_providers"]["other"]["name"] == "Other"
+            catalog = json.loads(Path(config["model_catalog_json"]).read_text())
+            assert catalog["models"][0]["context_window"] == context_window
+            assert catalog["models"][0]["max_context_window"] == context_window
+            assert (
+                catalog["models"][0]["auto_compact_token_limit"]
+                == context_window * 9 // 10
+            )
 
     def test_backup_failure_does_not_overwrite_config(self, tmp_path):
         config_path = tmp_path / "config.toml"
