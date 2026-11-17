@@ -369,6 +369,17 @@ values, and existing thinking defaults remain unchanged. This also lets Codex
 Desktop's low-effort background title generator prefer the launch-default model
 instead of loading another checkpoint solely for its effort metadata.
 
+Codex App configuration rewrites preserve user-set
+`model_auto_compact_token_limit` and `model_post_turn_compact_threshold_percent`
+in `config.toml`, including on subsequent launches. Set these to compact earlier
+if local memory constraints require extra headroom. These are global Codex
+settings, not per-model limits. Each catalog entry records the server's effective
+context window as both its context window and override ceiling, with an explicit
+auto-compaction threshold of 90% of that window (Codex's default). A lower
+user-set compaction limit can trigger earlier compaction. Relaunch Codex after
+changing server context limits; already-running sessions can retain older model
+metadata.
+
 Deferred tool loading is opt-in. Start the server with `--responses-tool-search`
 (or set `server.responses_tool_search` to `true` in `settings.json`), then relaunch
 Codex through oMLX to refresh its `supports_search_tool` catalog capability.
