@@ -254,6 +254,7 @@
             // Models
             models: [],
             loadingModels: false,
+            _modelsLoadSeq: 0,
             reloading: false,
             // Sort state persists across refreshes/restarts via localStorage.
             sortBy: localStorage.getItem('omlx_models_sort_by') || MODELS_SORT_DEFAULT.by,
@@ -1614,19 +1615,29 @@
             },
 
             async loadModels() {
+                const loadSeq = ++this._modelsLoadSeq;
                 this.loadingModels = true;
                 try {
                     const response = await fetch('/admin/api/models');
+
+                    if (loadSeq !== this._modelsLoadSeq) return;
                     if (response.ok) {
                         const data = await response.json();
-                        this.models = data.models || [];
+
+                        if (loadSeq === this._modelsLoadSeq) {
+                            this.models = data.models || [];
+                        }
                     } else if (response.status === 401) {
                         window.location.href = '/admin';
                     }
                 } catch (err) {
-                    console.error('Failed to load models:', err);
+                    if (loadSeq === this._modelsLoadSeq) {
+                        console.error('Failed to load models:', err);
+                    }
                 } finally {
-                    this.loadingModels = false;
+                    if (loadSeq === this._modelsLoadSeq) {
+                        this.loadingModels = false;
+                    }
                 }
             },
 

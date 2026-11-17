@@ -3077,6 +3077,7 @@ async def update_model_settings(
             detail="vlm_mtp_enabled and KV cache compression cannot both be enabled.",
         )
     prev_engine_type = entry.engine_type  # Track for requires_reload check
+    prev_max_context_window = current_settings.max_context_window
     prev_load_signature = engine_pool._engine_runtime_signature(
         model_id, current_settings
     )
@@ -3706,9 +3707,18 @@ async def update_model_settings(
     current_load_signature = engine_pool._engine_runtime_signature(
         model_id, current_settings
     )
+    persisted_splash_context_changed = (
+        "max_context_window" in sent
+        and prev_max_context_window != current_settings.max_context_window
+        and (
+            isinstance(entry.engine, SplashEngine)
+            or engine_pool.external_engine_id(model_id, current_settings) == "splash"
+        )
+    )
     if entry.load_failed and (
         prev_engine_type != entry.engine_type
         or prev_load_signature != current_load_signature
+        or persisted_splash_context_changed
     ):
         engine_pool._clear_load_failure(entry)
         logger.info(
@@ -3724,6 +3734,7 @@ async def update_model_settings(
         # catches Qwen ANE controls (and future signature additions) without
         # requiring a second hand-maintained field list here.
         or prev_load_signature != current_load_signature
+        or persisted_splash_context_changed
         or "index_cache_freq" in sent
         or "dflash_enabled" in sent
         or "dflash_draft_model" in sent
