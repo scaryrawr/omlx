@@ -654,6 +654,50 @@ function setup(fetch) {
     return state;
 }
 
+test('Newest model-list request owns visible settings and loading state', async () => {
+    const pending = [];
+    const state = setup((url) => {
+        assert.equal(url, '/admin/api/models');
+        return new Promise(resolve => pending.push(resolve));
+    });
+
+    const older = state.loadModels();
+    const newer = state.loadModels();
+    let olderSettled = false;
+    older.then(() => { olderSettled = true; });
+    pending[0]({
+        ok: true,
+        json: async () => ({models: [{id: 'model-a', settings: {max_context_window: null}}]}),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(olderSettled, false);
+    assert.equal(state.loadingModels, true);
+
+    pending[1]({
+        ok: true,
+        json: async () => ({models: [{id: 'model-a', settings: {max_context_window: 49152}}]}),
+    });
+    await Promise.all([older, newer]);
+    assert.equal(olderSettled, true);
+    assert.equal(state.models[0].settings.max_context_window, 49152);
+    assert.equal(state.loadingModels, false);
+
+    const oldest = state.loadModels();
+    const latest = state.loadModels();
+    pending[2]({
+        ok: true,
+        json: async () => ({models: [{id: 'model-a', settings: {max_context_window: 65536}}]}),
+    });
+    pending[3]({
+        ok: true,
+        json: async () => ({models: [{id: 'model-a', settings: {max_context_window: 32768}}]}),
+    });
+    await latest;
+    await oldest;
+    assert.equal(state.models[0].settings.max_context_window, 32768);
+});
+
 test('MiniCPM uses fixed DSpark defaults without changing other families', async () => {
     for (const [family, mode] of [['minicpmv4_7', 'dflash'], ['qwen3_5', 'adaptive']]) {
         let payload;
