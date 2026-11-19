@@ -26,7 +26,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from transformers.utils.chat_template_utils import render_jinja_template
 
@@ -44,6 +44,9 @@ from .model_classification import (
     is_helper_config_model_type,
 )
 from .utils.safetensors_shards import select_safetensors_weight_files
+
+if TYPE_CHECKING:
+    from .lora_adapter import AdapterBinding
 
 logger = logging.getLogger(__name__)
 
@@ -488,6 +491,7 @@ class DiscoveredModel:
     is_helper: bool = False  # Speculative-decoding drafter (dFlash/Assistant/MTP)
     model_format: str | None = None  # "gguf": served by an external engine only
     source_path: str | None = None  # The GGUF file a generated folder links to
+    adapter: "AdapterBinding | None" = None  # LoRA adapter served over model_path
 
 
 @dataclass(frozen=True)
@@ -2595,7 +2599,9 @@ def _owner_folder(path: Path, model_dirs: list[Path]) -> str | None:
 
 
 def discover_models(
-    model_dir: Path, gguf_root: Path | None = None
+    model_dir: Path,
+    gguf_root: Path | None = None,
+    adapter_dirs: list[Path] | None = None,
 ) -> dict[str, DiscoveredModel]:
     """
     Scan model directory with two-level discovery.
@@ -2625,6 +2631,7 @@ def discover_models(
     Args:
         model_dir: Path to directory containing model subdirectories
         gguf_root: Where GGUF model folders are generated; None skips GGUFs
+        adapter_dirs: Optional collector for adapter directories
 
     Returns:
         Dictionary mapping model_id to DiscoveredModel
@@ -2645,10 +2652,9 @@ def discover_models(
             continue
 
         if _is_adapter_dir(subdir):
-            logger.info(
-                f"Skipping LoRA adapter: {subdir.name} "
-                "(oMLX does not support LoRA/PEFT adapters)"
-            )
+            logger.debug("Found adapter directory: %s", subdir)
+            if adapter_dirs is not None:
+                adapter_dirs.append(subdir)
         elif _register_gguf_folder(models, subdir, gguf_root):
             pass
         elif _is_model_dir(subdir):
@@ -2690,13 +2696,12 @@ def discover_models(
                 ) or child.name.startswith("."):
                     continue
                 if _is_adapter_dir(child):
-                    logger.info(
-                        f"Skipping LoRA adapter: {child.name} "
-                        "(oMLX does not support LoRA/PEFT adapters)"
-                    )
-                elif _register_gguf_folder(models, child, gguf_root):
-                    has_children = True
-                elif _skip_splash_package(child):
+                    logger.debug("Found adapter directory: %s", child)
+                    if adapter_dirs is not None:
+                        adapter_dirs.append(child)
+                elif _register_gguf_folder(
+                    models, child, gguf_root
+                ) or _skip_splash_package(child):
                     has_children = True
                 elif _is_model_dir(child):
                     has_children = True
@@ -2720,7 +2725,9 @@ def discover_models(
 
 
 def discover_models_from_dirs(
-    model_dirs: list[Path], gguf_root: Path | None = None
+    model_dirs: list[Path],
+    gguf_root: Path | None = None,
+    adapter_dirs: list[Path] | None = None,
 ) -> dict[str, DiscoveredModel]:
     """
     Scan multiple model directories and merge results.
@@ -2730,6 +2737,8 @@ def discover_models_from_dirs(
 
     Args:
         model_dirs: List of paths to directories containing model subdirectories
+        gguf_root: Where GGUF model folders are generated; None skips GGUFs
+        adapter_dirs: Optional collector for adapter directories
 
     Returns:
         Dictionary mapping model_id to DiscoveredModel
@@ -2743,7 +2752,7 @@ def discover_models_from_dirs(
             continue
 
         try:
-            discovered = discover_models(model_dir, gguf_root)
+            discovered = discover_models(model_dir, gguf_root, adapter_dirs)
         except ValueError as e:
             logger.warning(f"Skipping directory {model_dir}: {e}")
             continue
