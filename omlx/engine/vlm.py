@@ -37,7 +37,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import numpy as np
@@ -108,6 +108,9 @@ from .lfm3_realtime import LFM3VoiceBackend
 from .lfm3_speech import SPEECH_MODEL_TYPES, LFM3Speech
 from .qwen3_omni_realtime import Qwen3OmniVoiceBackend
 from .realtime_voice import RealtimeVoiceError, RealtimeVoiceSession
+
+if TYPE_CHECKING:
+    from ..lora_adapter import AdapterBinding
 
 logger = logging.getLogger(__name__)
 
@@ -1876,6 +1879,8 @@ class VLMBatchedEngine(BaseEngine):
         enable_thinking: bool | None = None,
         model_settings: Any | None = None,
         prefill_eviction_callback: Any | None = None,
+        *,
+        lora: "AdapterBinding | None" = None,
     ):
         self._model_name = model_name
         self._trust_remote_code = trust_remote_code
@@ -1884,6 +1889,7 @@ class VLMBatchedEngine(BaseEngine):
         self._enable_thinking = enable_thinking
         self._model_settings = model_settings
         self._prefill_eviction_callback = prefill_eviction_callback
+        self._lora = lora
 
         self._vlm_model = None
         self._processor = None
@@ -2296,9 +2302,22 @@ class VLMBatchedEngine(BaseEngine):
                     return loaded
 
         loop = asyncio.get_running_loop()
-        self._vlm_model, self._processor = await loop.run_in_executor(
+        model, processor = await loop.run_in_executor(
             get_mlx_executor(), _load_vlm_sync
         )
+        if self._lora is not None:
+            from ..lora_adapter import attach_lora
+
+            wrapped = await loop.run_in_executor(
+                get_mlx_executor(), attach_lora, model, self._lora
+            )
+            logger.info(
+                "Applied LoRA adapter %s to %s (%d modules)",
+                self._lora.source.public_id,
+                self._lora.base.model_id,
+                wrapped,
+            )
+        self._vlm_model, self._processor = model, processor
 
         from ..models.vlm import restore_bonsai_quantized_modules
 
@@ -2439,7 +2458,7 @@ class VLMBatchedEngine(BaseEngine):
         # After the fp16 recast so the adapter takes the activation dtype, and
         # before the fusions and packers that replace the projections.
         lora_path = getattr(self._model_settings, "lora_adapter", None)
-        if lora_path:
+        if lora_path and self._lora is None:
             wrapped = await loop.run_in_executor(
                 get_mlx_executor(), apply_adapter, self._vlm_model, lora_path
             )
@@ -2770,7 +2789,11 @@ class VLMBatchedEngine(BaseEngine):
         await self._engine.engine.start()
 
         scheduler = self._engine.engine.scheduler
-        stage_adapter = stage_adapter_for(self.model_type, "vlm", self._model_name)
+        stage_adapter = (
+            stage_adapter_for(self.model_type, "vlm", self._model_name)
+            if self._lora is None
+            else None
+        )
         if stage_adapter is not None:
             self._prefill_helper = PrefillHelperManager(
                 model_path=self._model_name,

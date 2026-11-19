@@ -64,6 +64,8 @@ def _saved_settings(model_id: str) -> Any:
 
 
 def _adapter(entry: Any) -> Any:
+    if getattr(entry, "adapter", None) is not None:
+        return None
     return adapter_for_model(
         getattr(entry, "config_model_type", None),
         getattr(entry, "engine_type", None),
@@ -86,6 +88,8 @@ def prepare_unloaded(entry: Any, settings: Any) -> None:
 
 def helper_status(entry: Any) -> dict | None:
     """The loaded model's helper, else the copy made before it loads."""
+    if getattr(entry, "adapter", None) is not None:
+        return None
     manager = getattr(entry.engine, "prefill_helper", None)
     if manager is not None:
         return manager.status()
@@ -279,6 +283,10 @@ async def model_action(model_id: str, action: str) -> dict:
     if action not in ("check", "copy", "retry", "stop"):
         raise HTTPException(status_code=404, detail=f"Unknown action: {action}")
     entry = _entry(model_id)
+    if getattr(entry, "adapter", None) is not None:
+        raise HTTPException(
+            status_code=400, detail="LoRA adapters do not support remote prefill."
+        )
     manager = getattr(entry.engine, "prefill_helper", None)
     if manager is not None:
         if action != "check":

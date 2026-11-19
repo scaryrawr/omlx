@@ -20,6 +20,43 @@ from omlx.model_settings import (
 )
 
 
+def test_adapter_base_overrides_round_trip_and_clear(tmp_path):
+    manager = ModelSettingsManager(tmp_path)
+    manager.set_adapter_base("pi", "base")
+    copy = manager.get_adapter_bases()
+    copy.clear()
+    assert manager.get_adapter_bases() == {"pi": "base"}
+    assert json.loads((tmp_path / "adapter_bases.json").read_text()) == {
+        "version": 1,
+        "adapter_bases": {"pi": "base"},
+    }
+    assert not manager.has_settings("pi")
+
+    reopened = ModelSettingsManager(tmp_path)
+    assert reopened.get_adapter_bases() == {"pi": "base"}
+    reopened.set_adapter_base("pi", None)
+    assert ModelSettingsManager(tmp_path).get_adapter_bases() == {}
+
+
+def test_delete_settings_preserves_overrides_pointing_at_deleted_base(tmp_path):
+    manager = ModelSettingsManager(tmp_path)
+    manager.set_adapter_base("pi", "base")
+    manager.set_adapter_base("hermes", "pi")
+
+    assert not manager.delete_settings("base")
+    assert manager.get_adapter_bases() == {"pi": "base", "hermes": "pi"}
+    assert manager.delete_settings("pi")
+    assert not manager.delete_settings("pi")
+    assert ModelSettingsManager(tmp_path).get_adapter_bases() == {"hermes": "pi"}
+
+
+def test_unreadable_adapter_bases_file_starts_empty(tmp_path, caplog):
+    (tmp_path / "adapter_bases.json").write_text("{")
+
+    assert ModelSettingsManager(tmp_path).get_adapter_bases() == {}
+    assert "Failed to load adapter bases file" in caplog.text
+
+
 class TestModelSettings:
     """Tests for ModelSettings dataclass."""
 

@@ -119,6 +119,12 @@ def test_local_pool_inventory_keeps_vlms_for_cluster_compatibility():
                         "estimated_size": 2,
                     },
                     {
+                        "id": "tuned",
+                        "model_path": "/models/m3",
+                        "model_type": "vlm",
+                        "adapter": {"base_model_id": "m3"},
+                    },
+                    {
                         "id": "Q-UD-Q4_K_M",
                         "model_path": "/base/gguf/Q-UD-Q4_K_M-0123",
                         "model_type": "vlm",

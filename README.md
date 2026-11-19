@@ -250,6 +250,20 @@ Configure sampling parameters, chat template kwargs, TTL, model alias, model typ
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX Chat Template Kwargs" width="480">
 </p>
 
+### LoRA adapters
+
+Download a Hugging Face PEFT LoRA adapter such as [harness-hub/LFM3-1.7B-pi](https://huggingface.co/harness-hub/LFM3-1.7B-pi), or place `adapter_config.json` and `adapter_model.safetensors` together in a folder under your model directories. Each adapter appears as its own model, named after its folder, without writing a merged copy of the base weights.
+
+oMLX matches `base_model_name_or_path` to an exact local repo ID first, then to the same model family. For example, `LiquidAI/LFM3-1.7B` matches `mlx-community/LFM3-1.7B-OptiQ-4bit`. If no base matches or several match, the **Models** tab and `GET /admin/api/models` explain how to resolve the issue. oMLX never guesses between candidates. Use [`PUT /admin/api/adapters/{adapter_id}/base`](docs/admin-api.md#models) to choose one.
+
+Adapter entries default to thinking off when the base template has a thinking switch. Applying an adapter adds memory and per-token compute. oMLX does not support DoRA, QA-LoRA, aLoRA, layer replication, `modules_to_save`, rank or alpha patterns, or `.bin`-only adapters. Adapter entries do not support cluster sync, Splash, remote prefill, MTP, or ANE prefill.
+
+LoRA targets must belong to numbered language-model layers. Vision and draft layers are not supported. If two adapter folders have the same name, the first keeps the model ID even if its adapter files cannot be loaded.
+
+Adapters must contain a standalone delta for the original base. Keep the ordinary PEFT export for initializers such as Gaussian or EVA. If the initializer changed the base weights, as PiSSA and OLoRA do, export a standard LoRA delta with PEFT before serving it on the original base.
+
+Routed-expert adapters can target `down_proj` on compatible MLX MoE bases, including quantized checkpoints. oMLX supports PEFT factors stored on the expert container for the `layers.N.mlp.experts.down_proj` and `layers.N.experts.down_proj` layouts when the base uses a supported MLX switch projection. It applies the delta only to selected experts without dequantizing or rewriting the base. Other expert parameter targets, including fused `gate_up_proj`, are not supported. Routed adapters cannot run with expert offload or DFlash.
+
 ### Built-in Chat
 
 Chat directly with any loaded model from the admin panel. Supports conversation history, model switching, dark mode, reasoning model output, and image upload for VLM/OCR models.

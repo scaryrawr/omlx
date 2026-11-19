@@ -1308,6 +1308,37 @@ def test_routes_report_status_forward_actions_and_stop_lending(tmp_path, monkeyp
     assert killed[-1] == signal.SIGTERM
 
 
+def test_adapter_controls_cannot_access_base_helper_preparation(monkeypatch):
+    calls = []
+    path = "/models/base"
+    prep = SimpleNamespace(
+        status=lambda: {"state": "copying"},
+        cancel=lambda: calls.append("cancel"),
+    )
+    entries = {
+        "base": SimpleNamespace(engine=None, model_path=path, adapter=None),
+        "tuned": SimpleNamespace(engine=None, model_path=path, adapter=object()),
+    }
+    monkeypatch.setattr(
+        helper_routes, "_get_engine_pool", lambda: SimpleNamespace(get_entry=entries.get)
+    )
+    monkeypatch.setattr(helper_routes, "file_prep", lambda _: prep)
+    app = FastAPI()
+    app.include_router(helper_routes.router)
+    client = TestClient(app)
+    url = "/admin/api/prefill-helper/models"
+    assert client.get(f"{url}/base").json() == {"state": "copying"}
+    assert client.post(f"{url}/base/stop").status_code == 200
+    assert calls == ["cancel"]
+    calls.clear()
+    assert client.post(f"{url}/tuned/stop").status_code == 400
+    assert calls == []
+    assert client.get(f"{url}/tuned").json() == {"state": "unloaded"}
+    for action in ("check", "copy", "retry"):
+        assert client.post(f"{url}/tuned/{action}").status_code == 400
+    assert calls == []
+
+
 def test_a_mac_helping_another_model_counts_that_memory_as_free(monkeypatch):
     info = {
         "budget": 100 << 30,

@@ -188,8 +188,8 @@ struct ModelCardSheet: View {
             errorView(message: message)
         case .loaded(let dto):
             metadataRow(dto: dto)
-            if dto.isAdapter == true {
-                loraBanner
+            if let adapter = dto.adapter {
+                adapterBanner(adapter)
             }
             tabBar
             Divider().overlay(theme.groupBorder)
@@ -309,16 +309,20 @@ struct ModelCardSheet: View {
         .foregroundStyle(theme.textSecondary)
     }
 
-    // MARK: LoRA adapter note
-
-    private var loraBanner: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "info.circle.fill")
+    private func adapterBanner(_ adapter: ModelCardAdapter) -> some View {
+        let missingBase = adapter.localBaseIds?.isEmpty == true
+        let message = missingBase
+            ? String(localized: "downloads.card.adapter_no_base",
+                     defaultValue: "LoRA adapter. No matching base model is downloaded yet. Download \(adapter.baseRepoId) or a quantized version of it and this adapter becomes available.",
+                     comment: "Model card warning. The placeholder is the Hugging Face repo ID of the base model.")
+            : String(localized: "downloads.card.adapter_info",
+                     defaultValue: "LoRA adapter for \(adapter.baseRepoId). It appears as its own model on top of a matching base model on this Mac.",
+                     comment: "Model card information banner. The placeholder is the Hugging Face repo ID of the base model.")
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: missingBase ? "exclamationmark.triangle.fill" : "info.circle")
                 .font(.system(size: 12))
-                .foregroundStyle(theme.textSecondary)
-            Text(String(localized: "downloads.card.lora_info",
-                        defaultValue: "This is a LoRA adapter. After it downloads, choose it in a base model's Advanced Settings.",
-                        comment: "Note in the model card sheet when the repo is a LoRA adapter rather than a full model"))
+                .foregroundStyle(missingBase ? theme.warningText : theme.textSecondary)
+            Text(message)
                 .font(.omlxText(DesignTokens.FontSize.subheadline))
                 .foregroundStyle(theme.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -326,10 +330,11 @@ struct ModelCardSheet: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(theme.groupBg)
+        .background(missingBase ? theme.warningBg : theme.codeBg)
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(theme.textSecondary.opacity(0.25), lineWidth: 0.5)
+                .strokeBorder(missingBase ? theme.warningText.opacity(0.25) : theme.inputBorder,
+                              lineWidth: 0.5)
         )
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
@@ -378,7 +383,7 @@ struct ModelCardSheet: View {
             )
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                if target.source == .huggingFace, dto.isAdapter != true, dto.unsupportedReason == nil,
+                if target.source == .huggingFace, dto.unsupportedReason == nil,
                    dto.layout == "safetensors" || dto.layout == "gguf" {
                     Text(dto.layout == "safetensors" ? checkpointFilesHint : ggufFilesHint)
                         .font(.omlxText(DesignTokens.FontSize.subheadline))
@@ -567,28 +572,26 @@ struct ModelCardSheet: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            Group {
-                if let reason = dto.unsupportedReason, !reason.isEmpty {
-                    Text(reason)
-                        .font(.omlxText(DesignTokens.FontSize.subheadline))
-                        .foregroundStyle(theme.warningText)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if target.source == .huggingFace {
-                    hfDownloadButtons(dto: dto)
-                } else {
-                    Button {
-                        onDownload(target.repoId, nil)
-                        dismiss()
-                    } label: {
-                        Label(String(localized: "downloads.card.download",
-                                     defaultValue: "Download",
-                                     comment: "Primary button in the model card sheet that starts downloading the displayed model"),
-                              systemImage: "icloud.and.arrow.down")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .buttonStyle(.omlx(.primary))
-                    .keyboardShortcut(.defaultAction)
+            if let reason = dto.unsupportedReason, !reason.isEmpty {
+                Text(reason)
+                    .font(.omlxText(DesignTokens.FontSize.subheadline))
+                    .foregroundStyle(theme.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if target.source == .huggingFace {
+                hfDownloadButtons(dto: dto)
+            } else {
+                Button {
+                    onDownload(target.repoId, nil)
+                    dismiss()
+                } label: {
+                    Label(String(localized: "downloads.card.download",
+                                 defaultValue: "Download",
+                                 comment: "Primary button in the model card sheet that starts downloading the displayed model"),
+                          systemImage: "icloud.and.arrow.down")
+                        .labelStyle(.titleAndIcon)
                 }
+                .buttonStyle(.omlx(.primary))
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(.horizontal, 20)

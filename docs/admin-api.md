@@ -54,6 +54,7 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 | Endpoint | Description |
 |---|---|
 | `GET /admin/api/models` | Discovered models with load state, size, and settings |
+| `PUT /admin/api/adapters/{adapter_id}/base` | Set a base override with `{"base_model_id": "<model id>"}` or clear it with `{"base_model_id": null}` |
 | `POST /admin/api/models/{model_id}/load`, `.../unload` | Load or unload a model |
 | `POST /admin/api/models/{model_id}/requests/{request_id}/abort` | Stop one waiting, prefilling, or generating request and keep the model loaded |
 | `POST /admin/api/reload` | Rescan the model directories |
@@ -64,6 +65,14 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 | `GET /admin/api/models/{model_id}/lora-adapters` | List LoRA adapters in the model folders, each with why it does not fit this model |
 | `GET`, `POST /admin/api/models/{model_id}/profiles`, `PUT`, `DELETE .../profiles/{name}`, `POST .../profiles/{name}/apply` | Per-model profiles |
 | `GET`, `POST /admin/api/profile-templates`, `PUT`, `DELETE .../{name}` | Global profile templates |
+
+Each row in `GET /admin/api/models` has `adapter: null` for a regular model, or an adapter object with `base_model_id` (string), `rank` (integer), `alpha` (number), and `weight_bytes` (integer).
+
+The same API serves routed-expert LoRA adapters. The supported PEFT `target_parameters` layouts are described in [LoRA adapters](../README.md#lora-adapters). Loading a routed adapter with MoE expert offload or DFlash returns a model-loading error.
+
+The top-level `adapter_issues` array describes adapter folders that could not become model entries. Each issue has `id`, `kind`, `reason`, and `path` strings, and a `candidates` array of model IDs. The issue kinds are `unsupported`, `malformed`, `base_missing`, `base_ambiguous`, `override_invalid`, and `id_collision`.
+
+The base override returns `{"success": true, "id": string, "base_model_id": string or null, "adapter": object or null, "issue": object or null}`. The `adapter` and `issue` objects use the same fields as the list response. The endpoint returns `404` for an unknown adapter, `400` when the requested base is not a candidate, and `409` while the adapter is loaded or loading.
 
 `POST /v1/models/{model_id}/load` and `/unload` do the same as the admin load and unload, and accept the main key or a sub key.
 
@@ -80,6 +89,8 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 | `GET /admin/api/hf/models`, `DELETE /admin/api/hf/models/{model_name}` | List or delete downloaded models; a GGUF lists and deletes per file |
 | `/admin/api/ms/...` | The same for ModelScope |
 | `/admin/api/upload/...` | Upload oQ models to Hugging Face |
+
+The Hugging Face model card includes `adapter: null` or an object with `base_repo_id` (string), `rank` (integer), and `local_base_ids` (array of matching local model IDs). An empty `local_base_ids` array does not block downloads. An unsupported adapter config returns `adapter: null` and an `unsupported_reason` string.
 
 ### Quantization
 

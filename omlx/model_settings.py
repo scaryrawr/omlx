@@ -321,6 +321,7 @@ def ced_prefill_on(settings: Any) -> bool:
 
 PROFILES_VERSION = 2
 TEMPLATES_VERSION = 2
+ADAPTER_BASES_VERSION = 1
 
 
 def _drop_ui_default_mtp_depth(settings: dict) -> bool:
@@ -330,6 +331,7 @@ def _drop_ui_default_mtp_depth(settings: dict) -> bool:
         return False
     del settings["mtp_adaptive_max_depth"]
     return True
+
 
 
 _LEGACY_TURBOQUANT_PROFILE_FIELDS = frozenset(
@@ -657,7 +659,7 @@ class ModelSettings:
 
     # LoRA adapter folder applied on top of the weights at load (PEFT or mlx).
     # The adapter is never served on its own; profiles can expose a variant.
-    lora_adapter: Optional[str] = None
+    lora_adapter: str | None = None
 
     loopcd_enabled: bool = False
     loopcd_skip_thinking: bool = False
@@ -826,10 +828,12 @@ class ModelSettingsManager:
         self.settings_file = self.base_path / "model_settings.json"
         self.profiles_file = self.base_path / "model_profiles.json"
         self.templates_file = self.base_path / "global_templates.json"
+        self.adapter_bases_file = self.base_path / "adapter_bases.json"
         self._lock = threading.Lock()
         self._settings: dict[str, ModelSettings] = {}
         self._profiles: dict[str, dict[str, dict[str, Any]]] = {}
         self._templates: dict[str, dict[str, Any]] = {}
+        self._adapter_bases: dict[str, str] = {}
 
         # Ensure base directory exists
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -839,6 +843,8 @@ class ModelSettingsManager:
         self._load()
         self._load_profiles()
         self._load_templates()
+        with self._lock:
+            self._load_adapter_bases()
 
     def _repair_profile_references(self) -> None:
         """Detach missing references without changing saved settings or IDs."""
@@ -1180,7 +1186,7 @@ class ModelSettingsManager:
             self._save()
 
     def delete_settings(self, model_id: str) -> bool:
-        """Remove all persisted state for a model (settings + profiles).
+        """Remove a model's settings, profiles, and own adapter base override.
 
         Called when a model is deleted so its alias and other settings are
         released and can be reused by another model.
@@ -1200,6 +1206,9 @@ class ModelSettingsManager:
             if model_id in self._profiles:
                 del self._profiles[model_id]
                 self._save_profiles()
+                removed = True
+            if model_id in self._adapter_bases:
+                self._set_adapter_base_locked(model_id, None)
                 removed = True
             if removed:
                 logger.info(f"Deleted settings for model '{model_id}'")
@@ -1338,6 +1347,67 @@ class ModelSettingsManager:
             logger.error(f"Failed to save profiles file: {e}")
             temp_file.unlink(missing_ok=True)
             raise
+
+    def _load_adapter_bases(self) -> None:
+        if not self.adapter_bases_file.exists():
+            return
+        try:
+            with open(self.adapter_bases_file, encoding="utf-8") as f:
+                data = json.load(f)
+            version = data.get("version", 1)
+            if version != ADAPTER_BASES_VERSION:
+                logger.warning(
+                    "Adapter bases file version %s differs from current %s",
+                    version,
+                    ADAPTER_BASES_VERSION,
+                )
+            bases = data.get("adapter_bases", {})
+            if not isinstance(bases, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in bases.items()
+            ):
+                raise ValueError("adapter_bases must map adapter IDs to base model IDs")
+            self._adapter_bases = bases
+        except (OSError, ValueError, AttributeError) as e:
+            logger.error(f"Failed to load adapter bases file: {e}")
+            self._adapter_bases = {}
+
+    def _save_adapter_bases(self, bases: dict[str, str]) -> None:
+        data = {"version": ADAPTER_BASES_VERSION, "adapter_bases": bases}
+        temp_file = self.adapter_bases_file.with_name(
+            f"{self.adapter_bases_file.name}.{os.getpid()}.tmp"
+        )
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            temp_file.replace(self.adapter_bases_file)
+        except (OSError, ValueError, TypeError) as e:
+            logger.error(f"Failed to save adapter bases file: {e}")
+            temp_file.unlink(missing_ok=True)
+            raise
+
+    def get_adapter_bases(self) -> dict[str, str]:
+        with self._lock:
+            return self._adapter_bases.copy()
+
+    def set_adapter_base(self, adapter_id: str, base_model_id: str | None) -> None:
+        with self._lock:
+            self._set_adapter_base_locked(adapter_id, base_model_id)
+
+    def _set_adapter_base_locked(
+        self, adapter_id: str, base_model_id: str | None
+    ) -> None:
+        if self._adapter_bases.get(adapter_id) == base_model_id:
+            return
+        bases = self._adapter_bases.copy()
+        if base_model_id is None:
+            del bases[adapter_id]
+        else:
+            bases[adapter_id] = base_model_id
+        self._save_adapter_bases(bases)
+        self._adapter_bases = bases
 
     @staticmethod
     def _dedupe_profile_api_name(base: str, used: set[str]) -> str:
