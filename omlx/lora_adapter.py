@@ -282,6 +282,21 @@ def parse_adapter_config(raw: bytes) -> LoraConfig:
     if document.get("bias") not in (None, "none"):
         raise _unsupported("bias")
 
+    initializer = document.get("init_lora_weights", True)
+    if not isinstance(initializer, bool) and initializer not in (
+        "gaussian",
+        "eva",
+        "orthogonal",
+        "mica",
+        "nora",
+    ):
+        raise UnsupportedAdapterError(
+            f"oMLX cannot apply init_lora_weights={_clip(initializer)} "
+            "as a standalone delta on the original base. Use a standard "
+            "LoRA export that does not require changing the base weights.",
+            feature="init_lora_weights",
+        )
+
     targets = document.get("target_parameters")
     if targets is None:
         targets = []

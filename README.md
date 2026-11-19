@@ -259,6 +259,8 @@ Adapter entries default to thinking off when the base template has a thinking sw
 
 LoRA targets must belong to numbered language-model layers. Vision and draft layers are not supported. If two adapter folders have the same name, the first keeps the model ID even if its adapter files cannot be loaded.
 
+Adapters must contain a standalone delta for the original base. Keep the ordinary PEFT export for initializers such as Gaussian or EVA. If the initializer changed the base weights, as PiSSA and OLoRA do, export a standard LoRA delta with PEFT before serving it on the original base.
+
 Routed-expert adapters can target `down_proj` on compatible MLX MoE bases, including quantized checkpoints. oMLX supports PEFT factors stored on the expert container for the `layers.N.mlp.experts.down_proj` and `layers.N.experts.down_proj` layouts when the base uses a supported MLX switch projection. It applies the delta only to selected experts without dequantizing or rewriting the base. Other expert parameter targets, including fused `gate_up_proj`, are not supported. Routed adapters cannot run with expert offload or DFlash.
 
 ### Built-in Chat

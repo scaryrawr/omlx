@@ -234,6 +234,32 @@ class TestParseAdapterConfig:
         assert feature in error.message
         assert "merge" in error.message.lower()
 
+    @pytest.mark.parametrize(
+        "initializer",
+        [
+            "pissa",
+            "pissa_niter_4",
+            "olora",
+            "loftq",
+            "corda",
+            "lora_ga",
+            "astra",
+            "unknown",
+        ],
+    )
+    def test_base_changing_initializers_are_rejected(self, initializer):
+        with pytest.raises(UnsupportedAdapterError) as caught:
+            parse_adapter_config(config_bytes(init_lora_weights=initializer))
+        assert caught.value.feature == "init_lora_weights"
+
+    @pytest.mark.parametrize(
+        "initializer", [True, False, "gaussian", "eva", "orthogonal", "mica", "nora"]
+    )
+    def test_portable_initializers_do_not_change_inference_config(self, initializer):
+        assert parse_adapter_config(
+            config_bytes(init_lora_weights=initializer)
+        ) == parse_adapter_config(config_bytes())
+
     def test_alora_is_rejected_without_merge_advice(self):
         with pytest.raises(UnsupportedAdapterError) as caught:
             parse_adapter_config(config_bytes(alora_invocation_tokens=[42]))

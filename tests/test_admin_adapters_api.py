@@ -205,6 +205,7 @@ async def test_list_models_includes_binding_and_all_issues(
 ):
     pool, _, _ = admin
     monkeypatch.setattr(routes, "_get_global_settings", lambda: None)
+    monkeypatch.setattr(routes, "stage_adapter_for", lambda *_: object())
     pool._entries["z-base"] = Entry("z-base", adapter.model_path)
     paths = [tmp_path / "one" / "tuned", tmp_path / "two" / "tuned"]
     pool.adapter_issues = tuple(ambiguous_issue(path) for path in paths)
@@ -214,6 +215,8 @@ async def test_list_models_includes_binding_and_all_issues(
     rows = {row["id"]: row for row in result["models"]}
     assert rows["tuned"]["adapter"] == adapter_row(adapter.adapter, "z-base")
     assert rows["z-base"]["adapter"] is None
+    assert rows["z-base"]["prefill_helper_supported"] is True
+    assert rows["tuned"]["prefill_helper_supported"] is False
     assert result["adapter_issues"] == [issue_row(path) for path in paths]
 
 

@@ -2746,7 +2746,8 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "is_paroquant": is_paroquant,
             "paroquant_reason": paroquant_reason,
             "activation_fp16_supported": activation_fp16_supported,
-            "prefill_helper_supported": stage_adapter_for(
+            "prefill_helper_supported": model_info.get("adapter") is None
+            and stage_adapter_for(
                 model_info.get("config_model_type"),
                 model_info.get("engine_type"),
                 model_info.get("model_path"),
