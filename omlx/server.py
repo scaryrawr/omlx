@@ -4045,7 +4045,10 @@ async def _list_visible_models() -> list[ModelInfo]:
             is_hidden_helper = hide_helpers and (
                 m.get("is_helper")
                 or model_id in referenced_drafts
-                or m.get("model_path") in referenced_drafts
+                or (
+                    m.get("adapter") is None
+                    and m.get("model_path") in referenced_drafts
+                )
                 or (m.get("source_repo_id") in referenced_drafts)
             )
             # A GGUF no external engine can serve is listed in the admin only.

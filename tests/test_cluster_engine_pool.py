@@ -8,6 +8,7 @@ import pytest
 from omlx.cluster.deployment import ClusterDeployment, ClusterHost
 from omlx.cluster.planner import PipelineAssignment
 from omlx.engine_pool import EngineEntry, EnginePool
+from omlx.exceptions import ModelLoadingError
 
 
 def _deployment(model_path: str) -> ClusterDeployment:
@@ -89,6 +90,34 @@ def test_pool_status_reports_full_and_local_cluster_sizes(tmp_path):
     assert model["estimated_size"] == 300
     assert model["resident_estimated_size"] == 90
     assert model["distributed"] is True
+
+
+@pytest.mark.asyncio
+async def test_cluster_path_matches_base_but_never_adapter(
+    tmp_path, write_lora_adapter
+):
+    base = tmp_path / "nemotron"
+    base.mkdir()
+    (base / "config.json").write_text('{"model_type": "llama"}')
+    (base / "model.safetensors").write_bytes(b"0" * 100)
+    write_lora_adapter(tmp_path / "aaa-adapter", base_ref="owner/nemotron")
+    pool = EnginePool()
+    pool.discover_models(str(tmp_path))
+    deployment = _deployment(str(base))
+    pool._cluster_registry = SimpleNamespace(
+        get_for_model=lambda path: deployment if path == str(base) else None
+    )
+
+    assert pool.resolve_cluster_model_id(str(base)) == "nemotron"
+    assert pool.register_cluster_model(str(base), estimated_size=100) == (
+        "nemotron",
+        False,
+    )
+    status = {row["id"]: row for row in pool.get_status()["models"]}
+    assert status["nemotron"]["distributed"] is True
+    assert status["aaa-adapter"]["distributed"] is False
+    with pytest.raises(ModelLoadingError, match="aaa-adapter.*distributed cluster"):
+        await pool.get_engine("aaa-adapter")
 
 
 def test_cluster_model_path_resolves_to_public_model_id(tmp_path):

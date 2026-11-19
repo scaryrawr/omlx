@@ -4672,6 +4672,39 @@ class TestNumericsSignature:
         )
         assert numerics_revision_for_model(nn.Linear(4, 4)) is None
 
+    def test_revision_tracks_attached_lora(self, tmp_path, write_lora_adapter):
+        from dataclasses import replace
+
+        nn = pytest.importorskip("mlx.nn")
+        from omlx.lora_adapter import BaseRef, attach_lora, bind_adapter, parse_adapter
+
+        source = parse_adapter(write_lora_adapter(tmp_path / "adapter"))
+        binding = bind_adapter(source, BaseRef("base", tmp_path))
+
+        def make_model():
+            model = nn.Module()
+            layer = nn.Module()
+            layer.mlp = nn.Module()
+            layer.mlp.gate_proj = nn.Linear(8, 16, bias=False)
+            model.layers = [layer]
+            return model
+
+        base = make_model()
+        assert numerics_revision_for_model(base) is None
+        base._omlx_fp16_recast = True
+        assert numerics_revision_for_model(base) == "fp16-recast"
+
+        attach_lora(base, binding)
+        assert (
+            numerics_revision_for_model(base) == f"fp16-recast,{binding.cache_revision}"
+        )
+
+        updated = make_model()
+        attach_lora(updated, replace(binding, cache_revision="lora-updated"))
+        assert numerics_revision_for_model(updated) == "lora-updated"
+        updated._omlx_fp16_recast = True
+        assert numerics_revision_for_model(updated) == "fp16-recast,lora-updated"
+
     def test_sweep_drops_blocks_from_other_numerics(self, tmp_path: Path):
         mgr = self._make_manager(tmp_path, self.REVISION)
         mgr._index.add(self._make_meta(block_hash=b"21" * 10, numerics=None))

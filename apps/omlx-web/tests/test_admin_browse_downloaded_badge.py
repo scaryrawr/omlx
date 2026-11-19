@@ -58,12 +58,14 @@ const state = vm.runInNewContext(source + '\n dashboard;', {
 })();
 state.hfModels = [
     {name: 'Qwen3-8B-4bit', repo_id: 'mlx-community/Qwen3-8B-4bit'},
+    {name: 'LFM3-1.7B-pi', repo_id: 'harness-hub/LFM3-1.7B-pi'},
     {name: 'local-only', repo_id: null},
 ];
 
 assert.equal(state.isModelDownloaded('mlx-community/Qwen3-8B-4bit'), true);
 assert.equal(state.isModelDownloaded('MLX-Community/qwen3-8b-4bit'), true);
 assert.equal(state.isModelDownloaded('someone-else/Qwen3-8B-4bit'), false);
+assert.equal(state.isModelDownloaded('harness-hub/LFM3-1.7B-pi'), true);
 assert.equal(state.isModelDownloaded('someone/local-only'), false);
 assert.equal(state.isModelDownloaded(undefined), false);
 

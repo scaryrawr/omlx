@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .cluster.deployment import ClusterDeployment
     from .cluster.registry import ClusterRegistry
     from .engine.image import ImageEngine
+    from .lora_adapter import AdapterBinding, AdapterIssue, BaseCandidate
     from .model_settings import ModelSettingsManager
 
 import mlx.core as mx
@@ -429,6 +430,7 @@ class EngineEntry:
     load_failed: bool = False  # Sticky until the next discovery refresh
     load_failure_message: str | None = None
     load_failure_at: float | None = None
+    adapter: AdapterBinding | None = None
 
 
 class EnginePool:
@@ -464,6 +466,8 @@ class EnginePool:
             are wired up the pool admits unconditionally.
         """
         self._entries: dict[str, EngineEntry] = {}
+        self._adapter_issues: tuple[AdapterIssue, ...] = ()
+        self._changed_adapter_ids: set[str] = set()
         self._lock = asyncio.Lock()
         self._current_model_memory = 0
         # Splash engines between launch and load completion, which the memory
@@ -586,6 +590,8 @@ class EnginePool:
     def _distributed_deployment_for_entry(
         self, entry: EngineEntry
     ) -> ClusterDeployment | None:
+        if entry.adapter is not None:
+            return None
         if entry.engine is not None:
             # A newly activated registry record must not retroactively relabel
             # an already-loaded local engine. The deployment applies only
@@ -1630,8 +1636,7 @@ class EnginePool:
             model_dirs: Path or list of paths to directories containing model subdirectories
             pinned_models: List of model IDs to pin (never evict)
         """
-        from pathlib import Path
-
+        from .lora_adapter import discover_adapters
         from .model_discovery import discover_models_from_dirs
 
         if isinstance(model_dirs, str):
@@ -1641,13 +1646,43 @@ class EnginePool:
         self._model_dirs = dirs
 
         gguf_root = _gguf_model_root()
-        adapters: dict[str, str] = {}
-        discovered = discover_models_from_dirs(dirs, gguf_root, adapters)
-        self._lora_adapters = adapters
+        adapter_paths: dict[str, str] = {}
+        adapter_dirs: list[Path] = []
+        discovered = discover_models_from_dirs(
+            dirs, gguf_root, adapter_paths, adapter_dirs=adapter_dirs
+        )
+        self._lora_adapters = adapter_paths
+        get_bases = getattr(self._settings_manager, "get_adapter_bases", None)
+        adapters = discover_adapters(
+            adapter_dirs, discovered, get_bases() if callable(get_bases) else {}
+        )
+        discovered.update(adapters.entries)
+        previous = {
+            (issue.public_id, issue.kind, issue.detail)
+            for issue in self._adapter_issues
+        }
+        for issue in adapters.issues:
+            key = (issue.public_id, issue.kind, issue.detail)
+            if key not in previous:
+                logger.warning("Adapter '%s': %s", issue.public_id, issue.detail)
+                previous.add(key)
+        self._adapter_issues = adapters.issues
 
         pinned_set = set(pinned_models or [])
+        self._changed_adapter_ids.clear()
+        for issue in adapters.issues:
+            existing = self._entries.get(issue.public_id)
+            if (
+                existing is not None
+                and existing.adapter is None
+                and (existing.engine is not None or existing.is_loading)
+                and Path(existing.model_path).resolve() == issue.path.resolve()
+                and issue.public_id not in discovered
+            ):
+                self._changed_adapter_ids.add(issue.public_id)
 
         for model_id, info in discovered.items():
+            adapter = getattr(info, "adapter", None)
             existing = self._entries.get(model_id)
             if existing is not None and (
                 existing.engine is not None or existing.is_loading
@@ -1656,6 +1691,13 @@ class EnginePool:
                 # update the pinned flag. Replacing an in-flight entry would
                 # orphan the engine the load attaches on completion (#2307).
                 existing.is_pinned = model_id in pinned_set
+                if (existing.adapter is None) != (adapter is None) or (
+                    existing.adapter is not None
+                    and adapter is not None
+                    and existing.adapter.source.path.resolve()
+                    != adapter.source.path.resolve()
+                ):
+                    self._changed_adapter_ids.add(model_id)
             else:
                 # New or unloaded model: create fresh entry
                 self._entries[model_id] = EngineEntry(
@@ -1689,6 +1731,7 @@ class EnginePool:
                     model_format=getattr(info, "model_format", None),
                     source_path=getattr(info, "source_path", None),
                     is_pinned=model_id in pinned_set,
+                    adapter=adapter,
                 )
 
             if model_id in pinned_set:
@@ -1726,6 +1769,15 @@ class EnginePool:
         """LoRA adapter folders found in the model roots, by adapter id."""
         return dict(self._lora_adapters)
 
+    @property
+    def adapter_issues(self) -> tuple[AdapterIssue, ...]:
+        return self._adapter_issues
+
+    def adapter_base_candidates(self) -> tuple[BaseCandidate, ...]:
+        from .lora_adapter import base_candidates
+
+        return base_candidates(self._entries.values())
+
     _MODEL_TYPE_TO_ENGINE: dict[ModelType, EngineType] = {
         "llm": "batched",
         "vlm": "vlm",
@@ -1743,8 +1795,14 @@ class EnginePool:
         model_type = (entry.config_model_type or "").lower().replace("-", "_")
         return model_type == "diffusion_gemma"
 
-    @staticmethod
-    def _raise_if_entry_unavailable(entry: EngineEntry) -> None:
+    def _raise_if_entry_unavailable(self, entry: EngineEntry) -> None:
+        if entry.model_id in self._changed_adapter_ids:
+            raise ModelLoadingError(
+                entry.model_id,
+                f"Model '{entry.model_id}' changed between a base and a LoRA adapter "
+                "or changed adapter directory. "
+                "Unload it and rediscover models before serving it.",
+            )
         reason = model_unavailable_reason(entry.config_model_type)
         if reason is not None:
             raise ModelUnavailableError(entry.model_id, reason)
@@ -1791,7 +1849,8 @@ class EnginePool:
     @classmethod
     def _starts_with_lightning_mtp(cls, entry: EngineEntry) -> bool:
         if (
-            entry.is_helper
+            entry.adapter is not None
+            or entry.is_helper
             or entry.source_type == "cluster"
             or entry.model_type not in ("llm", "vlm")
             or cls._entry_is_diffusion_model(entry)
@@ -1805,7 +1864,8 @@ class EnginePool:
 
         Values come from generation_config.json and family defaults. OCR
         defaults replace them, so OCR models keep their request-time values.
-        Temporary cluster entries get none.
+        Adapters with a thinking toggle start with thinking off. Temporary
+        cluster entries get none.
         """
         if (
             entry.is_helper
@@ -1819,6 +1879,8 @@ class EnginePool:
             return {k: v for k, v in values.items() if k == "temperature"}
         ocr = OCR_MODEL_GENERATION_DEFAULTS.get(entry.config_model_type, {})
         values.update({k: v for k, v in ocr.items() if k in SAMPLING_SETTING_KEYS})
+        if entry.adapter is not None and entry.thinking_default is not None:
+            values["enable_thinking"] = False
         return values
 
     def get_model_ids(self) -> list[str]:
@@ -1881,6 +1943,8 @@ class EnginePool:
         )
         matches = []
         for model_id, entry in self._entries.items():
+            if entry.adapter is not None:
+                continue
             entry_path = Path(entry.model_path).expanduser()
             entry_key = (
                 str(entry_path.resolve()) if entry_path.exists() else str(entry_path)
@@ -1924,7 +1988,8 @@ class EnginePool:
         exact = [
             (model_id, entry)
             for model_id, entry in self._entries.items()
-            if str(Path(entry.model_path).expanduser().resolve()) == candidate_key
+            if entry.adapter is None
+            and str(Path(entry.model_path).expanduser().resolve()) == candidate_key
         ]
         if exact:
             model_id, entry = self._select_cluster_path_match(exact)
@@ -2259,6 +2324,7 @@ class EnginePool:
         return (
             model_type not in VLM_NATIVE_TEXT_MODEL_TYPES
             and model_type != "minicpmv4_7"
+            and not (entry.adapter is not None and model_type.startswith("lfm3_"))
         )
 
     def _force_lm_replaces_engine(self, model_id: str) -> bool:
@@ -2324,6 +2390,8 @@ class EnginePool:
         entry = self._entries.get(model_id)
         if entry is None:
             return None, f"Model '{model_id}' not found"
+        if entry.adapter is not None:
+            return None, f"Splash cannot apply LoRA adapter '{model_id}'"
         if entry.engine_type not in ("batched", "vlm"):
             return None, "Splash serves language models only"
         return resolve_splash_target(
@@ -2432,6 +2500,11 @@ class EnginePool:
             if callable(get_settings):
                 settings = get_settings(model_id)
         if self.external_engine_id(model_id, settings):
+            entry = self._entries.get(model_id)
+            if entry is not None and entry.adapter is not None:
+                raise ModelLoadingError(
+                    model_id, f"Splash cannot apply LoRA adapter '{model_id}'"
+                )
             await asyncio.to_thread(
                 find_splash_binary, get_global_settings().integrations.splash_path
             )
@@ -2924,6 +2997,8 @@ class EnginePool:
             ModelLoadingError: If model is already being loaded
         """
         entry = self._entries.get(model_id)
+        if entry is not None and model_id in self._changed_adapter_ids:
+            self._raise_if_entry_unavailable(entry)
         if force_lm and entry is not None and not self._has_mlx_lm_path(entry):
             # The VLM engine is the only text engine for these families.
             force_lm = False
@@ -3257,6 +3332,8 @@ class EnginePool:
             )
 
             loaded = self._entries[model_id]
+            if model_id in self._changed_adapter_ids:
+                self._raise_if_entry_unavailable(loaded)
             if ngram_admission_override and expected_signature is not None:
                 # Automatic mmap is local to this admission attempt. Keep the
                 # user's requested variant as the reuse key so the next request
@@ -4387,6 +4464,45 @@ class EnginePool:
             raise ModelLoadingError(model_id)
         await self._check_splash_launcher(model_id, runtime_settings)
 
+        model_settings = runtime_settings
+        if model_settings is None and self._settings_manager is not None:
+            model_settings = self._settings_manager.get_settings(model_id)
+
+        if entry.adapter is not None:
+            force_lm = force_lm and self._has_mlx_lm_path(entry)
+            registry = self._cluster_registry
+            if entry.source_type == "cluster" or (
+                registry is not None
+                and registry.get_for_model(entry.model_path) is not None
+            ):
+                feature = "distributed cluster inference"
+            elif getattr(model_settings, "prefill_helper_node_id", None):
+                feature = "a remote prefill helper"
+            elif entry.engine_type not in ("batched", "vlm"):
+                feature = f"the {entry.engine_type} engine"
+            elif entry.engine_type == "batched" and not self._has_mlx_lm_path(entry):
+                feature = "the batched language engine for this model family"
+            elif getattr(model_settings, "mtp_enabled", False) or getattr(
+                model_settings, "vlm_mtp_enabled", False
+            ):
+                feature = "multi-token prediction (MTP)"
+            elif getattr(model_settings, "qwen35_ane_prefill_enabled", False):
+                feature = "ANE prefill"
+            elif entry.adapter.source.has_routed_targets and getattr(
+                model_settings, "moe_expert_offload_enabled", False
+            ):
+                feature = "MoE expert offload"
+            elif entry.adapter.source.has_routed_targets and getattr(
+                model_settings, "dflash_enabled", False
+            ):
+                feature = "DFlash"
+            else:
+                feature = None
+            if feature is not None:
+                raise ModelLoadingError(
+                    model_id, f"LoRA adapter '{model_id}' cannot run with {feature}"
+                )
+
         entry.is_loading = True
         entry.loading_started_at = time.monotonic()
         self._wake_process_memory_enforcer(active=True)
@@ -4404,10 +4520,6 @@ class EnginePool:
             else:
                 logger.info(f"Loading model: {model_id}")
 
-            # Retrieve per-model settings for post-load transforms
-            model_settings = runtime_settings
-            if model_settings is None and self._settings_manager is not None:
-                model_settings = self._settings_manager.get_settings(model_id)
             # A status read may have logged a forced offload long before this
             # load. Log it again next to the load.
             for kind in ("qwen4_ple_ssd_offload", "deepseek_v41_engram_ssd_offload"):
@@ -4599,6 +4711,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        lora=entry.adapter,
                     )
                 elif entry.engine_type == "audio_stt":
                     engine = STTEngine(model_name=entry.model_path)
@@ -4636,6 +4749,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        lora=entry.adapter,
                     )
 
             if isinstance(engine, SplashEngine):
@@ -4675,6 +4789,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        lora=entry.adapter,
                     )
                     try:
                         await self._start_engine(engine)
@@ -4709,6 +4824,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        lora=entry.adapter,
                     )
                     try:
                         await self._start_engine(engine)
@@ -5179,6 +5295,7 @@ class EnginePool:
                     "preserve_thinking_default": e.preserve_thinking_default,
                     "reasoning_efforts": e.reasoning_efforts,
                     "source_type": e.source_type,
+                    "adapter": e.adapter.as_status() if e.adapter else None,
                     "source_repo_id": e.source_repo_id,
                     "model_format": e.model_format,
                     "source_path": e.source_path,

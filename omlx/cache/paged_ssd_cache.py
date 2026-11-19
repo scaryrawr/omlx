@@ -445,6 +445,11 @@ def numerics_revision_for_model(model: Any) -> str | None:
         for module in modules
     ):
         revisions.add("a8-prefill-1")
+    if HAS_MLX:
+        from ..lora_adapter import lora_revision_of
+
+        if lora := lora_revision_of(model):
+            revisions.add(lora)
     return ",".join(sorted(revisions)) or None
 
 

@@ -5,7 +5,6 @@
 // All metadata fields are optional because:
 //   • `model_card` is always present (server normalizes empty to "")
 //   • MS doesn't surface `params` (server returns null for it)
-//   • MS doesn't surface `is_adapter` at all (HF-only field)
 //   • Even on HF, some repos omit pipeline_tag or have zero downloads/likes
 //
 // Future tabs (Files, Tags) would decode `files` and `tags` here — left
@@ -35,11 +34,8 @@ struct ModelCardDTO: Decodable, Equatable, Sendable {
     /// Lifetime like/star count from the upstream API.
     let likes: Int?
 
-    /// HF-only: true when the repo is a LoRA / PEFT adapter rather than
-    /// a full model. The sheet renders a warning banner and hides the
-    /// Download button so the user doesn't accidentally pull an adapter
-    /// they can't run standalone.
-    let isAdapter: Bool?
+    /// HF-only: non-nil when the repo is a LoRA adapter.
+    let adapter: ModelCardAdapter?
 
     /// Per-file listing — name + size in bytes + server-formatted size.
     /// Drives the Files tab. Always present for HF; MS returns the same
@@ -65,6 +61,13 @@ struct ModelCardDTO: Decodable, Equatable, Sendable {
 
     /// HF-only: why no engine oMLX runs loads the repo (a Splash package).
     let unsupportedReason: String?
+}
+
+struct ModelCardAdapter: Decodable, Equatable, Sendable {
+    let baseRepoId: String
+    let rank: Int
+    /// An empty list means no base matched. Nil means the server did not report matches.
+    let localBaseIds: [String]?
 }
 
 /// One entry in `ModelCardDTO.files`. `sizeFormatted` is already

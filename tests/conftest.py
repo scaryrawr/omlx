@@ -426,6 +426,68 @@ def write_gguf():
 
 
 @pytest.fixture
+def write_lora_adapter():
+    """Write a tiny valid PEFT LoRA directory and return it.
+
+    Other test files use this. ``modules`` maps an HF module path to its
+    ``(in_features, out_features)``. ``tensors`` maps full tensor names to arrays and
+    replaces generated tensors of the same name. ``config`` is merged over the
+    generated adapter_config.json.
+    """
+    import json
+    from collections.abc import Mapping
+
+    import numpy as np
+    from safetensors.numpy import save_file
+
+    def write(
+        path: Path,
+        *,
+        base_ref: str = "Qwen/Qwen3.8-27B",
+        rank: int = 4,
+        alpha: float = 8.0,
+        modules: Mapping[str, tuple[int, int]] | None = None,
+        tensors: Mapping[str, np.ndarray] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Path:
+        if modules is None:
+            modules = {"model.layers.0.mlp.gate_proj": (8, 16)}
+        rng = np.random.default_rng(0)
+        weights = {}
+        for hf_path, (in_features, out_features) in modules.items():
+            prefix = f"base_model.model.{hf_path}"
+            lora_a = rng.standard_normal((rank, in_features)) * 0.1
+            lora_b = rng.standard_normal((out_features, rank)) * 0.1
+            weights[f"{prefix}.lora_A.weight"] = lora_a.astype(np.float32)
+            weights[f"{prefix}.lora_B.weight"] = lora_b.astype(np.float32)
+        weights.update(tensors or {})
+
+        path.mkdir(parents=True, exist_ok=True)
+        document = {
+            "peft_type": "LORA",
+            "r": rank,
+            "lora_alpha": alpha,
+            "base_model_name_or_path": base_ref,
+            "bias": "none",
+            "use_dora": False,
+            "use_rslora": False,
+            "fan_in_fan_out": False,
+            "rank_pattern": {},
+            "alpha_pattern": {},
+            "modules_to_save": None,
+            "target_parameters": None,
+            **(config or {}),
+        }
+        (path / "adapter_config.json").write_text(json.dumps(document))
+        save_file(
+            weights, str(path / "adapter_model.safetensors"), metadata={"format": "pt"}
+        )
+        return path
+
+    return write
+
+
+@pytest.fixture
 def write_z_image_checkpoint():
     pytest.importorskip("mlx_vlm")
 

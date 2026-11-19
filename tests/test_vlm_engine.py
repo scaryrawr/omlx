@@ -87,6 +87,64 @@ def _make_engine(**overrides):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["adapter", "base", "invalid"])
+async def test_start_attaches_lora_before_bonsai_restore(
+    tmp_path, monkeypatch, write_lora_adapter, case
+):
+    from omlx import lora_adapter
+    from omlx.exceptions import UnsupportedAdapterError
+    from omlx.models import vlm
+    from omlx.utils import model_loading
+
+    class RestoreReachedError(Exception):
+        pass
+
+    source = lora_adapter.parse_adapter(write_lora_adapter(tmp_path / "adapter"))
+    binding = lora_adapter.bind_adapter(source, lora_adapter.BaseRef("base", tmp_path))
+    model, processor = object(), object()
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append("load")
+        return model, processor
+
+    def attach(loaded, adapter):
+        assert loaded is model and adapter is binding
+        calls.append("attach")
+        if case == "invalid":
+            raise UnsupportedAdapterError(
+                "unsupported test adapter", source.path, feature="test"
+            )
+        return 1
+
+    def restore(loaded):
+        assert loaded is model
+        calls.append("restore")
+        raise RestoreReachedError
+
+    monkeypatch.setattr(
+        model_loading, "maybe_apply_pre_load_patches", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(model_loading, "maybe_load_custom_quantization", load)
+    monkeypatch.setattr(lora_adapter, "attach_lora", attach)
+    monkeypatch.setattr(vlm, "restore_bonsai_quantized_modules", restore)
+    engine = _make_engine(
+        model_name=str(tmp_path), lora=None if case == "base" else binding
+    )
+    if case == "invalid":
+        with pytest.raises(UnsupportedAdapterError, match="unsupported test adapter"):
+            await engine.start()
+        assert calls == ["load", "attach"]
+        assert engine._processor is None
+    else:
+        with pytest.raises(RestoreReachedError):
+            await engine.start()
+        assert calls == (
+            ["load", "restore"] if case == "base" else ["load", "attach", "restore"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_start_rejects_unsupported_mtp_offload_before_loading(tmp_path):
     from omlx.model_settings import ModelSettings
 

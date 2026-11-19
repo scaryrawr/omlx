@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import httpx
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub._local_folder import read_download_metadata
 from huggingface_hub.utils import (
@@ -45,11 +46,17 @@ from huggingface_hub.utils._xet import abort_xet_session
 
 from .. import gguf
 
+try:
+    from httpx2 import RequestError as HubRequestError
+except ImportError:
+    HubRequestError = httpx.RequestError
+
 logger = logging.getLogger(__name__)
 
 # Timeout for HuggingFace API calls (seconds).
 # Prevents server from hanging when HF is unreachable.
 _HF_API_TIMEOUT = 10
+_ADAPTER_CONFIG_MAX_BYTES = 1024 * 1024
 
 # Seconds with no disk or wire activity before considering the download
 # stalled.
@@ -1587,6 +1594,57 @@ class HFDownloader(_QueuePersistenceMixin):
         }
 
     @staticmethod
+    async def _get_adapter_info(
+        repo_id: str,
+        endpoint: str | None,
+        token: str | None,
+        file_sizes: dict[str, int],
+    ) -> tuple[dict | None, str | None]:
+        from ..exceptions import AdapterError
+        from ..lora_adapter import (
+            ADAPTER_CONFIG_NAME,
+            ADAPTER_WEIGHTS_NAME,
+            parse_adapter_config,
+        )
+
+        filename = ADAPTER_CONFIG_NAME
+        if ADAPTER_WEIGHTS_NAME not in file_sizes:
+            if "adapter_model.bin" in file_sizes:
+                return None, (
+                    "The adapter ships adapter_model.bin, and oMLX never loads "
+                    f"pickled weights. Re-save it as {ADAPTER_WEIGHTS_NAME}."
+                )
+            return None, (
+                f"{ADAPTER_WEIGHTS_NAME} is missing. Choose a repo that includes it."
+            )
+        if file_sizes[filename] > _ADAPTER_CONFIG_MAX_BYTES:
+            return None, f"{filename} is larger than 1 MiB."
+
+        try:
+            config_path = await asyncio.wait_for(
+                asyncio.to_thread(
+                    hf_hub_download,
+                    repo_id=repo_id,
+                    filename=filename,
+                    endpoint=endpoint,
+                    token=token,
+                ),
+                timeout=_HF_API_TIMEOUT,
+            )
+            with Path(config_path).open("rb") as handle:
+                raw = handle.read(_ADAPTER_CONFIG_MAX_BYTES + 1)
+        except TimeoutError:
+            return None, f"Could not read {filename}: request timed out."
+        except (HfHubHTTPError, HubRequestError, httpx.RequestError, OSError) as error:
+            return None, f"Could not read {filename}: {error}"
+
+        try:
+            config = parse_adapter_config(raw)
+        except AdapterError as error:
+            return None, str(error)
+        return {"base_repo_id": config.base_ref, "rank": config.rank}, None
+
+    @staticmethod
     async def get_model_info(
         repo_id: str, local_dir: Path | None = None, token: str | None = None
     ) -> dict:
@@ -1618,8 +1676,14 @@ class HFDownloader(_QueuePersistenceMixin):
         )
         update_files = await asyncio.to_thread(_update_files, files, local_dir)
 
-        # Detect LoRA/adapter repos (adapter_config.json is peft standard)
-        is_adapter = any(f["name"] == "adapter_config.json" for f in files)
+        adapter = None
+        unsupported_reason = _unsupported_repo_reason(info)
+        if unsupported_reason is None:
+            file_sizes = {row["name"]: row["size"] for row in files}
+            if "adapter_config.json" in file_sizes:
+                adapter, unsupported_reason = await HFDownloader._get_adapter_info(
+                    repo_id, endpoint, token, file_sizes
+                )
 
         # Params from the dtype histogram (logical count). Size from current
         # revision blob bytes — U32 packed quants are not 4 bytes/param (#3401).
@@ -1677,7 +1741,7 @@ class HFDownloader(_QueuePersistenceMixin):
             "layout": layout,
             "update_files": update_files,
             "download_all_size": download_all_size or 0,
-            "unsupported_reason": _unsupported_repo_reason(info),
+            "unsupported_reason": unsupported_reason,
             "tags": list(info.tags) if info.tags else [],
             "pipeline_tag": info.pipeline_tag or "",
             "params": params,
@@ -1690,7 +1754,7 @@ class HFDownloader(_QueuePersistenceMixin):
             "updated_at": (
                 info.last_modified.isoformat() if info.last_modified else ""
             ),
-            "is_adapter": is_adapter,
+            "adapter": adapter,
         }
 
     def __init__(
