@@ -113,6 +113,39 @@ def test_adapter_discovery_adds_a_separate_model(lora_pool, small_mock_model_dir
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("settings", "reason"),
+    [
+        (ModelSettings(moe_expert_offload_enabled=True), "MoE expert offload"),
+        (ModelSettings(dflash_enabled=True), "DFlash"),
+    ],
+)
+async def test_routed_adapter_rejects_bypassing_runtime_modes(
+    small_mock_model_dir, write_lora_adapter, settings, reason
+):
+    import numpy as np
+
+    stem = "model.layers.0.mlp.experts"
+    write_lora_adapter(
+        small_mock_model_dir / "routed",
+        base_ref="owner/model-a",
+        rank=1,
+        modules={},
+        tensors={
+            f"base_model.model.{stem}.lora_A.weight": np.ones((3, 8), np.float32),
+            f"base_model.model.{stem}.lora_B.weight": np.ones((16, 3), np.float32),
+        },
+        config={"target_parameters": [stem + ".down_proj"]},
+    )
+    pool = _make_pool()
+    pool.discover_models(str(small_mock_model_dir))
+    with patch("omlx.engine_pool.BatchedEngine") as engine:
+        with pytest.raises(ModelLoadingError, match=reason):
+            await pool.get_engine("routed", runtime_settings=settings)
+        engine.assert_not_called()
+
+
 def test_missing_adapter_base_is_reported_once(tmp_path, caplog, write_lora_adapter):
     write_lora_adapter(tmp_path / "pi", base_ref="owner/missing")
     pool = _make_pool()

@@ -1271,6 +1271,146 @@ def write_adapter(
     return adapter, factors
 
 
+@pytest.mark.parametrize("layout", ["qwen", "gemma"])
+@pytest.mark.parametrize("bits", [None, 4, 8])
+def test_routed_down_projection(write_lora_adapter, tmp_path, layout, bits):
+    from types import SimpleNamespace
+
+    experts, rank, width, outputs = 3, 2, 64, 32
+    layer = nn.Module()
+    if layout == "qwen":
+        from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
+        layer.mlp = Qwen3_5MoeSparseMoeBlock(
+            SimpleNamespace(
+                hidden_size=outputs,
+                moe_intermediate_size=width,
+                shared_expert_intermediate_size=width,
+                num_experts=experts,
+                num_experts_per_tok=2,
+                norm_topk_prob=True,
+            )
+        )
+        switch = layer.mlp.switch_mlp
+        stem = "model.language_model.layers.0.mlp.experts"
+    else:
+        from mlx_lm.models.gemma4_text import Experts
+
+        layer.experts = Experts(
+            SimpleNamespace(
+                hidden_size=outputs, moe_intermediate_size=width, num_experts=experts
+            )
+        )
+        switch = layer.experts.switch_glu
+        stem = "model.layers.0.experts"
+    model = nn.Module()
+    model.layers = [layer]
+    if bits is not None:
+        switch.down_proj = switch.down_proj.to_quantized(group_size=32, bits=bits)
+    original = switch.down_proj
+    weight = effective_parts(original, None if bits is None else ("affine", bits, 32))[
+        0
+    ]
+    rng = np.random.default_rng(42)
+    a = rng.normal(0, 0.1, size=(experts, rank, width)).astype(np.float32)
+    b = rng.normal(0, 0.1, size=(outputs, rank, experts)).astype(np.float32)
+    dense = {"model.language_model.layers.0.mlp.gate": (outputs, experts)}
+    path = write_lora_adapter(
+        tmp_path / "routed",
+        rank=rank,
+        alpha=3,
+        modules=dense if layout == "qwen" else {},
+        tensors={
+            f"base_model.model.{stem}.lora_A.weight": a.reshape(experts * rank, width),
+            f"base_model.model.{stem}.lora_B.weight": b.reshape(
+                outputs, rank * experts
+            ),
+        },
+        config={"target_parameters": [stem + ".down_proj"]},
+    )
+    binding = bind_adapter(parse_adapter(path), BaseRef("base", tmp_path))
+    assert attach_lora(model, binding) == (2 if layout == "qwen" else 1)
+    assert lora_revision_of(model) == binding.cache_revision
+    assert switch.down_proj.linear is original
+    assert not hasattr(switch.down_proj, "weight")
+    merged = weight + 1.5 * np.einsum("ore,eri->eoi", b, a)
+    for routes, sorted_indices in (
+        (np.array([[2, 0], [1, 2]]), False),
+        (np.array([0, 1, 2, 2]), True),
+    ):
+        x = rng.standard_normal((*routes.shape, 1, width)).astype(np.float32)
+        actual = switch.down_proj(mx.array(x), mx.array(routes), sorted_indices)
+        expected = x @ np.swapaxes(merged[routes], -1, -2)
+        np.testing.assert_allclose(np.array(actual), expected, atol=2e-5, rtol=2e-5)
+    x = mx.array(rng.standard_normal((1, 33, outputs)).astype(np.float32))
+    if layout == "qwen":
+        from omlx.patches.qwen35_moe_routed_decode import _build_plan
+
+        model.eval()
+        assert _build_plan(layer.mlp) is None
+        forward, args = layer.mlp, (x,)
+    else:
+        routes = mx.broadcast_to(mx.array([2, 0]), (1, 33, 2))
+        scores = mx.broadcast_to(mx.array([0.75, 0.25]), routes.shape)
+        forward, args = layer.experts, (x, routes, scores)
+    adapted = np.array(forward(*args))
+    switch.down_proj = original
+    baseline = np.array(forward(*args))
+    assert np.max(np.abs(adapted - baseline)) > 1e-4
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("duplicate", "duplicate expert"),
+        ("missing", "needs lora_A and lora_B"),
+        ("rank", "matching expert counts"),
+        ("experts", "has 4 experts, but"),
+    ],
+)
+def test_invalid_routed_adapter_is_rejected(
+    write_lora_adapter, tmp_path, case, message
+):
+    from mlx_lm.models.switch_layers import SwitchGLU
+
+    stem = "model.layers.0.mlp.experts"
+    target = stem + ".down_proj"
+    path = write_lora_adapter(
+        tmp_path / "routed",
+        rank=2,
+        modules={"model.layers.0.mlp.dense": (8, 8)},
+        config={
+            "target_parameters": [target, target] if case == "duplicate" else [target]
+        },
+        tensors=(
+            {
+                f"base_model.model.{stem}.lora_A.weight": np.ones((8, 64), np.float32),
+                f"base_model.model.{stem}.lora_B.weight": np.ones(
+                    (32, 7 if case == "rank" else 8), np.float32
+                ),
+            }
+            if case != "missing"
+            else None
+        ),
+    )
+    if case != "experts":
+        with pytest.raises(AdapterError, match=message):
+            parse_adapter(path)
+        return
+    model, layer = nn.Module(), nn.Module()
+    model.layers = [layer]
+    layer.mlp = nn.Module()
+    dense = layer.mlp.dense = nn.Linear(8, 8)
+    switch = layer.mlp.switch_mlp = SwitchGLU(32, 64, 3)
+    down = switch.down_proj
+    binding = bind_adapter(parse_adapter(path), BaseRef("base", tmp_path))
+    with pytest.raises(AdapterShapeError, match=message):
+        attach_lora(model, binding)
+    assert layer.mlp.dense is dense
+    assert switch.down_proj is down
+    assert lora_revision_of(model) is None
+
+
 def effective_parts(linear, quant):
     """The weight a Linear or QuantizedLinear applies, and its bias, in float32."""
     if quant is None:

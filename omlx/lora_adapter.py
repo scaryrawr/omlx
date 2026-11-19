@@ -43,13 +43,15 @@ _TENSOR_KEY = re.compile(
     r"base_model\.model\.(?P<path>.+)\.lora_(?P<half>[AB])\.weight"
 )
 _LAYER_TAIL = re.compile(r"(?:^|\.)(layers\.\d+\..+)$")
+_ROUTED_DOWN = re.compile(
+    r"(?:model\.|language_model\.)*layers\.\d+\.(?:mlp\.)?experts\.down_proj"
+)
 _UNSUPPORTED_WHEN_TRUTHY = (
     "use_dora",
     "use_qalora",
     "modules_to_save",
     "rank_pattern",
     "alpha_pattern",
-    "target_parameters",
     "fan_in_fan_out",
 )
 _BASE_MODEL_TYPES = frozenset({"llm", "vlm"})
@@ -66,6 +68,7 @@ class LoraConfig:
     rank: int
     alpha: float
     rslora: bool
+    target_parameters: tuple[str, ...] = ()
 
     @property
     def scale(self) -> float:
@@ -83,6 +86,21 @@ class LoraModule:
 
 
 @dataclass(frozen=True)
+class _RoutedModule(LoraModule):
+    experts: int
+
+    @property
+    def tensor_stem(self) -> str:
+        return self.hf_path.removesuffix(".down_proj")
+
+    @property
+    def runtime_path(self) -> str:
+        if self.tensor_stem.endswith(".mlp.experts"):
+            return self.tensor_stem.removesuffix(".experts") + ".switch_mlp.down_proj"
+        return self.tensor_stem + ".switch_glu.down_proj"
+
+
+@dataclass(frozen=True)
 class AdapterSource:
     """A structurally valid adapter directory. Not yet bound to a base."""
 
@@ -93,6 +111,10 @@ class AdapterSource:
     weights_path: Path
     weight_bytes: int  # file size == resident bytes (tensors stay as shipped)
     fingerprint: str  # sha256(config bytes + weights size + weights mtime_ns)
+
+    @property
+    def has_routed_targets(self) -> bool:
+        return bool(self.config.target_parameters)
 
 
 @dataclass(frozen=True)
@@ -253,6 +275,16 @@ def parse_adapter_config(raw: bytes) -> LoraConfig:
     if document.get("bias") not in (None, "none"):
         raise _unsupported("bias")
 
+    targets = document.get("target_parameters")
+    if targets is None:
+        targets = []
+    if not isinstance(targets, list) or not all(
+        isinstance(path, str) and _ROUTED_DOWN.fullmatch(path) for path in targets
+    ):
+        raise _unsupported("target_parameters")
+    if len(set(targets)) != len(targets):
+        raise AdapterError("target_parameters contains duplicate expert projections.")
+
     base_ref = document.get("base_model_name_or_path")
     if not isinstance(base_ref, str) or not base_ref.strip():
         raise AdapterError(
@@ -267,6 +299,7 @@ def parse_adapter_config(raw: bytes) -> LoraConfig:
         rank=rank,
         alpha=_alpha_from(document.get("lora_alpha")),
         rslora=bool(document.get("use_rslora")),
+        target_parameters=tuple(targets),
     )
 
 
@@ -361,7 +394,7 @@ def _tensor_shape(
 
 
 def _modules_from_header(
-    header: dict[str, Any], data_start: int, file_size: int, rank: int
+    header: dict[str, Any], data_start: int, file_size: int, config: LoraConfig
 ) -> tuple[LoraModule, ...]:
     halves: dict[str, dict[str, tuple[int, ...]]] = {}
     for name, entry in header.items():
@@ -376,7 +409,17 @@ def _modules_from_header(
         shape = _tensor_shape(name, entry, data_start, file_size)
         halves.setdefault(match["path"], {})[match["half"]] = shape
 
-    modules = []
+    routed = {
+        path.removesuffix(".down_proj"): path for path in config.target_parameters
+    }
+    for stem, path in routed.items():
+        if stem not in halves:
+            raise AdapterError(
+                f"Expert projection {_clip(path)} needs lora_A and lora_B."
+            )
+
+    rank = config.rank
+    modules: list[LoraModule] = []
     for hf_path in sorted(halves):
         pair = halves[hf_path]
         if pair.keys() != {"A", "B"}:
@@ -384,6 +427,21 @@ def _modules_from_header(
         shape_a, shape_b = pair["A"], pair["B"]
         if len(shape_a) != 2 or len(shape_b) != 2:
             raise AdapterError(f"Module {_clip(hf_path)} needs 2-D LoRA weights.")
+        if hf_path in routed:
+            experts, remainder = divmod(shape_a[0], rank)
+            if not experts or remainder or shape_b[1] != experts * rank:
+                raise AdapterError(
+                    f"Expert projection {_clip(routed[hf_path])} needs matching "
+                    f"expert counts in lora_A and lora_B at rank {rank}."
+                )
+            modules.append(
+                _RoutedModule(routed[hf_path], shape_a[1], shape_b[0], experts)
+            )
+            continue
+        if _ROUTED_DOWN.fullmatch(hf_path + ".down_proj"):
+            raise AdapterError(
+                f"Expert container {_clip(hf_path)} has no declared target."
+            )
         if shape_a[0] != rank or shape_b[1] != rank:
             raise AdapterError(
                 f"Module {_clip(hf_path)} has rank {shape_a[0]} and {shape_b[1]}, "
@@ -408,7 +466,7 @@ def _parse_adapter(adapter_dir: Path) -> AdapterSource:
     config = parse_adapter_config(config_bytes)
     weights_path = adapter_dir / ADAPTER_WEIGHTS_NAME
     header, data_start, weight_bytes, mtime_ns = _read_weights_header(weights_path)
-    modules = _modules_from_header(header, data_start, weight_bytes, config.rank)
+    modules = _modules_from_header(header, data_start, weight_bytes, config)
     return AdapterSource(
         public_id=adapter_dir.name,
         path=adapter_dir,
@@ -624,17 +682,7 @@ def discover_adapters(
     return AdapterDiscovery(entries, (*parse_issues, *resolve_issues))
 
 
-class LoraLinear(nn.Module):
-    """y = linear(x) + (scale * ((x @ lora_a) @ lora_b)).astype(x.dtype)
-
-    The math of mlx_vlm.trainer.peft.lora_layers.LoRALinear.__call__ (mlx_lm.tuner.lora
-    has the same class) without dropout, and without importing either trainer package.
-    lora_a is [in, r] and lora_b is [r, out], kept in the dtype the adapter shipped in.
-    It is not a subclass of nn.QuantizedLinear and exposes no .weight, so code that
-    reads linear attributes directly fails loudly and exact-type-gated patches skip the
-    wrapper. revision is a plain str attribute, not a parameter.
-    """
-
+class _LoraProjection(nn.Module):
     def __init__(
         self,
         linear: nn.Module,
@@ -650,10 +698,36 @@ class LoraLinear(nn.Module):
         self.scale = float(scale)
         self.revision = revision
 
+
+class LoraLinear(_LoraProjection):
+    """y = linear(x) + (scale * ((x @ lora_a) @ lora_b)).astype(x.dtype)
+
+    The math of mlx_vlm.trainer.peft.lora_layers.LoRALinear.__call__ (mlx_lm.tuner.lora
+    has the same class) without dropout, and without importing either trainer package.
+    lora_a is [in, r] and lora_b is [r, out], kept in the dtype the adapter shipped in.
+    It is not a subclass of nn.QuantizedLinear and exposes no .weight, so code that
+    reads linear attributes directly fails loudly and exact-type-gated patches skip the
+    wrapper. revision is a plain str attribute, not a parameter.
+    """
+
     def __call__(self, x: mx.array) -> mx.array:
         y: mx.array = self.linear(x)
         delta = (x @ self.lora_a) @ self.lora_b
         return y + (self.scale * delta).astype(x.dtype)
+
+
+class _LoraSwitchLinear(_LoraProjection):
+    def __call__(
+        self, x: mx.array, indices: mx.array, sorted_indices: bool = False
+    ) -> mx.array:
+        y: mx.array = self.linear(x, indices, sorted_indices=sorted_indices)
+        h = mx.gather_mm(
+            x, self.lora_a, rhs_indices=indices, sorted_indices=sorted_indices
+        )
+        delta = mx.gather_mm(
+            h, self.lora_b, rhs_indices=indices, sorted_indices=sorted_indices
+        )
+        return y + (self.scale * delta).astype(y.dtype)
 
 
 @dataclass(frozen=True)
@@ -719,14 +793,47 @@ def _locate(root: Any, name: str) -> tuple[Any, str | int]:
 
 
 def _plan_replacement(
-    root: Any,
+    parent: Any,
+    key: str | int,
     name: str,
     target: nn.Module,
     module: LoraModule,
     weights: Mapping[str, mx.array],
     source: AdapterSource,
 ) -> _Replacement:
-    in_features, out_features = _linear_features(name, target, source.path)
+    stem = module.hf_path
+    rank = source.config.rank
+    if isinstance(module, _RoutedModule):
+        from mlx_lm.models import switch_layers as lm
+
+        supported = type(parent) is lm.SwitchGLU and type(target) in (
+            lm.SwitchLinear,
+            lm.QuantizedSwitchLinear,
+        )
+        if not supported and type(parent).__module__ == "mlx_vlm.models.switch_layers":
+            from mlx_vlm.models import switch_layers as vlm
+
+            supported = type(parent) is vlm.SwitchGLU and type(target) in (
+                vlm.SwitchLinear,
+                vlm.QuantizedSwitchLinear,
+            )
+        if not supported or getattr(parent, "oqh_experts", None) is not None:
+            raise AdapterShapeError(
+                f"Base module {name} is not a supported routed expert projection.",
+                source.path,
+            )
+        if target.num_experts != module.experts:
+            raise AdapterShapeError(
+                f"{module.hf_path} has {module.experts} experts, but base module "
+                f"{name} has {target.num_experts}.",
+                source.path,
+            )
+        in_features, out_features = target.input_dims, target.output_dims
+        stem = module.tensor_stem
+        packed_rank = rank * module.experts
+    else:
+        in_features, out_features = _linear_features(name, target, source.path)
+        packed_rank = rank
     if (in_features, out_features) != (module.in_features, module.out_features):
         raise AdapterShapeError(
             f"{module.hf_path} was trained for {module.in_features} inputs and "
@@ -735,25 +842,28 @@ def _plan_replacement(
             "for this base.",
             source.path,
         )
-    rank = source.config.rank
-    lora_a = weights.get(_tensor_name(module.hf_path, "A"))
-    lora_b = weights.get(_tensor_name(module.hf_path, "B"))
+    lora_a = weights.get(_tensor_name(stem, "A"))
+    lora_b = weights.get(_tensor_name(stem, "B"))
     if (
         lora_a is None
         or lora_b is None
-        or tuple(lora_a.shape) != (rank, in_features)
-        or tuple(lora_b.shape) != (out_features, rank)
+        or tuple(lora_a.shape) != (packed_rank, in_features)
+        or tuple(lora_b.shape) != (out_features, packed_rank)
     ):
         raise AdapterShapeError(
             f"The weights of {module.hf_path} in {ADAPTER_WEIGHTS_NAME} differ from "
             "the adapter that was discovered. Reload the model list.",
             source.path,
         )
-    parent, key = _locate(root, name)
+    if isinstance(module, _RoutedModule):
+        a = lora_a.reshape(module.experts, rank, in_features).transpose(0, 2, 1)
+        # PEFT packs B in [out, rank, expert] order, not [out, expert, rank].
+        b = lora_b.reshape(out_features, rank, module.experts).transpose(2, 1, 0)
+        return _Replacement(module.hf_path, parent, key, target, a, b)
     return _Replacement(module.hf_path, parent, key, target, lora_a.T, lora_b.T)
 
 
-def _install(parent: Any, key: str | int, wrapper: LoraLinear) -> None:
+def _install(parent: Any, key: str | int, wrapper: nn.Module) -> None:
     if isinstance(parent, nn.Module):
         setattr(parent, str(key), wrapper)
     else:
@@ -777,7 +887,7 @@ def _require_unchanged(source: AdapterSource) -> None:
 
 
 def attach_lora(model: Any, binding: AdapterBinding) -> int:
-    """Wrap each targeted nn.Linear or nn.QuantizedLinear in a LoraLinear, in place.
+    """Wrap targeted dense or routed projections in place.
 
     Runs on the MLX executor right after the loader returns and before every walker
     (patches, offload, fusion). The weights come from mx.load, which maps the file
@@ -791,7 +901,7 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
     place after the load is not detected.
 
     Everything is validated before anything is installed. An AdapterShapeError (an
-    unresolved or duplicate target, a target that is not a Linear or QuantizedLinear,
+    unresolved, duplicate or unsupported projection,
     a feature-size mismatch, files changed since discovery, or a model that already
     carries an adapter) therefore leaves the model unmodified. Returns the number of
     wrapped modules.
@@ -811,27 +921,46 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
             f"{ADAPTER_WEIGHTS_NAME} did not load as named tensors.", source.path
         )
 
-    plan: dict[str, _Replacement] = {}
+    plan: dict[tuple[int, str | int], tuple[_Replacement, _LoraProjection]] = {}
     for module in source.modules:
-        name = _target_name(module.hf_path, named, source.path)
-        if name in plan:
+        path = (
+            module.runtime_path if isinstance(module, _RoutedModule) else module.hf_path
+        )
+        name = _target_name(path, named, source.path)
+        parent, key = _locate(root, name)
+        slot = (id(parent), key)
+        if slot in plan:
             raise AdapterShapeError(
-                f"{plan[name].hf_path} and {module.hf_path} both target "
+                f"{plan[slot][0].hf_path} and {module.hf_path} both target "
                 f"base module {name}.",
                 source.path,
             )
-        plan[name] = _plan_replacement(root, name, named[name], module, weights, source)
-
-    scale = source.config.scale
-    for replacement in plan.values():
-        wrapper = LoraLinear(
-            replacement.target,
-            replacement.lora_a,
-            replacement.lora_b,
-            scale,
-            binding.cache_revision,
+        replacement = _plan_replacement(
+            parent, key, name, named[name], module, weights, source
         )
-        _install(replacement.parent, replacement.key, wrapper)
+        wrapper_type = (
+            _LoraSwitchLinear if isinstance(module, _RoutedModule) else LoraLinear
+        )
+        plan[slot] = (
+            replacement,
+            wrapper_type(
+                replacement.target,
+                replacement.lora_a,
+                replacement.lora_b,
+                source.config.scale,
+                binding.cache_revision,
+            ),
+        )
+    _require_unchanged(source)
+    installed = []
+    try:
+        for replacement, wrapper in plan.values():
+            _install(replacement.parent, replacement.key, wrapper)
+            installed.append(replacement)
+    except Exception:
+        for replacement in reversed(installed):
+            _install(replacement.parent, replacement.key, replacement.target)
+        raise
     return len(plan)
 
 
@@ -841,6 +970,6 @@ def lora_revision_of(model: Any) -> str | None:
     if not callable(modules):
         return None
     for module in modules():
-        if isinstance(module, LoraLinear):
+        if isinstance(module, _LoraProjection):
             return module.revision
     return None

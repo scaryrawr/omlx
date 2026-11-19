@@ -257,6 +257,8 @@ oMLX matches `base_model_name_or_path` to an exact local repo ID first, then to 
 
 Adapter entries default to thinking off when the base template has a thinking switch. Applying an adapter adds memory and per-token compute. oMLX does not support DoRA, QA-LoRA, `modules_to_save`, rank or alpha patterns, or `.bin`-only adapters. Adapter entries do not support cluster sync, Splash, remote prefill, MTP, or ANE prefill.
 
+Routed-expert adapters can target `down_proj` on compatible MLX MoE bases, including quantized checkpoints. oMLX supports PEFT factors stored on the expert container for the `layers.N.mlp.experts.down_proj` and `layers.N.experts.down_proj` layouts when the base uses a supported MLX switch projection. It applies the delta only to selected experts without dequantizing or rewriting the base. Other expert parameter targets, including fused `gate_up_proj`, are not supported. Routed adapters cannot run with expert offload or DFlash.
+
 ### Built-in Chat
 
 Chat directly with any loaded model from the admin panel. Supports conversation history, model switching, dark mode, reasoning model output, and image upload for VLM/OCR models.

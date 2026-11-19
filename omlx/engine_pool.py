@@ -4370,6 +4370,14 @@ class EnginePool:
                 feature = "multi-token prediction (MTP)"
             elif getattr(model_settings, "qwen35_ane_prefill_enabled", False):
                 feature = "ANE prefill"
+            elif entry.adapter.source.has_routed_targets and getattr(
+                model_settings, "moe_expert_offload_enabled", False
+            ):
+                feature = "MoE expert offload"
+            elif entry.adapter.source.has_routed_targets and getattr(
+                model_settings, "dflash_enabled", False
+            ):
+                feature = "DFlash"
             else:
                 feature = None
             if feature is not None:

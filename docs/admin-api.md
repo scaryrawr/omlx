@@ -67,6 +67,8 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 
 Each row in `GET /admin/api/models` has `adapter: null` for a regular model, or an adapter object with `base_model_id` (string), `rank` (integer), `alpha` (number), and `weight_bytes` (integer).
 
+The same API serves routed-expert LoRA adapters. The supported PEFT `target_parameters` layouts are described in [LoRA adapters](../README.md#lora-adapters). Loading a routed adapter with MoE expert offload or DFlash returns a model-loading error.
+
 The top-level `adapter_issues` array describes adapter folders that could not become model entries. Each issue has `id`, `kind`, `reason`, and `path` strings, and a `candidates` array of model IDs. The issue kinds are `unsupported`, `malformed`, `base_missing`, `base_ambiguous`, `override_invalid`, and `id_collision`.
 
 The base override returns `{"success": true, "id": string, "base_model_id": string or null, "adapter": object or null, "issue": object or null}`. The `adapter` and `issue` objects use the same fields as the list response. The endpoint returns `404` for an unknown adapter, `400` when the requested base is not a candidate, and `409` while the adapter is loaded or loading.
