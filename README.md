@@ -249,6 +249,14 @@ Configure sampling parameters, chat template kwargs, TTL, model alias, model typ
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX Chat Template Kwargs" width="480">
 </p>
 
+### LoRA adapters
+
+Download a Hugging Face PEFT LoRA adapter such as [harness-hub/LFM3-1.7B-pi](https://huggingface.co/harness-hub/LFM3-1.7B-pi), or place `adapter_config.json` and `adapter_model.safetensors` together in a folder under your model directories. Each adapter appears as its own model, named after its folder, without writing a merged copy of the base weights.
+
+oMLX matches `base_model_name_or_path` to an exact local repo ID first, then to the same model family. For example, `LiquidAI/LFM3-1.7B` matches `mlx-community/LFM3-1.7B-OptiQ-4bit`. If no base matches or several match, the **Models** tab and `GET /admin/api/models` explain how to resolve the issue. oMLX never guesses between candidates. Use [`PUT /admin/api/adapters/{adapter_id}/base`](docs/admin-api.md#models) to choose one.
+
+Adapter entries default to thinking off when the base template has a thinking switch. Applying an adapter adds memory and per-token compute. oMLX does not support DoRA, QA-LoRA, `modules_to_save`, rank or alpha patterns, or `.bin`-only adapters. Adapter entries do not support cluster sync, Splash, remote prefill, MTP, or ANE prefill.
+
 ### Built-in Chat
 
 Chat directly with any loaded model from the admin panel. Supports conversation history, model switching, dark mode, reasoning model output, and image upload for VLM/OCR models.

@@ -563,6 +563,10 @@ class ModelSettingsRequest(BaseModel):
         return value or None
 
 
+class AdapterBaseRequest(BaseModel):
+    base_model_id: str | None = None
+
+
 def _normalize_profile_settings(
     value: dict[str, Any] | None, *, universal: bool = False
 ) -> dict[str, Any] | None:
@@ -2719,6 +2723,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "capabilities": model_info.get("capabilities", []),
             "tasks": model_info.get("tasks", []),
             "image_metadata": model_info.get("image_metadata"),
+            "adapter": model_info.get("adapter"),
             "last_access": model_info.get("last_access"),
             "external_engines": external_engines,
             "dflash_compatible": compat_ok,
@@ -2799,7 +2804,94 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             }
         )
 
-    return {"models": models}
+    return {
+        "models": models,
+        "adapter_issues": [
+            _adapter_issue_row(issue)
+            for issue in getattr(engine_pool, "adapter_issues", ())
+        ],
+    }
+
+
+def _adapter_issue_row(issue) -> dict:
+    return {
+        "id": issue.public_id,
+        "kind": issue.kind.value,
+        "reason": issue.detail,
+        "candidates": list(issue.candidates),
+        "path": str(issue.path),
+    }
+
+
+@router.put("/api/adapters/{adapter_id}/base")
+async def set_adapter_base(
+    adapter_id: str,
+    request: AdapterBaseRequest,
+    is_admin: bool = Depends(require_admin),
+):
+    """Set or clear a local base override for a LoRA adapter."""
+    engine_pool = _get_engine_pool()
+    if engine_pool is None:
+        raise HTTPException(status_code=503, detail="Engine pool not initialized")
+    settings_manager = _require_settings_manager()
+    global_settings = _get_global_settings()
+    if global_settings is None:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+
+    entry = engine_pool.get_entry(adapter_id)
+    adapter = entry.adapter if entry is not None else None
+    issues = [
+        issue for issue in engine_pool.adapter_issues if issue.public_id == adapter_id
+    ]
+    if adapter is None and not issues:
+        raise HTTPException(status_code=404, detail=f"Adapter not found: {adapter_id}")
+
+    base_id = request.base_model_id
+    if base_id is not None and not any(
+        candidate.model_id == base_id
+        for candidate in engine_pool.adapter_base_candidates()
+    ):
+        raise HTTPException(status_code=400, detail=f"Invalid adapter base: {base_id}")
+
+    if (
+        len(issues) > 1
+        or (entry is not None and issues)
+        or any(issue.kind.value == "id_collision" for issue in issues)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Adapter id {adapter_id!r} is not unique. Rename the adapter directory.",
+        )
+    if adapter is not None and (entry.engine is not None or entry.is_loading):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Unload adapter {adapter_id!r} before changing its base.",
+        )
+
+    settings_manager.set_adapter_base(adapter_id, base_id)
+    _rediscover_models(
+        engine_pool,
+        global_settings,
+        settings_manager,
+        settings_manager.get_pinned_model_ids(),
+    )
+    entry = engine_pool.get_entry(adapter_id)
+    adapter = entry.adapter if entry is not None else None
+    issues = [
+        issue for issue in engine_pool.adapter_issues if issue.public_id == adapter_id
+    ]
+    logger.info("Set base override for adapter %r to %r", adapter_id, base_id)
+    return {
+        "success": True,
+        "id": adapter_id,
+        "base_model_id": settings_manager.get_adapter_bases().get(adapter_id),
+        "adapter": adapter.as_status() if adapter is not None else None,
+        "issue": (
+            _adapter_issue_row(issues[0])
+            if adapter is None and len(issues) == 1
+            else None
+        ),
+    }
 
 
 @router.post("/api/models/{model_id}/unload")
@@ -2988,14 +3080,22 @@ async def import_mtplx(
     is_admin: bool = Depends(_require_admin_or_bearer),
 ):
     """Import an MTPLX side-car MTP head into the model's checkpoint index."""
-    from ..oq import import_mtplx_sidecar
-
     engine_pool = _get_engine_pool()
     if engine_pool is None:
         raise HTTPException(status_code=503, detail="Engine pool not initialized")
     entry = engine_pool.get_entry(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+    if entry.adapter is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MTPLX import is not supported on an adapter. "
+                f"Import against the base model ID {entry.adapter.base.model_id!r} instead."
+            ),
+        )
+
+    from ..oq import import_mtplx_sidecar
 
     try:
         result = await asyncio.to_thread(import_mtplx_sidecar, entry.model_path)
@@ -8539,6 +8639,23 @@ async def get_hf_model_info(
             local_dir=local_dir,
             token=request.headers.get("x-hf-token") or None,
         )
+        adapter = result.get("adapter")
+        if adapter is not None:
+            try:
+                engine_pool = _get_engine_pool() if _get_engine_pool else None
+            except HTTPException:
+                engine_pool = None
+            if engine_pool is None:
+                adapter["local_base_ids"] = []
+            else:
+                from ..lora_adapter import match_bases
+
+                adapter["local_base_ids"] = sorted(
+                    candidate.model_id
+                    for candidate in match_bases(
+                        adapter["base_repo_id"], engine_pool.adapter_base_candidates()
+                    )
+                )
         if _hf_downloader is not None:
             result["disk_free"] = await asyncio.to_thread(
                 _free_disk_bytes, _hf_downloader.model_dir
@@ -8579,7 +8696,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     model_dirs = global_settings.get_effective_model_dirs()
 
-    from ..model_discovery import _is_model_dir
+    from ..model_discovery import _is_adapter_dir, _is_model_dir
 
     def _add_model(
         model_path: Path,
@@ -8624,7 +8741,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
             if gguf.is_gguf_folder(subdir):
                 gguf_folders.append((subdir, subdir.name, "local"))
-            elif _is_model_dir(subdir):
+            elif _is_adapter_dir(subdir) or _is_model_dir(subdir):
                 # Level 1: direct model folder
                 _add_model(subdir, subdir.name)
             else:
@@ -8651,7 +8768,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                         continue
                     if gguf.is_gguf_folder(child):
                         gguf_folders.append((child, child.name, "local"))
-                    elif _is_model_dir(child):
+                    elif _is_adapter_dir(child) or _is_model_dir(child):
                         _add_model(
                             child, child.name, repo_id=f"{subdir.name}/{child.name}"
                         )
@@ -8710,10 +8827,9 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
 
 def _is_listed_model_folder(path: Path) -> bool:
-    """A folder /api/hf/models lists whole: a checkpoint or a GGUF folder."""
-    from ..model_discovery import _is_model_dir
+    from ..model_discovery import _is_adapter_dir, _is_model_dir
 
-    return _is_model_dir(path) or gguf.is_gguf_folder(path)
+    return _is_adapter_dir(path) or _is_model_dir(path) or gguf.is_gguf_folder(path)
 
 
 @router.delete("/api/hf/models/{model_name}")
@@ -8735,6 +8851,21 @@ async def delete_hf_model(
         _refresh_pool_after_delete(model_name, engine_pool, global_settings)
         return {"success": True, "message": f"Model '{model_name}' deleted"}
 
+    from ..model_discovery import _is_adapter_dir
+
+    has_entry = getattr(entry, "model_id", None) == model_name
+    adapter = getattr(entry, "adapter", None) if has_entry else None
+
+    def matches_folder(candidate: Path) -> bool:
+        if not candidate.is_dir() or not _is_listed_model_folder(candidate):
+            return False
+        if adapter is not None:
+            return (
+                _is_adapter_dir(candidate)
+                and candidate.absolute() == adapter.source.path.absolute()
+            )
+        return not has_entry or not _is_adapter_dir(candidate)
+
     # Search the discovery directories in flat, HF cache and org-folder layouts
     model_path = None
     parent_model_dir = None
@@ -8742,7 +8873,7 @@ async def delete_hf_model(
         if not model_dir.exists():
             continue
         candidate = model_dir / model_name
-        if candidate.is_dir() and _is_listed_model_folder(candidate):
+        if matches_folder(candidate):
             model_path = candidate
             parent_model_dir = model_dir
             break
@@ -8753,18 +8884,22 @@ async def delete_hf_model(
             if hf_resolved is not None:
                 # The repo dir owns the snapshot symlinks and their blobs, so
                 # it is removed as one unit.
-                if hf_resolved.model_id == model_name and (
-                    _is_hf_cache_mlx_compatible(
-                        hf_resolved.snapshot_path, hf_resolved.source_repo_id
+                if (
+                    adapter is None
+                    and hf_resolved.model_id == model_name
+                    and (
+                        _is_hf_cache_mlx_compatible(
+                            hf_resolved.snapshot_path, hf_resolved.source_repo_id
+                        )
+                        or gguf.is_gguf_folder(hf_resolved.snapshot_path)
                     )
-                    or gguf.is_gguf_folder(hf_resolved.snapshot_path)
                 ):
                     model_path = subdir
                     parent_model_dir = model_dir
                     break
                 continue
             candidate = subdir / model_name
-            if candidate.is_dir() and _is_listed_model_folder(candidate):
+            if matches_folder(candidate):
                 model_path = candidate
                 parent_model_dir = model_dir
                 break
@@ -8853,13 +8988,19 @@ def _refresh_pool_after_delete(model_name: str, engine_pool, global_settings) ->
     # so they can be reused by another model.
     if settings_manager:
         settings_manager.delete_settings(model_name)
+    _rediscover_models(engine_pool, global_settings, settings_manager, pinned_models)
+    logger.info("Model pool refreshed after deletion")
+
+
+def _rediscover_models(
+    engine_pool, global_settings, settings_manager, pinned_models
+) -> None:
     engine_pool.discover_models(
         [str(d) for d in global_settings.get_effective_model_dirs()],
         pinned_models,
     )
     if settings_manager:
         engine_pool.apply_settings_overrides(settings_manager)
-    logger.info("Model pool refreshed after deletion")
 
 
 def _unlink_hf_cache_file(link: Path, repo_dir: Path) -> None:

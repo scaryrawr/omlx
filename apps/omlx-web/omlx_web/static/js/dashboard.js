@@ -253,6 +253,7 @@
 
             // Models
             models: [],
+            adapterIssues: [],
             loadingModels: false,
             _modelsLoadSeq: 0,
             _modelsLoadPromise: null,
@@ -1630,6 +1631,12 @@
 
                             if (loadSeq === this._modelsLoadSeq) {
                                 this.models = data.models || [];
+
+                                const issues = data.adapter_issues || [];
+
+                                if (JSON.stringify(this.adapterIssues) !== JSON.stringify(issues)) {
+                                    this.adapterIssues = issues;
+                                }
                             }
                         } else if (response.status === 401) {
                             window.location.href = '/admin';
@@ -9323,7 +9330,8 @@
             // A downloaded checkpoint with Hub changes offers Update instead of the download buttons.
             hfShowsUpdate() {
                 const detail = this.hfModelDetail;
-                return !!(detail && !detail.is_adapter && !detail.unsupported_reason && detail.layout !== 'gguf'
+
+                return !!(detail && !detail.unsupported_reason && detail.layout !== 'gguf'
                     && detail.update_files?.length && this.isModelDownloaded(detail.repo_id));
             },
 
