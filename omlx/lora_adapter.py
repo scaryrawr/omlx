@@ -42,9 +42,10 @@ _DTYPE_BYTES = {"F32": 4, "BF16": 2, "F16": 2}
 _TENSOR_KEY = re.compile(
     r"base_model\.model\.(?P<path>.+)\.lora_(?P<half>[AB])\.weight"
 )
-_LAYER_TAIL = re.compile(r"(?:^|\.)(layers\.\d+\..+)$")
+_LANGUAGE_PREFIX = r"(?:model\.)?(?:language_model\.(?:model\.)?)?"
+_LAYER_TAIL = re.compile(rf"{_LANGUAGE_PREFIX}(layers\.\d+\..+)")
 _ROUTED_DOWN = re.compile(
-    r"(?:model\.|language_model\.)*layers\.\d+\.(?:mlp\.)?experts\.down_proj"
+    rf"{_LANGUAGE_PREFIX}layers\.\d+\.(?:mlp\.)?experts\.down_proj"
 )
 _UNSUPPORTED_WHEN_TRUTHY = (
     "use_dora",
@@ -552,7 +553,7 @@ def match_bases(
 
 
 def resolve_adapters(
-    sources: Iterable[AdapterSource],
+    sources: Iterable[AdapterSource | AdapterIssue],
     candidates: Iterable[BaseCandidate],
     overrides: Mapping[str, str],
     taken_ids: Collection[str],
@@ -575,6 +576,9 @@ def resolve_adapters(
 
     for source in sources:
         public_id = source.public_id
+        if isinstance(source, AdapterIssue):
+            reserved.add(public_id)
+            continue
         pin = f"PUT /admin/api/adapters/{public_id}/base"
         if ":" in public_id:
             reject(
@@ -662,7 +666,7 @@ def discover_adapters(
     A directory that cannot be served becomes an issue, never an exception. Parse
     issues come first, then resolution issues. Entries never override a real model id.
     """
-    sources: list[AdapterSource] = []
+    sources: list[AdapterSource | AdapterIssue] = []
     parse_issues: list[AdapterIssue] = []
     for adapter_dir in adapter_dirs:
         try:
@@ -673,9 +677,9 @@ def discover_adapters(
                 if isinstance(error, UnsupportedAdapterError)
                 else IssueKind.MALFORMED
             )
-            parse_issues.append(
-                AdapterIssue(adapter_dir.name, adapter_dir, kind, error.message)
-            )
+            issue = AdapterIssue(adapter_dir.name, adapter_dir, kind, error.message)
+            parse_issues.append(issue)
+            sources.append(issue)
 
     bindings, resolve_issues = resolve_adapters(
         sources, base_candidates(discovered.values()), base_overrides, set(discovered)
@@ -752,11 +756,10 @@ def _tensor_name(hf_path: str, half: str) -> str:
 
 def _target_name(hf_path: str, named: Mapping[str, nn.Module], adapter: Path) -> str:
     """The name under the language root that an adapter's HF module path points at."""
-    match = _LAYER_TAIL.search(hf_path)
+    match = _LAYER_TAIL.fullmatch(hf_path)
     if match is None:
         raise AdapterShapeError(
-            f"{hf_path} is not inside a numbered layer, so oMLX cannot map it to "
-            "the base model.",
+            f"{hf_path} is not inside a supported numbered language layer.",
             adapter,
         )
     tail = match.group(1)

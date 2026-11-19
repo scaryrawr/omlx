@@ -1070,6 +1070,32 @@ class TestDiscoverAdapters:
             (second, IssueKind.ID_COLLISION)
         ]
 
+    @pytest.mark.parametrize("unsupported", [False, True])
+    def test_broken_adapter_does_not_hand_its_id_to_another_directory(
+        self, write_lora_adapter, tmp_path, unsupported
+    ):
+        first = write_lora_adapter(tmp_path / "a" / "pi")
+        second = write_lora_adapter(tmp_path / "b" / "pi")
+        models = {"qwen-base": discovered("qwen-base", model_path=QWEN_DIR)}
+        assert (
+            discover_adapters([first, second], models, {})
+            .entries["pi"]
+            .adapter.source.path
+            == first
+        )
+
+        if unsupported:
+            write_lora_adapter(first, config={"use_dora": True})
+        else:
+            (first / WEIGHTS).write_bytes(b"truncated")
+
+        result = discover_adapters([first, second], models, {})
+        assert not result.entries
+        assert [(issue.path, issue.kind) for issue in result.issues] == [
+            (first, IssueKind.UNSUPPORTED if unsupported else IssueKind.MALFORMED),
+            (second, IssueKind.ID_COLLISION),
+        ]
+
     def test_an_override_pins_one_of_two_matching_bases(
         self, write_lora_adapter, tmp_path
     ):
@@ -1733,9 +1759,24 @@ class TestAttachLoraRejections:
 
         assert_rejected(LlmModel(), bind(adapter), bad)
 
-    def test_target_outside_the_numbered_layers(self, write_lora_adapter, tmp_path):
-        bad = "model.visual.blocks.0.attn.qkv"
-        adapter = self.adapter(write_lora_adapter, tmp_path, {bad: (DIMS, HIDDEN)})
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "model.visual.blocks.0.attn.qkv",
+            "model.vision_tower.encoder.layers.0.mlp.gate_proj",
+            "model.mtp.layers.0.mlp.gate_proj",
+        ],
+    )
+    def test_target_outside_language_layers(self, write_lora_adapter, tmp_path, bad):
+        adapter = write_lora_adapter(
+            tmp_path / "ad",
+            rank=RANK,
+            alpha=ALPHA,
+            modules={
+                "model.layers.0.mlp.down_proj": (HIDDEN, DIMS),
+                bad: (DIMS, HIDDEN),
+            },
+        )
 
         assert_rejected(LlmModel(), bind(adapter), bad)
 

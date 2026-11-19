@@ -419,6 +419,10 @@ class ModelSyncManager:
             raise ModelNotFoundError(model_id or "<empty>", [])
         candidate = Path(model_id).expanduser()
         if candidate.is_dir():
+            from ..model_discovery import _is_adapter_dir
+
+            if _is_adapter_dir(candidate):
+                raise ModelNotFoundError(model_id, [])
             return candidate.resolve()
         pool = self._pool_getter() if self._pool_getter is not None else None
         if pool is not None:

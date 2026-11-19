@@ -21,7 +21,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from omlx.cluster import memory_guard, modelsync
-from omlx.exceptions import ModelNotFoundError
 from omlx.cluster.deployment import (
     ClusterDeployment,
     ClusterHost,
@@ -41,6 +40,7 @@ from omlx.cluster.modelsync import (
 )
 from omlx.cluster.planner import PipelineAssignment, ShardPlan, synthetic_model_layout
 from omlx.cluster.registry import ClusterRegistry
+from omlx.exceptions import ModelNotFoundError
 
 
 def _write_shard(directory, name, tensors, payload=b"\x00" * 32):
@@ -163,6 +163,12 @@ def test_local_manifest_does_not_resolve_adapter_to_base(tmp_path):
     with pytest.raises(ModelNotFoundError):
         manager.local_manifest("tuned")
     assert manager.resolve_local_model_path("alpha") == base.resolve()
+
+
+def test_local_manifest_rejects_adapter_directories(tmp_path, write_lora_adapter):
+    adapter = write_lora_adapter(tmp_path / "tuned")
+    with pytest.raises(ModelNotFoundError):
+        ModelSyncManager().local_manifest(str(adapter))
 
 
 def test_manifest_endpoint_serves_known_model(manifest_client):
