@@ -25,6 +25,60 @@ from omlx.api.grammar import GRAMMAR_CACHE_LIMIT_BYTES
 from omlx.engine.base import BaseEngine, BaseNonStreamingEngine, GenerationOutput
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["adapter", "base", "invalid"])
+async def test_start_attaches_lora_before_post_load(
+    tmp_path, monkeypatch, write_lora_adapter, case
+):
+    from omlx import lora_adapter
+    from omlx.engine.batched import BatchedEngine
+    from omlx.exceptions import AdapterShapeError
+    from omlx.utils import model_loading
+
+    class PostLoadReachedError(Exception):
+        pass
+
+    source = lora_adapter.parse_adapter(write_lora_adapter(tmp_path / "adapter"))
+    binding = lora_adapter.bind_adapter(source, lora_adapter.BaseRef("base", tmp_path))
+    model, tokenizer = object(), object()
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append("load")
+        return model, tokenizer
+
+    def attach(loaded, adapter):
+        assert loaded is model and adapter is binding
+        calls.append("attach")
+        if case == "invalid":
+            raise AdapterShapeError("invalid test adapter", source.path)
+        return 1
+
+    def post_load(loaded, settings):
+        assert loaded is model
+        calls.append("post_load")
+        raise PostLoadReachedError
+
+    monkeypatch.setattr(
+        model_loading, "maybe_apply_pre_load_patches", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(model_loading, "maybe_load_custom_quantization", load)
+    monkeypatch.setattr(lora_adapter, "attach_lora", attach)
+    monkeypatch.setattr(model_loading, "apply_post_load_transforms", post_load)
+    engine = BatchedEngine(str(tmp_path), lora=None if case == "base" else binding)
+    if case == "invalid":
+        with pytest.raises(AdapterShapeError, match="invalid test adapter"):
+            await engine.start()
+        assert calls == ["load", "attach"]
+        assert engine.tokenizer is None
+    else:
+        with pytest.raises(PostLoadReachedError):
+            await engine.start()
+        assert calls == (
+            ["load", "post_load"] if case == "base" else ["load", "attach", "post_load"]
+        )
+
+
 class FakeStreamingCore:
     """Minimal async engine core for stream cleanup tests."""
 

@@ -11509,6 +11509,78 @@
         }
       }
     },
+    "downloads.card.adapter_info" : {
+      "comment" : "Model card information banner. The placeholder is the Hugging Face repo ID of the base model.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA-Adapter für %@. Mit einem passenden Basismodell auf diesem Mac erscheint er als eigenständiges Modell."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA adapter for %@. It appears as its own model on top of a matching base model on this Mac."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adattatore LoRA per %@. Se su questo Mac è presente un modello di base compatibile, l'adattatore compare come modello separato."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA-адаптер для %@. Если на этом Mac есть подходящая базовая модель, адаптер отображается как отдельная модель."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的 LoRA 适配器。如果这台 Mac 上有匹配的基座模型，适配器会显示为单独的模型。"
+          }
+        }
+      }
+    },
+    "downloads.card.adapter_no_base" : {
+      "comment" : "Model card warning. The placeholder is the Hugging Face repo ID of the base model.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA-Adapter. Es wurde noch kein passendes Basismodell heruntergeladen. Lade %@ oder eine quantisierte Version davon herunter, damit der Adapter verfügbar wird."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA adapter. No matching base model is downloaded yet. Download %@ or a quantized version of it and this adapter becomes available."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adattatore LoRA. Non hai ancora scaricato un modello di base compatibile. Scarica %@ o una sua versione quantizzata per rendere disponibile l'adattatore."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA-адаптер. Подходящая базовая модель ещё не скачана. Скачайте %@ или её квантованную версию, чтобы адаптер стал доступен."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LoRA 适配器。尚未下载匹配的基座模型。下载 %@ 或其量化版本后，即可使用此适配器。"
+          }
+        }
+      }
+    },
     "downloads.card.cancel" : {
       "comment" : "Button in the model card sheet that closes it without downloading",
       "extractionState" : "manual",
@@ -12009,42 +12081,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在加载模型卡片…"
-          }
-        }
-      }
-    },
-    "downloads.card.lora_info" : {
-      "comment" : "Note in the model card sheet when the repo is a LoRA adapter rather than a full model",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dies ist ein LoRA-Adapter. Nach dem Herunterladen in den erweiterten Einstellungen eines Basismodells auswählen."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This is a LoRA adapter. After it downloads, choose it in a base model's Advanced Settings."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Questo è un adattatore LoRA. Dopo il download, sceglilo nelle impostazioni avanzate di un modello base."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Это LoRA-адаптер. После загрузки выберите его в расширенных настройках базовой модели."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这是一个 LoRA 适配器。下载后，请在基础模型的高级设置中选择它。"
           }
         }
       }

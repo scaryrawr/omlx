@@ -2959,7 +2959,8 @@ class TestGetModelInfo:
         assert result["files"][0]["name"] == "model.safetensors"
         assert "text-generation" in result["tags"]
         assert result["model_card"] == ""  # No README available
-        assert result["is_adapter"] is False
+        assert result["adapter"] is None
+        assert "is_" + "adapter" not in result
 
     @pytest.mark.asyncio
     async def test_u32_size_uses_sibling_blobs_not_histogram(self):
@@ -2997,36 +2998,99 @@ class TestGetModelInfo:
         assert result["params"] == 25_805_936_206
 
     @pytest.mark.asyncio
-    async def test_detects_lora_adapter(self):
-        """Verify is_adapter=True when adapter_config.json is in file list."""
-        mock_info = MagicMock()
-        mock_info.id = "user/lora-adapter"
-        mock_info.downloads = 50
-        mock_info.likes = 5
-        mock_info.tags = ["lora", "mlx"]
-        mock_info.pipeline_tag = "text-generation"
-        mock_info.created_at = None
-        mock_info.last_modified = None
-        mock_info.safetensors = None
-        mock_info.card_data = None
+    @pytest.mark.parametrize(
+        ("case", "reason"),
+        [
+            ("valid", None),
+            ("dora", "use_dora"),
+            ("fetch", "Could not read adapter_config.json: proxy unavailable"),
+            ("listed_oversize", "larger than 1 MiB"),
+            ("downloaded_oversize", "larger than 1 MiB"),
+            ("splash", "This is a Splash package"),
+            (
+                "bin_only",
+                "oMLX never loads pickled weights. Re-save it as "
+                "adapter_model.safetensors.",
+            ),
+            (
+                "missing_weights",
+                "adapter_model.safetensors is missing. Choose a repo that includes it.",
+            ),
+        ],
+    )
+    async def test_adapter_config_metadata(self, tmp_path, case, reason):
+        config_path = tmp_path / "adapter_config.json"
+        config = {
+            "peft_type": "LORA",
+            "base_model_name_or_path": "LiquidAI/LFM3-1.7B",
+            "r": 32,
+            "lora_alpha": 64,
+            "use_dora": case == "dora",
+        }
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        listed_size = config_path.stat().st_size
+        if case == "listed_oversize":
+            listed_size = 1024**2 + 1
+        if case == "downloaded_oversize":
+            with config_path.open("ab") as handle:
+                handle.write(b" " * (1024**2))
 
-        siblings = []
-        for name in ["adapter_config.json", "adapters.safetensors", "config.json"]:
-            s = MagicMock()
-            s.rfilename = name
-            s.size = 1000
-            siblings.append(s)
-        mock_info.siblings = siblings
+        weight_file = {
+            "bin_only": "adapter_model.bin",
+            "missing_weights": "model.safetensors",
+        }.get(case, "adapter_model.safetensors")
 
-        with patch("omlx.admin.hf_downloader.HfApi") as mock_api_cls, \
-             patch("omlx.admin.hf_downloader.hf_hub_download", side_effect=Exception("no readme")):
-            mock_api = MagicMock()
-            mock_api.model_info.return_value = mock_info
-            mock_api_cls.return_value = mock_api
+        model = SimpleNamespace(
+            id="harness-hub/LFM3-1.7B-pi",
+            downloads=50,
+            likes=5,
+            tags=["lora", "mlx"],
+            pipeline_tag="text-generation",
+            created_at=None,
+            last_modified=None,
+            safetensors=None,
+            card_data=None,
+            library_name="splash" if case == "splash" else "peft",
+            siblings=[
+                SimpleNamespace(rfilename=config_path.name, size=listed_size),
+                SimpleNamespace(rfilename=weight_file, size=1000),
+            ],
+        )
 
-            result = await HFDownloader.get_model_info("user/lora-adapter")
+        def download(*, filename, **kwargs):
+            if filename == "README.md":
+                raise FileNotFoundError(filename)
+            assert filename == config_path.name
+            if case == "fetch":
+                raise hub_httpx.ProxyError("proxy unavailable")
+            return str(config_path)
 
-        assert result["is_adapter"] is True
+        with (
+            patch("omlx.admin.hf_downloader.HfApi") as mock_api_cls,
+            patch(
+                "omlx.admin.hf_downloader.hf_hub_download", side_effect=download
+            ) as mock_download,
+        ):
+            mock_api_cls.return_value.model_info.return_value = model
+            result = await HFDownloader.get_model_info(model.id)
+
+        if reason is None:
+            assert result["adapter"] == {
+                "base_repo_id": "LiquidAI/LFM3-1.7B",
+                "rank": 32,
+            }
+            assert result["unsupported_reason"] is None
+            assert [
+                f["name"] for f in result["files"] if f["required"] and f["preselected"]
+            ] == ["adapter_config.json", "adapter_model.safetensors"]
+        else:
+            assert result["adapter"] is None
+            assert reason in result["unsupported_reason"]
+
+        if case in {"listed_oversize", "splash", "bin_only", "missing_weights"}:
+            assert [
+                call.kwargs["filename"] for call in mock_download.call_args_list
+            ] == ["README.md"]
 
     @pytest.mark.asyncio
     async def test_returns_model_card(self, tmp_path):

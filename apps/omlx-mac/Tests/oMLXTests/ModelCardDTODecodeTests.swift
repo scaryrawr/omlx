@@ -64,9 +64,6 @@ final class ModelCardDTODecodeTests: XCTestCase {
     }
 
     func testDecodesFullHFMetadata() throws {
-        // Production-shaped HF response — every metadata field populated.
-        // Drives the sheet's badges (params/size/pipeline_tag), the
-        // downloads / likes counters, and the LoRA-adapter warning.
         let json = """
         {
             "repo_id": "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -79,7 +76,7 @@ final class ModelCardDTODecodeTests: XCTestCase {
             "size_formatted": "4.2 GB",
             "downloads": 12500,
             "likes": 234,
-            "is_adapter": false
+            "adapter": null
         }
         """.data(using: .utf8)!
 
@@ -89,14 +86,10 @@ final class ModelCardDTODecodeTests: XCTestCase {
         XCTAssertEqual(dto.sizeFormatted, "4.2 GB")
         XCTAssertEqual(dto.downloads, 12500)
         XCTAssertEqual(dto.likes, 234)
-        XCTAssertEqual(dto.isAdapter, false)
+        XCTAssertNil(dto.adapter)
     }
 
     func testDecodesMSResponseWithoutHFOnlyFields() throws {
-        // ModelScope returns the same envelope but omits `is_adapter`
-        // entirely and always leaves `params`/`params_formatted` null
-        // (see ms_downloader.py). Decoder must treat both as nil rather
-        // than throwing.
         let json = """
         {
             "model_card": "## A ModelScope model",
@@ -114,18 +107,45 @@ final class ModelCardDTODecodeTests: XCTestCase {
         XCTAssertNil(dto.paramsFormatted)
         XCTAssertEqual(dto.sizeFormatted, "8.1 GB")
         XCTAssertEqual(dto.downloads, 4200)
-        XCTAssertNil(dto.isAdapter,
-                     "MS responses omit is_adapter entirely; decoder must produce nil, not throw.")
+        XCTAssertNil(dto.adapter, "ModelScope responses omit adapter metadata.")
     }
 
     func testDecodesLoraAdapter() throws {
-        // Adapter repos surface with `is_adapter: true` — the sheet's
-        // warning banner hinges on this. Test it as an isolated case
-        // so a server-side rename catches here, not via the larger
-        // metadata test.
-        let json = #"{"model_card": "...", "is_adapter": true}"#.data(using: .utf8)!
+        let json = """
+        {
+            "model_card": "...",
+            "adapter": {"base_repo_id": "LiquidAI/LFM3-1.7B", "rank": 32, "local_base_ids": []}
+        }
+        """.data(using: .utf8)!
         let dto = try decoder.decode(ModelCardDTO.self, from: json)
-        XCTAssertEqual(dto.isAdapter, true)
+        let adapter = try XCTUnwrap(dto.adapter)
+        XCTAssertEqual(adapter.baseRepoId, "LiquidAI/LFM3-1.7B")
+        XCTAssertEqual(adapter.rank, 32)
+        XCTAssertEqual(adapter.localBaseIds, [])
+    }
+
+    func testDecodesLoraAdapterWithoutLocalBaseIds() throws {
+        let json = """
+        {"model_card": "...", "adapter": {"base_repo_id": "LiquidAI/LFM3-1.7B", "rank": 32}}
+        """.data(using: .utf8)!
+        let dto = try decoder.decode(ModelCardDTO.self, from: json)
+        let adapter = try XCTUnwrap(dto.adapter)
+        XCTAssertNil(adapter.localBaseIds)
+    }
+
+    func testDecodesLoraAdapterWithLocalBaseIds() throws {
+        let json = """
+        {
+            "model_card": "...",
+            "adapter": {
+                "base_repo_id": "LiquidAI/LFM3-1.7B",
+                "rank": 32,
+                "local_base_ids": ["mlx-community/LFM3-1.7B-OptiQ-4bit"]
+            }
+        }
+        """.data(using: .utf8)!
+        let dto = try decoder.decode(ModelCardDTO.self, from: json)
+        XCTAssertEqual(dto.adapter?.localBaseIds, ["mlx-community/LFM3-1.7B-OptiQ-4bit"])
     }
 
     func testDecodesFilesList() throws {

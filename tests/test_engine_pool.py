@@ -31,6 +31,7 @@ from omlx.exceptions import (
     ModelUnavailableError,
     is_metal_out_of_memory,
 )
+from omlx.model_discovery import discover_models
 from omlx.model_settings import ModelSettings, ModelSettingsManager
 from omlx.patches.mlx_vlm_qwen4_exp_compat.residency import (
     Qwen4ExpResidencyEstimate,
@@ -71,6 +72,293 @@ def small_mock_model_dir(tmp_path):
     (model_b / "model.safetensors").write_bytes(b"0" * 2048)
 
     return tmp_path
+
+
+@pytest.fixture
+def lora_pool(small_mock_model_dir, write_lora_adapter):
+    adapter = write_lora_adapter(
+        small_mock_model_dir / "harness-hub" / "pi",
+        base_ref="owner/model-a",
+    )
+    pool = _make_pool()
+    pool.discover_models(str(small_mock_model_dir))
+    return pool, adapter
+
+
+def test_adapter_discovery_adds_a_separate_model(lora_pool, small_mock_model_dir):
+    pool, adapter_dir = lora_pool
+    base = pool.get_entry("model-a")
+    adapter = pool.get_entry("pi")
+    weight_bytes = (adapter_dir / "adapter_model.safetensors").stat().st_size
+    assert (
+        adapter.model_path == base.model_path == str(small_mock_model_dir / "model-a")
+    )
+    assert base.adapter is None
+    plain_size = discover_models(small_mock_model_dir)["model-a"].estimated_size
+    assert base.estimated_size == plain_size
+    assert adapter.estimated_size == plain_size + weight_bytes
+    assert adapter.source_type == "local"
+    assert adapter.adapter.source.path == adapter_dir
+    assert {candidate.model_id for candidate in pool.adapter_base_candidates()} == {
+        "model-a",
+        "model-b",
+    }
+    rows = {row["id"]: row for row in pool.get_status()["models"]}
+    assert rows["model-a"]["adapter"] is None
+    assert rows["pi"]["adapter"] == {
+        "base_model_id": "model-a",
+        "rank": 4,
+        "alpha": 8.0,
+        "weight_bytes": weight_bytes,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("settings", "reason"),
+    [
+        (ModelSettings(moe_expert_offload_enabled=True), "MoE expert offload"),
+        (ModelSettings(dflash_enabled=True), "DFlash"),
+    ],
+)
+async def test_routed_adapter_rejects_bypassing_runtime_modes(
+    small_mock_model_dir, write_lora_adapter, settings, reason
+):
+    import numpy as np
+
+    stem = "model.layers.0.mlp.experts"
+    write_lora_adapter(
+        small_mock_model_dir / "routed",
+        base_ref="owner/model-a",
+        rank=1,
+        modules={},
+        tensors={
+            f"base_model.model.{stem}.lora_A.weight": np.ones((3, 8), np.float32),
+            f"base_model.model.{stem}.lora_B.weight": np.ones((16, 3), np.float32),
+        },
+        config={"target_parameters": [stem + ".down_proj"]},
+    )
+    pool = _make_pool()
+    pool.discover_models(str(small_mock_model_dir))
+    with patch("omlx.engine_pool.BatchedEngine") as engine:
+        with pytest.raises(ModelLoadingError, match=reason):
+            await pool.get_engine("routed", runtime_settings=settings)
+        engine.assert_not_called()
+
+
+def test_missing_adapter_base_is_reported_once(tmp_path, caplog, write_lora_adapter):
+    write_lora_adapter(tmp_path / "pi", base_ref="owner/missing")
+    pool = _make_pool()
+    for _ in range(2):
+        pool.discover_models(str(tmp_path))
+        assert pool.get_model_ids() == []
+        (issue,) = pool.adapter_issues
+        assert (issue.public_id, issue.kind.value) == ("pi", "base_missing")
+        assert "owner/missing" in issue.detail
+    assert sum(issue.detail in record.message for record in caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_override_resolves_ambiguity_without_rebinding_loaded_adapter(
+    lora_pool, small_mock_model_dir
+):
+    pool, _ = lora_pool
+    root = small_mock_model_dir
+    shutil.copytree(root / "model-a", root / "model-a-4bit")
+    manager = ModelSettingsManager(root / "settings")
+    pool._settings_manager = manager
+    pool.discover_models(str(root))
+    assert pool.get_entry("pi") is None
+    (issue,) = pool.adapter_issues
+    assert issue.kind.value == "base_ambiguous"
+    assert set(issue.candidates) == {"model-a", "model-a-4bit"}
+
+    manager.set_adapter_base("pi", "model-a-4bit")
+    pool.discover_models(str(root))
+    assert pool.adapter_issues == ()
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("pi") is loaded
+    manager.set_adapter_base("pi", "model-a")
+    pool.discover_models(str(root))
+    assert pool.get_entry("pi").engine is loaded
+    assert pool.get_entry("pi").adapter.base.model_id == "model-a-4bit"
+    assert pool.get_entry("pi").model_path == str(root / "model-a-4bit")
+
+
+@pytest.mark.asyncio
+async def test_rediscovery_does_not_serve_adapter_from_a_replaced_directory(
+    lora_pool, small_mock_model_dir, write_lora_adapter
+):
+    pool, first = lora_pool
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock(), scheduler=None, _engine=None)
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("pi") is loaded
+    shutil.rmtree(first)
+    second = write_lora_adapter(
+        small_mock_model_dir / "other" / "pi", base_ref="owner/model-b"
+    )
+    pool.discover_models(str(small_mock_model_dir))
+
+    with pytest.raises(ModelLoadingError, match="changed adapter directory"):
+        await pool.get_engine("pi")
+    assert pool.get_entry("pi").engine is loaded
+
+    assert await pool.request_unload("pi", reason="test")
+    pool.discover_models(str(small_mock_model_dir))
+    assert pool.get_entry("pi").adapter.source.path == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("final_state", ["valid", "missing_base", "malformed"])
+async def test_rediscovery_does_not_serve_resident_base_under_adapter_id(
+    small_mock_model_dir, write_lora_adapter, final_state
+):
+    root = small_mock_model_dir
+    pool = _make_pool()
+    pool.discover_models(str(root))
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("model-b") is loaded
+    shutil.rmtree(root / "model-b")
+    write_lora_adapter(root / "model-b", base_ref="owner/model-a")
+    pool.discover_models(str(root))
+    if final_state == "missing_base":
+        write_lora_adapter(root / "model-b", base_ref="owner/missing")
+    elif final_state == "malformed":
+        (root / "model-b" / "adapter_config.json").write_text("not JSON")
+    pool.discover_models(str(root))
+
+    with pytest.raises(ModelLoadingError, match="changed between a base and a LoRA"):
+        await pool.get_engine("model-b")
+
+
+@pytest.mark.asyncio
+async def test_invalid_adapter_elsewhere_does_not_block_same_name_base(
+    small_mock_model_dir, write_lora_adapter
+):
+    root = small_mock_model_dir
+    pool = _make_pool()
+    pool.discover_models(str(root))
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("model-b") is loaded
+    write_lora_adapter(root / "owner" / "model-b", base_ref="owner/missing")
+    pool.discover_models(str(root))
+    assert await pool.get_engine("model-b") is loaded
+
+
+def test_adapter_seeds_thinking_off_but_not_lightning_mtp(
+    lora_pool, small_mock_model_dir, write_lora_adapter
+):
+    pool, _ = lora_pool
+    root = small_mock_model_dir
+    (root / "model-a" / "chat_template.jinja").write_text(
+        "{% if enable_thinking | default(true) %}thinking{% else %}plain{% endif %}"
+    )
+    (root / "model-a" / "config.json").write_text(
+        '{"model_type": "qwen3_5", "mtp_num_hidden_layers": 1}'
+    )
+    (root / "model-a" / "model.safetensors.index.json").write_text(
+        '{"weight_map": {"mtp.fc.weight": "model.safetensors"}}'
+    )
+    write_lora_adapter(root / "pi-no-toggle", base_ref="owner/model-b")
+    pool.discover_models(str(root))
+    assert pool.get_entry("model-a").thinking_default is True
+    assert pool.get_entry("pi-no-toggle").thinking_default is None
+    manager = ModelSettingsManager(root / "settings")
+    pool.apply_settings_overrides(manager)
+
+    saved = ModelSettingsManager(root / "settings")
+    assert saved.get_settings("pi").enable_thinking is False
+    assert saved.get_settings("pi").mtp_enabled is False
+    assert saved.get_settings("pi-no-toggle").enable_thinking is None
+    assert saved.get_settings("model-a").enable_thinking is None
+    assert saved.get_settings("model-a").mtp_enabled is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "force_lm, failed_engine",
+    [(False, None), (True, None), (False, "vlm"), (True, "batched")],
+)
+async def test_adapter_reaches_vlm_and_batched_engines_including_fallbacks(
+    lora_pool, force_lm, failed_engine
+):
+    pool, _ = lora_pool
+    entry = pool.get_entry("pi")
+    entry.engine_type = entry.model_type = "vlm"
+    vlm = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    batched = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    if failed_engine is not None:
+        failed = vlm if failed_engine == "vlm" else batched
+        failed.start.side_effect = ValueError("unsupported checkpoint")
+    with (
+        patch("omlx.engine_pool.VLMBatchedEngine", return_value=vlm) as vlm_cls,
+        patch("omlx.engine_pool.BatchedEngine", return_value=batched) as batched_cls,
+    ):
+        engine = await pool.get_engine("pi", force_lm=force_lm)
+
+    expected = batched if force_lm != (failed_engine is not None) else vlm
+    assert engine is expected
+    constructors = [cls for cls in (vlm_cls, batched_cls) if cls.called]
+    assert len(constructors) == (2 if failed_engine else 1)
+    for cls in constructors:
+        assert cls.call_args.kwargs["lora"] is entry.adapter
+        assert cls.call_args.kwargs["scheduler_config"].model_name == "pi"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings, reason",
+    [
+        (ModelSettings(external_engine="splash"), "Splash"),
+        (ModelSettings(prefill_helper_node_id="peer"), "prefill helper"),
+        (ModelSettings(mtp_enabled=True), "MTP"),
+        (ModelSettings(vlm_mtp_enabled=True), "MTP"),
+        (ModelSettings(qwen35_ane_prefill_enabled=True), "ANE prefill"),
+        (ModelSettings(model_type_override="embedding"), "embedding engine"),
+    ],
+)
+async def test_adapter_rejects_modes_that_cannot_guarantee_the_delta(
+    lora_pool, small_mock_model_dir, settings, reason
+):
+    pool, _ = lora_pool
+    manager = ModelSettingsManager(small_mock_model_dir / "settings")
+    manager.set_settings("pi", settings)
+    pool._settings_manager = manager
+    pool.apply_settings_overrides(manager)
+
+    with (
+        patch("omlx.engine_pool.find_splash_binary") as launcher,
+        patch("omlx.engine_pool.prepare_prefill_helper") as helper,
+        patch("omlx.engine_pool.BatchedEngine") as batched,
+        patch("omlx.engine_pool.VLMBatchedEngine") as vlm,
+        pytest.raises(ModelLoadingError, match=reason),
+    ):
+        await pool.get_engine("pi")
+    assert pool.get_entry("pi").engine is None
+    for unused in (launcher, helper, batched, vlm):
+        unused.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lfm3_adapter_stays_on_vlm_when_text_engine_is_requested(
+    lora_pool, small_mock_model_dir
+):
+    pool, _ = lora_pool
+    (small_mock_model_dir / "model-a" / "config.json").write_text(
+        '{"model_type": "lfm3"}'
+    )
+    pool.discover_models(str(small_mock_model_dir))
+    vlm = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with (
+        patch("omlx.engine_pool.VLMBatchedEngine", return_value=vlm) as vlm_cls,
+        patch("omlx.engine_pool.BatchedEngine") as batched_cls,
+    ):
+        assert await pool.get_engine("pi", force_lm=True) is vlm
+    assert vlm_cls.call_args.kwargs["lora"] is pool.get_entry("pi").adapter
+    batched_cls.assert_not_called()
 
 
 class TestEnginePoolInit:
