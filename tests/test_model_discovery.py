@@ -1822,6 +1822,22 @@ class TestFormatSize:
 class TestAdapterDetection:
     """Tests for LoRA/PEFT adapter detection."""
 
+    def test_adapter_collector_preserves_discovery_order(
+        self, tmp_path, write_lora_adapter
+    ):
+        first, second = tmp_path / "first", tmp_path / "second"
+        flat = write_lora_adapter(first / "a-flat")
+        nested = write_lora_adapter(first / "b-org" / "nested")
+        duplicate = write_lora_adapter(second / "a-flat")
+        found = []
+
+        assert discover_models(first, adapter_dirs=found) == {}
+        assert found == [flat, nested]
+        found.clear()
+        assert discover_models_from_dirs([first, second], adapter_dirs=found) == {}
+        assert found == [flat, nested, duplicate]
+        assert discover_models_from_dirs([first, second]) == {}
+
     def test_adapter_dir_detected(self, tmp_path):
         """Directory with adapter_config.json is detected as adapter."""
         (tmp_path / "adapter_config.json").write_text("{}")

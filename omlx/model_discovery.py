@@ -26,7 +26,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from transformers.utils.chat_template_utils import render_jinja_template
 
@@ -44,6 +44,9 @@ from .model_classification import (
     is_helper_config_model_type,
 )
 from .utils.safetensors_shards import select_safetensors_weight_files
+
+if TYPE_CHECKING:
+    from .lora_adapter import AdapterBinding
 
 logger = logging.getLogger(__name__)
 
@@ -492,6 +495,7 @@ class DiscoveredModel:
     is_helper: bool = False  # Speculative-decoding drafter (dFlash/Assistant/MTP)
     model_format: str | None = None  # "gguf": served by an external engine only
     source_path: str | None = None  # The GGUF file a generated folder links to
+    adapter: "AdapterBinding | None" = None  # LoRA adapter served over model_path
 
 
 @dataclass(frozen=True)
@@ -1740,7 +1744,11 @@ def _is_adapter_dir(path: Path) -> bool:
     return (path / "adapter_config.json").exists()
 
 
-def _register_adapter(adapters: dict[str, str], path: Path, adapter_id: str) -> None:
+def _register_adapter(
+    adapters: dict[str, str] | None, path: Path, adapter_id: str
+) -> None:
+    if adapters is None:
+        return
     if adapter_id in adapters:
         logger.warning(
             f"Duplicate LoRA adapter id '{adapter_id}' at {path}, "
@@ -2613,6 +2621,8 @@ def discover_models(
     model_dir: Path,
     gguf_root: Path | None = None,
     adapters: dict[str, str] | None = None,
+    *,
+    adapter_dirs: list[Path] | None = None,
 ) -> dict[str, DiscoveredModel]:
     """
     Scan model directory with two-level discovery.
@@ -2642,8 +2652,8 @@ def discover_models(
     Args:
         model_dir: Path to directory containing model subdirectories
         gguf_root: Where GGUF model folders are generated; None skips GGUFs
-        adapters: Receives LoRA adapter folders as {adapter_id: path}. They are
-            never models: a model's settings apply one on top of its weights.
+        adapters: Maps adapter IDs to paths for per-model settings
+        adapter_dirs: Collects local adapter directories for standalone entries
 
     Returns:
         Dictionary mapping model_id to DiscoveredModel
@@ -2667,6 +2677,8 @@ def discover_models(
 
         if _is_adapter_dir(subdir):
             _register_adapter(adapters, subdir, subdir.name)
+            if adapter_dirs is not None:
+                adapter_dirs.append(subdir)
         elif _register_gguf_folder(models, subdir, gguf_root):
             pass
         elif _is_model_dir(subdir):
@@ -2714,9 +2726,11 @@ def discover_models(
                 if _is_adapter_dir(child):
                     has_children = True
                     _register_adapter(adapters, child, child.name)
-                elif _register_gguf_folder(models, child, gguf_root):
-                    has_children = True
-                elif _skip_splash_package(child):
+                    if adapter_dirs is not None:
+                        adapter_dirs.append(child)
+                elif _register_gguf_folder(
+                    models, child, gguf_root
+                ) or _skip_splash_package(child):
                     has_children = True
                 elif _is_model_dir(child):
                     has_children = True
@@ -2743,6 +2757,8 @@ def discover_models_from_dirs(
     model_dirs: list[Path],
     gguf_root: Path | None = None,
     adapters: dict[str, str] | None = None,
+    *,
+    adapter_dirs: list[Path] | None = None,
 ) -> dict[str, DiscoveredModel]:
     """
     Scan multiple model directories and merge results.
@@ -2752,7 +2768,9 @@ def discover_models_from_dirs(
 
     Args:
         model_dirs: List of paths to directories containing model subdirectories
-        adapters: Receives LoRA adapter folders, earlier directory first
+        gguf_root: Where GGUF model folders are generated; None skips GGUFs
+        adapters: Maps adapter IDs to paths for per-model settings
+        adapter_dirs: Collects local adapter directories for standalone entries
 
     Returns:
         Dictionary mapping model_id to DiscoveredModel
@@ -2766,7 +2784,9 @@ def discover_models_from_dirs(
             continue
 
         try:
-            discovered = discover_models(model_dir, gguf_root, adapters)
+            discovered = discover_models(
+                model_dir, gguf_root, adapters, adapter_dirs=adapter_dirs
+            )
         except ValueError as e:
             logger.warning(f"Skipping directory {model_dir}: {e}")
             continue
