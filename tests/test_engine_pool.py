@@ -187,6 +187,29 @@ async def test_override_resolves_ambiguity_without_rebinding_loaded_adapter(
 
 
 @pytest.mark.asyncio
+async def test_rediscovery_does_not_serve_adapter_from_a_replaced_directory(
+    lora_pool, small_mock_model_dir, write_lora_adapter
+):
+    pool, first = lora_pool
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock(), scheduler=None, _engine=None)
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("pi") is loaded
+    shutil.rmtree(first)
+    second = write_lora_adapter(
+        small_mock_model_dir / "other" / "pi", base_ref="owner/model-b"
+    )
+    pool.discover_models(str(small_mock_model_dir))
+
+    with pytest.raises(ModelLoadingError, match="changed adapter directory"):
+        await pool.get_engine("pi")
+    assert pool.get_entry("pi").engine is loaded
+
+    assert await pool.request_unload("pi", reason="test")
+    pool.discover_models(str(small_mock_model_dir))
+    assert pool.get_entry("pi").adapter.source.path == second
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("final_state", ["valid", "missing_base", "malformed"])
 async def test_rediscovery_does_not_serve_resident_base_under_adapter_id(
     small_mock_model_dir, write_lora_adapter, final_state

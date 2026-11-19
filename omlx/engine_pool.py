@@ -1627,7 +1627,12 @@ class EnginePool:
                 # update the pinned flag. Replacing an in-flight entry would
                 # orphan the engine the load attaches on completion (#2307).
                 existing.is_pinned = model_id in pinned_set
-                if (existing.adapter is None) != (adapter is None):
+                if (existing.adapter is None) != (adapter is None) or (
+                    existing.adapter is not None
+                    and adapter is not None
+                    and existing.adapter.source.path.resolve()
+                    != adapter.source.path.resolve()
+                ):
                     self._changed_adapter_ids.add(model_id)
             else:
                 # New or unloaded model: create fresh entry
@@ -1726,7 +1731,8 @@ class EnginePool:
         if entry.model_id in self._changed_adapter_ids:
             raise ModelLoadingError(
                 entry.model_id,
-                f"Model '{entry.model_id}' changed between a base and a LoRA adapter. "
+                f"Model '{entry.model_id}' changed between a base and a LoRA adapter "
+                "or changed adapter directory. "
                 "Unload it and rediscover models before serving it.",
             )
         reason = model_unavailable_reason(entry.config_model_type)
