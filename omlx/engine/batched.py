@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..adapter.output_parser import repair_tool_parser
 from ..api.tool_calling import convert_tools_for_template
@@ -40,6 +40,9 @@ from .base import (
     _run_scheduler_preflight_with_cleanup_retry,
     _warn_scheduler_unreachable_once,
 )
+
+if TYPE_CHECKING:
+    from ..lora_adapter import AdapterBinding
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +103,8 @@ class BatchedEngine(BaseEngine):
         enable_thinking: bool | None = None,
         model_settings: Any | None = None,
         prefill_eviction_callback: Any | None = None,
+        *,
+        lora: "AdapterBinding | None" = None,
     ):
         """
         Initialize the batched engine.
@@ -119,6 +124,7 @@ class BatchedEngine(BaseEngine):
         self._enable_thinking = enable_thinking
         self._model_settings = model_settings
         self._prefill_eviction_callback = prefill_eviction_callback
+        self._lora = lora
 
         self._model = None
         self._tokenizer = None
@@ -377,9 +383,22 @@ class BatchedEngine(BaseEngine):
             )
 
         loop = asyncio.get_running_loop()
-        self._model, self._tokenizer = await loop.run_in_executor(
+        model, tokenizer = await loop.run_in_executor(
             get_mlx_executor(), _load_model_sync
         )
+        if self._lora is not None:
+            from ..lora_adapter import attach_lora
+
+            wrapped = await loop.run_in_executor(
+                get_mlx_executor(), attach_lora, model, self._lora
+            )
+            logger.info(
+                "Applied LoRA adapter %s to %s (%d modules)",
+                self._lora.source.public_id,
+                self._lora.base.model_id,
+                wrapped,
+            )
+        self._model, self._tokenizer = model, tokenizer
         # The scheduler repairs only its deep copy, and API tool parsing reads
         # this tokenizer. Repair it here only for MiMo-format templates (#4933).
         if is_mimo_tool_template(getattr(self._tokenizer, "chat_template", None)):
@@ -468,7 +487,7 @@ class BatchedEngine(BaseEngine):
         # After the fp16 recast so the adapter takes the activation dtype, and
         # before the fusions and packers that replace the projections.
         lora_path = getattr(self._model_settings, "lora_adapter", None)
-        if lora_path:
+        if lora_path and self._lora is None:
             wrapped = await loop.run_in_executor(
                 get_mlx_executor(), apply_adapter, self._model, lora_path
             )

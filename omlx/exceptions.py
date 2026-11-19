@@ -19,6 +19,7 @@ Usage:
 """
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 # Direction of the memory_guard_tier knob. Spelled out everywhere a message
@@ -346,6 +347,52 @@ class ModelInferenceError(ModelError):
 
 class TokenizerError(ModelError):
     """Error related to tokenization."""
+
+    pass
+
+
+class AdapterError(ModelError):
+    """
+    A LoRA adapter cannot be served.
+
+    Attributes:
+        details["adapter"]: The adapter directory, set whenever adapter_path is given.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        adapter_path: Path | str | None = None,
+        details: dict | None = None,
+    ):
+        merged = dict(details or {})
+        if adapter_path is not None:
+            merged["adapter"] = str(adapter_path)
+        super().__init__(message, merged)
+
+
+class UnsupportedAdapterError(AdapterError):
+    """
+    A valid PEFT adapter that uses a feature oMLX does not apply.
+
+    Attributes:
+        feature: The unsupported PEFT feature, also at details["feature"].
+    """
+
+    def __init__(
+        self,
+        message: str,
+        adapter_path: Path | str | None = None,
+        details: dict | None = None,
+        *,
+        feature: str,
+    ):
+        super().__init__(message, adapter_path, {**(details or {}), "feature": feature})
+        self.feature = feature
+
+
+class AdapterShapeError(AdapterError):
+    """The adapter does not fit the loaded base model, or changed since discovery."""
 
     pass
 
