@@ -8758,12 +8758,7 @@ def _token_strings(tokenizer, token_ids: list[int]) -> list[str]:
 
 
 def _embedding_tokenizer(engine: EmbeddingEngine, model: str | None):
-    # mlx-embeddings returns either a tokenizer or a processor that holds one.
-    # count_tokens() falls back to a whitespace estimate; /tokenize must not.
     processor = engine.processor
-    # TokenizerWrapper forwards attributes but not len().
-    if type(processor).__name__ == "TokenizerWrapper":
-        processor = processor._tokenizer
     for candidate in (processor, getattr(processor, "tokenizer", None)):
         if callable(getattr(candidate, "encode", None)) and callable(
             getattr(candidate, "decode", None)

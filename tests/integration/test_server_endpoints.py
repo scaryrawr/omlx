@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from fastapi.testclient import TestClient
-from mlx_embeddings.tokenizer_utils import TokenizerWrapper
 
 from omlx.api.responses_utils import ResponseStore
 from omlx.engine.base import BaseEngine
@@ -2578,7 +2577,6 @@ class TestEmbeddingTokenizeEndpoints:
             pytest.param(
                 lambda tokenizer: SimpleNamespace(tokenizer=tokenizer), id="processor"
             ),
-            pytest.param(TokenizerWrapper, id="mlx-embeddings"),
         ],
     )
     def test_tokenize(self, client, mock_engine_pool, mock_embedding_engine, wrap):
@@ -2608,7 +2606,7 @@ class TestEmbeddingTokenizeEndpoints:
 
     def test_detokenize(self, client, mock_engine_pool, mock_embedding_engine):
         tokenizer = CharTokenizer()
-        self._load(mock_embedding_engine, TokenizerWrapper(tokenizer))
+        self._load(mock_embedding_engine, SimpleNamespace(tokenizer=tokenizer))
         tokenizer.threads.clear()
 
         response = client.post(
