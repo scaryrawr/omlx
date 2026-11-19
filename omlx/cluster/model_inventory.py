@@ -96,7 +96,7 @@ def engine_pool_model_inventory(pool: Any) -> list[dict[str, Any]]:
     raw_models = status.get("models", []) if isinstance(status, dict) else []
     models: list[dict[str, Any]] = []
     for item in raw_models:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or item.get("adapter") is not None:
             continue
         model_path = item.get("model_path")
         model_type = item.get("model_type", "llm")

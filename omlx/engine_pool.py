@@ -1606,6 +1606,16 @@ class EnginePool:
 
         pinned_set = set(pinned_models or [])
         self._changed_adapter_ids.clear()
+        for issue in adapters.issues:
+            existing = self._entries.get(issue.public_id)
+            if (
+                existing is not None
+                and existing.adapter is None
+                and (existing.engine is not None or existing.is_loading)
+                and Path(existing.model_path).resolve() == issue.path.resolve()
+                and issue.public_id not in discovered
+            ):
+                self._changed_adapter_ids.add(issue.public_id)
 
         for model_id, info in discovered.items():
             adapter = getattr(info, "adapter", None)

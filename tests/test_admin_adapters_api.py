@@ -217,6 +217,34 @@ async def test_list_models_includes_binding_and_all_issues(
     assert result["adapter_issues"] == [issue_row(path) for path in paths]
 
 
+async def test_adapter_display_name_is_distinct_from_organized_base(
+    admin, adapter, monkeypatch
+):
+    pool, _, roots = admin
+    monkeypatch.setattr(routes, "_get_global_settings", lambda: None)
+    monkeypatch.setattr(routes, "_model_dirs_for_display", lambda _: roots)
+    adapter.model_path = str(roots[0] / "org" / "z-base")
+    pool._entries["z-base"] = Entry("z-base", adapter.model_path)
+
+    result = await routes.list_models(is_admin=True)
+
+    rows = {row["id"]: row for row in result["models"]}
+    assert rows["tuned"]["display_name"] == "tuned"
+    assert rows["z-base"]["display_name"] == "org/z-base"
+    assert rows["tuned"]["model_path"] == rows["z-base"]["model_path"]
+
+
+async def test_admin_rejects_remote_prefill_on_loaded_adapter(admin, adapter):
+    from unittest.mock import Mock
+
+    adapter.engine = Mock()
+    request = routes.ModelSettingsRequest(prefill_helper_node_id="peer")
+    with pytest.raises(HTTPException, match="do not support remote prefill") as caught:
+        await routes.update_model_settings("tuned", request, is_admin=True)
+    assert caught.value.status_code == 400
+    adapter.engine.configure_prefill_helper.assert_not_called()
+
+
 @pytest.mark.parametrize("dependency", ["_get_engine_pool", "_get_settings_manager"])
 async def test_set_base_requires_initialized_services(admin, monkeypatch, dependency):
     monkeypatch.setattr(routes, dependency, lambda: None)

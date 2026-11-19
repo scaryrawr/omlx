@@ -218,6 +218,7 @@ class TestParseAdapterConfig:
             ("modules_to_save", ["lm_head"]),
             ("rank_pattern", {"q_proj": 8}),
             ("alpha_pattern", {"q_proj": 16}),
+            ("layer_replication", [[0, 2]]),
             ("target_parameters", ["experts.gate_up_proj"]),
             ("fan_in_fan_out", True),
             ("bias", "all"),
@@ -232,6 +233,12 @@ class TestParseAdapterConfig:
         assert error.details["feature"] == feature
         assert feature in error.message
         assert "merge" in error.message.lower()
+
+    def test_alora_is_rejected_without_merge_advice(self):
+        with pytest.raises(UnsupportedAdapterError) as caught:
+            parse_adapter_config(config_bytes(alora_invocation_tokens=[42]))
+        assert caught.value.feature == "alora_invocation_tokens"
+        assert "merge" not in caught.value.message.lower()
 
     @pytest.mark.parametrize("peft_type", ["IA3", "LOHA", "lora"])
     def test_only_lora_peft_type_is_supported(self, peft_type):

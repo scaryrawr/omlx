@@ -2674,7 +2674,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "model_path": model_info.get("model_path", ""),
             "display_name": _model_display_name(
                 model_id,
-                model_info.get("model_path", ""),
+                None if model_info.get("adapter") else model_info.get("model_path", ""),
                 model_dirs,
                 source_repo_id=model_info.get("source_repo_id"),
                 source_path=model_info.get("source_path"),
@@ -3151,12 +3151,18 @@ async def update_model_settings(
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
 
-    # Get current settings
-    current_settings = settings_manager.get_settings(model_id)
-
     # Apply updates — use model_fields_set to distinguish "sent as null"
     # (clear to default) from "not sent" (don't touch).
     sent = request.model_fields_set
+    if (
+        getattr(entry, "adapter", None) is not None
+        and "prefill_helper_node_id" in sent
+        and request.prefill_helper_node_id
+    ):
+        raise HTTPException(
+            status_code=400, detail="LoRA adapters do not support remote prefill."
+        )
+    current_settings = settings_manager.get_settings(model_id)
     kv_scheme = current_settings.turboquant_kv_scheme
     kv_bits = current_settings.turboquant_kv_bits
     if "turboquant_kv_scheme" in sent:
@@ -3801,7 +3807,7 @@ async def update_model_settings(
     if not _oq_a8_kernels_available():
         # A8 here reaches only the helper's layers.
         helper_fields |= {"a8_prefill_enabled", "a8_prefill_min_tokens"}
-    if helper_fields & set(sent):
+    if getattr(entry, "adapter", None) is None and helper_fields & set(sent):
         if hasattr(entry.engine, "configure_prefill_helper"):
             # Applied to the loaded model in place; no reload.
             entry.engine.configure_prefill_helper(current_settings)

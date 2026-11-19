@@ -52,6 +52,7 @@ _UNSUPPORTED_WHEN_TRUTHY = (
     "modules_to_save",
     "rank_pattern",
     "alpha_pattern",
+    "layer_replication",
     "fan_in_fan_out",
 )
 _BASE_MODEL_TYPES = frozenset({"llm", "vlm"})
@@ -272,6 +273,11 @@ def parse_adapter_config(raw: bytes) -> LoraConfig:
     for key in _UNSUPPORTED_WHEN_TRUTHY:
         if document.get(key):
             raise _unsupported(key)
+    if document.get("alora_invocation_tokens") is not None:
+        raise UnsupportedAdapterError(
+            "oMLX does not support aLoRA's token-triggered activation.",
+            feature="alora_invocation_tokens",
+        )
     if document.get("bias") not in (None, "none"):
         raise _unsupported("bias")
 

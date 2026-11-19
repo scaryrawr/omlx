@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from omlx.cluster import memory_guard, modelsync
+from omlx.exceptions import ModelNotFoundError
 from omlx.cluster.deployment import (
     ClusterDeployment,
     ClusterHost,
@@ -144,6 +145,24 @@ def manifest_client(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(modelsync.manifest_router)
     return TestClient(app), models_root
+
+
+def test_local_manifest_does_not_resolve_adapter_to_base(tmp_path):
+    base = _model(tmp_path / "alpha")
+    rows = [
+        {
+            "id": "tuned",
+            "model_path": str(base),
+            "adapter": {"base_model_id": "alpha"},
+        },
+        {"id": "alpha", "model_path": str(base)},
+    ]
+    manager = ModelSyncManager(
+        pool_getter=lambda: SimpleNamespace(get_status=lambda: {"models": rows})
+    )
+    with pytest.raises(ModelNotFoundError):
+        manager.local_manifest("tuned")
+    assert manager.resolve_local_model_path("alpha") == base.resolve()
 
 
 def test_manifest_endpoint_serves_known_model(manifest_client):

@@ -426,6 +426,10 @@ class ModelSyncManager:
             for item in status.get("models", []) if isinstance(status, dict) else []:
                 if not isinstance(item, dict):
                     continue
+                if item.get("adapter") is not None:
+                    if model_id == item.get("id"):
+                        raise ModelNotFoundError(model_id, [])
+                    continue
                 if model_id in {
                     item.get("id"),
                     item.get("source_repo_id"),

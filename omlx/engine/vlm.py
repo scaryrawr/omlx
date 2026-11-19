@@ -2768,7 +2768,11 @@ class VLMBatchedEngine(BaseEngine):
         await self._engine.engine.start()
 
         scheduler = self._engine.engine.scheduler
-        stage_adapter = stage_adapter_for(self.model_type, "vlm", self._model_name)
+        stage_adapter = (
+            stage_adapter_for(self.model_type, "vlm", self._model_name)
+            if self._lora is None
+            else None
+        )
         if stage_adapter is not None:
             self._prefill_helper = PrefillHelperManager(
                 model_path=self._model_name,

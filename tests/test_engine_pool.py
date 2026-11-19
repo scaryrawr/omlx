@@ -187,8 +187,9 @@ async def test_override_resolves_ambiguity_without_rebinding_loaded_adapter(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("final_state", ["valid", "missing_base", "malformed"])
 async def test_rediscovery_does_not_serve_resident_base_under_adapter_id(
-    small_mock_model_dir, write_lora_adapter
+    small_mock_model_dir, write_lora_adapter, final_state
 ):
     root = small_mock_model_dir
     pool = _make_pool()
@@ -199,9 +200,29 @@ async def test_rediscovery_does_not_serve_resident_base_under_adapter_id(
     shutil.rmtree(root / "model-b")
     write_lora_adapter(root / "model-b", base_ref="owner/model-a")
     pool.discover_models(str(root))
+    if final_state == "missing_base":
+        write_lora_adapter(root / "model-b", base_ref="owner/missing")
+    elif final_state == "malformed":
+        (root / "model-b" / "adapter_config.json").write_text("not JSON")
+    pool.discover_models(str(root))
 
     with pytest.raises(ModelLoadingError, match="changed between a base and a LoRA"):
         await pool.get_engine("model-b")
+
+
+@pytest.mark.asyncio
+async def test_invalid_adapter_elsewhere_does_not_block_same_name_base(
+    small_mock_model_dir, write_lora_adapter
+):
+    root = small_mock_model_dir
+    pool = _make_pool()
+    pool.discover_models(str(root))
+    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
+        assert await pool.get_engine("model-b") is loaded
+    write_lora_adapter(root / "owner" / "model-b", base_ref="owner/missing")
+    pool.discover_models(str(root))
+    assert await pool.get_engine("model-b") is loaded
 
 
 def test_adapter_seeds_thinking_off_but_not_lightning_mtp(
