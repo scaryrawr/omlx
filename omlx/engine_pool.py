@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from .cluster.registry import ClusterRegistry
     from .engine.image import ImageEngine
     from .lora_adapter import AdapterBinding, AdapterIssue, BaseCandidate
-    from .model_settings import ModelSettingsManager
+    from .model_settings import ModelSettings, ModelSettingsManager
 
 import mlx.core as mx
 
@@ -2659,7 +2659,9 @@ class EnginePool:
                 logger.debug("external process memory read failed", exc_info=True)
         return total
 
-    def _start_prefill_helper_early(self, entry: Any, settings: Any) -> bool:
+    def _start_prefill_helper_early(
+        self, entry: EngineEntry, settings: ModelSettings | None
+    ) -> bool:
         """Start the chosen Prefill Accelerator while this Mac loads the model."""
         node_id = getattr(settings, "prefill_helper_node_id", None)
         model_type = (entry.config_model_type or "").replace("-", "_").lower()

@@ -28,6 +28,7 @@ from mlx_vlm.turboquant import (
     _build_codec,
     _concat_state,
     _QuantizedStateProxy,
+    _reserve_state_capacity,
     _slice_state,
     _slice_state_range,
     _state_length,  # noqa: F401 - re-exported for local attention/cache helpers
