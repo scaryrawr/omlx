@@ -1161,6 +1161,13 @@ class InklingTokenizer:
 
 
 class TestInklingOutputParserSession:
+    def test_mini_uses_channel_parser_with_an_arbitrary_model_name(self):
+        factory = detect_output_parser(
+            "local-checkpoint", InklingTokenizer({}), {"model_type": "inkling2_loop"}
+        )
+        assert factory is not None
+        assert factory.kind == "inkling"
+
     def _factory(self, token_map):
         tokenizer = InklingTokenizer(token_map)
         factory = detect_output_parser(

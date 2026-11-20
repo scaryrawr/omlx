@@ -2289,7 +2289,7 @@ class VLMBatchedEngine(BaseEngine):
                             getattr(self._model_settings, "a8_prefill_min_tokens", 128)
                         ),
                     )
-                if model_type == "inkling2":
+                if model_type in inkling2_vlm.MODEL_TYPES:
                     return inkling2_vlm.load(self._model_name)
                 if model_type == "muse_spark":
                     return muse_spark_model.load(

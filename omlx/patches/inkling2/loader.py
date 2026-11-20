@@ -54,6 +54,7 @@ def sanitize_weights(model, weights: dict) -> tuple[dict, dict]:
     out: dict = {}
     formats: dict[int, str] = {}
     per_layer: dict[int, dict] = {}
+    source_queries: dict[str, mx.array] = {}
     for key, value in weights.items():
         if key.startswith(_VISUAL_PREFIX):
             if has_vision:
@@ -85,24 +86,47 @@ def sanitize_weights(model, weights: dict) -> tuple[dict, dict]:
             out["model.final_input.query"] = value.reshape(-1, hidden).astype(
                 mx.float32
             )
+        elif name in (
+            "middle_cycle_cross_pass_queries",
+            "middle_cycle_cross_pass_kv_queries",
+        ):
+            source_queries[name] = value
         elif name.startswith("layers."):
             _, idx, rest = name.split(".", 2)
             per_layer.setdefault(int(idx), {})[rest] = value
+        elif getattr(model.model, "message_query", None) is not None:
+            raise ValueError(f"Unmapped Inkling 2 tensor: {key}")
+
+    if source_queries:
+        hidden = args.hidden_size
+        q_mlp = source_queries["middle_cycle_cross_pass_queries"].reshape(-1, 2, hidden)
+        k_v = source_queries["middle_cycle_cross_pass_kv_queries"].reshape(
+            -1, 2, hidden
+        )
+        out["model.message_query"] = mx.concatenate(
+            [q_mlp[:, :1], k_v, q_mlp[:, 1:]], axis=1
+        ).astype(mx.float32)
 
     for idx, d in per_layer.items():
         pre = f"model.layers.{idx}."
+        split_sliding = model.model.layers[idx].attn.split_sliding
         if args.is_sliding(idx):
-            out[pre + "attn.in_proj.weight"] = mx.concatenate(
-                [
-                    d.pop("attn.wq_du.weight"),
-                    d.pop("attn.wk_dv.weight"),
-                    d.pop("attn.wv_dv.weight"),
-                    d.pop("attn.wr_du.weight"),
-                    d.pop("attn.gate_attn.weight"),
-                    d.pop("attn.attn_sink_proj.weight"),
-                ],
-                axis=0,
-            )
+            q = d.pop("attn.wq_du.weight")
+            k_weight = d.pop("attn.wk_dv.weight")
+            v_weight = d.pop("attn.wv_dv.weight")
+            tail = [
+                d.pop("attn.wr_du.weight"),
+                d.pop("attn.gate_attn.weight"),
+                d.pop("attn.attn_sink_proj.weight"),
+            ]
+            if split_sliding:
+                out[pre + "attn.q_proj.weight"] = mx.concatenate([q, *tail], axis=0)
+                out[pre + "attn.k_proj.weight"] = k_weight
+                out[pre + "attn.v_proj.weight"] = v_weight
+            else:
+                out[pre + "attn.in_proj.weight"] = mx.concatenate(
+                    [q, k_weight, v_weight, *tail], axis=0
+                )
             out[pre + "attn.k_conv"] = d.pop("attn.k_sconv.weight").reshape(-1, k)
             out[pre + "attn.v_conv"] = d.pop("attn.v_sconv.weight").reshape(-1, k)
             out[pre + "attn_norm.weight"] = d.pop("attn_norm.weight")
@@ -140,6 +164,9 @@ def sanitize_weights(model, weights: dict) -> tuple[dict, dict]:
         formats[idx] = _expert_tensors(d, "w13", out, pre)
         if _expert_tensors(d, "w2", out, pre) != formats[idx]:
             raise ValueError(f"Inkling 2 layer {idx} mixes expert formats")
+        for n in list(d):
+            if n.startswith("controllers."):
+                out[pre + n] = d.pop(n)
         if d:
             raise ValueError(f"Unmapped Inkling 2 tensors in layer {idx}: {sorted(d)}")
     return out, formats

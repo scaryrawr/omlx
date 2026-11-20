@@ -536,6 +536,12 @@ Models are auto-detected by type. You can also download models directly from the
 
 Embedding and reranker models load through mlx-vlm; the separate mlx-embeddings dependency is gone. NomicBERT checkpoints are no longer supported. SigLIP serves text embeddings only and rejects image inputs. Qwen3-VL-Embedding rejects inputs longer than 8192 tokens instead of truncating them.
 
+oMLX serves [Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
+from the original `inkling2_loop` checkpoint. Keep the checkpoint files together
+in a model directory. Text, image input, and chat tool calls use the native
+checkpoint template and tokenizer. The bundled DSpark draft, audio input, and
+video input are not supported for Mini.
+
 ### Flint
 
 RecursiveSI Flint is a text-only MoE model served through native mlx-vlm

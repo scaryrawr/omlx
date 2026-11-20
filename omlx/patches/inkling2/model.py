@@ -346,9 +346,10 @@ def _dynamic_conv(x, dyn, static_w, state, heads, scale):
 
 
 class Inkling2Attention(nn.Module):
-    def __init__(self, args: TextArgs, layer_idx: int):
+    def __init__(self, args: TextArgs, layer_idx: int, *, split_sliding: bool = False):
         super().__init__()
         self.sliding = args.is_sliding(layer_idx)
+        self.split_sliding = split_sliding
         self.head_dim = args.swa_head_dim if self.sliding else args.head_dim
         self.n_heads = (
             args.swa_num_attention_heads if self.sliding else args.num_attention_heads
@@ -369,8 +370,14 @@ class Inkling2Attention(nn.Module):
         dr = self.n_heads * self.d_rel
         if self.sliding:
             # q | k | v | r | gate | sink share one input.
-            splits = (dq, self.dkv, self.dkv, dr, dq, self.n_heads)
-            self.in_proj = nn.Linear(h, sum(splits), bias=False)
+            if split_sliding:
+                splits = (dq, dr, dq, self.n_heads)
+                self.q_proj = nn.Linear(h, sum(splits), bias=False)
+                self.k_proj = nn.Linear(h, self.dkv, bias=False)
+                self.v_proj = nn.Linear(h, self.dkv, bias=False)
+            else:
+                splits = (dq, self.dkv, self.dkv, dr, dq, self.n_heads)
+                self.in_proj = nn.Linear(h, sum(splits), bias=False)
             self.k_conv = mx.zeros((self.dkv, self.conv_k))
             self.v_conv = mx.zeros((self.dkv, self.conv_k))
         else:
@@ -412,7 +419,11 @@ class Inkling2Attention(nn.Module):
         b, length, _ = xq.shape
         dkv = self.dkv
         if self.sliding:
-            q, k, v, r, gate, sink = mx.split(self.in_proj(xq), self._cuts, axis=-1)
+            if self.split_sliding:
+                q, r, gate, sink = mx.split(self.q_proj(xq), self._cuts, axis=-1)
+                k, v = self.k_proj(xk), self.v_proj(xv)
+            else:
+                q, k, v, r, gate, sink = mx.split(self.in_proj(xq), self._cuts, axis=-1)
             k, ks = _static_conv(k, self.k_conv, ks, self._sconv_scale)
             v, vs = _static_conv(v, self.v_conv, vs, self._sconv_scale)
         else:
@@ -500,8 +511,36 @@ def _cumsum(xs):
 _COMPILED_MAX_TOKENS = 16
 
 
+class _MessageGate(nn.Module):
+    def __init__(self, hidden: int, rank: int, eps: float):
+        super().__init__()
+        self.down_weight = mx.zeros((rank, 2 * hidden))
+        self.forget_weight = mx.zeros((hidden, rank), dtype=mx.float32)
+        self.gain_weight = mx.zeros((hidden, rank), dtype=mx.float32)
+        self.eps = eps
+
+    def __call__(self, state, message):
+        inputs = mx.concatenate(
+            [_unit_rms(state, self.eps), _unit_rms(message, self.eps)], axis=-1
+        )
+        gate = (inputs.astype(self.down_weight.dtype) @ self.down_weight.T).astype(
+            mx.float32
+        )
+        forget = mx.tanh(gate @ self.forget_weight.T)
+        gain = mx.tanh(gate @ self.gain_weight.T)
+        return (1 - forget) * state + gain * message
+
+
 class Inkling2Layer(nn.Module):
-    def __init__(self, args: TextArgs, layer_idx: int, w13_spec: dict, w2_spec: dict):
+    def __init__(
+        self,
+        args: TextArgs,
+        layer_idx: int,
+        w13_spec: dict,
+        w2_spec: dict,
+        *,
+        message_rank: int | None = None,
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         self.sliding = args.is_sliding(layer_idx)
@@ -511,7 +550,14 @@ class Inkling2Layer(nn.Module):
         if layer_idx > 0:
             self.attn_input = AttnResQuery(h, 1 if self.sliding else 3)
         self.mlp_input = AttnResQuery(h, 1)
-        self.attn = Inkling2Attention(args, layer_idx)
+        self.attn = Inkling2Attention(
+            args, layer_idx, split_sliding=self.sliding and message_rank is not None
+        )
+        if message_rank is not None:
+            self.controllers = {
+                name: _MessageGate(h, message_rank, eps)
+                for name in ("attn", "k", "v", "mlp")
+            }
         self.mlp = Inkling2MoE(args, w13_spec, w2_spec)
         if self.sliding:
             self.attn_norm = nn.RMSNorm(h, eps=eps)
@@ -530,7 +576,7 @@ class Inkling2Layer(nn.Module):
         self._pre_compiled = mx.compile(lambda *a: Inkling2Layer._pre(layer, *a))
         self._post_compiled = mx.compile(lambda *a: Inkling2Layer._post(layer, *a))
 
-    def _pre(self, h, blocks, ks, vs, tau=None):
+    def _pre(self, h, blocks, ks, vs, tau=None, messages=None):
         dtype = h.dtype
         h_n = _unit_rms(h.astype(mx.float32))
         if self.layer_idx == 0:
@@ -538,19 +584,27 @@ class Inkling2Layer(nn.Module):
         else:
             mixed = self.attn_input(blocks, h_n)
             if self.sliding:
-                xq = mixed[:, :, 0]
+                xq = xk = xv = mixed[:, :, 0]
             else:
                 xq, xk, xv = mixed[:, :, 0], mixed[:, :, 1], mixed[:, :, 2]
+        if messages is not None:
+            xq = self.controllers["attn"](xq, messages[..., 0, :])
+            xk = self.controllers["k"](xk, messages[..., 1, :])
+            xv = self.controllers["v"](xv, messages[..., 2, :])
         if self.sliding:
             xq = self.attn_norm(xq).astype(dtype)
-            xk = xv = None
+            if self.attn.split_sliding:
+                xk = self.attn_norm(xk).astype(dtype)
+                xv = self.attn_norm(xv).astype(dtype)
+            else:
+                xk = xv = None
         else:
             xq = self.q_input_norm(xq).astype(dtype)
             xk = self.k_input_norm(xk).astype(dtype)
             xv = self.v_input_norm(xv).astype(dtype)
         return (*self.attn.project(xq, xk, xv, ks, vs, tau), h_n)
 
-    def _post(self, out, gate, h, mlp_blocks, s2, s3):
+    def _post(self, out, gate, h, mlp_blocks, s2, s3, messages=None):
         a = self.attn.output(out, gate)
         a, s2 = _static_conv(a, self.attn_conv, s2, self._conv_scale)
         if self.is_boundary:
@@ -558,11 +612,13 @@ class Inkling2Layer(nn.Module):
         else:
             residual = h.astype(mx.float32) + a.astype(mx.float32)
         y = self.mlp_input(mlp_blocks, _unit_rms(residual))[:, :, 0]
+        if messages is not None:
+            y = self.controllers["mlp"](y, messages[..., 3, :])
         m = self.mlp(self.mlp_norm(y).astype(h.dtype))
         m, s3 = _static_conv(m, self.mlp_conv, s3, self._conv_scale)
         return (residual + m.astype(mx.float32)).astype(h.dtype), s2, s3
 
-    def __call__(self, h, blocks, cache=None):
+    def __call__(self, h, blocks, cache=None, *, messages=None):
         """``h``: partial block sum [B, L, H] bf16. ``blocks``: list of unit-RMS
         FP32 completed blocks; extended in place at a block boundary."""
         b, length, hidden = h.shape
@@ -580,13 +636,18 @@ class Inkling2Layer(nn.Module):
         pre = self._pre_compiled if compiled else self._pre
         post = self._post_compiled if compiled else self._post
         pre_args = (h, blocks, states[0], states[1])
-        if tau is not None:
+        if messages is not None:
+            pre_args = (*pre_args, tau, messages)
+        elif tau is not None:
             pre_args = (*pre_args, tau)
         q, k, v, rel, gate, sink, ks, vs, h_n = pre(*pre_args)
         out = self.attn.attend(q, k, v, rel, sink, kv)
         if self.is_boundary:
             blocks.append(h_n)
-        h, s2, s3 = post(out, gate, h, blocks, states[2], states[3])
+        post_args = (out, gate, h, blocks, states[2], states[3])
+        if messages is not None:
+            post_args = (*post_args, messages)
+        h, s2, s3 = post(*post_args)
         if conv is not None:
             windows = (ks, vs, s2, s3)
             if 1 < length <= _COMPILED_MAX_TOKENS:
@@ -606,11 +667,14 @@ class Inkling2TextModel(nn.Module):
         self.embed = nn.Embedding(args.vocab_size, args.hidden_size)
         self.embed_norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
         self.layers = [
-            Inkling2Layer(args, i, *_expert_specs(args, quant, i))
+            self._make_layer(args, i, *_expert_specs(args, quant, i))
             for i in range(args.num_hidden_layers)
         ]
         self.final_input = AttnResQuery(args.hidden_size, 1)
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+
+    def _make_layer(self, args, index, w13, w2):
+        return Inkling2Layer(args, index, w13, w2)
 
     def __call__(self, inputs, cache=None, input_embeddings=None, capture=None):
         """``capture`` maps draft feature ids to fill: ``i`` < num layers is
@@ -635,12 +699,14 @@ class Inkling2TextModel(nn.Module):
 
 
 class Model(nn.Module):
+    _text_model = Inkling2TextModel
+
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
         self.model_type = args.model_type
         quant = args.quantization
-        self.model = Inkling2TextModel(args.text, quant)
+        self.model = self._text_model(args.text, quant)
         self.lm_head = nn.Linear(
             args.text.hidden_size, args.text.vocab_size, bias=False
         )
@@ -781,7 +847,11 @@ class Model(nn.Module):
         return self.model.layers
 
     def make_cache(self):
-        return [CacheList(KVCache(), ArraysCache(4)) for _ in self.model.layers]
+        return [CacheList(KVCache(), ArraysCache(4)) for _ in range(self._cache_count)]
+
+    @property
+    def _cache_count(self):
+        return len(self.model.layers)
 
     def sanitize(self, weights: dict) -> dict:
         out, formats = sanitize_weights(self, weights)
@@ -806,6 +876,8 @@ class Model(nn.Module):
                 or key.endswith("router_weight")
                 or key.endswith("router_bias")
                 or key.endswith(".global_scale")
+                or key.endswith(".message_query")
+                or key.endswith((".forget_weight", ".gain_weight"))
             )
 
         return predicate

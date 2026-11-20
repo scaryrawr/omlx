@@ -522,8 +522,16 @@ def _inkling2_tiny(formats=("mxfp8",) * 6 + ("nvfp4",) * 6, vision=None, **dims)
         expert_formats=list(formats),
     )
     text.update(dims)
-    model = inkling2.Model(
-        inkling2.ModelArgs(model_type="inkling2", text_config=text, vision_config=vision)
+    cls = inkling2.Model
+    model_type = "inkling2"
+    if "loop_config" in dims:
+        from omlx.patches.inkling2.vlm import LoopModel
+
+        cls, model_type = LoopModel, "inkling2_loop"
+    model = cls(
+        inkling2.ModelArgs(
+            model_type=model_type, text_config=text, vision_config=vision
+        )
     )
     mx.random.seed(0)
     weights = []
@@ -557,6 +565,142 @@ def test_inkling2_incremental_and_chunked_match_full_forward():
     model(ids[:, :11], cache=chunked)
     tail = model(ids[:, 11:], cache=chunked)[..., :300]
     assert mx.abs(full[:, 11:] - tail).max().item() < 1e-3
+
+
+def test_inkling2_mini_keeps_each_pass_cache_and_reuses_layers():
+    model = _inkling2_tiny(
+        formats=("nvfp4",) * 4 + ("mxfp8",) * 2,
+        n_layers_per_attn_res_block=2,
+        local_layer_ids=[0, 2, 4],
+        loop_config=dict(core_start=2, core_end=4, num_passes=3, gate_rank=8),
+    )
+    ids = mx.random.randint(0, 300, (1, 15))
+    cache = model.make_cache()
+    full = model(ids)[..., :300]
+    model(ids[:, :8], cache=cache)
+    tail = model(ids[:, 8:14], cache=cache)[..., :300]
+    final = model(ids[:, -1:], cache=cache)[..., :300]
+    assert mx.allclose(full[:, 8:], mx.concatenate((tail, final), axis=1), atol=1e-3)
+    assert len(model.layers) == 6
+    assert [entry[0].offset for entry in cache] == [15] * 10
+    # Layer 2 runs three times with different controller inputs.
+    assert not mx.array_equal(cache[2][0].keys, cache[4][0].keys).item()
+    assert not mx.array_equal(cache[4][0].keys, cache[6][0].keys).item()
+
+
+def test_inkling2_mini_loads_original_packed_checkpoint(tmp_path):
+    import json
+    from dataclasses import asdict
+
+    from mlx.utils import tree_flatten
+
+    from omlx.patches.inkling2.vlm import load
+
+    loop = dict(core_start=1, core_end=2, num_passes=3, gate_rank=8)
+    original = _inkling2_tiny(
+        formats=("nvfp4", "nvfp4", "mxfp8"),
+        local_layer_ids=[0, 1, 2],
+        n_layers_per_attn_res_block=1,
+        loop_config=loop,
+    )
+    tensors = dict(tree_flatten(original.parameters()))
+    source = {
+        "embed.weight": tensors["model.embed.weight"],
+        "embed_norm.weight": tensors["model.embed_norm.weight"],
+        "norm.weight": tensors["model.norm.weight"],
+        "unembed.weight": tensors["lm_head.weight"],
+        "attn_res.output_query": tensors["model.final_input.query"],
+    }
+    query = tensors["model.message_query"]
+    source["middle_cycle_cross_pass_queries"] = query[:, [0, 3], :].reshape(-1, 128)
+    source["middle_cycle_cross_pass_kv_queries"] = query[:, 1:3, :].reshape(-1, 128)
+    names = {
+        "attn.k_conv": "attn.k_sconv.weight",
+        "attn.v_conv": "attn.v_sconv.weight",
+        "attn.o_proj.weight": "attn.wo_ud.weight",
+        "attn.q_scale": "attn.q_l2_clip.scale",
+        "attn.r_scale": "attn.rel_l2_clip.scale",
+        "attn.rel_proj": "attn.rel_logits_proj.proj",
+        "attn_conv": "attn_sconv.weight",
+        "mlp_conv": "mlp_sconv.weight",
+        "attn_norm.weight": "attn_norm.weight",
+        "mlp_norm.weight": "mlp_norm.weight",
+        "mlp.router_weight": "mlp.gate.weight",
+        "mlp.router_bias": "mlp.gate.bias",
+    }
+    for i, layer in enumerate(original.layers):
+        prefix = f"layers.{i}."
+        weights = {
+            key.removeprefix(f"model.{prefix}"): value
+            for key, value in tensors.items()
+            if key.startswith(f"model.{prefix}")
+        }
+        source.update({prefix + src: weights[dst] for dst, src in names.items()})
+        if i:
+            source[f"attn_res.attn_queries.{i - 1}"] = weights["attn_input.query"]
+        source[f"attn_res.mlp_queries.{i}"] = weights["mlp_input.query"]
+        for key in weights:
+            if key.startswith("controllers."):
+                source[prefix + key] = weights[key]
+        if layer.attn.split_sliding:
+            q, rel, gate, sink = mx.split(
+                weights["attn.q_proj.weight"], [128, 160, 288]
+            )
+            k, v = weights["attn.k_proj.weight"], weights["attn.v_proj.weight"]
+        else:
+            q, k, v, rel, gate, sink = mx.split(
+                weights["attn.in_proj.weight"], [128, 192, 256, 288, 416]
+            )
+        for part, weight in zip(
+            ("wq_du", "wk_dv", "wv_dv", "wr_du", "gate_attn", "attn_sink_proj"),
+            (q, k, v, rel, gate, sink),
+        ):
+            source[prefix + f"attn.{part}.weight"] = weight
+        for part in ("w13", "w2"):
+            key = f"mlp.experts.{part}"
+            source[prefix + key + "_weight"] = weights[key + ".weight"].view(mx.uint8)
+            source[prefix + key + "_weight_scale"] = weights[key + ".scales"]
+            if key + ".global_scale" in weights:
+                source[prefix + key + "_weight_amax"] = weights[key + ".global_scale"]
+                source[prefix + key + "_weight_outer_scale_denominator"] = mx.array(
+                    2688
+                )
+
+    text = asdict(original.args.text)
+    text.pop("expert_formats")  # The source supplies formats through weights.
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "inkling2_loop",
+                "text_config": {**text, "loop_config": loop},
+                "eos_token_id": 1,
+                "quantization_config": {
+                    "quant_method": "modelopt",
+                    "quant_algo": "NVFP4",
+                },
+            }
+        )
+    )
+    from tokenizers import Tokenizer, models
+    from transformers import PreTrainedTokenizerFast
+
+    tokenizer = Tokenizer(models.WordLevel({"[PAD]": 0, "[EOS]": 1, "[UNK]": 2}))
+    PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer,
+        eos_token="[EOS]",
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+    ).save_pretrained(tmp_path)
+    mx.save_safetensors(
+        str(tmp_path / "model.safetensors"),
+        {"model.llm." + key: value for key, value in source.items()},
+    )
+    mx.save_safetensors(str(tmp_path / "mtp.safetensors"), {"unused": mx.zeros(1)})
+    loaded, _ = load(tmp_path)
+    ids = mx.array([[9, 8, 24]])
+    assert mx.allclose(loaded(ids)[..., :300], original(ids)[..., :300], atol=1e-5)
+    assert loaded.layers[1].mlp.experts.w13.mode == "nvfp4"
+    assert loaded.layers[2].mlp.experts.w13.mode == "mxfp8"
 
 
 def test_inkling2_verify_rollback_matches_sequential_decode():

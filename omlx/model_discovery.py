@@ -131,6 +131,7 @@ VLM_MODEL_TYPES = {
     "inkling_mm_model",  # config model_type of Inkling Small checkpoints
     # mlx-lm's Inkling 2 module served through the VLM engine adapter.
     "inkling2",
+    "inkling2_loop",
     "bailing_moe_v3_vl",
     "muse_glimmer",
     "muse_spark",

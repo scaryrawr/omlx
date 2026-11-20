@@ -4,6 +4,7 @@ interface."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,9 +15,12 @@ from mlx_vlm.utils import get_model_path, load_processor
 
 from . import apply_inkling2_patch
 from . import model as inkling2
+from .loop import MODEL_TYPE as LOOP_MODEL_TYPE
+from .loop import LoopPlan, LoopTextModel
 from .processing import Inkling2Processor
 
 _MODEL_TYPE = "inkling2"
+MODEL_TYPES = frozenset({_MODEL_TYPE, LOOP_MODEL_TYPE})
 _UNSUPPORTED_INPUTS = ("pixel_values_videos", "input_values", "input_features")
 _REGISTERED = False
 
@@ -25,12 +29,13 @@ def _register_mlx_vlm() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    install_auto_processor_patch(_MODEL_TYPE, Inkling2Processor)
     # Without a MODEL_CONFIG entry apply_chat_template drops the image parts.
     model_config = getattr(prompt_utils, "MODEL_CONFIG", None)
     message_format = getattr(prompt_utils, "MessageFormat", None)
-    if isinstance(model_config, dict) and message_format is not None:
-        model_config.setdefault(_MODEL_TYPE, message_format.LIST_WITH_IMAGE_FIRST)
+    for model_type in MODEL_TYPES:
+        install_auto_processor_patch(model_type, Inkling2Processor)
+        if isinstance(model_config, dict) and message_format is not None:
+            model_config.setdefault(model_type, message_format.LIST_WITH_IMAGE_FIRST)
     _REGISTERED = True
 
 
@@ -79,15 +84,35 @@ class Model(inkling2.Model):
         return InputEmbeddingsFeatures(inputs_embeds=embeds)
 
 
+class LoopModel(Model):
+    def _text_model(self, args, quant):
+        plan = LoopPlan.from_config(self.args.text_config["loop_config"], args)
+        return LoopTextModel(args, quant, plan)
+
+    @property
+    def _cache_count(self):
+        return self.model.cache_count
+
+
+def _model_classes(config):
+    cls = LoopModel if config.get("model_type") == LOOP_MODEL_TYPE else Model
+    return cls, inkling2.ModelArgs
+
+
 def load(model_path: str | Path, *, lazy: bool = False):
     """Load an Inkling 2 checkpoint with mlx-lm and its processor."""
     apply_inkling2_patch()
     _register_mlx_vlm()
     path = get_model_path(str(model_path))
+    with (path / "config.json").open() as config_file:
+        is_loop = json.load(config_file).get("model_type") == LOOP_MODEL_TYPE
     model, config = load_model(
         path,
         lazy=lazy,
-        get_model_classes=lambda config: (Model, inkling2.ModelArgs),
+        get_model_classes=_model_classes,
+        # Mini's sanitizer installs the mixed expert carriers directly.
+        # Its global ModelOpt declaration describes only one of those formats.
+        model_config={"quantization_config": None} if is_loop else None,
     )
     model.config = SimpleNamespace(
         model_type=model.model_type,
