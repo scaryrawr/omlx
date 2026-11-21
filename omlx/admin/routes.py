@@ -1325,7 +1325,7 @@ def _mtp_compat_for_model(
         if bundled_dspark_path(model_path) is not None:
             return True, ""
         return False, "MiniMax checkpoint has no bundled dspark/ draft"
-    if model_type == "inkling2":
+    if model_type in ("inkling2", "inkling2_loop"):
         from ..patches.inkling2.dspark import bundled_inkling2_dspark_path
 
         if bundled_inkling2_dspark_path(model_path) is not None:

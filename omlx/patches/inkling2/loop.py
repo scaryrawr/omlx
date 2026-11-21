@@ -60,8 +60,6 @@ class LoopTextModel(Inkling2TextModel):
         return Inkling2Layer(args, index, w13, w2, message_rank=rank)
 
     def __call__(self, inputs, cache=None, input_embeddings=None, capture=None):
-        if capture:
-            raise ValueError("Inkling 2 Mini does not support speculative decoding.")
         h = (
             self.embed_norm(self.embed(inputs))
             if input_embeddings is None
@@ -84,6 +82,9 @@ class LoopTextModel(Inkling2TextModel):
                 )
                 h, blocks = pre_h, list(pre_blocks)
             for layer in layers:
+                # The draft indexes execution visits, not physical layers.
+                if capture is not None and index in capture:
+                    capture[index] = h
                 messages = None
                 if previous is not None:
                     query = self.message_query[layer - self._plan.start]
@@ -95,4 +96,7 @@ class LoopTextModel(Inkling2TextModel):
                 h = self.layers[layer](h, blocks, cache=entry, messages=messages)
                 index += 1
         x = self.final_input(blocks, _unit_rms(h.astype(mx.float32)))[:, :, 0]
-        return self.norm(x).astype(h.dtype)
+        out = self.norm(x).astype(h.dtype)
+        if capture is not None and index in capture:
+            capture[index] = out
+        return out

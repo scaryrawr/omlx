@@ -539,8 +539,9 @@ Embedding and reranker models load through mlx-vlm; the separate mlx-embeddings 
 oMLX serves [Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
 from the original `inkling2_loop` checkpoint. Keep the checkpoint files together
 in a model directory. Text, image input, and chat tool calls use the native
-checkpoint template and tokenizer. The bundled DSpark draft, audio input, and
-video input are not supported for Mini.
+checkpoint template and tokenizer. To use the bundled `mtp.safetensors` draft,
+enable **Lightning MTP** in Mini's model settings (`mtp_enabled: true`). It is
+off by default. Audio and video input are not supported for Mini.
 
 ### Flint
 

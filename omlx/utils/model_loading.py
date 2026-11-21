@@ -1001,19 +1001,18 @@ def maybe_apply_pre_load_patches(
     dflash_batched = dflash_batched_supported(
         model_type, "vlm" if for_vlm else "batched"
     ) and dflash_batched_requested(model_settings, model_name)
-    minimax_dspark = None
+    bundled_dspark = None
     if for_vlm and (
         model_type in minimax_m3_types or text_model_type in minimax_m3_types
     ):
         from ..patches.minimax_m3_dspark import bundled_dspark_path
 
-        minimax_dspark = bundled_dspark_path(model_name)
-    if model_type == "inkling2":
+        bundled_dspark = bundled_dspark_path(model_name)
+    elif for_vlm and model_type in ("inkling2", "inkling2_loop"):
         from ..patches.inkling2.dspark import bundled_inkling2_dspark_path
 
-        # Inkling 2 bundles its DSpark draft as mtp.safetensors.
-        minimax_dspark = bundled_inkling2_dspark_path(model_name)
-    if _is_mtp_compatible(config, model_type) or dflash_batched or minimax_dspark:
+        bundled_dspark = bundled_inkling2_dspark_path(model_name)
+    if _is_mtp_compatible(config, model_type) or dflash_batched or bundled_dspark:
         mtp_requested = bool(
             model_settings is not None and getattr(model_settings, "mtp_enabled", False)
         )
@@ -1024,7 +1023,7 @@ def maybe_apply_pre_load_patches(
         # is disabled so strict mlx-vlm loading remains lossless.
         mtp_enabled = (
             (
-                bool(mtp_requested and minimax_dspark)
+                bool(mtp_requested and bundled_dspark)
                 or _native_vlm_mtp_eligible(
                     config,
                     model_type,
@@ -1092,7 +1091,7 @@ def maybe_apply_pre_load_patches(
             else:
                 set_mtp_depth(3)
             if mtp_enabled:
-                if minimax_dspark is not None:
+                if bundled_dspark is not None:
                     backend = "bundled DSpark"
                 elif _has_dspark_heads(config):
                     backend = "embedded DSpark"
@@ -1688,7 +1687,7 @@ def lightning_mtp_supported(model_path: str | Path) -> bool:
     if str(quantization.get("quant_method") or "").lower() == "paroquant":
         return False
     model_type = config.get("model_type")
-    if model_type == "inkling2":
+    if model_type in ("inkling2", "inkling2_loop"):
         from ..patches.inkling2.dspark import bundled_inkling2_dspark_path
 
         return bundled_inkling2_dspark_path(model_path) is not None

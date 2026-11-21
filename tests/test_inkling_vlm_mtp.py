@@ -588,6 +588,70 @@ def test_inkling2_mini_keeps_each_pass_cache_and_reuses_layers():
     assert not mx.array_equal(cache[4][0].keys, cache[6][0].keys).item()
 
 
+@pytest.mark.parametrize(
+    ("formats", "incremental"),
+    [(("mxfp8",) * 6, True), (("nvfp4",) * 4 + ("mxfp8",) * 2, False)],
+    ids=["mxfp8-single-token", "mixed-chunked"],
+)
+def test_inkling2_mini_dspark_captures_and_rolls_back_every_visit(formats, incremental):
+    model = _inkling2_tiny(
+        formats=formats,
+        n_layers_per_attn_res_block=2,
+        local_layer_ids=[0, 2, 4],
+        loop_config=dict(core_start=2, core_end=4, num_passes=3, gate_rank=8),
+    )
+    ids = mx.random.randint(0, 300, (1, 21))
+    cache, reference = model.make_cache(), model.make_cache()
+    model(ids[:, :12], cache=cache)
+    model(ids[:, :12], cache=reference)
+    verified = model(
+        ids[:, 12:20], cache=cache, return_hidden=True, capture_layer_ids=[1, 5, 7, 10]
+    )
+    assert len(verified.hidden_states) == 5
+    assert not mx.array_equal(verified.hidden_states[1], verified.hidden_states[2]).item()
+    assert mx.array_equal(verified.hidden_states[3], verified.hidden_states[4]).item()
+    assert model.rollback_speculative_cache(cache, None, 3, 8) == 3
+    if incremental:
+        for t in range(12, 16):
+            model(ids[:, t : t + 1], cache=reference)
+    else:
+        # A chunked reference isolates rollback from NVFP4 batch-shape rounding.
+        model(ids[:, 12:16], cache=reference)
+    for visit, (actual, expected) in enumerate(zip(cache, reference)):
+        assert actual[0].offset == expected[0].offset == 16
+        for actual_kv, expected_kv in (
+            (actual[0].keys, expected[0].keys),
+            (actual[0].values, expected[0].values),
+        ):
+            assert mx.allclose(actual_kv[..., :16, :], expected_kv[..., :16, :], atol=1e-4)
+        for slot in range(4):
+            delta = mx.abs(actual[1][slot] - expected[1][slot]).max().item()
+            assert delta < 1e-4, (visit, slot, delta)
+    logits = model(ids[:, 16:17], cache=cache)[..., :300]
+    expected_logits = model(ids[:, 16:17], cache=reference)[..., :300]
+    assert mx.allclose(logits, expected_logits, atol=1e-4)
+
+
+def test_inkling2_mini_lightning_mtp_requires_bundled_draft(tmp_path):
+    import json
+
+    from omlx.model_settings import ModelSettings
+    from omlx.utils.model_loading import lightning_mtp_supported
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "inkling2_loop",
+                "mtp_config": {"markov_head_type": "rnn_hidden"},
+            }
+        )
+    )
+    assert not lightning_mtp_supported(tmp_path)
+    (tmp_path / "mtp.safetensors").touch()
+    assert lightning_mtp_supported(tmp_path)
+    assert not ModelSettings().mtp_enabled
+
+
 def test_inkling2_mini_loads_original_packed_checkpoint(tmp_path):
     import json
     from dataclasses import asdict

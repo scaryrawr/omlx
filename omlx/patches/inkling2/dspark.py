@@ -25,6 +25,7 @@ import mlx.nn as nn
 logger = logging.getLogger(__name__)
 
 DRAFT_FILENAME = "mtp.safetensors"
+BUNDLED_DSPARK_MODEL_TYPES = frozenset({"inkling2", "inkling2_loop"})
 
 
 def bundled_inkling2_dspark_path(model_path: str | Path) -> Path | None:
@@ -36,7 +37,7 @@ def bundled_inkling2_dspark_path(model_path: str | Path) -> Path | None:
     except (OSError, json.JSONDecodeError):
         return None
     mtp = config.get("mtp_config") or {}
-    if config.get("model_type") != "inkling2" or not mtp or not weights.is_file():
+    if config.get("model_type") not in BUNDLED_DSPARK_MODEL_TYPES or not weights.is_file():
         return None
     if mtp.get("markov_head_type") != "rnn_hidden":
         return None

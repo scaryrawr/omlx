@@ -91,6 +91,7 @@ from .model_settings import (
     validate_ane_prefill,
 )
 from .patches.inkling2.dspark import (
+    BUNDLED_DSPARK_MODEL_TYPES,
     bundled_inkling2_dspark_path,
     load_inkling2_dspark_drafter,
 )
@@ -746,7 +747,7 @@ class EnginePool:
                 extra += self._dflash_drafter_estimated_bytes(str(dspark_path), None)
         elif (
             getattr(runtime_settings, "mtp_enabled", False)
-            and entry.config_model_type == "inkling2"
+            and entry.config_model_type in BUNDLED_DSPARK_MODEL_TYPES
         ):
             draft = bundled_inkling2_dspark_path(entry.model_path)
             if draft is not None:
@@ -4889,7 +4890,7 @@ class EnginePool:
             if (
                 model_settings is not None
                 and getattr(model_settings, "mtp_enabled", False)
-                and entry.config_model_type == "inkling2"
+                and entry.config_model_type in BUNDLED_DSPARK_MODEL_TYPES
                 and hasattr(engine, "prepare_dflash_target")
             ):
                 draft_path = bundled_inkling2_dspark_path(entry.model_path)
