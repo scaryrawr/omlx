@@ -112,7 +112,7 @@ def test_cohere2_moe_loader_merges_generation_config_eos(monkeypatch, tmp_path):
 
     monkeypatch.setattr(vlm_utils, "load_processor", load_processor)
 
-    loaded_model, loaded_processor = _load_cohere2_moe_text_model("cohere")
+    loaded_model, loaded_processor = _load_text_model_with_tokenizer_fallback("cohere")
 
     assert loaded_model is model
     assert loaded_processor is processor
