@@ -553,8 +553,169 @@ def _inkling2_tiny(formats=("mxfp8",) * 6 + ("nvfp4",) * 6, vision=None, **dims)
     return model
 
 
-@pytest.mark.parametrize("dims", [{}, _TINY_LOOP], ids=["plain", "looped"])
-def test_inkling2_incremental_and_chunked_match_full_forward(dims):
+def _inkling2_attention_pair(monkeypatch, dtype, bias=False, quantization=None):
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    from omlx.patches.inkling2.model import Inkling2Attention, TextArgs
+
+    args = TextArgs(
+        hidden_size=128,
+        swa_num_attention_heads=4,
+        swa_num_key_value_heads=2,
+        swa_head_dim=32,
+        sliding_window_size=8,
+        d_rel=8,
+    )
+    mx.random.seed(71)
+    pair = []
+    for flag in ("0", "1"):
+        monkeypatch.setenv("OMLX_INKLING2_SPLIT_LOOP_PROJECTIONS", flag)
+        attn = Inkling2Attention(args, 0)
+        if bias:
+            attn.in_proj.bias = mx.random.normal((attn.in_proj.weight.shape[0],)) * 0.1
+        attn.k_conv = mx.random.normal(attn.k_conv.shape) * 0.1
+        attn.v_conv = mx.random.normal(attn.v_conv.shape) * 0.1
+        attn.rel_proj = mx.random.normal(attn.rel_proj.shape) * 0.1
+        attn.set_dtype(dtype)
+        if quantization is not None:
+            group_size, bits = quantization
+            attn.in_proj = nn.QuantizedLinear.from_linear(
+                attn.in_proj, group_size=group_size, bits=bits
+            )
+        pair.append(attn)
+    pair[1].load_weights(tree_flatten(pair[0].parameters()), strict=True)
+    return pair
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("length", [1, 8, 512], ids=["decode", "verify", "prefill"])
+@pytest.mark.parametrize(
+    "bias, quantization",
+    [(False, None), (True, None), (False, (32, 4)), (True, (128, 8)), (True, (64, 3))],
+    ids=["linear", "biased-linear", "affine-g32-b4", "affine-g128-b8", "affine-g64-b3"],
+)
+def test_inkling2_split_loop_projections_match_original(
+    monkeypatch, dtype, length, bias, quantization
+):
+    dtype = getattr(mx, dtype)
+    original, selective = _inkling2_attention_pair(
+        monkeypatch, dtype, bias, quantization
+    )
+    inputs = mx.random.normal((2, 3, length, 256)).astype(dtype)
+    xq, xk, xv = (inputs[:, i, :, ::2] for i in range(3))
+    states = mx.random.normal((2, 2, original.conv_k - 1, original.dkv))
+    ks, vs = states[:, 0], states[:, 1]
+    expected = original.project(xq, xk, xv, ks, vs, None)
+    got = selective.project(xq, xk, xv, ks, vs, None)
+    atol, rtol = (2e-3, 2e-2) if dtype == mx.bfloat16 else (1e-5, 1e-5)
+    for actual, reference in zip(got, expected):
+        np.testing.assert_allclose(
+            np.array(actual.astype(mx.float32)),
+            np.array(reference.astype(mx.float32)),
+            atol=atol,
+            rtol=rtol,
+        )
+    if length == 1:
+        assert all(mx.array_equal(a, b).item() for a, b in zip(got, expected))
+
+    shared = selective.project(xq, None, None, ks, vs, None)
+    shared_reference = original.project(xq, None, None, ks, vs, None)
+    assert all(mx.array_equal(a, b).item() for a, b in zip(shared, shared_reference))
+
+
+def test_inkling2_split_loop_projections_use_loaded_weights(monkeypatch):
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    original, selective = _inkling2_attention_pair(monkeypatch, mx.float32, bias=True)
+    xs = mx.random.normal((2, 3, 8, 256))
+    inputs = [xs[:, i, :, ::2] for i in range(3)]
+    state = mx.zeros((2, original.conv_k - 1, original.dkv))
+    previous = selective.project(*inputs, state, state, None)
+    mx.eval(previous)
+    for quantization in (None, (32, 4), (128, 8)):
+        replacement = nn.Linear(128, original.in_proj.weight.shape[0], bias=True)
+        if quantization is not None:
+            group_size, bits = quantization
+            for attn in (original, selective):
+                attn.in_proj = nn.QuantizedLinear(
+                    128, replacement.weight.shape[0], group_size=group_size, bits=bits
+                )
+            replacement = replacement.to_quantized(group_size, bits)
+        original.in_proj.load_weights(
+            tree_flatten(replacement.parameters()), strict=True
+        )
+        weights = tree_flatten(original.parameters())
+        selective.load_weights(weights, strict=True)
+        expected = original.project(*inputs, state, state, None)
+        got = selective.project(*inputs, state, state, None)
+        for actual, reference in zip(got, expected):
+            assert mx.allclose(actual, reference, atol=1e-5, rtol=1e-5).item()
+        assert not mx.array_equal(got[4], previous[4]).item()
+        assert [key for key, _ in tree_flatten(selective.parameters())] == [
+            key for key, _ in weights
+        ]
+        previous = got
+
+
+@pytest.mark.parametrize("carrier", ["transformed", "mxfp8"])
+def test_inkling2_split_loop_projections_fall_back_for_other_carriers(
+    monkeypatch, carrier
+):
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    class TransformedLinear(nn.Linear):
+        def __call__(self, x):
+            return mx.sin(super().__call__(x))
+
+    original, selective = _inkling2_attention_pair(monkeypatch, mx.float32)
+    for attn in (original, selective):
+        if carrier == "transformed":
+            attn.in_proj = TransformedLinear(128, attn.in_proj.weight.shape[0])
+        else:
+            attn.in_proj = attn.in_proj.to_quantized(mode=carrier)
+    selective.load_weights(tree_flatten(original.parameters()), strict=True)
+    xs = mx.random.normal((2, 3, 8, 128))
+    inputs = [xs[:, i] for i in range(3)]
+    state = mx.zeros((2, original.conv_k - 1, original.dkv))
+    expected = original.project(*inputs, state, state, None)
+    got = selective.project(*inputs, state, state, None)
+    assert all(mx.array_equal(a, b).item() for a, b in zip(got, expected))
+
+
+@pytest.mark.parametrize("value", [None, "0", "true", "1"])
+def test_inkling2_split_loop_projections_flag_is_read_at_construction(
+    monkeypatch, value
+):
+    from omlx.patches.inkling2.model import Inkling2Attention, TextArgs
+
+    key = "OMLX_INKLING2_SPLIT_LOOP_PROJECTIONS"
+    if value is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, value)
+    attn = Inkling2Attention(
+        TextArgs(
+            hidden_size=128,
+            swa_num_attention_heads=4,
+            swa_num_key_value_heads=2,
+            swa_head_dim=32,
+        ),
+        0,
+    )
+    monkeypatch.setenv(key, "0" if value == "1" else "1")
+    assert attn._split_loop_projections is (value == "1")
+
+
+@pytest.mark.parametrize(
+    "dims, split",
+    [({}, False), (_TINY_LOOP, False), (_TINY_LOOP, True)],
+    ids=["plain", "looped", "looped-split"],
+)
+def test_inkling2_incremental_and_chunked_match_full_forward(monkeypatch, dims, split):
+    monkeypatch.setenv("OMLX_INKLING2_SPLIT_LOOP_PROJECTIONS", "1" if split else "0")
     model = _inkling2_tiny(**dims)
     ids = mx.random.randint(0, 300, (1, 26))
     full = model(ids)[..., :300]
@@ -608,8 +769,13 @@ def test_inkling2_loop_model_type_uses_inkling2(tmp_path):
     assert bundled_inkling2_dspark_path(tmp_path) is not None
 
 
-@pytest.mark.parametrize("dims", [{}, _TINY_LOOP], ids=["plain", "looped"])
-def test_inkling2_verify_rollback_matches_sequential_decode(dims):
+@pytest.mark.parametrize(
+    "dims, split",
+    [({}, False), (_TINY_LOOP, False), (_TINY_LOOP, True)],
+    ids=["plain", "looped", "looped-split"],
+)
+def test_inkling2_verify_rollback_matches_sequential_decode(monkeypatch, dims, split):
+    monkeypatch.setenv("OMLX_INKLING2_SPLIT_LOOP_PROJECTIONS", "1" if split else "0")
     model = _inkling2_tiny(**dims)
     ids = mx.random.randint(0, 300, (1, 30))
     reference = model.make_cache()

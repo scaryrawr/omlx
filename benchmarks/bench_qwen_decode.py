@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Deterministic serving-path decode benchmark for supported Qwen models."""
+"""Deterministic serving-path decode benchmark for Qwen and Inkling 2 models."""
 
 from __future__ import annotations
 
@@ -18,12 +18,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from omlx.patches.inkling2 import INKLING2_MODEL_TYPES
+
 DEFAULT_PROMPT_TEXT = (
     r"Complete this Python module. Continue with code only and do not stop "
     r"until the implementation is complete.\n\n"
 )
-SUPPORTED_MODEL_TYPES = frozenset(
-    {"qwen3_5", "qwen3_5_moe", "qwen3_6", "qwen3_8", "qwen4_exp"}
+SUPPORTED_MODEL_TYPES = (
+    frozenset({"qwen3_5", "qwen3_5_moe", "qwen3_6", "qwen3_8", "qwen4_exp"})
+    | INKLING2_MODEL_TYPES
 )
 PROMPT_BUILD_MAX_ATTEMPTS = 16
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
@@ -44,6 +47,7 @@ MODEL_METADATA_NAMES = frozenset(
 OMLX_CANDIDATE_ENV_PREFIXES = (
     "OMLX_FA256_",
     "OMLX_GDN_",
+    "OMLX_INKLING2_",
     "OMLX_M5_",
     "OMLX_MTP_",
     "OMLX_QWEN35_",
@@ -70,6 +74,10 @@ class Trial:
     end_to_end_tps: float
     peak_memory_bytes: int
     errors: tuple[str, ...]
+    consumer_ttft_s: float | None = None
+    system_telemetry: dict[str, Any] | None = None
+    telemetry_status: str = "missing"
+    thermal_status: str = "missing"
 
 
 class BenchmarkError(RuntimeError):
@@ -84,6 +92,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--native-mtp", choices=("off", "on"), required=True)
+    parser.add_argument(
+        "--mtp-depth",
+        type=int,
+        help="Fixed Inkling 2 draft depth, capped by the checkpoint's trained depth",
+    )
     parser.add_argument("--label", required=True)
     parser.add_argument("--prompt-text", default=DEFAULT_PROMPT_TEXT)
     args = parser.parse_args(argv)
@@ -92,6 +105,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(f"--{name} must be positive")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
+    if args.mtp_depth is not None:
+        if args.mtp_depth <= 0:
+            parser.error("--mtp-depth must be positive")
+        if args.native_mtp != "on":
+            parser.error("--mtp-depth requires --native-mtp on")
     return args
 
 
@@ -288,10 +306,13 @@ async def _run_trial(
     *,
     index: int,
     warmup: bool,
+    sampler: Any = None,
 ) -> Trial:
     mx.reset_peak_memory()
 
+    window_started = time.monotonic()
     started = time.perf_counter()
+    consumer_ttft: float | None = None
     first_generated_at: float | None = None
     last_generated_until: float | None = None
     terminal = None
@@ -303,15 +324,39 @@ async def _run_trial(
         seed=0,
         skip_cache_store=True,
     ):
+        if consumer_ttft is None and output.completion_tokens > 0:
+            consumer_ttft = time.perf_counter() - started
         if output.generated_at is not None and first_generated_at is None:
             first_generated_at = float(output.generated_at)
         if output.generated_until is not None:
             last_generated_until = float(output.generated_until)
         terminal = output
     ended = time.perf_counter()
+    window_ended = time.monotonic()
 
     peak_memory = int(mx.get_peak_memory())
     consumer_duration = ended - started
+    telemetry = (
+        sampler.window(window_started, window_ended) if sampler is not None else None
+    )
+    thermal = telemetry.get("thermal", {}).get("max") if telemetry else None
+    if thermal is None:
+        thermal_status = "missing"
+    elif thermal == 0:
+        thermal_status = "nominal"
+    else:
+        thermal_status = "pressure"
+    errors = []
+    if thermal_status == "pressure":
+        errors.append(f"thermal pressure {thermal} invalidates comparison")
+    elif sampler is not None and thermal_status == "missing":
+        errors.append("missing thermal observations invalidate comparison")
+    measurements = {
+        "consumer_ttft_s": consumer_ttft,
+        "system_telemetry": telemetry,
+        "telemetry_status": "available" if telemetry is not None else "missing",
+        "thermal_status": thermal_status,
+    }
     if terminal is None:
         return Trial(
             index=index,
@@ -329,11 +374,11 @@ async def _run_trial(
             generation_tps=None,
             end_to_end_tps=0.0,
             peak_memory_bytes=peak_memory,
-            errors=("produced no output",),
+            errors=("produced no output", *errors),
+            **measurements,
         )
 
     output_ids = tuple(int(token) for token in terminal.tokens)
-    errors = []
     if not output_ids:
         errors.append("produced no terminal token IDs")
     if first_generated_at is None or last_generated_until is None:
@@ -374,6 +419,7 @@ async def _run_trial(
         end_to_end_tps=terminal.completion_tokens / consumer_duration,
         peak_memory_bytes=peak_memory,
         errors=tuple(errors),
+        **measurements,
     )
 
 
@@ -410,6 +456,11 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "seed": 0,
             "prompt_text": args.prompt_text,
             "cache_store": False,
+            "mtp_depth": args.mtp_depth,
+            "ttft_measurement": (
+                "Consumer request start to first output with completion tokens; "
+                "includes queueing, prefill, and streaming delay, not pure prefill"
+            ),
         },
         "runtime": {
             "python": platform.python_version(),
@@ -418,17 +469,24 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "trials": [],
     }
     engine = None
+    sampler = None
     trials: list[Trial] = []
     fingerprint_before = None
     try:
         fingerprint_before = _model_fingerprint(args.model)
         result["model_type"] = fingerprint_before["model_type"]
         result["model_fingerprint_before"] = fingerprint_before
+        if (
+            args.mtp_depth is not None
+            and fingerprint_before["model_type"] not in INKLING2_MODEL_TYPES
+        ):
+            raise BenchmarkError("--mtp-depth is only supported for Inkling 2")
 
         import mlx.core as mx
 
         from omlx.engine.vlm import VLMBatchedEngine
         from omlx.scheduler import SchedulerConfig
+        from omlx.utils.system_sampler import SystemSampler
 
         result["runtime"] = _runtime_info(mx)
         engine = VLMBatchedEngine(
@@ -447,11 +505,52 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 f"{fingerprint_before['model_type']!r}"
             )
 
+        if loaded_model_type in INKLING2_MODEL_TYPES and args.native_mtp == "on":
+            from omlx.engine_core import get_mlx_executor
+            from omlx.patches.inkling2.dspark import (
+                bundled_inkling2_dspark_path,
+                load_inkling2_dspark_drafter,
+            )
+
+            if bundled_inkling2_dspark_path(args.model) is None:
+                raise BenchmarkError(
+                    "Inkling 2 native MTP requires a bundled DSpark draft"
+                )
+            drafter = await asyncio.get_running_loop().run_in_executor(
+                get_mlx_executor(),
+                load_inkling2_dspark_drafter,
+                args.model,
+                engine.prepare_dflash_target(),
+                args.mtp_depth,
+                bool(args.mtp_depth),
+            )
+            if drafter is None:
+                raise BenchmarkError("Inkling 2 DSpark loader returned no drafter")
+            engine.set_dflash_drafter(drafter)
+            if engine.dflash_drafter is not drafter:
+                raise BenchmarkError("Inkling 2 DSpark drafter was not attached")
+
+        drafter = engine.dflash_drafter
+        result["speculative"] = {
+            "dflash_drafter_attached": drafter is not None,
+            "drafter_kind": getattr(drafter, "kind", None),
+            "draft_depth": getattr(drafter, "depth", None),
+            "adaptive": getattr(drafter, "adaptive", None),
+            "activity": "unknown",
+            "counts": None,
+            "activity_note": (
+                "Attachment is not proof of draft/verify activity; "
+                "engine.dflash_drafter exposes no per-request acceptance counters"
+            ),
+        }
+
         prompt = _build_prompt(engine.tokenizer, args.pp, args.prompt_text)
         result["prompt"] = {
             "token_ids": list(prompt),
             "sha256": _token_digest(prompt),
         }
+        sampler = SystemSampler()
+        sampler.start()
         expected_output: tuple[int, ...] | None = None
         for index in range(args.warmup + args.repeats):
             trial = await _run_trial(
@@ -461,6 +560,7 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 args.gen,
                 index=index,
                 warmup=index < args.warmup,
+                sampler=sampler,
             )
             trials.append(trial)
             result["trials"] = [asdict(item) for item in trials]
@@ -470,6 +570,17 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
         result["status"] = "error"
         result["error"] = f"{type(exc).__name__}: {exc}"
     finally:
+        if sampler is not None:
+            try:
+                sampler.stop()
+            except Exception as exc:
+                result["status"] = "error"
+                cleanup_error = f"sampler cleanup failed: {type(exc).__name__}: {exc}"
+                result["error"] = (
+                    f"{result['error']}; {cleanup_error}"
+                    if "error" in result
+                    else cleanup_error
+                )
         if fingerprint_before is not None:
             try:
                 fingerprint_after = _model_fingerprint(args.model)

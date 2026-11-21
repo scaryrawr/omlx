@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import os
 import weakref
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -401,10 +402,33 @@ def _dynamic_conv(x, dyn, static_w, state, heads, scale):
     return out.astype(x.dtype), xp
 
 
+def _project_rows(proj, x, start, stop):
+    weight = proj.weight[start:stop]
+    if type(proj) is nn.QuantizedLinear:
+        biases = proj.get("biases")
+        out = mx.quantized_matmul(
+            x,
+            weight,
+            scales=proj.scales[start:stop],
+            biases=biases[start:stop] if biases is not None else None,
+            transpose=True,
+            group_size=proj.group_size,
+            bits=proj.bits,
+            mode=proj.mode,
+        )
+        return out + proj.bias[start:stop] if "bias" in proj else out
+    if "bias" in proj:
+        return mx.addmm(proj.bias[start:stop], x, weight.T)
+    return x @ weight.T
+
+
 class Inkling2Attention(nn.Module):
     def __init__(self, args: TextArgs, layer_idx: int):
         super().__init__()
         self.sliding = args.is_sliding(layer_idx)
+        self._split_loop_projections = (
+            os.environ.get("OMLX_INKLING2_SPLIT_LOOP_PROJECTIONS") == "1"
+        )
         self.head_dim = args.swa_head_dim if self.sliding else args.head_dim
         self.n_heads = (
             args.swa_num_attention_heads if self.sliding else args.num_attention_heads
@@ -470,6 +494,20 @@ class Inkling2Attention(nn.Module):
         if self.sliding:
             if xk is None:
                 q, k, v, r, gate, sink = mx.split(self.in_proj(xq), self._cuts, axis=-1)
+            elif (
+                self._split_loop_projections
+                and length > 1
+                and (
+                    type(self.in_proj) is nn.Linear
+                    or (
+                        type(self.in_proj) is nn.QuantizedLinear
+                        and self.in_proj.mode == "affine"
+                    )
+                )
+            ):
+                q, _, _, r, gate, sink = mx.split(self.in_proj(xq), self._cuts, axis=-1)
+                k = _project_rows(self.in_proj, xk, self._cuts[0], self._cuts[1])
+                v = _project_rows(self.in_proj, xv, self._cuts[1], self._cuts[2])
             else:
                 # Looped passes give q, k and v their own inputs; one stacked
                 # projection serves all three.
