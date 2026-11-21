@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from copy import copy, deepcopy
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
@@ -439,14 +439,14 @@ def test_complete_tiny_quantization_strict_native_reload(
     from mlx.utils import tree_flatten
     from mlx_vlm.models.nemotron_h_nano_omni import Model, ModelConfig
     from mlx_vlm.utils import load_model
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from transformers import PreTrainedTokenizerFast
 
     from omlx import oq
     from omlx.oq import quantize_oq_streaming
 
     if calibration != "basic" or modelopt:
-        from mlx_lm import tokenizer_utils
-
-        monkeypatch.setattr(tokenizer_utils, "load", lambda *_args: SimpleNamespace())
         monkeypatch.setattr(
             oq,
             "_load_calibration_data",
@@ -480,6 +480,11 @@ def test_complete_tiny_quantization_strict_native_reload(
     model.eval()
     source = tmp_path / "source"
     source.mkdir()
+    vocab = {f"t{i}": i for i in range(config["llm_config"]["vocab_size"])}
+    tokenizer = Tokenizer(WordLevel(vocab, unk_token="t0"))
+    PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer, unk_token="t0", eos_token=f"t{config['eos_token_id']}"
+    ).save_pretrained(source)
     weights = dict(tree_flatten(model.parameters()))
     source_references = {}
     if modelopt:
@@ -841,7 +846,7 @@ def test_engine_preparation_preserves_compacted_video_and_source_usage(
     from omlx.engine.vlm import VLMBatchedEngine
     from omlx.patches import mlx_audio_compat
     from omlx.request import Request, SamplingParams
-    from omlx.scheduler import Scheduler
+    from omlx.scheduler import Scheduler, SchedulerConfig
 
     engine = VLMBatchedEngine("unused")
     engine._vlm_model = native_target
@@ -918,11 +923,15 @@ def test_engine_preparation_preserves_compacted_video_and_source_usage(
     )
     scheduler = SimpleNamespace(
         model=engine._vlm_model,
+        config=SchedulerConfig(),
         _prefix_cache_prepared=set(),
         block_aware_cache=object(),
         _model_has_unreconstructible_cache=lambda: False,
         _log_prefix_divergence=lambda _request: None,
         _try_specprefill_scoring=lambda _request: None,
+    )
+    scheduler._resolve_junction_end = MethodType(
+        Scheduler._resolve_junction_end, scheduler
     )
     Scheduler._prepare_prefix_cache_for_request(scheduler, request)
     assert request.skip_cache_store
