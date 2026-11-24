@@ -1544,9 +1544,7 @@ class TestInkling2Lora:
             tensors[f"{stem}.lora_B.weight"] = b
             x = rng.standard_normal((3, inputs)).astype(np.float32)
             base = np.array(projection(mx.array(x)))
-            expected = folded_output(
-                x, np.array(projection.weight), None, a, b, 1.0
-            )
+            expected = folded_output(x, np.array(projection.weight), None, a, b, 1.0)
             cases.append((layer, x, base, expected))
         adapter = write_lora_adapter(
             tmp_path / "ad",
@@ -1578,9 +1576,7 @@ class TestInkling2Lora:
     def test_unknown_family_and_unsupported_targets_are_rejected(
         self, model, target, write_lora_adapter, tmp_path
     ):
-        projection = getattr(
-            model.model.layers[0].attn, target.split(".")[-1], None
-        )
+        projection = getattr(model.model.layers[0].attn, target.split(".")[-1], None)
         outputs, inputs = (128, 128) if projection is None else projection.weight.shape
         path = f"language_model.model.layers.0.{target}"
         adapter = write_lora_adapter(
