@@ -15,26 +15,47 @@ logger = logging.getLogger(__name__)
 _APPLIED = False
 _LOCK = threading.Lock()
 
+_Backport = tuple[str, str, tuple[tuple[str, str], ...]]
+_BackportProfile = dict[str, _Backport]
+
 
 def _prepare_sources(
     sources: dict[str, str],
-    backports: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]],
+    profiles: tuple[_BackportProfile, ...],
 ) -> dict[str, str]:
+    names = profiles[0].keys()
+    if sources.keys() != names:
+        raise _unsupported_sources(sorted(sources.keys() ^ names))
     states = {
         name: source_hash(selected_source(source, SYMBOLS.get(name)))
         for name, source in sources.items()
     }
-    if all(states[name] == spec[1] for name, spec in backports.items()):
-        return {}
-    unknown = [name for name, spec in backports.items() if states.get(name) != spec[0]]
-    if unknown:
-        raise RuntimeError(
-            "Unsupported or partially fixed mlx-vlm Qwen image source: "
-            + ", ".join(unknown)
-            + ". Update the verified Qwen image compatibility backport."
+    fingerprints = [
+        (
+            profile,
+            {name: spec[0] for name, spec in profile.items()},
+            {name: spec[1] for name, spec in profile.items()},
         )
+        for profile in profiles
+    ]
+    if any(states == native for _, _, native in fingerprints):
+        return {}
+    profile = next(
+        (profile for profile, legacy, _ in fingerprints if states == legacy),
+        None,
+    )
+    if profile is None:
+        unknown = min(
+            (
+                [name for name in names if states[name] != expected.get(name)]
+                for _, legacy, native in fingerprints
+                for expected in (legacy, native)
+            ),
+            key=len,
+        )
+        raise _unsupported_sources(unknown)
     patched = {}
-    for name, (_, native_hash, edits) in backports.items():
+    for name, (_, native_hash, edits) in profile.items():
         source = selected_source(sources[name], SYMBOLS.get(name))
         for before, after in edits:
             if source.count(before) != 1:
@@ -44,6 +65,14 @@ def _prepare_sources(
             raise RuntimeError(f"Qwen image backport result mismatch: {name}")
         patched[name] = source
     return patched
+
+
+def _unsupported_sources(names: list[str]) -> RuntimeError:
+    return RuntimeError(
+        "Unsupported or partially fixed mlx-vlm Qwen image source: "
+        + ", ".join(names)
+        + ". Update the verified Qwen image compatibility backport."
+    )
 
 
 def _read_source(module: ModuleType) -> str:
@@ -58,11 +87,12 @@ def apply_qwen_image_compat_patch() -> bool:
     with _LOCK:
         if _APPLIED:
             return False
-        from ._backport import BACKPORTS, SOURCE_REVISION
+        from ._backport import BACKPORT_PROFILES, SOURCE_REVISION
 
-        modules = {name: importlib.import_module(name) for name in BACKPORTS}
+        modules = {name: importlib.import_module(name) for name in BACKPORT_PROFILES[0]}
         patched = _prepare_sources(
-            {name: _read_source(module) for name, module in modules.items()}, BACKPORTS
+            {name: _read_source(module) for name, module in modules.items()},
+            BACKPORT_PROFILES,
         )
         if not patched:
             return False

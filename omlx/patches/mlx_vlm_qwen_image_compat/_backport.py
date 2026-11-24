@@ -3,6 +3,7 @@
 
 SOURCE_REVISION = "9a200804c81b98fd420d1f8a064a6824cec76f4f"
 BASE_REVISION = "4f4634bb813c0298cb1467bed2e957526c71d0b4"
+PINNED_REVISION = "36494b42c7676081aa3c14878b3175b90c2fedf4"
 BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee7512fd06e789512b8d5e3f2ff0d9dea47f2b26',
                                       '0099f6d10dcf9506b53d21aebd760c123a2d53ea7412da413d8ae74e0d90255e',
                                       (('from __future__ import annotations\n'
@@ -159,7 +160,7 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee751
                                         'height)):\n'
                                         '        if value < 256 or value > 2048:\n'))),
  'mlx_vlm.models.qwen_image.scheduler': ('2a8e6017536d8c6f5b9252d82fd2949de13e576a49735fa69926f410a12dea3b',
-                               '80f6f6976f2ffa5f8b221bc7b28bdd0834ddb645e192649582af593a96a57875',
+                                         '80f6f6976f2ffa5f8b221bc7b28bdd0834ddb645e192649582af593a96a57875',
                                          (('"""FlowMatchEuler scheduler for Qwen-Image-2.1 '
                                            '(dynamic exponential shift).\n'
                                            '\n'
@@ -306,7 +307,7 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee751
                                            '            [sigmas, mx.zeros((1,), '
                                            'dtype=sigmas.dtype)], axis=0\n'))),
  'mlx_vlm.models.qwen_image.text_encoder': ('844c0f95932fdb28265f3ce25e17a5300802f5143ec593baf2ddcae0f8891115',
-                                  'edfdfe05f14b5c3a9bad9a2ca0cf26c885753ae5732c194e50355d47f001500f',
+                                            'edfdfe05f14b5c3a9bad9a2ca0cf26c885753ae5732c194e50355d47f001500f',
                                             (('        return hidden[:, self.drop_idx :]\n'
                                               '\n'
                                               '    @property\n'
@@ -355,7 +356,7 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee751
                                               '                "shortest_edge", 65536\n'
                                               '            )\n'),)),
  'mlx_vlm.models.qwen_image.pipeline': ('10d29a321c9467b571e284c56167e4e666f7441bb66d43c03c1c3649debc6280',
-                              '2fb6b85468f0ff8bf58b5f8cdbb2381b788ece4f19a4495b386fed99f75e112b',
+                                        '2fb6b85468f0ff8bf58b5f8cdbb2381b788ece4f19a4495b386fed99f75e112b',
                                         (('import numpy as np\n'
                                           'from PIL import Image\n'
                                           '\n'
@@ -578,7 +579,7 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee751
                                           '            model_input = latents\n'
                                           '            edit_kwargs = {}\n'))),
  'mlx_vlm.models.qwen_image.model': ('c3cc0c52908879d46d577a75787662e0eb30dd8a513a3a8e96b19c7dbd236f1f',
-                           'aa6a434676e00ace2b6fbcb28505aab0b5b67a82ce5c49c94d20e618eea841d7',
+                                     'aa6a434676e00ace2b6fbcb28505aab0b5b67a82ce5c49c94d20e618eea841d7',
                                      (('from __future__ import annotations\n'
                                        '\n'
                                        'from dataclasses import dataclass\n'
@@ -809,3 +810,53 @@ BACKPORTS = {'mlx_vlm.models.qwen_image.config': ('f223a1cd7ae83fa66ec090b0ee751
                               '    for end in range(1, len(tokens) + 1):\n'
                               '        _add_model_type(candidates, "_".join(tokens[:end]))\n'
                               '        if end > 1:\n'),))}
+
+_PIPELINE_MODULE = 'mlx_vlm.models.qwen_image.pipeline'
+_PINNED_PIPELINE_EDITS = {1: ('        self.latents_std = mx.array(cfg["latents_std"]).reshape(1, self.z_dim, 1, 1, 1)\n'
+     '        mx.eval(self.latents_mean, self.latents_std)\n'
+     '        self.quantization_config = _read_quant(self.model_path / "transformer")\n'
+     '        scheduler_path = self.model_path / "scheduler" / "scheduler_config.json"\n'
+     '        scheduler_config = (\n'
+     '            json.loads(scheduler_path.read_text()) if scheduler_path.exists() else {}\n'
+     '        )\n'
+     '        self.scheduler_config = {\n'
+     '            key: scheduler_config[key]\n'
+     '            for key in (\n',
+     '        self.latents_std = mx.array(cfg["latents_std"]).reshape(1, self.z_dim, 1, 1, 1)\n'
+     '        mx.eval(self.latents_mean, self.latents_std)\n'
+     '        self.quantization_config = _read_quant(self.model_path / "transformer")\n'
+     '        self.sample_sigmas = load_sample_sigmas(self.model_path)\n'
+     '        scheduler_path = self.model_path / "scheduler" / "scheduler_config.json"\n'
+     '        scheduler_config = (\n'
+     '            json.loads(scheduler_path.read_text()) if scheduler_path.exists() else {}\n'
+     '        )\n'
+     '        if not isinstance(scheduler_config, dict):\n'
+     '            raise ValueError(f"Expected an object in {scheduler_path}")\n'
+     '        for key in (\n'
+     '            "use_beta_sigmas",\n'
+     '            "use_exponential_sigmas",\n'
+     '            "use_karras_sigmas",\n'
+     '            "invert_sigmas",\n'
+     '            "stochastic_sampling",\n'
+     '        ):\n'
+     '            if scheduler_config.get(key, False) is not False:\n'
+     '                raise ValueError(f"Unsupported Qwen-Image scheduler setting: {key}")\n'
+     '        if scheduler_config.get("time_shift_type", "exponential") != "exponential":\n'
+     '            raise ValueError("Qwen-Image only supports exponential time shifting")\n'
+     '        self.scheduler_config = {\n'
+     '            key: scheduler_config[key]\n'
+     '            for key in (\n')}
+BACKPORT_PROFILES = (
+    BACKPORTS,
+    {
+        **BACKPORTS,
+        _PIPELINE_MODULE: (
+            '8e3c3958c05c801abfab08765926f977b7c054c11b554e7c9f665d46b43b2286',
+            '39186efae841a6081df82b5d7b8673064a596421c62d16854b95bf0ea396bb9d',
+            tuple(
+                _PINNED_PIPELINE_EDITS.get(index, edit)
+                for index, edit in enumerate(BACKPORTS[_PIPELINE_MODULE][2])
+            ),
+        ),
+    },
+)
