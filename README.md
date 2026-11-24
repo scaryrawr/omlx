@@ -256,7 +256,7 @@ Download a Hugging Face PEFT LoRA adapter such as [harness-hub/LFM3-1.7B-pi](htt
 
 oMLX matches `base_model_name_or_path` to an exact local repo ID first, then to the same model family. For example, `LiquidAI/LFM3-1.7B` matches `mlx-community/LFM3-1.7B-OptiQ-4bit`. If no base matches or several match, the **Models** tab and `GET /admin/api/models` explain how to resolve the issue. oMLX never guesses between candidates. Use [`PUT /admin/api/adapters/{adapter_id}/base`](docs/admin-api.md#models) to choose one.
 
-Adapter entries default to thinking off when the base template has a thinking switch. Applying an adapter adds memory and per-token compute. oMLX does not support DoRA, QA-LoRA, aLoRA, layer replication, `modules_to_save`, rank or alpha patterns, or `.bin`-only adapters. Adapter entries do not support cluster sync, Splash, remote prefill, MTP, or ANE prefill.
+Adapter entries default to thinking off when the base template has a thinking switch. Applying an adapter adds memory and per-token compute. oMLX does not support DoRA, QA-LoRA, aLoRA, layer replication, `modules_to_save`, rank or alpha patterns, or `.bin`-only adapters. Adapter entries run with native and VLM MTP disabled, without changing saved preferences or the base model's MTP settings. Adapter entries do not support cluster sync, Splash, remote prefill, or ANE prefill.
 
 LoRA targets must belong to numbered language-model layers. Vision and draft layers are not supported. If two adapter folders have the same name, the first keeps the model ID even if its adapter files cannot be loaded.
 
