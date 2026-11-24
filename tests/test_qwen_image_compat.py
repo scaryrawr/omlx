@@ -7,7 +7,7 @@ import importlib
 import json
 from dataclasses import replace
 from io import BytesIO
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import mlx.core as mx
 import numpy as np
@@ -21,6 +21,12 @@ from omlx.engine.image import ImageEngine, _image_api
 from omlx.patches import mlx_vlm_qwen_image_compat as compat
 
 SIGMAS = [1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
+PIPELINE = "mlx_vlm.models.qwen_image.pipeline"
+LATENTS_STD = (
+    '        self.latents_std = mx.array(cfg["latents_std"])'
+    ".reshape(1, self.z_dim, 1, 1, 1)\n"
+)
+EAGER_EVAL = "        mx.eval(self.latents_mean, self.latents_std)\n"
 
 
 @pytest.fixture(scope="module")
@@ -275,22 +281,25 @@ def test_qwen_engine_routes_execute_saved_recipe_without_weights(
 
 
 def test_source_gate_fixed_noop_unknown_and_repeated_application(qwen, monkeypatch):
-    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORTS
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import (
+        BACKPORT_PROFILES,
+        BACKPORTS,
+    )
 
     sources = {
         name: compat._read_source(importlib.import_module(name)) for name in BACKPORTS
     }
-    fixed = compat._prepare_sources(sources, BACKPORTS)
-    assert compat._prepare_sources(fixed, BACKPORTS) == {}
+    fixed = compat._prepare_sources(sources, BACKPORT_PROFILES)
+    assert compat._prepare_sources(fixed, BACKPORT_PROFILES) == {}
     altered = {
         **sources,
         next(iter(sources)): "raise RuntimeError('divergent source')\n",
     }
     with pytest.raises(RuntimeError, match="Unsupported"):
-        compat._prepare_sources(altered, BACKPORTS)
+        compat._prepare_sources(altered, BACKPORT_PROFILES)
     partially_fixed = {**sources, next(iter(fixed)): next(iter(fixed.values()))}
     with pytest.raises(RuntimeError, match="partially fixed"):
-        compat._prepare_sources(partially_fixed, BACKPORTS)
+        compat._prepare_sources(partially_fixed, BACKPORT_PROFILES)
     cls = qwen.model.QwenImageGenerationModel
     assert compat.apply_qwen_image_compat_patch() is False
     assert qwen.model.QwenImageGenerationModel is cls
@@ -298,6 +307,128 @@ def test_source_gate_fixed_noop_unknown_and_repeated_application(qwen, monkeypat
     monkeypatch.setattr(compat, "_read_source", lambda module: fixed[module.__name__])
     assert compat.apply_qwen_image_compat_patch() is False
     assert qwen.model.QwenImageGenerationModel is cls
+
+
+@pytest.fixture
+def pinned_sources():
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORTS
+
+    sources = {
+        name: compat._read_source(importlib.import_module(name)) for name in BACKPORTS
+    }
+    source = sources[PIPELINE].replace(EAGER_EVAL, "", 1)
+    assert source.count(LATENTS_STD) == 1
+    sources[PIPELINE] = source.replace(LATENTS_STD, LATENTS_STD + EAGER_EVAL, 1)
+    return sources
+
+
+def test_source_gate_accepts_pinned_pipeline_and_keeps_eager_eval(pinned_sources):
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
+
+    fixed = compat._prepare_sources(pinned_sources, BACKPORT_PROFILES)
+    assert fixed[PIPELINE].count(LATENTS_STD + EAGER_EVAL) == 1
+    assert compat._prepare_sources(fixed, BACKPORT_PROFILES) == {}
+
+
+@pytest.mark.parametrize("state", ["legacy", "fixed"])
+@pytest.mark.parametrize("change", ["arguments", "placement", "duplicate"])
+def test_source_gate_rejects_changed_or_misplaced_eager_eval(
+    pinned_sources, state, change
+):
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
+
+    sources = (
+        pinned_sources
+        if state == "legacy"
+        else compat._prepare_sources(pinned_sources, BACKPORT_PROFILES)
+    )
+    source = sources[PIPELINE]
+    if change == "arguments":
+        changed = source.replace(EAGER_EVAL, "        mx.eval(self.latents_mean)\n", 1)
+    elif change == "placement":
+        changed = source.replace(LATENTS_STD + EAGER_EVAL, EAGER_EVAL + LATENTS_STD, 1)
+    else:
+        changed = source.replace(EAGER_EVAL, EAGER_EVAL + EAGER_EVAL, 1)
+    assert changed != source
+    with pytest.raises(RuntimeError, match="Unsupported or partially fixed.*pipeline"):
+        compat._prepare_sources({**sources, PIPELINE: changed}, BACKPORT_PROFILES)
+
+
+def test_source_gate_rejects_mixed_legacy_and_fixed_sets(pinned_sources):
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
+
+    original = {
+        **pinned_sources,
+        PIPELINE: pinned_sources[PIPELINE].replace(EAGER_EVAL, "", 1),
+    }
+    for sources in (original, pinned_sources):
+        fixed = compat._prepare_sources(sources, BACKPORT_PROFILES)
+        assert compat._prepare_sources(fixed, BACKPORT_PROFILES) == {}
+        for name in ("mlx_vlm.models.qwen_image.config", PIPELINE):
+            with pytest.raises(RuntimeError, match="Unsupported or partially fixed"):
+                compat._prepare_sources(
+                    {**sources, name: fixed[name]}, BACKPORT_PROFILES
+                )
+            with pytest.raises(RuntimeError, match="Unsupported or partially fixed"):
+                compat._prepare_sources(
+                    {**fixed, name: sources[name]}, BACKPORT_PROFILES
+                )
+
+
+def test_partial_pinned_source_fails_before_activation(qwen, monkeypatch, pinned_sources):
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
+
+    fixed = compat._prepare_sources(pinned_sources, BACKPORT_PROFILES)
+    config = "mlx_vlm.models.qwen_image.config"
+    mixed = {**pinned_sources, config: fixed[config]}
+    original_config = qwen.config.get_variant
+    original_pipeline = qwen.pipeline.QwenImagePipeline
+    monkeypatch.setattr(compat, "_APPLIED", False)
+    monkeypatch.setattr(compat, "_read_source", lambda module: mixed[module.__name__])
+    with pytest.raises(RuntimeError, match="Unsupported or partially fixed"):
+        compat.apply_qwen_image_compat_patch()
+    assert qwen.config.get_variant is original_config
+    assert qwen.pipeline.QwenImagePipeline is original_pipeline
+    assert compat._APPLIED is False
+
+
+def test_pinned_pipeline_runs_tiny_generation(
+    qwen, checkpoint, monkeypatch, pinned_sources
+):
+    from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
+
+    fixed = compat._prepare_sources(pinned_sources, BACKPORT_PROFILES)
+    pipeline_module = ModuleType(PIPELINE)
+    pipeline_module.__dict__.update(qwen.pipeline.__dict__)
+    exec(
+        compile(fixed[PIPELINE], "<pinned-qwen-image>", "exec"),
+        pipeline_module.__dict__,
+    )
+    pinned_qwen = SimpleNamespace(
+        config=qwen.config, pipeline=pipeline_module, model=qwen.model
+    )
+
+    evaluations = []
+    evaluate = mx.eval
+
+    def observe_eval(*arrays):
+        evaluations.append(arrays)
+        return evaluate(*arrays)
+
+    monkeypatch.setattr(mx, "eval", observe_eval)
+    pipeline, calls, _ = _tiny_pipeline(pinned_qwen, checkpoint, monkeypatch)
+    assert len(evaluations) == 1
+    assert evaluations[0][0] is pipeline.latents_mean
+    assert evaluations[0][1] is pipeline.latents_std
+
+    model = qwen.model.QwenImageGenerationModel(pipeline, "tiny-qwen")
+    request = _image_api().ImageGenerationRequest(
+        prompt="a fox", steps=30, width=32, height=32, guidance=1
+    )
+    result = model.generate(request)
+    assert result.steps == len(calls) == 8
+    assert result.array.shape == (32, 32, 3)
+    assert result.array.dtype == mx.uint8
 
 
 @pytest.mark.parametrize("layout", ["legacy", "nested", "both"])
