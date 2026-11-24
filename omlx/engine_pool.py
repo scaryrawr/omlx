@@ -639,6 +639,7 @@ class EnginePool:
         recording forced offload decisions.
         """
 
+        runtime_settings = self._effective_adapter_model_settings(entry, runtime_settings)
         base = self._entry_resident_size(entry) if base_size is None else base_size
         if self._distributed_deployment_for_entry(entry) is not None:
             return base
@@ -1137,6 +1138,33 @@ class EnginePool:
         effective.deepseek_v41_engram_ssd_offload = True
         return effective
 
+    def _effective_adapter_model_settings(
+        self,
+        entry: EngineEntry,
+        settings: object | None,
+        *,
+        log_decision: bool = False,
+    ) -> object | None:
+        if entry.adapter is None:
+            return settings
+        if settings is None and self._settings_manager is not None:
+            settings = self._settings_manager.get_settings(entry.model_id)
+        if not (
+            getattr(settings, "mtp_enabled", False)
+            or getattr(settings, "vlm_mtp_enabled", False)
+        ):
+            return settings
+        if log_decision:
+            logger.warning(
+                "LoRA adapter '%s' runs without multi-token prediction (MTP); "
+                "disabling MTP for this load without changing saved settings",
+                entry.model_id,
+            )
+        effective = copy.copy(settings)
+        effective.mtp_enabled = False
+        effective.vlm_mtp_enabled = False
+        return effective
+
     @property
     def current_model_memory(self) -> int:
         """Current memory used by loaded models in bytes."""
@@ -1310,9 +1338,11 @@ class EnginePool:
         if settings is None:
             return None
 
+        entry = self._entries.get(model_id)
+        if entry is not None:
+            settings = self._effective_adapter_model_settings(entry, settings)
         to_dict = getattr(settings, "to_dict", None)
         data = to_dict() if callable(to_dict) else {}
-        entry = self._entries.get(model_id)
         is_diffusion = bool(entry and self._entry_is_diffusion_model(entry))
 
         def has_value(key: str) -> bool:
@@ -2994,6 +3024,11 @@ class EnginePool:
             ModelLoadingError: If model is already being loaded
         """
         entry = self._entries.get(model_id)
+        requested_runtime_settings = runtime_settings
+        if entry is not None:
+            runtime_settings = self._effective_adapter_model_settings(
+                entry, runtime_settings
+            )
         if entry is not None and model_id in self._changed_adapter_ids:
             self._raise_if_entry_unavailable(entry)
         if force_lm and entry is not None and not self._has_mlx_lm_path(entry):
@@ -3322,6 +3357,9 @@ class EnginePool:
                     )
 
             # Now load the model
+            self._effective_adapter_model_settings(
+                entry, requested_runtime_settings, log_decision=True
+            )
             await self._load_engine(
                 model_id,
                 force_lm=force_lm,
@@ -4464,6 +4502,9 @@ class EnginePool:
         model_settings = runtime_settings
         if model_settings is None and self._settings_manager is not None:
             model_settings = self._settings_manager.get_settings(model_id)
+        model_settings = self._effective_adapter_model_settings(
+            entry, model_settings, log_decision=True
+        )
 
         if entry.adapter is not None:
             force_lm = force_lm and self._has_mlx_lm_path(entry)
@@ -4479,10 +4520,6 @@ class EnginePool:
                 feature = f"the {entry.engine_type} engine"
             elif entry.engine_type == "batched" and not self._has_mlx_lm_path(entry):
                 feature = "the batched language engine for this model family"
-            elif getattr(model_settings, "mtp_enabled", False) or getattr(
-                model_settings, "vlm_mtp_enabled", False
-            ):
-                feature = "multi-token prediction (MTP)"
             elif getattr(model_settings, "qwen35_ane_prefill_enabled", False):
                 feature = "ANE prefill"
             elif entry.adapter.source.has_routed_targets and getattr(

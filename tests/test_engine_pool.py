@@ -115,6 +115,117 @@ def test_adapter_discovery_adds_a_separate_model(lora_pool, small_mock_model_dir
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "mtp_flag, engine_type",
+    [("mtp_enabled", "batched"), ("vlm_mtp_enabled", "vlm")],
+)
+async def test_adapter_runs_without_saved_mtp(
+    lora_pool, small_mock_model_dir, caplog, mtp_flag, engine_type
+):
+    pool, _ = lora_pool
+    entry = pool.get_entry("pi")
+    entry.engine_type = engine_type
+    manager = ModelSettingsManager(small_mock_model_dir / "settings")
+    requested = ModelSettings(
+        **{mtp_flag: True}, temperature=0.7, vlm_mtp_draft_model="unused-draft"
+    )
+    manager.set_settings("pi", requested)
+    manager.set_settings("model-a", ModelSettings(mtp_enabled=True))
+    persisted = manager.settings_file.read_bytes()
+    pool._settings_manager = manager
+    engine = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    base_engine = MagicMock(start=AsyncMock(), stop=AsyncMock())
+
+    with (
+        patch(
+            "omlx.engine_pool.BatchedEngine",
+            side_effect=lambda **kwargs: engine if kwargs["lora"] else base_engine,
+        ) as batched,
+        patch("omlx.engine_pool.VLMBatchedEngine", return_value=engine) as vlm,
+    ):
+        assert await pool.get_engine("pi") is engine
+        assert await pool.get_engine("pi") is engine
+        constructor = vlm if engine_type == "vlm" else batched
+        constructor.assert_called_once()
+        effective = constructor.call_args.kwargs["model_settings"]
+        assert constructor.call_args.kwargs["lora"] is entry.adapter
+        assert constructor.call_args.kwargs["model_name"] == entry.model_path
+        assert await pool.get_engine("model-a") is base_engine
+        assert batched.call_args.kwargs["model_settings"].mtp_enabled is True
+
+    assert effective.mtp_enabled is False
+    assert effective.vlm_mtp_enabled is False
+    assert effective.temperature == 0.7
+    assert effective.vlm_mtp_draft_model == "unused-draft"
+    assert entry.runtime_settings_signature == pool._engine_runtime_signature("pi")
+    assert entry.runtime_settings_signature == pool._engine_runtime_signature(
+        "pi", ModelSettings(temperature=0.7)
+    )
+    assert sum("disabling MTP for this load" in r.message for r in caplog.records) == 1
+    assert getattr(manager.get_settings("pi"), mtp_flag) is True
+    assert manager.settings_file.read_bytes() == persisted
+    saved = ModelSettingsManager(small_mock_model_dir / "settings")
+    assert getattr(saved.get_settings("pi"), mtp_flag) is True
+    assert saved.get_settings("model-a").mtp_enabled is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct_load", [False, True])
+@pytest.mark.parametrize("mtp_flag", ["mtp_enabled", "vlm_mtp_enabled"])
+async def test_adapter_profile_disables_mtp_without_changing_request(
+    lora_pool, direct_load, mtp_flag, caplog
+):
+    pool, _ = lora_pool
+    requested = ModelSettings(**{mtp_flag: True}, vlm_mtp_draft_model="unused-draft")
+    original = requested.to_dict()
+    engine = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with patch("omlx.engine_pool.BatchedEngine", return_value=engine) as constructor:
+        if direct_load:
+            await pool._load_engine("pi", runtime_settings=requested)
+        else:
+            assert await pool.get_engine("pi", runtime_settings=requested) is engine
+        assert await pool.get_engine("pi", runtime_settings=requested) is engine
+        assert await pool.get_engine("pi", runtime_settings=ModelSettings()) is engine
+    constructor.assert_called_once()
+    effective = constructor.call_args.kwargs["model_settings"]
+    assert effective.mtp_enabled is False
+    assert effective.vlm_mtp_enabled is False
+    assert requested.to_dict() == original
+    assert sum("disabling MTP for this load" in r.message for r in caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_adapter_admission_excludes_inkling_mtp_drafter(
+    lora_pool, small_mock_model_dir
+):
+    pool, _ = lora_pool
+    adapter = pool.get_entry("pi")
+    base = pool.get_entry("model-a")
+    adapter.config_model_type = base.config_model_type = "inkling2"
+    draft = small_mock_model_dir / "model-a" / "mtp.safetensors"
+    draft.write_bytes(b"draft")
+    requested = ModelSettings(mtp_enabled=True)
+    pool._get_final_ceiling = lambda: adapter.estimated_size + 1
+    engine = MagicMock(start=AsyncMock(), stop=AsyncMock())
+    with (
+        patch("omlx.engine_pool.bundled_inkling2_dspark_path", return_value=draft),
+        patch("omlx.engine_pool.get_phys_footprint", return_value=0),
+        patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
+        patch("omlx.engine_pool.BatchedEngine", return_value=engine),
+        patch("omlx.engine_pool.load_inkling2_dspark_drafter") as load_drafter,
+    ):
+        assert pool._entry_runtime_resident_size(adapter, requested) == (
+            adapter.estimated_size
+        )
+        assert pool._entry_runtime_resident_size(base, requested) == (
+            base.estimated_size + len(b"draft") + 201024 * 256 * 2
+        )
+        assert await pool.get_engine("pi", runtime_settings=requested) is engine
+    load_drafter.assert_not_called()
+    assert adapter.runtime_estimated_size == adapter.estimated_size
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("settings", "reason"),
     [
         (ModelSettings(moe_expert_offload_enabled=True), "MoE expert offload"),
@@ -314,8 +425,6 @@ async def test_adapter_reaches_vlm_and_batched_engines_including_fallbacks(
     [
         (ModelSettings(external_engine="splash"), "Splash"),
         (ModelSettings(prefill_helper_node_id="peer"), "prefill helper"),
-        (ModelSettings(mtp_enabled=True), "MTP"),
-        (ModelSettings(vlm_mtp_enabled=True), "MTP"),
         (ModelSettings(qwen35_ane_prefill_enabled=True), "ANE prefill"),
         (ModelSettings(model_type_override="embedding"), "embedding engine"),
     ],

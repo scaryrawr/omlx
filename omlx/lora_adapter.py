@@ -28,6 +28,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .exceptions import AdapterError, AdapterShapeError, UnsupportedAdapterError
+from .patches.inkling2 import INKLING2_MODEL_TYPES
 
 if TYPE_CHECKING:
     from .model_discovery import DiscoveredModel
@@ -44,6 +45,7 @@ _TENSOR_KEY = re.compile(
 )
 _LANGUAGE_PREFIX = r"(?:model\.)?(?:language_model\.(?:model\.)?)?"
 _LAYER_TAIL = re.compile(rf"{_LANGUAGE_PREFIX}(layers\.\d+\..+)")
+_INKLING2_PROJECTIONS = {"self_attn.o_proj": "attn.o_proj"}
 _ROUTED_DOWN = re.compile(
     rf"{_LANGUAGE_PREFIX}layers\.\d+\.(?:mlp\.)?experts\.down_proj"
 )
@@ -769,7 +771,12 @@ def _tensor_name(hf_path: str, half: str) -> str:
     return f"base_model.model.{hf_path}.lora_{half}.weight"
 
 
-def _target_name(hf_path: str, named: Mapping[str, nn.Module], adapter: Path) -> str:
+def _target_name(
+    hf_path: str,
+    named: Mapping[str, nn.Module],
+    adapter: Path,
+    model_type: str | None,
+) -> str:
     """The name under the language root that an adapter's HF module path points at."""
     match = _LAYER_TAIL.fullmatch(hf_path)
     if match is None:
@@ -779,6 +786,12 @@ def _target_name(hf_path: str, named: Mapping[str, nn.Module], adapter: Path) ->
         )
     tail = match.group(1)
     found = [name for name in (f"model.{tail}", tail) if name in named]
+    if not found and model_type in INKLING2_MODEL_TYPES:
+        _, index, projection = tail.split(".", 2)
+        runtime_projection = _INKLING2_PROJECTIONS.get(projection)
+        if runtime_projection is not None:
+            tail = f"layers.{index}.{runtime_projection}"
+            found = [name for name in (f"model.{tail}", tail) if name in named]
     if len(found) != 1:
         problem = "is not in" if not found else "matches two modules of"
         raise AdapterShapeError(
@@ -812,7 +825,12 @@ def _locate(root: Any, name: str) -> tuple[Any, str | int]:
     *parents, last = name.split(".")
     node = root
     for part in parents:
-        node = node[int(part)] if isinstance(node, list) else node[part]
+        if isinstance(node, list):
+            node = node[int(part)]
+        elif isinstance(node, Mapping):
+            node = node[part]
+        else:
+            node = getattr(node, part)
     return node, int(last) if isinstance(node, list) else last
 
 
@@ -918,6 +936,7 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
     lazily, and stay in the dtype the adapter shipped in. The language root is
     model.language_model when present, else model. Each adapter module resolves by its
     path from "layers.<n>." on, as "model.<tail>" or "<tail>" under that root.
+    Inkling2 also maps self_attn.o_proj to attn.o_proj when no exact path exists.
 
     Just before loading, the adapter's config and weights file are checked against
     source.fingerprint, so replaced files cannot be stamped with the cache_revision
@@ -950,7 +969,7 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
         path = (
             module.runtime_path if isinstance(module, _RoutedModule) else module.hf_path
         )
-        name = _target_name(path, named, source.path)
+        name = _target_name(path, named, source.path, getattr(root, "model_type", None))
         parent, key = _locate(root, name)
         slot = (id(parent), key)
         if slot in plan:

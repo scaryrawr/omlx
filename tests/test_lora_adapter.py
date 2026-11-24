@@ -1501,6 +1501,145 @@ def module_types(model):
     return {name: type(module) for name, module in model.named_modules()}
 
 
+class TestInkling2Lora:
+    @pytest.fixture
+    def model(self, request):
+        from test_inkling_vlm_mtp import _inkling2_tiny
+
+        model = _inkling2_tiny(formats=("mxfp8",) * 2, local_layer_ids=[])
+        model.model_type, vlm = request.param
+        if vlm:
+            from omlx.patches.inkling2.vlm import Model
+
+            model.args.model_type = model.model_type
+            facade = Model(model.args)
+            facade.update(model.parameters())
+            model = facade
+        return model
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            ("inkling2", False),
+            ("inkling2_loop", False),
+            ("inkling2", True),
+            ("inkling2_loop", True),
+        ],
+        indirect=True,
+        ids=["lm", "loop-lm", "vlm", "loop-vlm"],
+    )
+    def test_hf_output_projections_match_folded_lora(
+        self, model, write_lora_adapter, tmp_path
+    ):
+        rng = np.random.default_rng(42)
+        tensors, cases = {}, []
+        for layer in model.model.layers:
+            projection = layer.attn.o_proj
+            outputs, inputs = projection.weight.shape
+            a = (rng.standard_normal((64, inputs)) * 0.1).astype(np.float32)
+            b = (rng.standard_normal((outputs, 64)) * 0.1).astype(np.float32)
+            path = f"language_model.model.layers.{len(cases)}.self_attn.o_proj"
+            stem = f"base_model.model.{path}"
+            tensors[f"{stem}.lora_A.weight"] = a
+            tensors[f"{stem}.lora_B.weight"] = b
+            x = rng.standard_normal((3, inputs)).astype(np.float32)
+            base = np.array(projection(mx.array(x)))
+            expected = folded_output(x, np.array(projection.weight), None, a, b, 1.0)
+            cases.append((layer, x, base, expected))
+        adapter = write_lora_adapter(
+            tmp_path / "ad",
+            base_ref="thinkingmachines/Inkling-2-Mini",
+            rank=64,
+            alpha=64,
+            modules={},
+            tensors=tensors,
+        )
+
+        assert attach_lora(model, bind(adapter)) == len(cases)
+
+        for layer, x, base, expected in cases:
+            actual = np.array(layer.attn.o_proj(mx.array(x)))
+            assert np.abs(actual - base).max() > 0.1
+            np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
+
+    @pytest.mark.parametrize(
+        ("model", "target"),
+        [
+            (("unrelated", False), "self_attn.o_proj"),
+            (("inkling2_loop", True), "self_attn.q_proj"),
+            (("inkling2_loop", False), "self_attn.k_proj"),
+            (("inkling2", False), "self_attn.v_proj"),
+            (("inkling2_loop", True), "self_attn.missing_proj"),
+        ],
+        indirect=["model"],
+    )
+    def test_unknown_family_and_unsupported_targets_are_rejected(
+        self, model, target, write_lora_adapter, tmp_path
+    ):
+        projection = getattr(model.model.layers[0].attn, target.split(".")[-1], None)
+        outputs, inputs = (128, 128) if projection is None else projection.weight.shape
+        path = f"language_model.model.layers.0.{target}"
+        adapter = write_lora_adapter(
+            tmp_path / "ad", rank=RANK, modules={path: (inputs, outputs)}
+        )
+        types_before = module_types(model)
+
+        with pytest.raises(AdapterShapeError, match=re.escape(path)):
+            attach_lora(model, bind(adapter))
+
+        assert module_types(model) == types_before
+        assert lora_revision_of(model) is None
+
+    @pytest.mark.parametrize("model", [("inkling2_loop", True)], indirect=True)
+    def test_a_missing_runtime_output_projection_is_rejected(
+        self, model, write_lora_adapter, tmp_path
+    ):
+        del model.model.layers[0].attn.o_proj
+        path = "language_model.model.layers.0.self_attn.o_proj"
+        adapter = write_lora_adapter(
+            tmp_path / "ad", rank=RANK, modules={path: (128, 128)}
+        )
+        types_before = module_types(model)
+
+        with pytest.raises(AdapterShapeError, match=re.escape(path)):
+            attach_lora(model, bind(adapter))
+
+        assert module_types(model) == types_before
+        assert lora_revision_of(model) is None
+
+    @pytest.mark.parametrize("model", [("inkling2", False)], indirect=True)
+    def test_an_exact_projection_takes_precedence(
+        self, model, write_lora_adapter, tmp_path
+    ):
+        layer = model.model.layers[0]
+        layer.self_attn = nn.Module()
+        layer.self_attn.o_proj = nn.Linear(128, 128, bias=False)
+        path = "language_model.model.layers.0.self_attn.o_proj"
+        a, b = lora_factors(128, 128, seed=3)
+        stem = f"base_model.model.{path}"
+        adapter = write_lora_adapter(
+            tmp_path / "ad",
+            rank=RANK,
+            alpha=ALPHA,
+            modules={},
+            tensors={f"{stem}.lora_A.weight": a, f"{stem}.lora_B.weight": b},
+        )
+        x = np.ones((2, 128), dtype=np.float32)
+        unchanged = np.array(layer.attn.o_proj(mx.array(x)))
+        expected = folded_output(
+            x, np.array(layer.self_attn.o_proj.weight), None, a, b, PLAIN_SCALE
+        )
+
+        assert attach_lora(model, bind(adapter)) == 1
+
+        np.testing.assert_allclose(
+            np.array(layer.self_attn.o_proj(mx.array(x))), expected, atol=1e-4
+        )
+        np.testing.assert_array_equal(
+            np.array(layer.attn.o_proj(mx.array(x))), unchanged
+        )
+
+
 class TestAttachLora:
     @pytest.fixture(autouse=True)
     def seed(self):
