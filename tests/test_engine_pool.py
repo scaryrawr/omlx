@@ -114,6 +114,23 @@ def test_adapter_discovery_adds_a_separate_model(lora_pool, small_mock_model_dir
 
 
 @pytest.mark.asyncio
+async def test_adapter_runs_without_saved_mtp(lora_pool, small_mock_model_dir):
+    pool, _ = lora_pool
+    manager = ModelSettingsManager(small_mock_model_dir / "settings")
+    manager.set_settings("pi", ModelSettings(mtp_enabled=True))
+    pool._settings_manager = manager
+    engine = MagicMock(start=AsyncMock(), stop=AsyncMock())
+
+    with patch("omlx.engine_pool.BatchedEngine", return_value=engine) as constructor:
+        assert await pool.get_engine("pi") is engine
+
+    assert constructor.call_args.kwargs["lora"] is pool.get_entry("pi").adapter
+    assert constructor.call_args.kwargs["model_settings"].mtp_enabled is False
+    saved = ModelSettingsManager(small_mock_model_dir / "settings")
+    assert saved.get_settings("pi").mtp_enabled is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("settings", "reason"),
     [
