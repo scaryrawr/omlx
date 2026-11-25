@@ -242,6 +242,7 @@ from .api.utils import (
     prepare_system_messages_for_template,
     uses_native_reasoning_content,
 )
+from .api.video_routes import router as video_router
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, VLMBatchedEngine
 from .engine.decision import DecisionEngine
 from .engine.distributed import DistributedInferenceError
@@ -280,8 +281,10 @@ from .prefill_helper.routes import router as prefill_helper_router
 from .prefill_helper.routes import set_engine_pool_getter as set_prefill_helper_pool
 from .prefill_progress import get_prefill_tracker
 from .server_metrics import get_server_metrics, reset_server_metrics
+from .settings import resolve_default_base_path
 from .utils import gpu_power, macos_say
 from .utils.network import is_loopback_bind
+from .video_jobs import VideoJobs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -781,7 +784,29 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # pragma: no cover - never block startup
             logger.warning("MS download queue restore failed: %s", exc)
 
+    app.state.video_jobs = None
+    if _server_state.engine_pool is not None:
+        video_base = (
+            Path(_server_state.global_settings.base_path)
+            if _server_state.global_settings is not None
+            else resolve_default_base_path()
+        )
+        app.state.video_jobs = VideoJobs(
+            video_base / "videos", _server_state.engine_pool, resolve_model_id
+        )
+        try:
+            await app.state.video_jobs.start()
+        except (OSError, ValueError):
+            logger.exception("Video job service could not start")
+            app.state.video_jobs = None
+
     yield
+
+    if app.state.video_jobs is not None:
+        try:
+            await app.state.video_jobs.close()
+        except OSError:
+            logger.exception("Video job shutdown could not persist queued jobs")
 
     # Shutdown: Save all-time stats, stop TTL task, process memory enforcer, etc.
     # The GPU power cap affects the whole Mac, so remove it before slow steps.
@@ -846,6 +871,7 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+app.state.video_jobs = None
 
 # Include MCP routes
 from .api.mcp_routes import router as mcp_router
@@ -859,6 +885,8 @@ app.include_router(mcp_router, dependencies=[Depends(verify_inference_api_key)])
 from .api.image_routes import router as image_router
 
 app.include_router(image_router, dependencies=[Depends(verify_api_key)])
+
+app.include_router(video_router, dependencies=[Depends(verify_api_key)])
 
 # Include web search routes (chat UI built-in web_search / fetch_url tools)
 from .api.websearch_routes import router as websearch_router
