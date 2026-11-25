@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from .sts import STSEngine
 
 _FRAME_BYTES = 3200 * 2
-_MAX_APPEND_BYTES = SAMPLE_RATE * 2
-_MAX_APPEND_BASE64 = ((_MAX_APPEND_BYTES + 2) // 3) * 4
+HARU_MAX_APPEND_BYTES = SAMPLE_RATE * 2
+_MAX_APPEND_BASE64 = ((HARU_MAX_APPEND_BYTES + 2) // 3) * 4
 HARU_REALTIME_CAPABILITIES = {"input_image": False, "tools": False, "duplex": True}
 
 

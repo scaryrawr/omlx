@@ -38,6 +38,7 @@ from PIL import Image
 
 from ..engine.audio_utils import wav_bytes_to_pcm_frames, wav_header
 from ..engine.haru_realtime import (
+    HARU_MAX_APPEND_BYTES,
     HARU_REALTIME_CAPABILITIES,
     HaruRealtimeSession,
     haru_default_instructions,
@@ -1300,7 +1301,8 @@ async def _run_haru_voice(
     where = {**output, "item_id": item["id"], "content_index": 0}
     transcript: list[str] = []
     announced = False
-    pending_audio: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
+    pending_audio = bytearray()
+    audio_ready = asyncio.Event()
     received_audio = False
 
     async def emit(frame) -> None:
@@ -1345,7 +1347,11 @@ async def _run_haru_voice(
 
     async def generate_frames() -> None:
         while True:
-            pcm = await pending_audio.get()
+            await audio_ready.wait()
+            pcm = bytes(pending_audio[:HARU_MAX_APPEND_BYTES])
+            del pending_audio[:HARU_MAX_APPEND_BYTES]
+            if not pending_audio:
+                audio_ready.clear()
             async for frame in session.append(pcm):
                 await emit(frame)
                 if frame.done:
@@ -1381,13 +1387,13 @@ async def _run_haru_voice(
                     })
                 elif kind == "input_audio_buffer.append":
                     pcm = session.decode_append(event.get("audio"))
-                    try:
-                        pending_audio.put_nowait(pcm)
-                    except asyncio.QueueFull:
+                    if len(pending_audio) + len(pcm) > 8 * HARU_MAX_APPEND_BYTES:
                         await send_error(
                             "audio_buffer_limit", "Haru cannot keep up with incoming audio", client_event_id
                         )
                         return "incomplete"
+                    pending_audio.extend(pcm)
+                    audio_ready.set()
                     received_audio = True
                 elif kind == "response.cancel":
                     if event.get("response_id") not in (None, response["id"]):

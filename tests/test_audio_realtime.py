@@ -1444,6 +1444,27 @@ class TestHaruRealtimeWebSocket:
             assert ws.receive()["code"] == 1000
         assert _eventually(lambda: pool.release_engine.await_count == 2)
 
+    def test_small_audio_appends_do_not_overflow_during_one_model_frame(self, haru_engine):
+        engine, upstream = haru_engine
+        upstream.unblock.clear()
+        (p1, p2, p3), _, client = _voice_client(engine)
+        with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
+            ws.receive_json()
+            try:
+                _send_pcm(ws, bytes(6400))
+                _until(ws, "response.output_audio.delta")
+                assert upstream.entered.wait(2)
+                # Replay 140 ms of 10 ms chunks while one model step is in flight.
+                for i in range(14):
+                    _send_pcm(ws, np.full(240, i, dtype="<i2").tobytes())
+                ws.send_json({"type": "session.update", "session": {"output_modalities": ["audio"]}})
+                assert ws.receive_json()["type"] == "session.updated"
+            finally:
+                upstream.unblock.set()
+            assert _until(ws, "response.done")[-1]["response"]["status"] == "completed"
+        expected = np.repeat(np.arange(14, dtype=np.float32), 240)[:3200] / 32768
+        np.testing.assert_array_equal(upstream.samples[1], expected)
+
     def test_cancel_stops_a_multi_frame_append_without_releasing_lease_early(self, haru_engine):
         engine, upstream = haru_engine
         upstream.unblock.clear()
