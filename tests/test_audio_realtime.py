@@ -26,19 +26,20 @@ from mlx_vlm.models.lfm3_audio import ModelConfig as Lfm3AudioConfig
 from mlx_vlm.models.lfm3_audio.codec import CodecConfig, LiquidCodec
 from PIL import Image
 
-from omlx.api.audio_routes import _realtime_api_key, realtime_router
-from omlx.engine import lfm3_realtime
+from omlx.api.audio_routes import _realtime_api_key, realtime_router, router
+from omlx.engine import lfm3_realtime, sts
 from omlx.engine.qwen3_omni_realtime import Qwen3OmniVoiceBackend
 from omlx.engine.realtime_voice import (
     FunctionCall,
     RealtimeVoiceError,
     RealtimeVoiceSession,
+    ToolOutput,
     VoiceBackend,
     VoiceStep,
-    ToolOutput,
     VoiceTurn,
     turn_messages,
 )
+from omlx.engine.sts import STSEngine
 from omlx.engine.stt import (
     RealtimeTranscriptionSession,
     STTEngine,
@@ -1298,6 +1299,200 @@ class TestRealtimeVoiceWebSocket:
 
     def test_voice_backends_cover_discovery_types(self):
         assert set(_VOICE_BACKENDS) == REALTIME_VOICE_MODEL_TYPES
+
+
+class _FakeHaru:
+    def __init__(self, finish_on=2):
+        self.finish_on = finish_on
+        self.calls = []
+        self.samples = []
+        self.prompt = None
+        self.entered = threading.Event()
+        self.unblock = threading.Event()
+        self.unblock.set()
+
+    def create_session(self, *, system_prompt):
+        self.prompt = system_prompt
+        self.calls.append(("create", threading.current_thread().name))
+        return self
+
+    def start(self):
+        self.calls.append(("start", threading.current_thread().name))
+        return SimpleNamespace(audio=np.zeros(3200), text="", done=False)
+
+    def step(self, samples):
+        self.calls.append(("step", threading.current_thread().name))
+        self.samples.append(samples)
+        self.entered.set()
+        assert self.unblock.wait(5)
+        return SimpleNamespace(
+            audio=np.full(3200, 0.5), text="hi ", done=len(self.samples) == self.finish_on
+        )
+
+    def synchronize_decoder(self):
+        self.calls.append(("synchronize", threading.current_thread().name))
+
+
+@pytest.fixture
+def haru_engine(monkeypatch, tmp_path):
+    model = _FakeHaru()
+    (tmp_path / "config.json").write_text('{"model_type":"haru"}')
+    engine = STSEngine(str(tmp_path), config_model_type="haru")
+    with ThreadPoolExecutor(1, thread_name_prefix="mlx-haru-test") as executor:
+        monkeypatch.setattr("omlx.engine.haru_realtime.get_mlx_executor", lambda: executor)
+        monkeypatch.setattr("omlx.engine.sts.get_mlx_executor", lambda: executor)
+        monkeypatch.setattr(
+            "omlx.engine.haru_realtime.haru_default_instructions", lambda: "Default Haru prompt"
+        )
+        monkeypatch.setitem(
+            sts._FAMILY_LOADERS, "haru", lambda _: model
+        )
+        asyncio.run(engine.start())
+        try:
+            yield engine, model
+        finally:
+            model.unblock.set()
+
+
+def _send_pcm(ws, pcm: bytes):
+    ws.send_json({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
+
+
+class TestHaruRealtimeWebSocket:
+    def test_fragmented_audio_uses_one_response_without_turns(self, haru_engine):
+        engine, upstream = haru_engine
+        (p1, p2, p3), pool, client = _voice_client(engine)
+        first = np.full(3200, -32768, dtype="<i2").tobytes()
+        second = np.full(3200, 16384, dtype="<i2").tobytes()
+        with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
+            config = ws.receive_json()["session"]
+            assert config["capabilities"] == {"duplex": True, "input_image": False, "tools": False}
+            assert config["instructions"] == "Default Haru prompt"
+            assert config["audio"]["input"] == {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "turn_detection": None,
+            }
+            ws.send_json({"type": "session.update", "session": {"instructions": "Speak Japanese."}})
+            assert ws.receive_json()["session"]["instructions"] == "Speak Japanese."
+
+            _send_pcm(ws, first[:6399])
+            events = _until(ws, "response.output_audio.delta")
+            assert len(base64.b64decode(events[-1]["delta"])) == 6400
+            assert not upstream.samples
+
+            _send_pcm(ws, first[6399:] + second[:137])
+            events.extend(_until(ws, "response.output_audio.delta"))
+            _send_pcm(ws, second[137:])
+            events.extend(_until(ws, "response.done"))
+
+        kinds = [event["type"] for event in events]
+        assert kinds == [
+            "response.created",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_audio.delta",
+            "response.output_audio_transcript.delta",
+            "response.output_audio.delta",
+            "response.output_audio_transcript.delta",
+            "response.output_audio.delta",
+            "response.output_audio.done",
+            "response.output_audio_transcript.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.done",
+        ]
+        response = events[-1]["response"]
+        assert response["id"] == events[0]["response"]["id"]
+        assert response["status"] == "completed"
+        assert response["output"][0]["id"] == events[1]["item"]["id"]
+        assert response["output"][0]["content"] == [{"type": "output_audio", "transcript": "hi hi "}]
+        assert np.frombuffer(base64.b64decode(events[5]["delta"]), dtype="<i2")[0] == 16383
+        assert upstream.prompt == "Speak Japanese."
+        np.testing.assert_array_equal(upstream.samples[0], np.full(3200, -1, dtype=np.float32))
+        np.testing.assert_array_equal(upstream.samples[1], np.full(3200, 0.5, dtype=np.float32))
+        assert _eventually(lambda: pool.release_engine.await_count == 1)
+        assert [name for name, _ in upstream.calls] == ["create", "start", "step", "step", "synchronize"]
+        assert {thread for _, thread in upstream.calls} == {"mlx-haru-test_0"}
+
+    def test_unsupported_controls_and_terminal_cancel(self, haru_engine):
+        engine, upstream = haru_engine
+        (p1, p2, p3), pool, client = _voice_client(engine)
+        with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
+            ws.receive_json()
+            for event, code in (
+                ({"type": "input_audio_buffer.commit"}, "unsupported"),
+                ({"type": "response.create"}, "unsupported"),
+                ({"type": "conversation.item.truncate"}, "unsupported"),
+                ({"type": "session.update", "session": {"turn_detection": {"type": "server_vad"}}}, "unsupported"),
+                ({"type": "session.update", "session": {"voice": "alloy"}}, "unsupported"),
+                ({"type": "session.update", "session": {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}}}, "unsupported"),
+                ({"type": "input_audio_buffer.append", "audio": "?"}, "invalid_value"),
+                ({"type": "input_audio_buffer.append", "audio": _pcm(1.1)}, "audio_buffer_limit"),
+            ):
+                ws.send_json({**event, "event_id": "bad"})
+                error = ws.receive_json()["error"]
+                assert (error["code"], error["event_id"]) == (code, "bad")
+            assert not upstream.calls
+            _send_pcm(ws, bytes(20))
+            _until(ws, "response.output_audio.delta")
+            ws.send_json({"type": "session.update", "session": {"instructions": ""}})
+            assert ws.receive_json()["error"]["code"] == "instructions_locked"
+            with client.websocket_connect(VOICE_PATH) as other:
+                assert other.receive_json()["error"]["code"] == "session_limit"
+            ws.send_json({"type": "response.cancel"})
+            assert _until(ws, "response.done")[-1]["response"]["status"] == "cancelled"
+            assert ws.receive()["code"] == 1000
+        assert _eventually(lambda: pool.release_engine.await_count == 2)
+
+    def test_unload_holds_lease_and_gpu_cap_until_decoder_drain(self, haru_engine, monkeypatch):
+        engine, upstream = haru_engine
+        upstream.unblock.clear()
+        (p1, p2, p3), pool, client = _voice_client(engine)
+        pool.get_abort_requested_reason.side_effect = (
+            lambda _: "test unload" if upstream.entered.is_set() else None
+        )
+        limiter = MagicMock()
+        monkeypatch.setattr("omlx.api.audio_routes.REALTIME_UNLOAD_POLL_SECONDS", 0.01)
+        monkeypatch.setattr("omlx.api.audio_routes._get_gpu_power_limiter", lambda: limiter)
+        monkeypatch.setattr("omlx.api.audio_routes._realtime_gpu_power_limit", lambda *_: 10)
+        with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
+            ws.receive_json()
+            try:
+                _send_pcm(ws, bytes(6400))
+                error = _until(ws, "response.done")[-1]["error"]
+                assert error["code"] == "model_unloaded"
+                assert ws.receive()["code"] == 1012
+                pool.get_engine.assert_awaited_once_with("voice", _lease=True)
+                limiter.acquire.assert_called_once_with(10)
+                pool.release_engine.assert_not_awaited()
+                limiter.release.assert_not_called()
+                assert [name for name, _ in upstream.calls] == ["create", "start", "step"]
+            finally:
+                upstream.unblock.set()
+        assert _eventually(lambda: pool.release_engine.await_count == 1)
+        assert upstream.calls[-1] == ("synchronize", "mlx-haru-test_0")
+        limiter.release.assert_called_once_with(10)
+
+    def test_static_capabilities_do_not_load_checkpoint(self, haru_engine, monkeypatch):
+        engine, _ = haru_engine
+        app = FastAPI()
+        app.include_router(router)
+        pool = MagicMock()
+        pool.get_entry.return_value = SimpleNamespace(model_path=engine.model_name)
+        monkeypatch.setattr("omlx.api.audio_routes._get_engine_pool", lambda: pool)
+        monkeypatch.setattr("omlx.api.audio_routes._resolve_model", lambda model: model)
+        monkeypatch.setattr(
+            "omlx.api.audio_routes.haru_default_instructions", lambda: "Default Haru prompt"
+        )
+        with TestClient(app) as client:
+            response = client.get("/v1/audio/voices?model=haru&realtime=true")
+        assert response.json() == {
+            "model": "haru",
+            "voices": [],
+            "capabilities": {"duplex": True, "input_image": False, "tools": False},
+            "instructions": "Default Haru prompt",
+        }
+        pool.get_engine.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -1050,6 +1050,18 @@ class TestEnginePoolErrors:
 class TestEnginePoolStatus:
     """Tests for EnginePool status reporting."""
 
+    def test_status_reports_haru_duplex_without_loading_weights(self, small_mock_model_dir):
+        (small_mock_model_dir / "model-a" / "config.json").write_text('{"model_type":"haru"}')
+        pool = _make_pool()
+        pool.discover_models(str(small_mock_model_dir))
+
+        models = {model["id"]: model for model in pool.get_status()["models"]}
+        assert models["model-a"]["realtime_voice"] is True
+        assert models["model-a"]["realtime_duplex"] is True
+        assert models["model-a"]["loaded"] is False
+        assert models["model-b"]["realtime_voice"] is False
+        assert models["model-b"]["realtime_duplex"] is False
+
     @pytest.mark.parametrize(
         "config_model_type,loaded_tool_support,expected",
         [

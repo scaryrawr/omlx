@@ -2763,7 +2763,11 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "engine_type": model_info.get("engine_type", "batched"),
             "model_type": model_info.get("model_type", "llm"),
             "config_model_type": model_info.get("config_model_type", ""),
-            "realtime_voice": bool(model_info.get("realtime_voice")),
+            # The built-in voice client uses push-to-talk, not duplex PCM.
+            "realtime_voice": bool(
+                model_info.get("realtime_voice") and not model_info.get("realtime_duplex")
+            ),
+            "realtime_duplex": bool(model_info.get("realtime_duplex")),
             "unavailable_reason": model_info.get("unavailable_reason"),
             # Native context window from the model's config.json — used by
             # the context bench UI to hide targets the model cannot reach.

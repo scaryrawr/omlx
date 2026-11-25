@@ -469,9 +469,41 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `GET /v1/models` | List available models |
 | `GET /v1/models/{model_id}` | Retrieve one model |
 | `POST /v1/audio/transcriptions` | Speech-to-text, including speaker labels when supported |
+| `WS /v1/realtime` | Spoken conversations, including full-duplex audio with Haru |
 | `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`); embedding models take `prompt` only |
 
 The admin API for settings, models, downloads, quantization, and benchmarks takes the main API key as a Bearer token and also works in headless mode. See [Admin API](docs/admin-api.md).
+
+#### Full-duplex audio with Haru
+
+With the `audio` extra installed, connect to `/v1/realtime?model=<model-id>` for
+a local `higurashi-ai/Haru-4B` checkpoint. Use the ID from `GET /v1/models` and
+send the API key as an `Authorization: Bearer` header if authentication is
+enabled. `GET /v1/audio/voices?model=<model-id>&realtime=true` advertises
+`capabilities.duplex: true`, the default instructions, and an empty voice list.
+The built-in push-to-talk client does not use this protocol.
+
+Send `input_audio_buffer.append` events with base64-encoded, mono, 24 kHz
+little-endian PCM16 in `audio`. Pace the stream in real time and keep sending
+silence when nobody speaks. Each append can carry up to one second of audio.
+The server assembles 3,200-sample frames across appends and sends model audio
+in the same format. Read output while sending input. The first append starts
+one continuous response with `response.output_audio.delta` and
+`response.output_audio_transcript.delta` events.
+
+To replace Haru's default prompt, send `session.update` with
+`session.instructions` before the first append. Instructions may contain
+up to 8,192 characters. Leave `audio.input.turn_detection` set to `null`.
+Haru does not emit voice activity or turn events and rejects
+`input_audio_buffer.commit`, `response.create`, and
+`conversation.item.truncate`. Named voices, tools, and images are unsupported.
+
+Each loaded Haru model accepts one connection at a time. After 10 minutes
+without an event, the server closes the connection. At the model's limit
+of 27,000 output frames, about 60 minutes of audio, the server sends
+`response.done` and closes the connection. `response.cancel` ends the entire
+session. Reconnect to start another conversation. Haru is not available on
+`POST /v1/audio/process`.
 
 #### Transcription with speaker labels
 

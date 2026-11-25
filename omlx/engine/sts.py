@@ -4,7 +4,7 @@ STS (Speech-to-Speech) engine for oMLX.
 
 This module provides an engine for audio processing (speech enhancement,
 speech-to-speech conversion, source separation) using mlx-audio.
-Unlike LLM engines, STS engines don't support streaming or chat completion.
+Haru supports full-duplex audio over the realtime WebSocket.
 mlx-audio is imported lazily inside start() to avoid module-level import errors
 when mlx-audio is not installed.
 
@@ -13,6 +13,7 @@ Supported model families (mlx-audio >=0.4.0):
 - MossFormer2: speech enhancement
 - SAMAudio: text-guided sound/speech separation
 - LFM2.5-Audio: multimodal speech-to-speech generation
+- Haru: full-duplex spoken conversations
 """
 
 import asyncio
@@ -20,7 +21,8 @@ import gc
 import logging
 import os
 import tempfile
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -29,13 +31,15 @@ from ..engine_core import get_mlx_executor
 from .audio_utils import DEFAULT_SAMPLE_RATE as _DEFAULT_SAMPLE_RATE
 from .audio_utils import audio_to_wav_bytes as _audio_to_wav_bytes
 from .base import BaseNonStreamingEngine
+from .haru_realtime import HaruRealtimeSession
+from .realtime_voice import RealtimeVoiceError
 
 logger = logging.getLogger(__name__)
 
 
 # Maps config.json model_type / architecture values to STS engine families.
 # This is the authoritative source — name-based matching is only a fallback.
-_CONFIG_TYPE_TO_FAMILY: Dict[str, str] = {
+_CONFIG_TYPE_TO_FAMILY: dict[str, str] = {
     # model_type values (from config.json or mlx-audio dir names)
     "deepfilternet": "deepfilternet",
     "mossformer2_se": "mossformer2",
@@ -43,11 +47,13 @@ _CONFIG_TYPE_TO_FAMILY: Dict[str, str] = {
     "lfm_audio": "lfm2",
     "lfm2_audio": "lfm2",
     "lfm2": "lfm2",
+    "haru": "haru",
     # architecture values
     "DeepFilterNetModel": "deepfilternet",
     "MossFormer2SEModel": "mossformer2",
     "SAMAudio": "sam_audio",
     "LFM2AudioModel": "lfm2",
+    "HaruForConditionalGeneration": "haru",
 }
 
 
@@ -58,7 +64,7 @@ def _detect_sts_family(model_name: str, config_model_type: str = "") -> str:
         model_name: HuggingFace repo name or local path
         config_model_type: Raw model_type from config.json (passed via EngineEntry)
 
-    Returns one of: "deepfilternet", "mossformer2", "sam_audio", "lfm2", "generic"
+    Returns one of: "deepfilternet", "mossformer2", "sam_audio", "lfm2", "haru", "generic"
     """
     # 1) config.json model_type — most reliable signal
     if config_model_type:
@@ -135,11 +141,20 @@ def _load_lfm2(model_name: str):
     return model, processor
 
 
+def _load_haru(model_name: str):
+    from mlx_audio.utils import base_load_model
+
+    return base_load_model(
+        Path(model_name), category="sts", model_type="haru", model_remapping={}
+    )
+
+
 _FAMILY_LOADERS = {
     "deepfilternet": _load_deepfilternet,
     "mossformer2": _load_mossformer2,
     "sam_audio": _load_sam_audio,
     "lfm2": _load_lfm2,
+    "haru": _load_haru,
 }
 
 # ---------------------------------------------------------------------------
@@ -281,11 +296,34 @@ class STSEngine(BaseNonStreamingEngine):
         self._model = None  # For lfm2, this is (model, processor) tuple
         self._family = _detect_sts_family(model_name, config_model_type)
         self._kwargs = kwargs
+        self._haru_session: HaruRealtimeSession | None = None
 
     @property
     def model_name(self) -> str:
         """Get the model name."""
         return self._model_name
+
+    @property
+    def supports_realtime_voice(self) -> bool:
+        return self._family == "haru" and self._model is not None
+
+    @property
+    def supports_audio_processing(self) -> bool:
+        return self._family in _FAMILY_PROCESSORS
+
+    async def create_realtime_session(self) -> HaruRealtimeSession:
+        if not self.supports_realtime_voice:
+            raise RealtimeVoiceError("unsupported_model", "This model has no duplex backend")
+        if self._haru_session is not None:
+            raise RealtimeVoiceError(
+                "session_limit", f"{self._model_name} already has a voice session"
+            )
+        self._haru_session = HaruRealtimeSession(self, self._model)
+        return self._haru_session
+
+    def release_haru_session(self, session: HaruRealtimeSession) -> None:
+        if self._haru_session is session:
+            self._haru_session = None
 
     async def start(self) -> None:
         """Start the engine (load model if not loaded).
@@ -329,13 +367,17 @@ class STSEngine(BaseNonStreamingEngine):
             return
 
         logger.info(f"Stopping STS engine: {self._model_name}")
-        self._model = None
+        if self._haru_session is not None:
+            await self._haru_session.close()
 
-        gc.collect()
+        def _stop_sync():
+            self._model = None
+            gc.collect()
+            mx.synchronize()
+            mx.clear_cache()
+
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            get_mlx_executor(), lambda: (mx.synchronize(), mx.clear_cache())
-        )
+        await loop.run_in_executor(get_mlx_executor(), _stop_sync)
         logger.info(f"STS engine stopped: {self._model_name}")
 
     async def process(self, audio_path: str, **kwargs) -> bytes:
@@ -404,7 +446,7 @@ class STSEngine(BaseNonStreamingEngine):
         finally:
             await self._finish_activity(activity_id)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         return {
             "model_name": self._model_name,
