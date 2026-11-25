@@ -230,6 +230,41 @@ async def test_shutdown_and_restart_fail_interrupted_work(video_client):
     await recovered.close()
 
 
+async def test_queued_job_rejects_a_changed_checkpoint(video_client, tmp_path):
+    client, jobs, pool = video_client
+    first = await client.post("/v1/videos", json={"model": "wan", "prompt": "First"})
+    await asyncio.wait_for(pool.engine.entered.wait(), 5)
+    second = await client.post("/v1/videos", json={"model": "wan", "prompt": "Second"})
+    pool.engine._model_name = str(tmp_path / "replacement")
+    pool.engine.finish.set()
+    await asyncio.wait_for(jobs._pending.join(), 5)
+    assert jobs.get(first.json()["id"]).status == "completed"
+    failed = jobs.get(second.json()["id"])
+    assert failed.status == "failed"
+    assert failed.error.code == "generation_failed"
+    assert pool.engine.plan.prompt == "First"
+
+
+async def test_shutdown_stops_dispatch_after_teardown_failure(video_client, monkeypatch, caplog):
+    client, jobs, pool = video_client
+
+    async def fail_on_cancel(plan, directory, owner_fd):
+        pool.engine.entered.set()
+        try:
+            await pool.engine.finish.wait()
+        except asyncio.CancelledError as error:
+            raise RuntimeError("worker teardown failed") from error
+
+    monkeypatch.setattr(pool.engine, "generate", fail_on_cancel)
+    first = await client.post("/v1/videos", json={"model": "wan", "prompt": "First"})
+    await asyncio.wait_for(pool.engine.entered.wait(), 5)
+    second = await client.post("/v1/videos", json={"model": "wan", "prompt": "Second"})
+    await asyncio.wait_for(jobs.close(), 5)
+    assert jobs.get(first.json()["id"]).error.code == "generation_failed"
+    assert jobs.get(second.json()["id"]).error.code == "server_shutdown"
+    assert "worker teardown failed" in caplog.text
+
+
 async def test_dispatcher_persistence_failure_stops_admission_and_releases_owner(
     video_client, monkeypatch, caplog
 ):

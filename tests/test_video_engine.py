@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import signal
 import subprocess
@@ -160,6 +161,49 @@ video_worker.main()
     )
     try:
         returncode = process.wait(timeout=20)
+        assert returncode == 0, process.stderr.read().decode()
+        assert (tmp_path / "video.mp4").read_bytes() == b"completed"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        process.stdin.close()
+        process.stderr.close()
+
+
+def test_dual_wan_worker_passes_guidance_for_both_models(tmp_path):
+    pytest.importorskip("mlx_video")
+    (tmp_path / "config.json").write_text(json.dumps({
+        "model_type": "t2v", "model_version": "2.2", "dual_model": True,
+    }))
+    plan = _plan(tmp_path)
+    plan.guidance = 5.0
+    spec = tmp_path / "render.json"
+    spec.write_text(plan.model_dump_json())
+    code = """
+import sys
+from pathlib import Path
+from omlx import video_worker
+
+def generate(**kwargs):
+    assert kwargs["guide_scale"] == (5.0, 5.0)
+    Path(kwargs["output_path"]).write_bytes(b"generated")
+
+def finalize(plan, directory):
+    (directory / "video.mp4").write_bytes(b"completed")
+
+sys.argv = ["omlx.video_worker", sys.argv[1]]
+video_worker.generate_wan = generate
+video_worker.finalize_video = finalize
+video_worker.main()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(spec)],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        returncode = process.wait(timeout=30)
         assert returncode == 0, process.stderr.read().decode()
         assert (tmp_path / "video.mp4").read_bytes() == b"completed"
     finally:
@@ -439,7 +483,66 @@ async def test_abort_kills_worker_that_ignores_sigterm(tmp_path, monkeypatch):
                     await task
 
 
-async def test_unconfirmed_worker_remains_accounted_and_blocks_new_work(tmp_path, monkeypatch):
+async def test_abort_kills_children_after_worker_exits(tmp_path, monkeypatch):
+    import omlx.engine.video as video
+
+    engine = VideoEngine(str(tmp_path), estimated_size=100)
+    original = asyncio.create_subprocess_exec
+    entered = asyncio.Event()
+    processes = []
+    monkeypatch.setattr(video, "_WORKER_STOP_TIMEOUT", 0.5)
+
+    async def spawn(*args, **kwargs):
+        kwargs["stdout"] = asyncio.subprocess.PIPE
+        code = """
+import signal, subprocess, sys
+child = subprocess.Popen(
+    [sys.executable, "-c",
+     "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+     "print('ready', flush=True); signal.pause()"],
+    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+)
+assert child.stdout.readline() == b"ready\\n"
+print(child.pid, flush=True)
+sys.stdin.buffer.read()
+"""
+        process = await original(sys.executable, "-c", code, **kwargs)
+        processes.append(process)
+        assert int(await process.stdout.readline()) > 0
+        original_wait = process.wait
+
+        async def observed_wait():
+            entered.set()
+            return await original_wait()
+
+        monkeypatch.setattr(process, "wait", observed_wait)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with (tmp_path / ".owner").open("a+b") as owner:
+        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            assert await engine.abort_all_requests() == 1
+            with pytest.raises(RuntimeError, match="Video worker exited with code -15"):
+                await asyncio.wait_for(task, 5)
+            assert engine.process_memory_bytes() == 0
+            with pytest.raises(ProcessLookupError):
+                os.killpg(processes[0].pid, 0)
+        finally:
+            if processes:
+                with suppress(ProcessLookupError, PermissionError):
+                    os.killpg(processes[0].pid, signal.SIGKILL)
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+
+@pytest.mark.parametrize("leader_exits", [False, True])
+async def test_unconfirmed_worker_remains_accounted_and_blocks_new_work(
+    tmp_path, monkeypatch, leader_exits
+):
     import omlx.engine.video as video
 
     engine = VideoEngine(str(tmp_path), estimated_size=100)
@@ -455,8 +558,13 @@ async def test_unconfirmed_worker_remains_accounted_and_blocks_new_work(tmp_path
     async def spawn(*args, **kwargs):
         return process
 
+    def signal_group(pid, sig):
+        if leader_exits and sig == signal.SIGTERM:
+            process.returncode = -signal.SIGTERM
+            never.set()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(video.os, "killpg", lambda pid, sig: None)
+    monkeypatch.setattr(video.os, "killpg", signal_group)
     monkeypatch.setattr(video, "_WORKER_STOP_TIMEOUT", 0.01)
     monkeypatch.setattr(video, "list_process_group_pids", lambda pid: [pid])
     monkeypatch.setattr(video, "get_phys_footprint", lambda pid: 200)

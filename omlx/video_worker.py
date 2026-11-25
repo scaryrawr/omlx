@@ -27,7 +27,7 @@ except ImportError:
 
 from .patches.mlx_video_ltx2 import safe_ltx_tokenizer
 from .utils.optional_deps import MLX_VIDEO_MISSING_MESSAGE
-from .video_registry import VideoRenderPlan
+from .video_registry import VideoRenderPlan, WanVideoConfig
 
 P = ParamSpec("P")
 
@@ -138,6 +138,14 @@ def main() -> None:
         mx.set_cache_limit(int(mx.device_info()["memory_size"]))
         for layer in (vae22.ResidualBlock, vae22.Resample):
             layer.__call__ = _reclaim_after_forward(layer.__call__)
+        requested_guidance = plan.guidance
+        guidance: float | tuple[float, float] | None = requested_guidance
+        if requested_guidance is not None:
+            config = WanVideoConfig.model_validate_json(
+                (Path(plan.model_path) / "config.json").read_text()
+            )
+            if config.dual_model:
+                guidance = (requested_guidance, requested_guidance)
         generate_wan(
             model_dir=plan.model_path,
             prompt=plan.prompt,
@@ -147,7 +155,7 @@ def main() -> None:
             height=plan.height,
             num_frames=plan.generation_frames,
             steps=plan.steps,
-            guide_scale=plan.guidance,
+            guide_scale=guidance,
             seed=plan.seed,
             output_path=output,
         )

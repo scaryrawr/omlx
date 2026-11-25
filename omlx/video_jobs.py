@@ -182,6 +182,12 @@ class VideoJobs:
                     async with self.pool.acquire(stored.video.model) as engine:
                         if not isinstance(engine, VideoEngine):
                             raise TypeError("Pool returned a non-video engine")
+                        if Path(engine.model_name).resolve() != Path(
+                            stored.plan.model_path
+                        ).resolve():
+                            raise RuntimeError(
+                                "Video checkpoint changed after the job was queued"
+                            )
                         await engine.generate(
                             stored.plan,
                             self.directory / stored.video.id,
@@ -205,6 +211,9 @@ class VideoJobs:
                         code="generation_failed",
                         message="Video generation failed. See the server and job logs.",
                     )
+                    if not self._accepting:
+                        self._save(stored)
+                        raise
                 finally:
                     self._pending.task_done()
                 self._save(stored)

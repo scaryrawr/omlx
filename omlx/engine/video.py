@@ -17,6 +17,17 @@ from ..video_registry import VideoRenderPlan, load_video_spec
 from .base import BaseNonStreamingEngine
 
 _WORKER_STOP_TIMEOUT = 5.0
+_WORKER_GROUP_POLL_INTERVAL = 0.05
+
+
+def _process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class VideoEngine(BaseNonStreamingEngine):
@@ -28,6 +39,7 @@ class VideoEngine(BaseNonStreamingEngine):
         self._estimated_size = estimated_size
         self._process: asyncio.subprocess.Process | None = None
         self._call_lock = asyncio.Lock()
+        self._termination_lock = asyncio.Lock()
 
     @property
     def model_name(self) -> str:
@@ -51,7 +63,9 @@ class VideoEngine(BaseNonStreamingEngine):
     async def abort_all_requests(self) -> int:
         """Stop the active worker when memory enforcement aborts requests."""
         process = self._process
-        if process is None or process.returncode is not None:
+        if process is None or (
+            process.returncode is not None and not _process_group_exists(process.pid)
+        ):
             return 0
         await self._terminate_worker()
         return 1
@@ -62,20 +76,28 @@ class VideoEngine(BaseNonStreamingEngine):
             return
 
         async def terminate() -> None:
-            if process.returncode is None:
+            async with self._termination_lock:
+                if process.returncode is not None and not _process_group_exists(process.pid):
+                    return
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGTERM)
-            try:
-                await asyncio.wait_for(process.wait(), _WORKER_STOP_TIMEOUT)
-            except TimeoutError:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
+
+                async def wait_for_group() -> None:
+                    await process.wait()
+                    while _process_group_exists(process.pid):
+                        await asyncio.sleep(_WORKER_GROUP_POLL_INTERVAL)
+
                 try:
-                    await asyncio.wait_for(process.wait(), _WORKER_STOP_TIMEOUT)
-                except TimeoutError as error:
-                    raise RuntimeError(
-                        f"Video worker {process.pid} did not exit after SIGKILL"
-                    ) from error
+                    await asyncio.wait_for(wait_for_group(), _WORKER_STOP_TIMEOUT)
+                except TimeoutError:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    try:
+                        await asyncio.wait_for(wait_for_group(), _WORKER_STOP_TIMEOUT)
+                    except TimeoutError as error:
+                        raise RuntimeError(
+                            f"Video worker group {process.pid} did not exit after SIGKILL"
+                        ) from error
 
         waiter = asyncio.create_task(terminate())
         cancelled = False
@@ -91,7 +113,9 @@ class VideoEngine(BaseNonStreamingEngine):
     def process_memory_bytes(self) -> int:
         """Read the video process group's physical memory footprint."""
         process = self._process
-        if process is None or process.returncode is not None:
+        if process is None or (
+            process.returncode is not None and not _process_group_exists(process.pid)
+        ):
             return 0
         footprint = sum(
             get_phys_footprint(pid) for pid in list_process_group_pids(process.pid)
@@ -113,7 +137,10 @@ class VideoEngine(BaseNonStreamingEngine):
     ) -> None:
         """Run an isolated backend and retain the lease through process exit."""
         async with self._call_lock:
-            if self._process is not None and self._process.returncode is None:
+            if self._process is not None and (
+                self._process.returncode is None
+                or _process_group_exists(self._process.pid)
+            ):
                 raise RuntimeError("Previous video worker has not exited")
             spec_path = directory / "render.json"
             spec_path.write_text(plan.model_dump_json())
@@ -163,6 +190,7 @@ class VideoEngine(BaseNonStreamingEngine):
                     if cancelled:
                         raise asyncio.CancelledError
                     returncode = await asyncio.shield(self._process.wait())
+                    await self._terminate_worker()
                 if returncode != 0:
                     raise RuntimeError(
                         f"Video worker exited with code {returncode}; see {directory / 'render.log'}"
@@ -173,6 +201,10 @@ class VideoEngine(BaseNonStreamingEngine):
                 await self._terminate_worker()
                 raise
             finally:
-                if self._process is not None and self._process.returncode is not None:
+                if (
+                    self._process is not None
+                    and self._process.returncode is not None
+                    and not _process_group_exists(self._process.pid)
+                ):
                     self._process = None
                 self._end_activity(activity)
