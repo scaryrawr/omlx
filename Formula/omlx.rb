@@ -115,7 +115,7 @@ class Omlx < Formula
       ENV.append "CMAKE_ARGS", "-DPython_EXECUTABLE=#{libexec}/bin/python"
     end
 
-    # [audio] is the only source of mlx-audio and of the Kokoro G2P stack
+    # [audio] adds the mlx-audio extras and Kokoro G2P dependencies
     # (misaki, spaCy) that the spaCy model check below needs. [cluster] adds
     # zeroconf, the only way the Cluster tab finds NVIDIA prefill helpers.
     extras = build.with?("grammar") ? "audio,cluster,grammar" : "audio,cluster"

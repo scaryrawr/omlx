@@ -374,6 +374,15 @@ class TestSTSEngineUnit:
         from omlx.engine.sts import _detect_sts_family
         assert _detect_sts_family("some-unknown-audio-model") == "generic"
 
+    def test_haru_scalar_architecture_selects_duplex_engine(self, tmp_path):
+        from omlx.engine.sts import STSEngine
+
+        (tmp_path / "config.json").write_text(
+            '{"architectures": "HaruForConditionalGeneration"}'
+        )
+        engine = STSEngine(str(tmp_path))
+        assert engine.get_stats()["family"] == "haru"
+
     def test_process_raises_if_not_started(self):
         """process() raises RuntimeError if engine not started."""
         import asyncio

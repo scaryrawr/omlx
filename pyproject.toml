@@ -113,7 +113,7 @@ dependencies = [
     # by their pre-load patches.
     "mlx-vlm @ git+https://github.com/Neywa-Labs/mlx-vlm@36494b42c7676081aa3c14878b3175b90c2fedf4",
     # mlx-vlm requires mlx-audio>=0.6.2 in the shared runtime.
-    "mlx-audio @ git+https://github.com/Neywa-Labs/mlx-audio@1157775c1999654b1ebde41ed03d88108e23f88b",
+    "mlx-audio @ git+https://github.com/Neywa-Labs/mlx-audio@93cfb9ff82c10e610ce65570b1c2efc1f0f9411d",
     "Pillow>=9.0.0",
     "markitdown[pdf,docx,pptx]==0.1.9",
 ]
@@ -144,8 +144,7 @@ modelscope = [
     "modelscope>=1.28.0",
 ]
 audio = [
-    # mlx-audio from commit (1157775, v0.6.5) with tts/stt/sts extras
-    "mlx-audio[tts,stt,sts] @ git+https://github.com/Neywa-Labs/mlx-audio@1157775c1999654b1ebde41ed03d88108e23f88b",
+    "mlx-audio[tts,stt,sts] @ git+https://github.com/Neywa-Labs/mlx-audio@93cfb9ff82c10e610ce65570b1c2efc1f0f9411d",
     # Keep dependencies for existing audio models removed from upstream extras.
     "cn2an>=0.5.24",
     "jieba>=0.42.1",
@@ -180,12 +179,19 @@ bundle = [
     "mcp>=2.0.0,<3",
     "modelscope>=1.28.0",
     # mlx-audio core deps needed when packaging installs the git wheel --no-deps.
-    "huggingface-hub>=1.0",
+    "anyio>=4.14.2",
+    "certifi>=2026.10.18",
+    "filelock>=4.2.1",
+    "fsspec>=2026.6.0",
+    "numpy>=1.26.4,<2.4",
+    "requests>=2.33.0",
+    "sentencepiece>=0.2.0",
+    "urllib3>=2.8.0",
     "tqdm>=4.67.1",
     # Audio runtime deps bundled for TTS/STT/STS support:
     "scipy>=1.11.0",
     "librosa>=0.10.0",
-    "miniaudio>=1.61",
+    "miniaudio>=1.71",
     "numba>=0.59.0",
     "pyloudnorm>=0.1.0",
     "sounddevice>=0.5.3",
@@ -196,9 +202,9 @@ bundle = [
     "pypinyin>=0.55.0",
     "num2words>=0.5.14",
     "spacy>=3.8.4",
-    "webrtcvad>=2.0.10",
+    "Pillow>=13.0.0",
+    "webrtcvad-wheels>=2.0.14.post1",
     "zstandard>=0.23.0",
-    "setuptools<81",
     # [audio] extra on top of pyproject's plain mistral-common>=1.10
     "mistral-common[audio]>=1.10",
     # realtime STT WebSocket endpoint
