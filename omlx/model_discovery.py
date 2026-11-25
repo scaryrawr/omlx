@@ -44,6 +44,7 @@ from .model_classification import (
     is_helper_config_model_type,
 )
 from .utils.safetensors_shards import select_safetensors_weight_files
+from .video_registry import detect_video_family, load_video_spec
 
 if TYPE_CHECKING:
     from .lora_adapter import AdapterBinding
@@ -60,6 +61,7 @@ ModelType = Literal[
     "audio_sts",
     "image",
     "decision",
+    "video",
 ]
 EngineType = Literal[
     "batched",
@@ -71,6 +73,7 @@ EngineType = Literal[
     "audio_sts",
     "image",
     "decision",
+    "video",
 ]
 DecisionKind = Literal["clef", "openjev", "d3", "d1"]
 
@@ -1112,10 +1115,13 @@ def detect_model_type(model_path: Path) -> ModelType:
 
     Returns:
         Model type: "llm", "vlm", "embedding", "reranker", "audio_stt",
-        "audio_tts", "audio_sts", "decision", or "image"
+        "audio_tts", "audio_sts", "decision", "image", or "video"
     """
     if _load_image_manifest(model_path) is not None:
         return "image"
+
+    if detect_video_family(model_path) is not None:
+        return "video"
 
     config_path = model_path / "config.json"
     if not config_path.exists():
@@ -1782,6 +1788,7 @@ def _is_model_dir(path: Path) -> bool:
     return (
         _load_image_manifest(path) is not None
         or (path / "config.json").exists()
+        or detect_video_family(path) is not None
     ) and not _is_adapter_dir(path)
 
 
@@ -2385,6 +2392,9 @@ def _register_model(
             capabilities = []
             tasks = []
             image_metadata = None
+            if model_type == "video":
+                capabilities = list(load_video_spec(model_dir).tasks)
+                tasks = list(capabilities)
 
         if model_type == "embedding":
             engine_type = "embedding"
@@ -2402,6 +2412,8 @@ def _register_model(
             engine_type = "decision"
         elif model_type == "image":
             engine_type = "image"
+        elif model_type == "video":
+            engine_type = "video"
         else:
             engine_type = "batched"
         text_only_size = (

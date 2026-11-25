@@ -37,6 +37,62 @@ from omlx.model_discovery import (
 )
 
 
+class TestVideoDiscovery:
+    def test_converted_wan_is_video_and_raw_checkpoint_is_not_served(self, tmp_path, caplog):
+        raw = tmp_path / "wan-original"
+        raw.mkdir()
+        (raw / "config.json").write_text(
+            json.dumps(
+                {"_class_name": "WanModel", "model_type": "ti2v", "dim": 3072, "in_dim": 48}
+            )
+        )
+        for index in range(1, 4):
+            (raw / f"diffusion_pytorch_model-{index:05d}-of-00003.safetensors").write_bytes(
+                b"weights"
+            )
+        model = tmp_path / "wan"
+        model.mkdir()
+        config = {
+            "model_type": "ti2v", "model_version": "2.2", "dual_model": False,
+            "vae_stride": [4, 16, 16], "sample_fps": 24,
+            "dim": 3072, "text_dim": 4096,
+        }
+        (model / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(model) == "video"
+        assert discover_models(tmp_path) == {}
+        assert (
+            "Failed to discover model wan-original: Video checkpoint requires mlx-video conversion"
+            in caplog.text
+        )
+        for name in ("model.safetensors", "t5_encoder.safetensors", "vae.safetensors"):
+            (model / name).write_bytes(b"weights")
+        models = discover_models(tmp_path)
+        assert list(models) == ["wan"]
+        discovered = models["wan"]
+        assert discovered.model_type == discovered.engine_type == "video"
+        assert discovered.capabilities == ["text-to-video", "image-to-video"]
+        assert discovered.estimated_size > 0
+
+    def test_converted_ltx2_without_root_config_is_video(self, tmp_path):
+        model = tmp_path / "LTX-2-dev"
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+        ):
+            (model / name).parent.mkdir(parents=True, exist_ok=True)
+            (model / name).write_text(json.dumps({"model_type": "ltx av model"}))
+        (model / "text_projections").mkdir()
+        (model / "text_projections/model.safetensors").write_bytes(b"weights")
+        assert detect_model_type(model) == "video"
+        assert discover_models(tmp_path) == {}
+        (model / "text_encoder").mkdir()
+        (model / "text_encoder/config.json").write_text("{}")
+        discovered = discover_models(tmp_path)["LTX-2-dev"]
+        assert discovered.engine_type == "video"
+        assert discovered.capabilities == ["text-to-video", "image-to-video"]
+
+
 class TestAudioInputDiscovery:
     @pytest.mark.parametrize(
         ("family", "key", "expected"),
