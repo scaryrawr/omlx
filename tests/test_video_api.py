@@ -212,6 +212,32 @@ async def test_failed_reference_save_removes_unsubmitted_job(video_client, monke
     assert list(jobs.directory.glob("video_*")) == []
 
 
+async def test_failed_job_persistence_removes_unsubmitted_job(video_client, monkeypatch):
+    import omlx.video_jobs as video_jobs
+
+    client, jobs, _ = video_client
+    image = BytesIO()
+    Image.new("RGB", (32, 32), color=(1, 2, 3)).save(image, format="PNG")
+    sync_directory = video_jobs._sync_directory
+
+    def fail_job_directory_sync(directory):
+        if directory.parent == jobs.directory and directory.name.startswith("video_"):
+            raise OSError("disk full")
+        sync_directory(directory)
+
+    monkeypatch.setattr(video_jobs, "_sync_directory", fail_job_directory_sync)
+    with pytest.raises(OSError, match="disk full"):
+        await client.post(
+            "/v1/videos",
+            data={"model": "wan", "prompt": "Animate"},
+            files={"input_reference": ("frame.png", image.getvalue(), "image/png")},
+        )
+
+    assert jobs.list(limit=20, order="asc", after=None).data == []
+    assert jobs._pending.empty()
+    assert list(jobs.directory.glob("video_*")) == []
+
+
 async def test_reference_normalization_is_offloaded_and_waited_on_cancellation(
     video_client, monkeypatch
 ):

@@ -201,7 +201,12 @@ class VideoJobs:
             raise HTTPException(429, "Video job queue is full")
         directory.mkdir(mode=0o700, exist_ok=True)
         stored = _StoredVideo(video=video, plan=plan)
-        self._save(stored)
+        try:
+            self._save(stored)
+        except Exception:
+            self._jobs.pop(video.id, None)
+            shutil.rmtree(directory)
+            raise
         self._pending.put_nowait(stored)
         return video.model_copy(deep=True)
 
