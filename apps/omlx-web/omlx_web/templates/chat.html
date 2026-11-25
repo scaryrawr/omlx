@@ -7380,7 +7380,8 @@
                 })));
                 if (this.historyDeleted.has(context.chatId)
                     || (!chatSession.temporary && this.historyStore?.deleted.has(context.chatId))) return;
-                const toolStopped = toolSignal.aborted || this.isPendingHistoryRemoval(context.chatId);
+                const removingHistory = this.isPendingHistoryRemoval(context.chatId);
+                const toolStopped = toolSignal.aborted || removingHistory;
 
                 // Log each tool outcome to the status timeline
                 results.forEach((result) => {
@@ -7395,7 +7396,7 @@
                 // the transcript; built-in web tools additionally carry a
                 // parsed `_web` summary that renders as a source card.
                 toolCalls.forEach((tc, i) => {
-                    const result = toolStopped
+                    const result = removingHistory || (toolSignal.aborted && !results[i].video)
                         ? { content: 'Error: Tool execution stopped by user.' }
                         : results[i];
                     chatSession.messages.push({

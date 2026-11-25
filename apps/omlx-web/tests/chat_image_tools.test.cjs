@@ -1400,6 +1400,45 @@ test('parallel result IDs remain distinct and unfinished sibling outputs are una
     assert.match(results[2].content, /not in this chat's selected history/);
 });
 
+test('Stop keeps an acknowledged video job when a sibling tool is still running', async () => {
+    const app = appFixture();
+    app.videoDiscoveryPossible = true;
+    const job = { id: videoId, status: 'queued', progress: 0 };
+    const { promise: submitted, resolve: acknowledge } = Promise.withResolvers();
+    const execute = app.executeChatTool.bind(app);
+    app.executeChatTool = async (tc, scope) => {
+        const result = await execute(tc, scope);
+        if (tc.function.name === 'generate_video') acknowledge(result);
+        return result;
+    };
+    let rounds = 0;
+    global.fetch = async (url, init) => {
+        if (url === '/v1/models/status') return json({ video_generation_ready: true, models: [
+            { id: 'motion', engine_type: 'video', tasks: ['text-to-video'] },
+        ] });
+        if (url === '/v1/models') return json({ data: [{ id: 'motion' }] });
+        if (url === '/v1/videos') return json({ object: 'video', ...job });
+        if (url === '/v1/chat/completions') {
+            rounds++;
+            return sse([call('generate_video', { model: 'motion', prompt: 'Clouds' }), call('slow_tool', {})]);
+        }
+        assert.equal(url, '/v1/mcp/execute');
+        return new Promise((_, reject) => {
+            init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+        });
+    };
+
+    const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    assert.deepEqual((await submitted).video, job);
+    app.stopChatStreaming('owner');
+    await pending;
+
+    const tools = app.savedChats.get('owner').messages.filter(msg => msg.role === 'tool');
+    assert.equal(rounds, 1);
+    assert.deepEqual(tools.map(msg => msg.content), [JSON.stringify(job), 'Error: Tool execution stopped by user.']);
+    assert.deepEqual(tools[0]._video, job);
+});
+
 test('Stop remains active through delayed response bodies and blocks registration and recursion', async () => {
     const app = appFixture();
     let round = 0;
