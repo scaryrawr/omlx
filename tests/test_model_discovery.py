@@ -116,6 +116,11 @@ class TestVideoDiscovery:
 
         (model / "vae/decoder/model-00001-of-00002.safetensors").write_bytes(b"weights")
         assert discover_models(tmp_path) == {}
+        (model / "vae/decoder/model-00000-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
+        (model / "vae/decoder/model-00000-of-00002.safetensors").unlink()
+        (model / "vae/decoder/model-00002-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
         (model / "vae/decoder/model-00000-of-00000.safetensors").write_bytes(b"weights")
         assert discover_models(tmp_path) == {}
 

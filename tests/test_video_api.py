@@ -191,6 +191,27 @@ async def test_multipart_reference_outlives_request_and_failure_is_durable(
     assert pool.engine.leased is False
 
 
+async def test_failed_reference_save_removes_unsubmitted_job(video_client, monkeypatch):
+    client, jobs, _ = video_client
+    image = BytesIO()
+    Image.new("RGB", (32, 32), color=(1, 2, 3)).save(image, format="PNG")
+
+    def fail_save(self, destination, *args, **kwargs):
+        destination.write_bytes(b"partial image")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Image.Image, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        await client.post(
+            "/v1/videos",
+            data={"model": "wan", "prompt": "Animate"},
+            files={"input_reference": ("frame.png", image.getvalue(), "image/png")},
+        )
+
+    assert jobs.list(limit=20, order="asc", after=None).data == []
+    assert list(jobs.directory.glob("video_*")) == []
+
+
 async def test_reference_normalization_is_offloaded_and_waited_on_cancellation(
     video_client, monkeypatch
 ):

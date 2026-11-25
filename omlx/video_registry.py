@@ -122,7 +122,7 @@ def _require_component_weights(model_path: Path, component: str) -> None:
         prefix = match.group("prefix")
         index = int(match.group("index"))
         total = int(match.group("total"))
-        if total < 1 or index < 1 or index > total:
+        if total < 1 or index > total:
             raise ValueError(
                 f"LTX-2 checkpoint has invalid weight shards in "
                 f"{path.parent.relative_to(model_path)} for {prefix}"

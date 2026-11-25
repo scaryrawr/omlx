@@ -178,20 +178,19 @@ class VideoJobs:
                 )
             )
             cancelled = False
-            while not normalization.done():
-                try:
-                    await asyncio.shield(normalization)
-                except asyncio.CancelledError:
-                    cancelled = True
             try:
+                while not normalization.done():
+                    try:
+                        await asyncio.shield(normalization)
+                    except asyncio.CancelledError:
+                        cancelled = True
                 normalization.result()
+                if cancelled:
+                    raise asyncio.CancelledError
             except BaseException:
                 if directory.exists():
                     shutil.rmtree(directory)
                 raise
-            if cancelled:
-                shutil.rmtree(directory)
-                raise asyncio.CancelledError
         if not self._accepting:
             if directory.exists():
                 shutil.rmtree(directory)
