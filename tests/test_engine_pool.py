@@ -5156,7 +5156,7 @@ class TestMemorySettleBarrier:
 
         assert entry.engine is None
         assert pool._current_model_memory == 0
-        assert pool._engine_unload_tasks == {}
+        assert pool._unloading_models == {}
 
     @pytest.mark.asyncio
     async def test_unload_failure_does_not_replace_caller_cancellation(
@@ -5181,8 +5181,7 @@ class TestMemorySettleBarrier:
         with pytest.raises(asyncio.CancelledError):
             await caller
         await asyncio.sleep(0)
-        assert pool._engine_unload_tasks == {}
-        assert pool._unloading_models == set()
+        assert pool._unloading_models == {}
 
     @pytest.mark.asyncio
     async def test_settle_takes_multiple_rounds(self, pool_with_loaded_model):

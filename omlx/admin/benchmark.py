@@ -189,7 +189,7 @@ class BenchmarkRun:
 
     bench_id: str
     request: BenchmarkRequest
-    queue_id: Optional[str] = None
+    queue_id: str | None = None
     status: str = "running"  # running, completed, cancelled, error
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
@@ -622,7 +622,7 @@ def get_active_run() -> BenchmarkRun | None:
 
 
 def create_run(
-    request: BenchmarkRequest, queue_id: Optional[str] = None
+    request: BenchmarkRequest, queue_id: str | None = None
 ) -> BenchmarkRun:
     """Create and register a new benchmark run."""
     bench_id = f"bench-{uuid.uuid4().hex[:12]}"

@@ -32,7 +32,7 @@ class MockTokenizer:
     def __init__(self):
         self.eos_token_id = 2
 
-    def encode(self, text: str) -> list[int]:
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         return [100 + i for i, _ in enumerate(text.split())]
 
     def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
