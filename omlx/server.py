@@ -1050,7 +1050,9 @@ def _openai_error_body(message, status_code: int, param=None, code=None) -> dict
 
 
 def _is_anthropic_route(request: FastAPIRequest) -> bool:
-    return request.url.path.startswith("/v1/messages")
+    return request.url.path.startswith(
+        ("/v1/messages", f"{CLAUDE_GATEWAY_PATH}/v1/messages")
+    )
 
 
 def _error_body_for(
@@ -4002,7 +4004,7 @@ async def _create_markitdown_chat_completion(
     )
 
 
-async def _list_visible_models() -> list[ModelInfo]:
+async def _list_visible_models(*, claude_gateway: bool = False) -> list[ModelInfo]:
     models = []
     favorite_ids: set[str] = set()
 
@@ -4193,7 +4195,7 @@ async def list_claude_gateway_models(
             "display_name": m.display_name or m.id,
             "max_model_len": m.max_model_len,
         }
-        for m in await _list_visible_models()
+        for m in await _list_visible_models(claude_gateway=True)
         if claude_code_model_disabled_reason({"max_context_window": m.max_model_len})
         is None
     ]

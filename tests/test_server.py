@@ -839,7 +839,7 @@ class TestExceptionHandlers:
             status_code=400,
             detail="prompt is too long: 100 tokens > 64",
         )
-        monkeypatch.setattr(srv, "_list_models", AsyncMock(side_effect=error))
+        monkeypatch.setattr(srv, "_list_visible_models", AsyncMock(side_effect=error))
         monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(side_effect=error))
         responses = []
         for prefix in ("", "/claude"):
@@ -866,7 +866,8 @@ class TestExceptionHandlers:
         standard = client.post(f"/v1/{suffix}", json={})
         gateway = client.post(f"/claude/v1/{suffix}", json={})
 
-        assert standard.status_code == gateway.status_code == 422
+        assert standard.status_code == gateway.status_code == 400
+        assert standard.json()["type"] == "error"
         assert "error" in standard.json()
         assert gateway.json() == standard.json()
 

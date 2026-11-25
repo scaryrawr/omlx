@@ -233,7 +233,7 @@ def test_claude_gateway_uses_inference_auth(tmp_path, headers, path):
             else client.post(path, headers=headers, json={})
         )
 
-    expected_status = 200 if path.endswith("/models") else 422
+    expected_status = 200 if path.endswith("/models") else 400
     assert response.status_code == (expected_status if headers else 401)
 
 
