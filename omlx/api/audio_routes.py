@@ -37,6 +37,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from PIL import Image
 
 from ..engine.audio_utils import wav_bytes_to_pcm_frames, wav_header
+from ..engine.haru_realtime import (
+    HARU_MAX_APPEND_BYTES,
+    HARU_REALTIME_CAPABILITIES,
+    HaruRealtimeSession,
+    haru_default_instructions,
+)
 from ..engine.lfm3_speech import SPEECH_MODEL_TYPES, VOICES
 from ..engine.realtime_voice import (
     SAMPLE_RATE,
@@ -45,6 +51,7 @@ from ..engine.realtime_voice import (
     ResponseResult,
     pcm16_bytes,
 )
+from ..engine.sts import STSEngine
 from ..engine.tts import MING3_VOICES, is_ming3_config
 from ..engine.vlm import (
     VLMBatchedEngine,
@@ -53,6 +60,7 @@ from ..engine.vlm import (
     realtime_voice_names,
 )
 from ..exceptions import InvalidRequestError, ModelNotFoundError
+from ..model_discovery import is_haru_model
 from ..server_metrics import get_server_metrics
 from ..utils import gpu_power, macos_say
 from .audio_models import AudioSpeechRequest, AudioTranscriptionResponse
@@ -924,24 +932,34 @@ def _realtime_api_key(websocket: WebSocket) -> str | None:
 
 
 def _realtime_session_object(
-    session_id: str, model: str, session: RealtimeVoiceSession
+    session_id: str, model: str, session: RealtimeVoiceSession | HaruRealtimeSession
 ) -> dict:
     pcm = {"type": "audio/pcm", "rate": SAMPLE_RATE}
-    return {
+    config: dict = {
         "object": "realtime.session",
         "type": "realtime",
         "id": session_id,
         "model": model,
         "output_modalities": ["audio"],
         "instructions": session.instructions,
-        "tools": [{"type": "function", **tool["function"]} for tool in session.tools],
-        "tool_choice": "auto",
-        # Not in the OpenAI session object: what this model's backend accepts.
-        "capabilities": session.capabilities,
         "audio": {
             "input": {"format": pcm, "turn_detection": None},
-            "output": {"format": pcm, "voice": session.voice},
+            "output": {"format": pcm},
         },
+    }
+    if isinstance(session, HaruRealtimeSession):
+        return {
+            **config,
+            "tools": [],
+            "tool_choice": "none",
+            "capabilities": HARU_REALTIME_CAPABILITIES,
+        }
+    config["audio"]["output"]["voice"] = session.voice
+    return {
+        **config,
+        "tools": [{"type": "function", **tool["function"]} for tool in session.tools],
+        "tool_choice": "auto",
+        "capabilities": session.capabilities,
         "max_output_tokens": session.max_output_tokens or "inf",
     }
 
@@ -1063,10 +1081,7 @@ def _realtime_images(item: dict) -> list:
 async def realtime_voice(websocket: WebSocket, model: str | None = None) -> None:
     """Spoken conversation over WebSocket, following the OpenAI Realtime API.
 
-    The client streams 24 kHz PCM16 with ``input_audio_buffer.append``, ends
-    each turn with ``input_audio_buffer.commit`` and asks for the spoken reply
-    with ``response.create``. There is no server turn detection; barge-in is
-    ``response.cancel`` followed by ``conversation.item.truncate``.
+    Haru processes a continuous PCM stream. VLMs use explicit client turns.
     """
     offered = websocket.scope.get("subprotocols") or []
     await websocket.accept(subprotocol="realtime" if "realtime" in offered else None)
@@ -1138,12 +1153,12 @@ async def realtime_voice(websocket: WebSocket, model: str | None = None) -> None
         )
         return
 
-    session: RealtimeVoiceSession | None = None
+    session: RealtimeVoiceSession | HaruRealtimeSession | None = None
     limiter = None
     gpu_limit = None
     try:
         if (
-            not isinstance(engine, VLMBatchedEngine)
+            not isinstance(engine, (VLMBatchedEngine, STSEngine))
             or not engine.supports_realtime_voice
         ):
             await reject(
@@ -1169,16 +1184,14 @@ async def realtime_voice(websocket: WebSocket, model: str | None = None) -> None
                 "session": _realtime_session_object(session_id, model, session),
             }
         )
-        await _run_realtime_voice(
-            websocket,
-            send,
-            send_error,
-            session,
-            session_id,
-            model,
-            resolved_model,
-            pool,
-        )
+        if isinstance(session, HaruRealtimeSession):
+            await _run_haru_voice(
+                websocket, send, send_error, session, session_id, model, resolved_model, pool
+            )
+        else:
+            await _run_realtime_voice(
+                websocket, send, send_error, session, session_id, model, resolved_model, pool
+            )
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -1199,6 +1212,227 @@ async def realtime_voice(websocket: WebSocket, model: str | None = None) -> None
                         limiter.release(gpu_limit)
                 finally:
                     await pool.release_engine(resolved_model)
+
+
+def _update_haru_session(session: HaruRealtimeSession, config, model: str) -> None:
+    if not isinstance(config, dict):
+        raise RealtimeVoiceError("invalid_value", "session must be an object")
+    audio = config.get("audio", {})
+    if not isinstance(audio, dict):
+        raise RealtimeVoiceError("invalid_value", "audio must be an object")
+    audio_in, audio_out = audio.get("input", {}), audio.get("output", {})
+    if not isinstance(audio_in, dict) or not isinstance(audio_out, dict):
+        raise RealtimeVoiceError("invalid_value", "audio input and output must be objects")
+    if (
+        config.get("turn_detection") is not None
+        or audio_in.get("turn_detection") is not None
+    ):
+        raise RealtimeVoiceError(
+            "unsupported", "Haru does not support turn detection; stream audio including silence"
+        )
+    for value in (
+        config.get("input_audio_format"),
+        config.get("output_audio_format"),
+        audio_in.get("format"),
+        audio_out.get("format"),
+    ):
+        _check_realtime_format(value)
+    if (
+        config.get("type", "realtime") != "realtime"
+        or config.get("model", model) != model
+        or config.get("output_modalities", ["audio"]) != ["audio"]
+        or config.get("tools", []) != []
+        or config.get("tool_choice", "none") != "none"
+        or config.get("voice") is not None
+        or audio_out.get("voice") is not None
+    ):
+        raise RealtimeVoiceError(
+            "unsupported", "Haru supports audio output only, without model changes, tools or voices"
+        )
+    if (
+        config.keys()
+        - {
+            "type",
+            "model",
+            "instructions",
+            "output_modalities",
+            "audio",
+            "tools",
+            "tool_choice",
+            "voice",
+            "turn_detection",
+            "input_audio_format",
+            "output_audio_format",
+        }
+        or audio.keys() - {"input", "output"}
+        or audio_in.keys() - {"format", "turn_detection"}
+        or audio_out.keys() - {"format", "voice"}
+    ):
+        raise RealtimeVoiceError("unsupported", "Haru does not support this session setting")
+    if "instructions" in config:
+        session.update_instructions(config["instructions"])
+
+
+async def _run_haru_voice(
+    websocket: WebSocket,
+    send,
+    send_error,
+    session: HaruRealtimeSession,
+    session_id: str,
+    model: str,
+    resolved_model: str,
+    pool,
+) -> None:
+    response = {
+        "object": "realtime.response",
+        "id": _realtime_id("resp"),
+        "status": "in_progress",
+        "output": [],
+    }
+    item = {
+        "object": "realtime.item",
+        "id": _realtime_id("item"),
+        "type": "message",
+        "role": "assistant",
+        "status": "in_progress",
+        "content": [],
+    }
+    output = {"response_id": response["id"], "output_index": 0}
+    where = {**output, "item_id": item["id"], "content_index": 0}
+    transcript: list[str] = []
+    announced = False
+    pending_audio = bytearray()
+    audio_ready = asyncio.Event()
+    received_audio = False
+
+    async def emit(frame) -> None:
+        nonlocal announced
+        if not announced:
+            await send({"type": "response.created", "response": response})
+            await send({"type": "response.output_item.added", **output, "item": item})
+            await send({
+                "type": "response.content_part.added", **where,
+                "part": {"type": "output_audio", "transcript": ""},
+            })
+            announced = True
+        if frame.text:
+            transcript.append(frame.text)
+            await send({
+                "type": "response.output_audio_transcript.delta", **where, "delta": frame.text,
+            })
+        delta = base64.b64encode(pcm16_bytes(frame.audio)).decode("ascii")
+        await send({"type": "response.output_audio.delta", **where, "delta": delta})
+
+    async def finish(status: str) -> None:
+        if announced:
+            part = {"type": "output_audio", "transcript": "".join(transcript)}
+            final_item = {
+                **item,
+                "status": "completed" if status == "completed" else "incomplete",
+                "content": [part],
+            }
+            await send({"type": "response.output_audio.done", **where})
+            await send({
+                "type": "response.output_audio_transcript.done", **where,
+                "transcript": part["transcript"],
+            })
+            await send({"type": "response.content_part.done", **where, "part": part})
+            await send({"type": "response.output_item.done", **output, "item": final_item})
+            await send({
+                "type": "response.done",
+                "response": {**response, "status": status, "output": [final_item]},
+            })
+            _record_audio_request(resolved_model)
+        await websocket.close(code=1000)
+
+    async def generate_frames() -> None:
+        while True:
+            await audio_ready.wait()
+            pcm = bytes(pending_audio[:HARU_MAX_APPEND_BYTES])
+            del pending_audio[:HARU_MAX_APPEND_BYTES]
+            if not pending_audio:
+                audio_ready.clear()
+            async for frame in session.append(pcm):
+                await emit(frame)
+                if frame.done:
+                    return
+
+    async def receive_frames() -> str:
+        nonlocal received_audio
+        while True:
+            try:
+                async with asyncio.timeout(REALTIME_IDLE_SECONDS):
+                    event = await websocket.receive_json()
+            except TimeoutError:
+                await send_error("session_expired", "The session was idle for too long")
+                return "incomplete"
+            except ValueError:
+                event = None
+            if not isinstance(event, dict):
+                await send_error("invalid_json", "Events must be JSON objects")
+                continue
+            kind, client_event_id = event.get("type"), event.get("event_id")
+            try:
+                if kind == "session.update":
+                    config = event.get("session")
+                    if received_audio and isinstance(config, dict) and "instructions" in config:
+                        raise RealtimeVoiceError(
+                            "instructions_locked",
+                            "instructions cannot change after the first audio append",
+                        )
+                    _update_haru_session(session, config, model)
+                    await send({
+                        "type": "session.updated",
+                        "session": _realtime_session_object(session_id, model, session),
+                    })
+                elif kind == "input_audio_buffer.append":
+                    pcm = session.decode_append(event.get("audio"))
+                    if len(pending_audio) + len(pcm) > 8 * HARU_MAX_APPEND_BYTES:
+                        await send_error(
+                            "audio_buffer_limit", "Haru cannot keep up with incoming audio", client_event_id
+                        )
+                        return "incomplete"
+                    pending_audio.extend(pcm)
+                    audio_ready.set()
+                    received_audio = True
+                elif kind == "response.cancel":
+                    if event.get("response_id") not in (None, response["id"]):
+                        raise RealtimeVoiceError(
+                            "response_not_found", "No such duplex response"
+                        )
+                    return "cancelled"
+                else:
+                    raise RealtimeVoiceError(
+                        "unsupported", f"Haru does not support {kind!r}; stream PCM continuously"
+                    )
+            except RealtimeVoiceError as exc:
+                await send_error(exc.code, str(exc), client_event_id)
+
+    async def wait_for_unload() -> str:
+        while True:
+            reason = pool.get_abort_requested_reason(resolved_model)
+            if reason:
+                return reason
+            await asyncio.sleep(REALTIME_UNLOAD_POLL_SECONDS)
+
+    receiver = asyncio.create_task(receive_frames())
+    stream = asyncio.create_task(generate_frames())
+    watcher = asyncio.create_task(wait_for_unload())
+    tasks = (receiver, stream, watcher)
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    if receiver in done:
+        await finish(receiver.result())
+    elif stream in done:
+        stream.result()
+        await finish("completed")
+    else:
+        await send_error("model_unloaded", f"The model is being unloaded: {watcher.result()}")
+        await websocket.close(code=1012)
 
 
 async def _run_realtime_voice(
@@ -1540,6 +1774,17 @@ async def list_model_voices(model: Optional[str] = None, realtime: bool = False)
             config = json.loads((model_dir / "config.json").read_text())
         except (OSError, ValueError):
             config = {}
+        if is_haru_model(config.get("model_type", ""), config):
+            try:
+                instructions = haru_default_instructions()
+            except ImportError:
+                instructions = None
+            return {
+                "model": resolved,
+                "voices": [],
+                "instructions": instructions,
+                "capabilities": HARU_REALTIME_CAPABILITIES,
+            }
         return {
             "model": resolved,
             "voices": realtime_voice_names(config),
@@ -1746,7 +1991,6 @@ async def process_audio(
     the audio through an STS engine (e.g. DeepFilterNet, MossFormer2,
     SAMAudio, LFM2.5-Audio), and returns WAV bytes of the processed audio.
     """
-    from omlx.engine.sts import STSEngine
     from omlx.exceptions import ModelNotFoundError
 
     pool = _get_engine_pool()
@@ -1764,7 +2008,10 @@ async def process_audio(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    if not isinstance(engine, STSEngine):
+    if isinstance(engine, STSEngine):
+        if not engine.supports_audio_processing:
+            engine = None
+    else:
         engine = _lfm3_speech(engine)
     if engine is None:
         raise HTTPException(

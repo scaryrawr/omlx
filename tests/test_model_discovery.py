@@ -1141,6 +1141,21 @@ class TestDetectModelType:
         assert is_realtime_voice_model("lfm3_audio", {})
         assert not is_realtime_voice_model("qwen3_vl_moe", {})
 
+    @pytest.mark.parametrize(
+        "config",
+        [{"model_type": "haru"}, {"architectures": ["HaruForConditionalGeneration"]}],
+    )
+    def test_haru_is_discovered_as_realtime_sts(self, tmp_path, config):
+        checkpoint = tmp_path / "Haru-4B"
+        checkpoint.mkdir()
+        (checkpoint / "config.json").write_text(json.dumps(config))
+        (checkpoint / "model.safetensors").write_bytes(b"weights")
+
+        model = discover_models(tmp_path)["Haru-4B"]
+        assert model.model_type == model.engine_type == "audio_sts"
+        assert model.realtime_voice
+        assert model.realtime_duplex
+
     def test_detect_lfm_audio_architecture_as_sts(self, tmp_path):
         """mlx-audio LFM STS remains classified via LFM2AudioModel architecture."""
         config = {

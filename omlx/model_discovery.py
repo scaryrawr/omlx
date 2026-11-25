@@ -439,14 +439,29 @@ AUDIO_STS_ARCHITECTURES = {
     "MossFormer2SEModel",
     "SAMAudio",
     "LFM2AudioModel",
+    "HaruForConditionalGeneration",
 }
 
 # Voice models with a /v1/realtime backend, served by the VLM engine.
 REALTIME_VOICE_MODEL_TYPES = frozenset({"lfm3_audio", "lfm3_omni", "qwen3_omni_moe"})
 
 
+def is_haru_model(config_model_type: str, config: dict | None = None) -> bool:
+    if config_model_type == "haru":
+        return True
+    architectures = (config or {}).get("architectures")
+    if isinstance(architectures, str):
+        return architectures == "HaruForConditionalGeneration"
+    return (
+        isinstance(architectures, (list, tuple, set))
+        and "HaruForConditionalGeneration" in architectures
+    )
+
+
 def is_realtime_voice_model(config_model_type: str, config: dict | None = None) -> bool:
     """True when the model can hold a spoken conversation on /v1/realtime."""
+    if is_haru_model(config_model_type, config):
+        return True
     if config_model_type not in REALTIME_VOICE_MODEL_TYPES:
         return False
     # Thinker-only Qwen3-Omni checkpoints have no talker to speak with.
@@ -471,6 +486,7 @@ class DiscoveredModel:
     estimated_size: int  # Estimated memory usage in bytes
     text_only_size: int = 0  # Language-only estimate for VLM checkpoints (0 = n/a)
     realtime_voice: bool = False  # Its model type and config allow /v1/realtime
+    realtime_duplex: bool = False
     supports_audio_input: bool | None = None
     config_model_type: str = (
         ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
@@ -1276,6 +1292,8 @@ def detect_model_type(model_path: Path) -> ModelType:
     for arch in architectures:
         if arch in AUDIO_STS_ARCHITECTURES:
             return "audio_sts"
+    if model_type == "haru":
+        return "audio_sts"
 
     # model_type check (dynamically loaded from mlx-audio when available).
     # Check TTS before STT because some model_type values (e.g. "vibevoice")
@@ -2424,6 +2442,7 @@ def _register_model(
             text_only_size=text_only_size,
             config_model_type=config_model_type,
             realtime_voice=is_realtime_voice_model(config_model_type, _config),
+            realtime_duplex=is_haru_model(config_model_type, _config),
             supports_audio_input=_detect_audio_input(model_dir, _config, model_type),
             reasoning_effort_options=reasoning_effort_options,
             reasoning_effort_default=reasoning_effort_default,
