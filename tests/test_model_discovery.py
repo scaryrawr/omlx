@@ -2364,6 +2364,54 @@ class TestHfCacheDiscovery:
         (snapshot / "config.json").write_text(json.dumps({"model_type": model_type}))
         (snapshot / "model.safetensors").write_bytes(b"0" * 1000)
 
+    def test_video_snapshots_are_discovered_and_include_component_weights(self, tmp_path):
+        from omlx.video_registry import load_video_spec
+
+        _, ltx = self._make_hf_cache_entry(tmp_path, "example", "LTX-2-distilled")
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+            "text_encoder/config.json",
+        ):
+            path = ltx / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"model_type": "ltx av model"}))
+        for name, size in (
+            ("ltx-spatial-upscaler-x2.safetensors", 10),
+            ("transformer/model-00001-of-00001.safetensors", 999),
+            ("transformer/model-00001-of-00002.safetensors", 40),
+            ("transformer/model-00002-of-00002.safetensors", 60),
+            ("vae/decoder/model.safetensors", 200),
+            ("vae/encoder/model.safetensors", 300),
+            ("text_encoder/model.safetensors", 400),
+            ("text_projections/model.safetensors", 50),
+        ):
+            path = ltx / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x" * size)
+
+        _, wan = self._make_hf_cache_entry(tmp_path, "example", "wan")
+        (wan / "config.json").write_text(json.dumps({
+            "model_type": "t2v", "model_version": "2.2", "dual_model": True,
+            "dim": 3072, "text_dim": 4096,
+        }))
+        for name in (
+            "low_noise_model.safetensors", "high_noise_model.safetensors",
+            "t5_encoder.safetensors", "vae.safetensors",
+        ):
+            (wan / name).write_bytes(b"weights")
+
+        models = discover_models(tmp_path)
+        assert models["example--LTX-2-distilled"].engine_type == "video"
+        assert models["example--LTX-2-distilled"].estimated_size == 1113
+        assert load_video_spec(ltx).pipeline == "distilled"
+        assert models["example--wan"].engine_type == "video"
+
+        (ltx / "text_encoder/config.json").unlink()
+        (wan / "high_noise_model.safetensors").unlink()
+        assert discover_models(tmp_path) == {}
+
     def test_resolve_valid_entry(self, tmp_path):
         """Valid HF cache entry resolves to snapshot path and repo metadata."""
         entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B-4bit")

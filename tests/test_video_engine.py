@@ -170,6 +170,113 @@ video_worker.main()
         process.stderr.close()
 
 
+def test_ltx_worker_rejects_checkpoint_tokenizer_code(tmp_path):
+    pytest.importorskip("mlx_video")
+    model = _ltx_checkpoint(tmp_path)
+    tokenizer = model / "tokenizer"
+    tokenizer.mkdir()
+    (tokenizer / "tokenizer_config.json").write_text(json.dumps({
+        "auto_map": {"AutoTokenizer": ["custom.EvilTokenizer", None]},
+    }))
+    marker = tmp_path / "executed"
+    (tokenizer / "custom.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+        "class EvilTokenizer:\n    pass\n"
+    )
+    plan = plan_video(model, prompt="A lake", seconds="4", size="1280x704",
+                      seed=0, has_reference=False)
+    spec = tmp_path / "render.json"
+    spec.write_text(plan.model_dump_json())
+    code = """
+import sys
+from omlx import video_worker
+
+def generate(**kwargs):
+    from transformers import AutoTokenizer
+    AutoTokenizer.from_pretrained(
+        kwargs["model_repo"] + "/tokenizer", trust_remote_code=True
+    )
+
+sys.argv = ["omlx.video_worker", sys.argv[1]]
+video_worker.generate_ltx2 = generate
+video_worker.main()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(spec)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        returncode = process.wait(timeout=30)
+        error = process.stderr.read().decode()
+        assert returncode != 0
+        assert not marker.exists()
+        assert "trust_remote_code" in error
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+
+
+def test_ltx_worker_loads_standard_tokenizer(tmp_path):
+    pytest.importorskip("mlx_video")
+    from tokenizers import Tokenizer, models
+
+    model = _ltx_checkpoint(tmp_path)
+    tokenizer = model / "tokenizer"
+    tokenizer.mkdir()
+    Tokenizer(models.WordLevel({"[UNK]": 0, "lake": 1}, unk_token="[UNK]")).save(
+        str(tokenizer / "tokenizer.json")
+    )
+    (tokenizer / "tokenizer_config.json").write_text(json.dumps({
+        "tokenizer_class": "PreTrainedTokenizerFast",
+    }))
+    plan = plan_video(model, prompt="A lake", seconds="4", size="1280x704",
+                      seed=0, has_reference=False)
+    spec = tmp_path / "render.json"
+    spec.write_text(plan.model_dump_json())
+    code = """
+import sys
+from pathlib import Path
+from omlx import video_worker
+
+def generate(**kwargs):
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        kwargs["model_repo"] + "/tokenizer", trust_remote_code=True
+    )
+    assert tokenizer.encode("lake", add_special_tokens=False) == [1]
+    Path(kwargs["output_path"]).write_bytes(b"generated")
+
+def finalize(plan, directory):
+    (directory / "video.mp4").write_bytes(b"completed")
+
+sys.argv = ["omlx.video_worker", sys.argv[1]]
+video_worker.generate_ltx2 = generate
+video_worker.finalize_video = finalize
+video_worker.main()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(spec)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        returncode = process.wait(timeout=30)
+        assert returncode == 0, process.stderr.read().decode()
+        assert (tmp_path / "video.mp4").read_bytes() == b"completed"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+
+
 @pytest.mark.parametrize("layer_name", ["ResidualBlock", "Resample"])
 def test_wan_worker_reclaims_decoder_cache_without_changing_output(tmp_path, layer_name):
     pytest.importorskip("mlx_video")
@@ -284,6 +391,84 @@ async def test_abort_reaps_worker_before_releasing_activity(tmp_path, monkeypatc
     assert processes[0].returncode == -signal.SIGTERM
     assert engine.active_request_count() == 0
     assert engine.process_memory_bytes() == 0
+
+
+async def test_abort_kills_worker_that_ignores_sigterm(tmp_path, monkeypatch):
+    import omlx.engine.video as video
+
+    engine = VideoEngine(str(tmp_path))
+    original = asyncio.create_subprocess_exec
+    entered = asyncio.Event()
+    processes = []
+    monkeypatch.setattr(video, "_WORKER_STOP_TIMEOUT", 0.5)
+
+    async def spawn(*args, **kwargs):
+        kwargs["stdout"] = asyncio.subprocess.PIPE
+        kwargs["stderr"] = asyncio.subprocess.PIPE
+        process = await original(
+            sys.executable, "-c",
+            "import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "print('ready', flush=True); sys.stdin.buffer.read()",
+            **kwargs,
+        )
+        assert await process.stdout.readline() == b"ready\n"
+        original_wait = process.wait
+
+        async def observed_wait():
+            entered.set()
+            return await original_wait()
+
+        monkeypatch.setattr(process, "wait", observed_wait)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    with (tmp_path / ".owner").open("a+b") as owner:
+        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            assert await engine.abort_all_requests() == 1
+            with pytest.raises(RuntimeError, match="Video worker exited with code -9"):
+                await asyncio.wait_for(task, 5)
+            assert processes[0].returncode == -signal.SIGKILL
+            assert engine.process_memory_bytes() == 0
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_unconfirmed_worker_remains_accounted_and_blocks_new_work(tmp_path, monkeypatch):
+    import omlx.engine.video as video
+
+    engine = VideoEngine(str(tmp_path), estimated_size=100)
+    entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def wait():
+        entered.set()
+        await never.wait()
+
+    process = SimpleNamespace(pid=123, returncode=None, wait=wait)
+
+    async def spawn(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(video.os, "killpg", lambda pid, sig: None)
+    monkeypatch.setattr(video, "_WORKER_STOP_TIMEOUT", 0.01)
+    monkeypatch.setattr(video, "list_process_group_pids", lambda pid: [pid])
+    monkeypatch.setattr(video, "get_phys_footprint", lambda pid: 200)
+    with (tmp_path / ".owner").open("a+b") as owner:
+        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        with pytest.raises(RuntimeError, match="did not exit after SIGKILL"):
+            await task
+        assert engine.process_memory_bytes() == 200
+        with pytest.raises(RuntimeError, match="Previous video worker has not exited"):
+            await engine.generate(_plan(tmp_path), tmp_path, owner.fileno())
 
 
 def test_video_workers_participate_in_external_memory_accounting(tmp_path, monkeypatch):

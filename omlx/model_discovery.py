@@ -1598,7 +1598,18 @@ def estimate_model_size(model_path: Path) -> int:
     total_size = 0
 
     # Primary: safetensors files
-    safetensors_files = select_safetensors_weight_files(model_path)
+    if detect_video_family(model_path) is not None:
+        directories = {
+            model_path,
+            *(path.parent for path in model_path.rglob("*.safetensors")),
+        }
+        safetensors_files = [
+            path
+            for directory in directories
+            for path in select_safetensors_weight_files(directory)
+        ]
+    else:
+        safetensors_files = select_safetensors_weight_files(model_path)
     for f in safetensors_files:
         total_size += f.stat().st_size
 
@@ -2159,6 +2170,13 @@ def _is_hf_cache_mlx_compatible(model_dir: Path, source_repo_id: str) -> bool:
     if not _is_model_dir(model_dir):
         return False
     if _load_image_manifest(model_dir) is not None:
+        return True
+    if detect_video_family(model_dir) is not None:
+        try:
+            load_video_spec(model_dir)
+        except (OSError, ValueError) as error:
+            logger.debug("Invalid video cache checkpoint %s: %s", source_repo_id, error)
+            return False
         return True
     try:
         config = json.loads((model_dir / "config.json").read_text())

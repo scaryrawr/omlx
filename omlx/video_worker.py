@@ -25,6 +25,7 @@ try:
 except ImportError:
     generate_wan = generate_ltx2 = PipelineType = None
 
+from .patches.mlx_video_ltx2 import safe_ltx_tokenizer
 from .utils.optional_deps import MLX_VIDEO_MISSING_MESSAGE
 from .video_registry import VideoRenderPlan
 
@@ -160,20 +161,21 @@ def main() -> None:
             }.items()
             if value is not None
         }
-        generate_ltx2(
-            model_repo=plan.model_path,
-            text_encoder_repo=None,
-            prompt=plan.prompt,
-            pipeline=PipelineType(plan.pipeline),
-            image=reference,
-            width=plan.width,
-            height=plan.height,
-            num_frames=plan.generation_frames,
-            fps=plan.fps,
-            seed=plan.seed,
-            output_path=output,
-            **sampling,
-        )
+        with safe_ltx_tokenizer():
+            generate_ltx2(
+                model_repo=plan.model_path,
+                text_encoder_repo=None,
+                prompt=plan.prompt,
+                pipeline=PipelineType(plan.pipeline),
+                image=reference,
+                width=plan.width,
+                height=plan.height,
+                num_frames=plan.generation_frames,
+                fps=plan.fps,
+                seed=plan.seed,
+                output_path=output,
+                **sampling,
+            )
     finalize_video(plan, directory)
     (directory / "generated.mp4").unlink()
 

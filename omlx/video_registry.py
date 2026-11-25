@@ -135,9 +135,12 @@ def _load_wan(model_path: Path) -> VideoModelSpec:
 def _load_ltx2(model_path: Path) -> VideoModelSpec:
     # Distilled and dev LTX-2 checkpoints share one transformer config; the
     # converted repositories identify the variant only in their names.
-    pipeline: LtxPipeline = (
-        "distilled" if "distilled" in model_path.name.lower() else "dev"
-    )
+    name = model_path.name
+    if model_path.parent.name == "snapshots" and model_path.parent.parent.name.startswith(
+        "models--"
+    ):
+        name = model_path.parent.parent.name
+    pipeline: LtxPipeline = "distilled" if "distilled" in name.lower() else "dev"
     required = [
         "transformer/config.json",
         "vae/decoder/config.json",

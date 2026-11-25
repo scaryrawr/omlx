@@ -16,6 +16,8 @@ from ..utils.proc_memory import get_phys_footprint, list_process_group_pids
 from ..video_registry import VideoRenderPlan, load_video_spec
 from .base import BaseNonStreamingEngine
 
+_WORKER_STOP_TIMEOUT = 5.0
+
 
 class VideoEngine(BaseNonStreamingEngine):
     """Supervise one-shot video workers under the model pool's lease."""
@@ -58,16 +60,33 @@ class VideoEngine(BaseNonStreamingEngine):
         process = self._process
         if process is None:
             return
-        if process.returncode is None:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
-        waiter = asyncio.create_task(process.wait())
+
+        async def terminate() -> None:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+            try:
+                await asyncio.wait_for(process.wait(), _WORKER_STOP_TIMEOUT)
+            except TimeoutError:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    await asyncio.wait_for(process.wait(), _WORKER_STOP_TIMEOUT)
+                except TimeoutError as error:
+                    raise RuntimeError(
+                        f"Video worker {process.pid} did not exit after SIGKILL"
+                    ) from error
+
+        waiter = asyncio.create_task(terminate())
+        cancelled = False
         while not waiter.done():
             try:
                 await asyncio.shield(waiter)
             except asyncio.CancelledError:
-                continue
+                cancelled = True
         waiter.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def process_memory_bytes(self) -> int:
         """Read the video process group's physical memory footprint."""
@@ -94,6 +113,8 @@ class VideoEngine(BaseNonStreamingEngine):
     ) -> None:
         """Run an isolated backend and retain the lease through process exit."""
         async with self._call_lock:
+            if self._process is not None and self._process.returncode is None:
+                raise RuntimeError("Previous video worker has not exited")
             spec_path = directory / "render.json"
             spec_path.write_text(plan.model_dump_json())
             activity = self._begin_activity("video", detail=plan.prompt)
@@ -152,5 +173,6 @@ class VideoEngine(BaseNonStreamingEngine):
                 await self._terminate_worker()
                 raise
             finally:
-                self._process = None
+                if self._process is not None and self._process.returncode is not None:
+                    self._process = None
                 self._end_activity(activity)
