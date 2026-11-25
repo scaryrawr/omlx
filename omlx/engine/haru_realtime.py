@@ -42,11 +42,6 @@ class HaruRealtimeSession:
         self.instructions = haru_default_instructions()
 
     def update_instructions(self, instructions: str) -> None:
-        if self._started:
-            raise RealtimeVoiceError(
-                "instructions_locked",
-                "instructions cannot change after the first audio append",
-            )
         if not isinstance(instructions, str) or len(instructions) > 8192:
             raise RealtimeVoiceError(
                 "invalid_value",
@@ -71,7 +66,7 @@ class HaruRealtimeSession:
         frame: Frame = upstream.step(samples)
         return frame
 
-    async def append(self, audio: str) -> AsyncIterator["Frame"]:
+    def decode_append(self, audio: object) -> bytes:
         if self._closing is not None:
             raise RealtimeVoiceError("session_closed", "The duplex session has closed")
         if not isinstance(audio, str) or not audio:
@@ -83,11 +78,13 @@ class HaruRealtimeSession:
                 "audio_buffer_limit", "send at most one second per append"
             )
         try:
-            pcm = base64.b64decode(audio, validate=True)
+            return base64.b64decode(audio, validate=True)
         except ValueError as exc:
             raise RealtimeVoiceError(
                 "invalid_value", "audio must be base64 PCM16"
             ) from exc
+
+    async def append(self, pcm: bytes) -> AsyncIterator["Frame"]:
         loop = asyncio.get_running_loop()
         if not self._started:
             self._started = True

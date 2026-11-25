@@ -79,7 +79,10 @@ def _detect_sts_family(model_name: str, config_model_type: str = "") -> str:
             import json
             with open(config_path) as f:
                 cfg = json.load(f)
-            for arch in cfg.get("architectures", []):
+            architectures = cfg.get("architectures") or []
+            if isinstance(architectures, str):
+                architectures = [architectures]
+            for arch in architectures:
                 family = _CONFIG_TYPE_TO_FAMILY.get(arch)
                 if family:
                     return family

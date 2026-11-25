@@ -486,6 +486,8 @@ The built-in push-to-talk client does not use this protocol.
 Send `input_audio_buffer.append` events with base64-encoded, mono, 24 kHz
 little-endian PCM16 in `audio`. Pace the stream in real time and keep sending
 silence when nobody speaks. Each append can carry up to one second of audio.
+If the server cannot keep up with incoming audio, it reports an
+`audio_buffer_limit` error and closes the session.
 The server assembles 3,200-sample frames across appends and sends model audio
 in the same format. Read output while sending input. The first append starts
 one continuous response with `response.output_audio.delta` and

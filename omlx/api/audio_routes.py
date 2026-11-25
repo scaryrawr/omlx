@@ -1300,6 +1300,8 @@ async def _run_haru_voice(
     where = {**output, "item_id": item["id"], "content_index": 0}
     transcript: list[str] = []
     announced = False
+    pending_audio: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
+    received_audio = False
 
     async def emit(frame) -> None:
         nonlocal announced
@@ -1341,15 +1343,23 @@ async def _run_haru_voice(
             _record_audio_request(resolved_model)
         await websocket.close(code=1000)
 
-    async def receive_frames() -> None:
+    async def generate_frames() -> None:
+        while True:
+            pcm = await pending_audio.get()
+            async for frame in session.append(pcm):
+                await emit(frame)
+                if frame.done:
+                    return
+
+    async def receive_frames() -> str:
+        nonlocal received_audio
         while True:
             try:
                 async with asyncio.timeout(REALTIME_IDLE_SECONDS):
                     event = await websocket.receive_json()
             except TimeoutError:
                 await send_error("session_expired", "The session was idle for too long")
-                await finish("incomplete")
-                return
+                return "incomplete"
             except ValueError:
                 event = None
             if not isinstance(event, dict):
@@ -1358,24 +1368,33 @@ async def _run_haru_voice(
             kind, client_event_id = event.get("type"), event.get("event_id")
             try:
                 if kind == "session.update":
-                    _update_haru_session(session, event.get("session"), model)
+                    config = event.get("session")
+                    if received_audio and isinstance(config, dict) and "instructions" in config:
+                        raise RealtimeVoiceError(
+                            "instructions_locked",
+                            "instructions cannot change after the first audio append",
+                        )
+                    _update_haru_session(session, config, model)
                     await send({
                         "type": "session.updated",
                         "session": _realtime_session_object(session_id, model, session),
                     })
                 elif kind == "input_audio_buffer.append":
-                    async for frame in session.append(event.get("audio")):
-                        await emit(frame)
-                        if frame.done:
-                            await finish("completed")
-                            return
+                    pcm = session.decode_append(event.get("audio"))
+                    try:
+                        pending_audio.put_nowait(pcm)
+                    except asyncio.QueueFull:
+                        await send_error(
+                            "audio_buffer_limit", "Haru cannot keep up with incoming audio", client_event_id
+                        )
+                        return "incomplete"
+                    received_audio = True
                 elif kind == "response.cancel":
                     if event.get("response_id") not in (None, response["id"]):
                         raise RealtimeVoiceError(
                             "response_not_found", "No such duplex response"
                         )
-                    await finish("cancelled")
-                    return
+                    return "cancelled"
                 else:
                     raise RealtimeVoiceError(
                         "unsupported", f"Haru does not support {kind!r}; stream PCM continuously"
@@ -1390,22 +1409,24 @@ async def _run_haru_voice(
                 return reason
             await asyncio.sleep(REALTIME_UNLOAD_POLL_SECONDS)
 
-    stream = asyncio.create_task(receive_frames())
+    receiver = asyncio.create_task(receive_frames())
+    stream = asyncio.create_task(generate_frames())
     watcher = asyncio.create_task(wait_for_unload())
+    tasks = (receiver, stream, watcher)
     try:
-        done, _ = await asyncio.wait({stream, watcher}, return_when=asyncio.FIRST_COMPLETED)
-        if stream in done:
-            await stream
-        else:
-            stream.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stream
-            await send_error("model_unloaded", f"The model is being unloaded: {watcher.result()}")
-            await websocket.close(code=1012)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        stream.cancel()
-        watcher.cancel()
-        await asyncio.gather(stream, watcher, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    if receiver in done:
+        await finish(receiver.result())
+    elif stream in done:
+        stream.result()
+        await finish("completed")
+    else:
+        await send_error("model_unloaded", f"The model is being unloaded: {watcher.result()}")
+        await websocket.close(code=1012)
 
 
 async def _run_realtime_voice(

@@ -1444,6 +1444,26 @@ class TestHaruRealtimeWebSocket:
             assert ws.receive()["code"] == 1000
         assert _eventually(lambda: pool.release_engine.await_count == 2)
 
+    def test_cancel_stops_a_multi_frame_append_without_releasing_lease_early(self, haru_engine):
+        engine, upstream = haru_engine
+        upstream.unblock.clear()
+        (p1, p2, p3), pool, client = _voice_client(engine)
+        with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
+            ws.receive_json()
+            try:
+                _send_pcm(ws, bytes(3 * 6400))
+                _until(ws, "response.output_audio.delta")
+                assert upstream.entered.wait(2)
+                ws.send_json({"type": "response.cancel"})
+                events = _until(ws, "response.done")
+                assert events[-1]["response"]["status"] == "cancelled"
+                assert not any(e["type"] == "response.output_audio.delta" for e in events)
+                pool.release_engine.assert_not_awaited()
+            finally:
+                upstream.unblock.set()
+        assert _eventually(lambda: pool.release_engine.await_count == 1)
+        assert [name for name, _ in upstream.calls] == ["create", "start", "step", "synchronize"]
+
     def test_unload_holds_lease_and_gpu_cap_until_decoder_drain(self, haru_engine, monkeypatch):
         engine, upstream = haru_engine
         upstream.unblock.clear()
