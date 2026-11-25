@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 VideoFamily = Literal["wan", "ltx2"]
 LtxPipeline = Literal["distilled", "dev"]
 VideoTask = Literal["text-to-video", "image-to-video"]
+_WEIGHT_SHARD_RE = re.compile(r"^(?P<prefix>.*)-(?P<index>\d+)-of-(?P<total>\d+)\.safetensors$")
 
 
 class WanVideoConfig(BaseModel):
@@ -104,6 +106,44 @@ def _require_files(model_path: Path, required: list[str], hint: str) -> None:
         raise ValueError(f"{hint}; missing " + ", ".join(missing))
 
 
+def _require_component_weights(model_path: Path, component: str) -> None:
+    directory = model_path / component
+    files = sorted(
+        path for path in directory.rglob("*.safetensors") if path.is_file()
+    )
+    if not files:
+        raise ValueError(f"LTX-2 checkpoint is missing weights in {component}/")
+
+    shard_groups: dict[tuple[Path, str], dict[int, set[int]]] = {}
+    for path in files:
+        match = _WEIGHT_SHARD_RE.fullmatch(path.name)
+        if match is None:
+            continue
+        prefix = match.group("prefix")
+        index = int(match.group("index"))
+        total = int(match.group("total"))
+        if total < 1 or index < 1 or index > total:
+            raise ValueError(
+                f"LTX-2 checkpoint has invalid weight shards in "
+                f"{path.parent.relative_to(model_path)} for {prefix}"
+            )
+        shard_groups.setdefault((path.parent, prefix), {}).setdefault(total, set()).add(
+            index
+        )
+
+    for (parent, prefix), groups in shard_groups.items():
+        if any(
+            set(range(1, total + 1)).issubset(indices)
+            or set(range(total)).issubset(indices)
+            for total, indices in groups.items()
+        ):
+            continue
+        raise ValueError(
+            f"LTX-2 checkpoint has incomplete weight shards in "
+            f"{parent.relative_to(model_path)} for {prefix}"
+        )
+
+
 def _load_wan(model_path: Path) -> VideoModelSpec:
     hint = "Video checkpoint requires mlx-video conversion"
     _require_files(model_path, ["t5_encoder.safetensors", "vae.safetensors"], hint)
@@ -145,7 +185,6 @@ def _load_ltx2(model_path: Path) -> VideoModelSpec:
         "transformer/config.json",
         "vae/decoder/config.json",
         "vae/encoder/config.json",
-        "text_projections/model.safetensors",
         "text_encoder/config.json",
     ]
     _require_files(
@@ -154,6 +193,14 @@ def _load_ltx2(model_path: Path) -> VideoModelSpec:
         "LTX-2 checkpoint must be a converted mlx-video directory with its "
         "Gemma text encoder in text_encoder/",
     )
+    for component in (
+        "transformer",
+        "vae/decoder",
+        "vae/encoder",
+        "text_projections",
+        "text_encoder",
+    ):
+        _require_component_weights(model_path, component)
     if pipeline == "distilled" and not any(
         model_path.glob("*spatial-upscaler-x2*.safetensors")
     ):

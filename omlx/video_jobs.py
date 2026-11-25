@@ -47,6 +47,8 @@ class VideoPool(Protocol):
 
     def acquire(self, model_id: str) -> AbstractAsyncContextManager[object]: ...
 
+    def _wake_process_memory_enforcer(self, *, active: bool = False) -> None: ...
+
 
 class _StoredVideo(BaseModel):
     video: Video
@@ -59,6 +61,15 @@ def _sync_directory(directory: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _normalize_reference(reference: Path, destination: Path) -> None:
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with Image.open(reference) as image:
+        normalized = ImageOps.exif_transpose(image).convert("RGB")
+        normalized.save(destination)
+    with destination.open("rb") as file:
+        os.fsync(file.fileno())
 
 
 class VideoJobs:
@@ -160,13 +171,36 @@ class VideoJobs:
             created_at=int(time.time()),
         )
         directory = self.directory / video.id
-        directory.mkdir(mode=0o700)
         if reference is not None:
-            with Image.open(reference) as image:
-                normalized = ImageOps.exif_transpose(image).convert("RGB")
-                normalized.save(directory / "reference.png")
-            with (directory / "reference.png").open("rb") as file:
-                os.fsync(file.fileno())
+            normalization = asyncio.create_task(
+                asyncio.to_thread(
+                    _normalize_reference, reference, directory / "reference.png"
+                )
+            )
+            cancelled = False
+            while not normalization.done():
+                try:
+                    await asyncio.shield(normalization)
+                except asyncio.CancelledError:
+                    cancelled = True
+            try:
+                normalization.result()
+            except BaseException:
+                if directory.exists():
+                    shutil.rmtree(directory)
+                raise
+            if cancelled:
+                shutil.rmtree(directory)
+                raise asyncio.CancelledError
+        if not self._accepting:
+            if directory.exists():
+                shutil.rmtree(directory)
+            raise HTTPException(503, "Video job service is stopping")
+        if self._pending.qsize() >= 32:
+            if directory.exists():
+                shutil.rmtree(directory)
+            raise HTTPException(429, "Video job queue is full")
+        directory.mkdir(mode=0o700, exist_ok=True)
         stored = _StoredVideo(video=video, plan=plan)
         self._save(stored)
         self._pending.put_nowait(stored)
@@ -188,6 +222,7 @@ class VideoJobs:
                             raise RuntimeError(
                                 "Video checkpoint changed after the job was queued"
                             )
+                        self.pool._wake_process_memory_enforcer(active=True)
                         await engine.generate(
                             stored.plan,
                             self.directory / stored.video.id,

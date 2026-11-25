@@ -44,6 +44,8 @@ def _ltx_checkpoint(root):
         (model / name).write_text(json.dumps({"model_type": "ltx av model"}))
     (model / "text_projections").mkdir()
     (model / "text_projections/model.safetensors").write_bytes(b"weights")
+    for component in ("transformer", "vae/decoder", "vae/encoder", "text_encoder"):
+        (model / component / "model.safetensors").write_bytes(b"weights")
     (model / "ltx-2-spatial-upscaler-x2-1.0.safetensors").write_bytes(b"weights")
     return model
 
@@ -110,6 +112,7 @@ def test_finalize_video_has_exact_dimensions_and_duration(tmp_path):
 
 
 def test_worker_exits_cleanly_with_parent_pipe_open(tmp_path):
+    pytest.importorskip("mlx_video")
     spec = tmp_path / "render.json"
     spec.write_text(_plan(tmp_path).model_dump_json())
     code = """

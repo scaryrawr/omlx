@@ -5,6 +5,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from io import BytesIO
+from threading import Event
 
 import httpx
 import pytest
@@ -45,9 +46,13 @@ class FakePool:
         self.entry = type(
             "Entry", (), {"model_path": str(model_path), "engine_type": "video"}
         )()
+        self.wake_calls = []
 
     def get_entry(self, model):
         return self.entry if model == "wan" else None
+
+    def _wake_process_memory_enforcer(self, *, active=False):
+        self.wake_calls.append(active)
 
     @asynccontextmanager
     async def acquire(self, model):
@@ -184,6 +189,112 @@ async def test_multipart_reference_outlives_request_and_failure_is_durable(
         "message": "Video generation failed. See the server and job logs.",
     }
     assert pool.engine.leased is False
+
+
+async def test_reference_normalization_is_offloaded_and_waited_on_cancellation(
+    video_client, monkeypatch
+):
+    import omlx.video_jobs as video_jobs
+
+    client, jobs, _ = video_client
+    entered = Event()
+    release = Event()
+    source_paths = []
+    source_exists_during_normalization = []
+    normalize = video_jobs._normalize_reference
+
+    def blocked_normalize(source, destination):
+        source_paths.append(source)
+        entered.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release image normalization")
+        source_exists_during_normalization.append(source.exists())
+        normalize(source, destination)
+
+    monkeypatch.setattr(video_jobs, "_normalize_reference", blocked_normalize)
+    image = BytesIO()
+    Image.new("RGB", (32, 32), color=(1, 2, 3)).save(image, format="PNG")
+    task = asyncio.create_task(
+        client.post(
+            "/v1/videos",
+            data={"model": "wan", "prompt": "Animate"},
+            files={"input_reference": ("frame.png", image.getvalue(), "image/png")},
+        )
+    )
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 5), 6)
+        loop = asyncio.get_running_loop()
+        heartbeat = asyncio.Event()
+        loop.call_soon(heartbeat.set)
+        await asyncio.wait_for(heartbeat.wait(), 1)
+        assert source_paths[0].is_file()
+
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=0.05)
+        assert not done
+        assert source_paths[0].is_file()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert source_exists_during_normalization == [True]
+    assert not source_paths[0].exists()
+    assert jobs.list(limit=20, order="asc", after=None).data == []
+
+
+async def test_reference_normalization_rechecks_admission_after_await(
+    video_client, monkeypatch
+):
+    import omlx.video_jobs as video_jobs
+
+    client, jobs, _ = video_client
+    entered = Event()
+    release = Event()
+    normalize = video_jobs._normalize_reference
+
+    def blocked_normalize(source, destination):
+        entered.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release image normalization")
+        normalize(source, destination)
+
+    monkeypatch.setattr(video_jobs, "_normalize_reference", blocked_normalize)
+    image = BytesIO()
+    Image.new("RGB", (32, 32), color=(1, 2, 3)).save(image, format="PNG")
+    task = asyncio.create_task(
+        client.post(
+            "/v1/videos",
+            data={"model": "wan", "prompt": "Animate"},
+            files={"input_reference": ("frame.png", image.getvalue(), "image/png")},
+        )
+    )
+    assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 5), 6)
+    await jobs.close()
+    release.set()
+    response = await task
+    assert response.status_code == 503
+    assert jobs._pending.empty()
+    assert jobs.list(limit=20, order="asc", after=None).data == []
+    assert list(jobs.directory.glob("video_*")) == []
+
+
+async def test_memory_enforcer_wakes_for_each_video_dispatch(video_client):
+    client, jobs, pool = video_client
+    first = await client.post("/v1/videos", json={"model": "wan", "prompt": "First"})
+    await asyncio.wait_for(pool.engine.entered.wait(), 5)
+    assert pool.wake_calls == [True]
+    pool.engine.finish.set()
+    await asyncio.wait_for(jobs._pending.join(), 5)
+
+    pool.engine.entered.clear()
+    pool.engine.finish.clear()
+    second = await client.post("/v1/videos", json={"model": "wan", "prompt": "Second"})
+    await asyncio.wait_for(pool.engine.entered.wait(), 5)
+    assert pool.wake_calls == [True, True]
+    pool.engine.finish.set()
+    await asyncio.wait_for(jobs._pending.join(), 5)
+    assert jobs.get(first.json()["id"]).status == "completed"
+    assert jobs.get(second.json()["id"]).status == "completed"
 
 
 @pytest.mark.parametrize(

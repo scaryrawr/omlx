@@ -88,9 +88,36 @@ class TestVideoDiscovery:
         assert discover_models(tmp_path) == {}
         (model / "text_encoder").mkdir()
         (model / "text_encoder/config.json").write_text("{}")
+        for component in ("transformer", "vae/decoder", "vae/encoder", "text_encoder"):
+            (model / component / "model.safetensors").write_bytes(b"weights")
         discovered = discover_models(tmp_path)["LTX-2-dev"]
         assert discovered.engine_type == "video"
         assert discovered.capabilities == ["text-to-video", "image-to-video"]
+
+    def test_incomplete_ltx_component_weights_are_not_discovered(self, tmp_path):
+        model = tmp_path / "LTX-2-dev"
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+            "text_encoder/config.json",
+        ):
+            (model / name).parent.mkdir(parents=True, exist_ok=True)
+            (model / name).write_text(json.dumps({"model_type": "ltx av model"}))
+        for component in ("transformer", "vae/decoder", "vae/encoder", "text_encoder"):
+            (model / component / "model.safetensors").write_bytes(b"weights")
+        (model / "text_projections").mkdir()
+        (model / "text_projections/model.safetensors").write_bytes(b"weights")
+
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
+
+        (model / "vae/decoder/model.safetensors").unlink()
+        assert discover_models(tmp_path) == {}
+
+        (model / "vae/decoder/model-00001-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path) == {}
+        (model / "vae/decoder/model-00000-of-00000.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path) == {}
 
 
 class TestAudioInputDiscovery:
