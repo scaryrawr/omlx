@@ -37,6 +37,94 @@ from omlx.model_discovery import (
 )
 
 
+class TestVideoDiscovery:
+    def test_converted_wan_is_video_and_raw_checkpoint_is_not_served(self, tmp_path, caplog):
+        raw = tmp_path / "wan-original"
+        raw.mkdir()
+        (raw / "config.json").write_text(
+            json.dumps(
+                {"_class_name": "WanModel", "model_type": "ti2v", "dim": 3072, "in_dim": 48}
+            )
+        )
+        for index in range(1, 4):
+            (raw / f"diffusion_pytorch_model-{index:05d}-of-00003.safetensors").write_bytes(
+                b"weights"
+            )
+        model = tmp_path / "wan"
+        model.mkdir()
+        config = {
+            "model_type": "ti2v", "model_version": "2.2", "dual_model": False,
+            "vae_stride": [4, 16, 16], "sample_fps": 24,
+            "dim": 3072, "text_dim": 4096,
+        }
+        (model / "config.json").write_text(json.dumps(config))
+        assert detect_model_type(model) == "video"
+        assert discover_models(tmp_path) == {}
+        assert (
+            "Failed to discover model wan-original: Video checkpoint requires mlx-video conversion"
+            in caplog.text
+        )
+        for name in ("model.safetensors", "t5_encoder.safetensors", "vae.safetensors"):
+            (model / name).write_bytes(b"weights")
+        models = discover_models(tmp_path)
+        assert list(models) == ["wan"]
+        discovered = models["wan"]
+        assert discovered.model_type == discovered.engine_type == "video"
+        assert discovered.capabilities == ["text-to-video", "image-to-video"]
+        assert discovered.estimated_size > 0
+
+    def test_converted_ltx2_without_root_config_is_video(self, tmp_path):
+        model = tmp_path / "LTX-2-dev"
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+        ):
+            (model / name).parent.mkdir(parents=True, exist_ok=True)
+            (model / name).write_text(json.dumps({"model_type": "ltx av model"}))
+        (model / "text_projections").mkdir()
+        (model / "text_projections/model.safetensors").write_bytes(b"weights")
+        assert detect_model_type(model) == "video"
+        assert discover_models(tmp_path) == {}
+        (model / "text_encoder").mkdir()
+        (model / "text_encoder/config.json").write_text("{}")
+        for component in ("transformer", "vae/decoder", "vae/encoder", "text_encoder"):
+            (model / component / "model.safetensors").write_bytes(b"weights")
+        discovered = discover_models(tmp_path)["LTX-2-dev"]
+        assert discovered.engine_type == "video"
+        assert discovered.capabilities == ["text-to-video", "image-to-video"]
+
+    def test_incomplete_ltx_component_weights_are_not_discovered(self, tmp_path):
+        model = tmp_path / "LTX-2-dev"
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+            "text_encoder/config.json",
+        ):
+            (model / name).parent.mkdir(parents=True, exist_ok=True)
+            (model / name).write_text(json.dumps({"model_type": "ltx av model"}))
+        for component in ("transformer", "vae/decoder", "vae/encoder", "text_encoder"):
+            (model / component / "model.safetensors").write_bytes(b"weights")
+        (model / "text_projections").mkdir()
+        (model / "text_projections/model.safetensors").write_bytes(b"weights")
+
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
+
+        (model / "vae/decoder/model.safetensors").unlink()
+        assert discover_models(tmp_path) == {}
+
+        (model / "vae/decoder/model-00001-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path) == {}
+        (model / "vae/decoder/model-00000-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
+        (model / "vae/decoder/model-00000-of-00002.safetensors").unlink()
+        (model / "vae/decoder/model-00002-of-00002.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path)["LTX-2-dev"].engine_type == "video"
+        (model / "vae/decoder/model-00000-of-00000.safetensors").write_bytes(b"weights")
+        assert discover_models(tmp_path) == {}
+
+
 class TestAudioInputDiscovery:
     @pytest.mark.parametrize(
         ("family", "key", "expected"),
@@ -2307,6 +2395,54 @@ class TestHfCacheDiscovery:
         _, snapshot = self._make_hf_cache_entry(parent, org, name)
         (snapshot / "config.json").write_text(json.dumps({"model_type": model_type}))
         (snapshot / "model.safetensors").write_bytes(b"0" * 1000)
+
+    def test_video_snapshots_are_discovered_and_include_component_weights(self, tmp_path):
+        from omlx.video_registry import load_video_spec
+
+        _, ltx = self._make_hf_cache_entry(tmp_path, "example", "LTX-2-distilled")
+        for name in (
+            "transformer/config.json",
+            "vae/decoder/config.json",
+            "vae/encoder/config.json",
+            "text_encoder/config.json",
+        ):
+            path = ltx / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"model_type": "ltx av model"}))
+        for name, size in (
+            ("ltx-spatial-upscaler-x2.safetensors", 10),
+            ("transformer/model-00001-of-00001.safetensors", 999),
+            ("transformer/model-00001-of-00002.safetensors", 40),
+            ("transformer/model-00002-of-00002.safetensors", 60),
+            ("vae/decoder/model.safetensors", 200),
+            ("vae/encoder/model.safetensors", 300),
+            ("text_encoder/model.safetensors", 400),
+            ("text_projections/model.safetensors", 50),
+        ):
+            path = ltx / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x" * size)
+
+        _, wan = self._make_hf_cache_entry(tmp_path, "example", "wan")
+        (wan / "config.json").write_text(json.dumps({
+            "model_type": "t2v", "model_version": "2.2", "dual_model": True,
+            "dim": 3072, "text_dim": 4096,
+        }))
+        for name in (
+            "low_noise_model.safetensors", "high_noise_model.safetensors",
+            "t5_encoder.safetensors", "vae.safetensors",
+        ):
+            (wan / name).write_bytes(b"weights")
+
+        models = discover_models(tmp_path)
+        assert models["example--LTX-2-distilled"].engine_type == "video"
+        assert models["example--LTX-2-distilled"].estimated_size == 1113
+        assert load_video_spec(ltx).pipeline == "distilled"
+        assert models["example--wan"].engine_type == "video"
+
+        (ltx / "text_encoder/config.json").unlink()
+        (wan / "high_noise_model.safetensors").unlink()
+        assert discover_models(tmp_path) == {}
 
     def test_resolve_valid_entry(self, tmp_path):
         """Valid HF cache entry resolves to snapshot path and repo metadata."""

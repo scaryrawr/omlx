@@ -466,6 +466,10 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/systemone` | Typed decisions with decision models or chat models (TypeSafe System One) |
 | `POST /v1/images/generations` | Image generation |
 | `POST /v1/images/edits` | Image editing |
+| `POST /v1/videos` | Create a local video generation job |
+| `GET /v1/videos`, `GET /v1/videos/{video_id}` | List and poll video jobs |
+| `GET /v1/videos/{video_id}/content` | Download a completed MP4 |
+| `DELETE /v1/videos/{video_id}` | Delete a completed or failed video |
 | `GET /v1/models` | List available models |
 | `GET /v1/models/{model_id}` | Retrieve one model |
 | `POST /v1/audio/transcriptions` | Speech-to-text, including speaker labels when supported |
@@ -473,6 +477,74 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`); embedding models take `prompt` only |
 
 The admin API for settings, models, downloads, quantization, and benchmarks takes the main API key as a Bearer token and also works in headless mode. See [Admin API](docs/admin-api.md).
+
+#### Generate video locally
+
+Install the optional video runtime with `uv sync --extra video`. It pins
+[mlx-video](https://github.com/Blaizzy/mlx-video/tree/87db56a51758fefb748a359b90a5283bb8ba4837).
+Two model families share this backend. Wan2.1 and Wan2.2 serve
+text-to-video, image-to-video, and TI2V checkpoints. LTX-2 and LTX-2.3
+serve text-to-video and image-to-video.
+
+Convert the original Wan checkpoint into a separate model directory before
+serving it. Conversion needs PyTorch; inference does not:
+
+```bash
+uv run --extra video --with torch python -m mlx_video.models.wan_2.convert \
+	--checkpoint-dir ~/.models/Wan-AI/Wan2.2-TI2V-5B \
+	--output-dir ~/.models/Wan-AI/Wan2.2-TI2V-5B-MLX
+```
+
+The converted directory needs `config.json`, `t5_encoder.safetensors`,
+`vae.safetensors`, and either `model.safetensors` or both noise-model files.
+Provision the backend's tokenizer before inference with
+`uv run --extra video python -c 'from transformers import AutoTokenizer; AutoTokenizer.from_pretrained("google/umt5-xxl")'`.
+Video workers run offline and never convert or download model assets.
+FFmpeg and FFprobe must be on `PATH`.
+
+LTX-2 needs no conversion when you download a converted checkpoint such as
+[prince-canuma/LTX-2-distilled](https://huggingface.co/prince-canuma/LTX-2-distilled).
+Its Gemma text encoder must live in the checkpoint's `text_encoder/`
+directory. Some converted repositories omit it; copy `google/gemma-3-12b-it`
+there. A directory name containing `distilled` selects the two-stage distilled
+pipeline, which needs the x2 spatial upscaler, sizes in multiples of 64, and
+rejects `steps`, `guidance`, and `negative_prompt`. Other LTX directories use
+the dev pipeline with sizes in multiples of 32. LTX audio is not generated.
+
+Restart oMLX or refresh model discovery after conversion. Use the video model
+ID returned by `/v1/models`, not a hosted Sora model name:
+
+```bash
+curl http://localhost:8000/v1/videos \
+	-H "Authorization: Bearer $OMLX_API_KEY" \
+	-F model=Wan2.2-TI2V-5B-MLX \
+	-F 'prompt=A paper boat drifting across a quiet pond' \
+	-F seconds=4 -F size=1280x704
+```
+
+Poll `/v1/videos/{id}` until `status` is `completed` or `failed`. Download
+the MP4 from `/v1/videos/{id}/content`. Creation accepts JSON and multipart.
+Multipart `input_reference=@frame.png` provides an initial image for I2V
+or TI2V models. JSON accepts an `input_reference` image URL or data URI
+through the same bounded image loader as image editing. File IDs are unsupported.
+
+The routes follow the [historical OpenAI video jobs API](https://developers.openai.com/api/reference/resources/videos),
+not Azure's older `/videos/generations/jobs` preview API. `seconds` accepts
+`"4"`, `"8"`, or `"12"`. The local default size is `1280x704`.
+Requested dimensions must satisfy the checkpoint's alignment and area limits;
+Wan TI2V requires multiples of 32. Invalid sizes fail rather than silently
+resize. Published MP4 duration exactly matches `seconds`.
+`seed`, `steps`, `guidance`, and `negative_prompt` are local extensions.
+Otherwise sampling defaults come from the converted checkpoint.
+
+One video job runs at a time under model-pool admission. Each job uses an
+isolated process; video weights reload per job rather than remaining resident.
+Progress stays at 0 until completion because the backend has no progress callback.
+Jobs and assets persist under `<base-path>/videos` until deletion.
+Interrupted jobs become `failed` after shutdown or restart, without automatic
+regeneration. The queue accepts up to 32 waiting jobs.
+Remix, video edits, extensions, audio generation, thumbnails, and spritesheets
+are not supported.
 
 #### Full-duplex audio with Haru
 

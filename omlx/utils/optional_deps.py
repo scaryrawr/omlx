@@ -10,6 +10,15 @@ MLX_VLM_MISSING_MESSAGE = (
     "mlx-vlm image support is unavailable or incompatible. Reinstall oMLX to "
     "restore its required mlx-vlm dependency."
 )
+MLX_VIDEO_MISSING_MESSAGE = (
+    "Video generation requires mlx-video. Install oMLX with the video extra."
+)
+
+
+def require_mlx_video_available() -> None:
+    """Raise an installation hint when the optional video runtime is absent."""
+    if find_spec("mlx_video") is None:
+        raise ImportError(MLX_VIDEO_MISSING_MESSAGE)
 
 
 def is_mlx_vlm_available() -> bool:

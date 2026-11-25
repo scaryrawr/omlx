@@ -130,6 +130,9 @@ grammar = [
 ]
 # Kept as a no-op compatibility extra. mlx-vlm image support is part of core.
 image = []
+video = [
+    "mlx-video @ git+https://github.com/Blaizzy/mlx-video@87db56a51758fefb748a359b90a5283bb8ba4837",
+]
 mcp = [
     "mcp>=2.0.0,<3",
 ]

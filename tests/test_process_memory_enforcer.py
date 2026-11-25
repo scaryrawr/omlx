@@ -4,6 +4,8 @@
 import asyncio
 import base64
 import io
+import signal
+import sys
 from contextlib import suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +20,7 @@ from omlx.cache.paged_ssd_cache import SharedHotCacheBudget
 from omlx.decode_activity import get_decode_activity
 from omlx.engine.embedding import EmbeddingEngine
 from omlx.engine.tts import TTSEngine
+from omlx.engine.video import VideoEngine
 from omlx.process_memory_enforcer import ProcessMemoryEnforcer, tier_reserve_bytes
 from omlx.scheduler import SchedulerConfig
 
@@ -1692,6 +1695,32 @@ class TestSingleModelMemoryPressure:
         assert entry.engine is not None
         assert entry.pending_unload_reason is None
         assert entry.abort_requested is False
+
+    @pytest.mark.asyncio
+    async def test_hard_pressure_terminates_running_video(self, enforcer, tmp_path, caplog):
+        engine = VideoEngine(str(tmp_path))
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import sys; sys.stdin.buffer.read()",
+            stdin=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        engine._process = process
+        entry = _make_entry("video", engine=engine)
+        entry.in_use = 1
+        enforcer._engine_pool._entries = {"video": entry}
+        enforcer._engine_pool._find_lru_victim.return_value = None
+        try:
+            with patch.object(enforcer, "_current_usage_bytes", return_value=11 * 1024**3):
+                await enforcer._check_and_enforce()
+            assert process.returncode == -signal.SIGTERM
+            assert "Hard memory pressure: aborted 1 request(s) on 'video'" in caplog.text
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+            process.stdin.close()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

@@ -57,6 +57,7 @@ from .engine.splash import (
 from .engine.sts import STSEngine
 from .engine.stt import STTEngine
 from .engine.tts import TTSEngine
+from .engine.video import VideoEngine
 from .engine.vlm import OCR_MODEL_GENERATION_DEFAULTS, VLMBatchedEngine
 from .engine_core import get_mlx_executor, shutdown_mlx_executor
 from .exceptions import (
@@ -368,6 +369,7 @@ if TYPE_CHECKING:
         | STSEngine
         | TTSEngine
         | ImageEngine
+        | VideoEngine
     )
 else:
     EngineInstance: TypeAlias = object
@@ -1820,6 +1822,7 @@ class EnginePool:
         "audio_sts": "audio_sts",
         "decision": "decision",
         "image": "image",
+        "video": "video",
     }
 
     @staticmethod
@@ -2678,12 +2681,12 @@ class EnginePool:
         )
 
     def external_process_memory_bytes(self) -> int:
-        """Memory held by models that run in their own processes (Splash)."""
+        """Memory held by models that run in their own processes."""
         engines = [entry.engine for entry in list(self._entries.values())]
         engines += list(self._starting_external.values())
         total = 0
         for engine in engines:
-            if not isinstance(engine, SplashEngine):
+            if not isinstance(engine, (SplashEngine, VideoEngine)):
                 continue
             try:
                 total += engine.process_memory_bytes()
@@ -3226,9 +3229,10 @@ class EnginePool:
                     # the committed total. Using only live memory lets a second
                     # large model load without evicting the first, over-
                     # committing past the ceiling (#1623).
+                    external_usage = self.external_process_memory_bytes()
                     current = max(
-                        mx.get_active_memory(),
-                        _settled_phys_footprint(),
+                        mx.get_active_memory() + external_usage,
+                        _settled_phys_footprint() + external_usage,
                         self._current_model_memory,
                     )
                     projected = current + admission_size
@@ -3278,7 +3282,8 @@ class EnginePool:
                         # keep trusting phys_footprint because it may be
                         # unrelated process pressure rather than model residue.
                         committed = max(
-                            mx.get_active_memory(), self._current_model_memory
+                            mx.get_active_memory() + external_usage,
+                            self._current_model_memory,
                         )
                         committed_projected = committed + admission_size
                         if committed_projected <= ceiling:
@@ -4142,8 +4147,9 @@ class EnginePool:
 
         logger.info(f"Unloading model: {model_id} (immediate abort)")
         distributed = self._distributed_deployment_for_entry(entry) is not None
-        # Splash, like cluster ranks, holds its memory in its own process.
-        external = distributed or isinstance(entry.engine, SplashEngine)
+        video = isinstance(entry.engine, VideoEngine)
+        # External engines hold their memory in separate processes.
+        external = distributed or video or isinstance(entry.engine, SplashEngine)
         resident_size = self._entry_resident_size(entry)
         settle_size = (
             entry.runtime_settle_size
@@ -4167,14 +4173,11 @@ class EnginePool:
                     **({'local_only': True} if local_only and distributed else {})
                 )
         except Exception as e:
-            if distributed:
-                # The supervisor raises (DistributedTeardownError) when the
-                # final SIGKILL cannot be verified, so this path is now
-                # reachable: keep the supervisor reachable and the planned
-                # memory accounted so a later unload can retry process
-                # teardown instead of releasing the budget over a live rank.
+            if distributed or video:
+                # Keep memory accounted until supervised processes are stopped.
+                kind = "Distributed" if distributed else "Video"
                 logger.error(
-                    f"Distributed teardown failed for {model_id} ({e}); "
+                    f"{kind} teardown failed for {model_id} ({e}); "
                     "keeping the engine registered for retry",
                     exc_info=True,
                 )
@@ -4212,8 +4215,7 @@ class EnginePool:
         entry.runtime_settle_size = None
 
         if external:
-            # Cluster weights live in supervised rank processes and Splash's
-            # in its server process, not this process's Metal allocator.
+            # External weights live outside this process's Metal allocator.
             # Successful process teardown is the memory barrier; polling
             # mx.get_active_memory() here would wait against an unrelated
             # gauge and then run emergency reclaim.
@@ -4222,7 +4224,7 @@ class EnginePool:
                 0,
                 self._current_model_memory - resident_size,
             )
-            kind = "distributed" if distributed else "Splash"
+            kind = "distributed" if distributed else "video" if video else "Splash"
             logger.info(
                 f"Unloaded {kind} model: {model_id}, released its process "
                 f"({format_size(resident_size)} planned)"
@@ -4782,6 +4784,10 @@ class EnginePool:
                         capabilities=list(entry.capabilities),
                         tasks=list(entry.tasks),
                         model_settings=model_settings,
+                    )
+                elif effective_type == "video":
+                    engine = VideoEngine(
+                        model_name=entry.model_path, estimated_size=resident_size
                     )
                 else:
                     engine = BatchedEngine(
