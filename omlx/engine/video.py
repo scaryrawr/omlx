@@ -5,13 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import signal
 import sys
 from contextlib import suppress
 from pathlib import Path
 
-from ..utils.optional_deps import require_mlx_video_available
+from ..utils.optional_deps import require_video_runtime
 from ..utils.proc_memory import get_phys_footprint, list_process_group_pids
 from ..video_registry import VideoRenderPlan, load_video_spec
 from .base import BaseNonStreamingEngine
@@ -48,11 +47,8 @@ class VideoEngine(BaseNonStreamingEngine):
 
     async def start(self) -> None:
         """Validate converted assets and runtime prerequisites."""
-        require_mlx_video_available()
+        require_video_runtime()
         load_video_spec(Path(self._model_name))
-        for tool in ("ffmpeg", "ffprobe"):
-            if shutil.which(tool) is None:
-                raise RuntimeError(f"Video generation requires {tool} on PATH")
 
     async def stop(self) -> None:
         """Terminate owned workers and reap them before releasing admission."""

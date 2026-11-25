@@ -6,6 +6,7 @@ import json
 from contextlib import asynccontextmanager
 from io import BytesIO
 from threading import Event
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -14,6 +15,8 @@ from PIL import Image
 
 from omlx.api.video_routes import router
 from omlx.engine.video import VideoEngine
+from omlx.server import ServerState, app, list_models_status
+from omlx.utils.optional_deps import require_video_runtime
 from omlx.video_jobs import VideoJobs
 
 
@@ -84,7 +87,7 @@ async def video_client(tmp_path, monkeypatch):
     )
     for name in ("model.safetensors", "t5_encoder.safetensors", "vae.safetensors"):
         (model / name).write_bytes(b"weights")
-    monkeypatch.setattr("omlx.video_jobs.require_mlx_video_available", lambda: None)
+    monkeypatch.setattr("omlx.video_jobs.require_video_runtime", lambda: None)
     pool = FakePool(model)
     jobs = VideoJobs(
         tmp_path / "videos", pool, lambda name: "wan" if name == "alias" else name
@@ -98,6 +101,29 @@ async def video_client(tmp_path, monkeypatch):
     ) as client:
         yield client, jobs, pool
     await jobs.close()
+
+
+async def test_models_status_reports_video_runtime_readiness(video_client, monkeypatch):
+    _, jobs, _ = video_client
+    state = ServerState()
+    state.engine_pool = MagicMock()
+    state.engine_pool.get_status.return_value = {"models": []}
+    monkeypatch.setattr("omlx.server._server_state", state)
+    monkeypatch.setattr("omlx.video_jobs.require_video_runtime", require_video_runtime)
+    monkeypatch.setattr("omlx.utils.optional_deps.find_spec", lambda _: None)
+    monkeypatch.setattr(app.state, "video_jobs", None)
+    assert (await list_models_status())["video_generation_ready"] is False
+
+    app.state.video_jobs = jobs
+    assert (await list_models_status())["video_generation_ready"] is False
+
+    monkeypatch.setattr("omlx.utils.optional_deps.find_spec", lambda _: object())
+    for missing in ("ffmpeg", "ffprobe", None):
+        paths = {
+            tool: f"/bin/{tool}" for tool in ("ffmpeg", "ffprobe") if tool != missing
+        }
+        monkeypatch.setattr("omlx.utils.optional_deps.which", paths.get)
+        assert (await list_models_status())["video_generation_ready"] is (missing is None)
 
 
 async def test_create_poll_download_list_delete_and_recover(video_client):

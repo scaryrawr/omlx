@@ -1709,6 +1709,28 @@
                             </div>
                         </div>
 
+                        <template x-if="msg.role === 'tool' && msg._video">
+                            <div x-data="{ videoCard: { busy: false, error: '' } }"
+                                class="my-1 max-w-3xl rounded-xl border border-line bg-surface-muted px-3.5 py-2.5 text-xs">
+                                <div class="font-medium">{{ t('chat.video.job') }}</div>
+                                <div aria-live="polite">
+                                    <span x-text="window.t('chat.video.' + msg._video.status)"></span>
+                                    <span x-show="msg._video.status === 'in_progress'"
+                                        x-text="msg._video.progress + '%'"></span>
+                                    <div x-show="msg._video.error" x-text="msg._video.error"></div>
+                                </div>
+                                <div class="mt-1 flex gap-2">
+                                    <button type="button" x-show="['queued', 'in_progress'].includes(msg._video.status)"
+                                        :disabled="videoCard.busy" @click="runVideoCardAction(msg, 'refresh', videoCard)"
+                                        class="underline">{{ t('chat.video.refresh') }}</button>
+                                    <button type="button" x-show="msg._video.status === 'completed'"
+                                        :disabled="videoCard.busy" @click="runVideoCardAction(msg, 'download', videoCard)"
+                                        class="underline">{{ t('chat.video.download') }}</button>
+                                </div>
+                                <div role="alert" x-text="videoCard.error" style="color: var(--text-danger);"></div>
+                            </div>
+                        </template>
+
                         <!-- Assistant Message -->
                         <div x-show="msg.role === 'assistant' && !msg._toolRound && msg._ui !== false" class="assistant-message">
                             <div class="message-header">
@@ -2805,6 +2827,7 @@
 
 {% block scripts %}
 <script src="{{ static('js/chat-image-tools.js') }}"></script>
+<script src="{{ static('js/chat-video-tools.js') }}"></script>
 <script src="{{ static('js/chat-history.js') }}"></script>
 <script>
     // Configure marked.js
@@ -2967,6 +2990,7 @@
 
             // VLM Detection State
             modelTypeMap: {},            // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
+            videoDiscoveryPossible: false,
             modelEngineTypeMap: {},      // { modelId: "llm"|"vlm"|"embedding"|"reranker"|"image" }
             modelToolSupportMap: {},
             aliasToGateway: {},          // { aliasName: gatewayId } maps alias to directory name
@@ -3570,7 +3594,7 @@
                     return (this.getTextContent(msg.content).trim().length > 0
                         || this.hasVisibleThinking(msg._thinking)) && this.isToolFlowVisible(index);
                 }
-                if (msg.role === 'tool' && (msg._web || msg._images || msg._imagesStripped)) {
+                if (msg.role === 'tool' && (msg._web || msg._images || msg._imagesStripped || msg._video)) {
                     return this.isToolFlowVisible(index);
                 }
                 if (msg._ui === false) return false;
@@ -4003,7 +4027,7 @@
                     // mutating the session's saved settings.
                     ...(context._generationOverride || {}),
                     ...(() => {
-                        const tools = this.activeTools(model);
+                        const tools = this.activeTools(model, context._videoModels);
                         return tools.length > 0 ? { tools } : {};
                     })(),
                 };
@@ -4460,6 +4484,8 @@
             this.modelToolSupportMap = toolSupportMap;
             this.realtimeSttMap = rtMap;
             this._mirrorAliasModelTypes();
+            this.videoDiscoveryPossible = ChatVideoTools.canDiscover(data);
+            return data;
         } catch (e) {
             // Model status endpoint unavailable
         }
@@ -4681,10 +4707,11 @@
         return null;
     },
 
-    activeTools(model = this.currentModel) {
+    activeTools(model = this.currentModel, videoModels = []) {
         const supportsTools = this.modelToolSupportMap[this.resolveGatewayModelId(model)] !== false;
         const builtins = [
             ...(supportsTools ? ChatImageTools.definitions() : []),
+            ...(supportsTools && videoModels.length ? ChatVideoTools.definitions() : []),
             ...(this.webSearchToolsActive() ? this.builtinWebTools() : []),
         ];
         const builtinNames = new Set(builtins.map(t => t.function.name));
@@ -4704,9 +4731,37 @@
         this.$refs.messageInput?.focus();
     },
 
+    async runVideoCardAction(msg, action, card) {
+        if (card.busy) return;
+        const chatId = this.currentChatId;
+        const headers = { 'Authorization': `Bearer ${this.getApiKey()}` };
+        const job = msg._video;
+        card.busy = true;
+        card.error = '';
+        try {
+            if (action === 'download') {
+                await ChatVideoTools.download(job.id, headers);
+                return;
+            }
+            const updated = await ChatVideoTools.refresh(job.id, headers);
+            if (this.currentChatId !== chatId || this.isPendingHistoryRemoval(chatId)
+                || this.historyDeleted.has(chatId) || !this.messages.includes(msg)
+                || msg._video !== job) return;
+            msg._video = updated;
+            msg.content = JSON.stringify(updated);
+            this.saveCurrentChat(chatId);
+        } catch (error) {
+            const key = action === 'download' ? 'chat.video.download_error' : 'chat.video.refresh_error';
+            card.error = `${window.t(key)} ${error.message}`;
+        } finally {
+            card.busy = false;
+        }
+    },
+
     async executeChatTool(tc, scope) {
         const toolName = tc.function.name;
         const imageTool = ChatImageTools.owns(toolName);
+        const videoTool = scope.videoModels?.length > 0 && ChatVideoTools.owns(toolName);
         const timeoutMs = imageTool && toolName !== 'list_image_models'
             ? this.IMAGE_TOOL_TIMEOUT_MS : this.TOOL_TIMEOUT_MS;
         const deadline = new AbortController();
@@ -4724,10 +4779,13 @@
                 args = JSON.parse(tc.function.arguments || '{}');
             } catch (error) {
                 if (imageTool) throw new Error('Invalid image tool arguments JSON');
+                if (videoTool) throw new Error('Invalid video tool arguments JSON');
             }
             let result;
             if (imageTool) {
                 result = await ChatImageTools.execute(toolName, args, { ...scope, headers, signal });
+            } else if (videoTool) {
+                result = await ChatVideoTools.execute(toolName, args, { ...scope, headers, signal });
             } else {
                 webRoute = this.builtinWebRoute(toolName);
                 const response = await fetch(webRoute || '/v1/mcp/execute', {
@@ -5398,7 +5456,6 @@
             const modelsData = await modelsResponse.json();
             const allModels = modelsData.data || [];
 
-            // Filter out audio/embedding/reranker/image — chat only works with LLM/VLM
             // Favorite gateway ids from the admin list; used to sort favorites first
             const favoriteIds = new Set(
                 (this._adminModelsList || []).filter(m => m.is_favorite).map(m => m.id)
@@ -5409,10 +5466,11 @@
             this.availableModels = this.dedupeAvailableModels(
                 allModels.filter(m => {
                     const gatewayId = this.aliasToGateway[m.id] || m.id;
-                    const t = (this.modelTypeMap[gatewayId] || this.modelTypeMap[m.id] || '').toLowerCase();
+                    const t = (this.modelTypeMap[gatewayId] || this.modelTypeMap[m.id] || m.model_type || '').toLowerCase();
                     const e = (this.modelEngineTypeMap[gatewayId] || this.modelEngineTypeMap[m.id] || '').toLowerCase();
                     return t !== 'audio_tts' && t !== 'audio_sts' && t !== 'embedding'
-                        && t !== 'reranker' && t !== 'decision' && t !== 'image' && e !== 'image';
+                        && t !== 'reranker' && t !== 'decision' && t !== 'image' && e !== 'image'
+                        && t !== 'video' && e !== 'video' && m.model_type !== 'video';
                 }).map(m => ({
                     id: this.aliasToGateway[m.id] || m.id, // gateway id for API calls
                     name: m.id, // original name (alias or directory name) for display
@@ -7034,11 +7092,28 @@
         stream._promptProgress = null;
         this.startPrefillPolling(context.chatId);
 
+        let requestVideoModels = this.modelToolSupportMap[requestBody.model] === false
+            ? [] : context._videoModels;
         try {
-            if (depth === 0 && this.modelToolSupportMap[requestBody.model] === false) {
-                await this.fetchModelTypes(stream.abortController.signal);
-                stream.abortController.signal.throwIfAborted();
-                const tools = this.activeTools(requestBody.model);
+            if (depth === 0 && (this.videoDiscoveryPossible || this.modelToolSupportMap[requestBody.model] === false)) {
+                const signal = stream.abortController.signal;
+                const status = await this.fetchModelTypes(signal);
+                signal.throwIfAborted();
+                context._videoModels = [];
+                if (this.modelToolSupportMap[requestBody.model] !== false) {
+                    try {
+                        context._videoModels = await ChatVideoTools.discover(
+                            status, { 'Authorization': `Bearer ${this.getApiKey()}` }, signal
+                        );
+                    } catch (error) {
+                        signal.throwIfAborted();
+                        console.warn('Video model discovery failed:', error);
+                    }
+                }
+                signal.throwIfAborted();
+                const tools = this.activeTools(requestBody.model, context._videoModels);
+                requestVideoModels = this.modelToolSupportMap[requestBody.model] === false
+                    ? [] : context._videoModels;
                 if (tools.length) requestBody.tools = tools;
                 else delete requestBody.tools;
             }
@@ -7302,6 +7377,7 @@
                     messages: selectedHistory,
                     resultMessageId: resultMessageIds[i],
                     signal: toolSignal,
+                    videoModels: requestVideoModels,
                 })));
                 if (this.historyDeleted.has(context.chatId)
                     || (!chatSession.temporary && this.historyStore?.deleted.has(context.chatId))) return;
@@ -7331,6 +7407,7 @@
                         _ui: false,
                         ...(result.web ? { _web: result.web } : {}),
                         ...(result.images?.length ? { _images: result.images } : {}),
+                        ...(result.video ? { _video: result.video } : {}),
                     });
                 });
 
