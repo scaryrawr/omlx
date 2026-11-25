@@ -7025,6 +7025,7 @@
             _modelOverride: streamContext?._modelOverride ?? null,
             _generationOverride: streamContext?._generationOverride ?? null,
             _requestStartedAt: streamContext?._requestStartedAt ?? null,
+            _videoModels: depth > 0 ? streamContext._videoModels : [],
         };
         const chatSession = this.getChatSession(context.chatId, true);
         const stream = this.getStreamSession(context.chatId, true);
@@ -7092,14 +7093,11 @@
         stream._promptProgress = null;
         this.startPrefillPolling(context.chatId);
 
-        let requestVideoModels = this.modelToolSupportMap[requestBody.model] === false
-            ? [] : context._videoModels;
         try {
             if (depth === 0 && (this.videoDiscoveryPossible || this.modelToolSupportMap[requestBody.model] === false)) {
                 const signal = stream.abortController.signal;
                 const status = await this.fetchModelTypes(signal);
                 signal.throwIfAborted();
-                context._videoModels = [];
                 if (this.modelToolSupportMap[requestBody.model] !== false) {
                     try {
                         context._videoModels = await ChatVideoTools.discover(
@@ -7112,11 +7110,12 @@
                 }
                 signal.throwIfAborted();
                 const tools = this.activeTools(requestBody.model, context._videoModels);
-                requestVideoModels = this.modelToolSupportMap[requestBody.model] === false
-                    ? [] : context._videoModels;
                 if (tools.length) requestBody.tools = tools;
                 else delete requestBody.tools;
             }
+
+            const requestVideoModels = this.modelToolSupportMap[requestBody.model] === false
+                ? [] : context._videoModels;
             const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: {

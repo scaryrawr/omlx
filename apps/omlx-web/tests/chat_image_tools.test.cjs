@@ -1232,7 +1232,7 @@ test('streamResponse performs discovery, generation, edit and final synthesis in
 
 const videoId = `video_${'a'.repeat(32)}`;
 
-test('chat discovers the public video alias, submits once, and refreshes its saved card', async () => {
+test('chat lists the public video alias, submits once, and refreshes its saved card', async () => {
     const app = appFixture();
     app.videoDiscoveryPossible = true;
     app.mcpTools = [call('generate_video', {})];
@@ -1248,11 +1248,23 @@ test('chat discovers the public video alias, submits once, and refreshes its sav
         if (url === '/v1/models') return json({ data: [{ id: 'motion' }] });
         if (url === '/v1/chat/completions') {
             const body = JSON.parse(init.body);
-            assert.equal(body.tools.filter(tool => tool.function.name === 'generate_video').length, 1);
-            if (!requests.includes('/v1/videos')) return sse([call('generate_video', { model: 'motion', prompt: 'Clouds' })]);
-            assert.deepEqual(JSON.parse(body.messages.at(-1).content), { id: videoId, status: 'queued', progress: 0 });
+            const videoTools = body.tools.map(tool => tool.function.name).filter(name => videos.owns(name));
+            const lastMessage = body.messages.at(-1);
+
+            assert.deepEqual(videoTools, ['list_video_models', 'generate_video']);
+
+            if (lastMessage.role !== 'tool') return sse([call('list_video_models', {})]);
+            if (!requests.includes('/v1/videos')) {
+                assert.deepEqual(JSON.parse(lastMessage.content), {
+                    models: [{ id: 'motion', tasks: ['text-to-video'] }],
+                });
+                return sse([call('generate_video', { model: 'motion', prompt: 'Clouds' })]);
+            }
+
+            assert.deepEqual(JSON.parse(lastMessage.content), { id: videoId, status: 'queued', progress: 0 });
             return sse(null);
         }
+
         if (url === '/v1/videos') {
             assert.equal(init.method, 'POST');
             assert.deepEqual(JSON.parse(init.body), { model: 'motion', prompt: 'Clouds' });
@@ -1263,7 +1275,10 @@ test('chat discovers the public video alias, submits once, and refreshes its sav
     };
 
     await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
-    assert.deepEqual(requests, ['/v1/models/status', '/v1/models', '/v1/chat/completions', '/v1/videos', '/v1/chat/completions']);
+    assert.deepEqual(requests, [
+        '/v1/models/status', '/v1/models', '/v1/chat/completions',
+        '/v1/chat/completions', '/v1/videos', '/v1/chat/completions',
+    ]);
     assert.deepEqual(app.savedChats.get('owner').messages.find(msg => msg._video)._video,
         { id: videoId, status: 'queued', progress: 0 });
 
