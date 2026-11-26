@@ -3,7 +3,7 @@
 #include "mlx/backend/metal/kernels/fp_quantized.h"
 
 #define define_qwen35_fp_qmm_t(mode, bits)                                     \
-  template <typename T, const int BM, const int BK, const int BN>              \
+  template <typename T, const int BM, const int RequestedBK, const int BN>     \
   [[kernel]] void qwen35_##mode##_qmm_t(                                      \
       const device uint32_t* w [[buffer(0)]],                                  \
       const device uint8_t* scales [[buffer(1)]],                              \
@@ -16,12 +16,17 @@
       uint lid [[thread_index_in_threadgroup]],                                \
       uint simd_gid [[simdgroup_index_in_threadgroup]],                        \
       uint simd_lid [[thread_index_in_simdgroup]]) {                           \
+    /* MLX's FP4 half loader cannot read a 64-by-64 weight tile. */             \
+    constexpr int BK =                                                        \
+        bits == 4 && metal::is_same_v<T, half> && RequestedBK == 64 && BN == 64 \
+        ? 32                                                                  \
+        : RequestedBK;                                                         \
     constexpr int BK_padded = (BK + 16 / sizeof(T));                           \
                                                                                 \
     threadgroup T Xs[BM * BK_padded];                                          \
     threadgroup T Ws[BN * BK_padded];                                          \
                                                                                 \
-    fp_qmm_t_impl<T, 32, bits, true, T, false, BM, BK, BN>(                    \
+    fp_qmm_t_impl<T, 32, bits, false, true, T, BM, BK, BN>(                    \
         w,                                                                     \
         scales,                                                                \
         nullptr,                                                               \

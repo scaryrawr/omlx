@@ -143,15 +143,23 @@ def test_qwen35_q_affine_qmm_matches_mlx_quantized_matmul(bits):
     assert rel <= 0.05
 
 
-@pytest.mark.parametrize("mode", ["mxfp4", "mxfp8"])
-@pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
-def test_qwen35_fp_qmm_matches_mlx_quantized_matmul(mode, dtype):
+@pytest.mark.parametrize(
+    "mode,dtype,variant",
+    [
+        ("mxfp4", mx.float16, 3),
+        ("mxfp4", mx.float16, 8),
+        ("mxfp4", mx.bfloat16, 8),
+        ("mxfp8", mx.float16, 8),
+        ("mxfp8", mx.bfloat16, 8),
+    ],
+)
+def test_qwen35_fp_qmm_matches_mlx_quantized_matmul(mode, dtype, variant):
     fast = _require_fp_kernel(mode)
     bits = 4 if mode == "mxfp4" else 8
     x = mx.random.normal((1, 32, 256)).astype(dtype)
     linear = _float_quantized_bf16(nn.Linear(256, 128, bias=False), mode)
     ref = linear(x)
-    got = getattr(fast, f"{mode}_qmm_t")(x, linear.weight, linear.scales, 8)
+    got = getattr(fast, f"{mode}_qmm_t")(x, linear.weight, linear.scales, variant)
     mx.eval(ref, got)
 
     diff = mx.abs(got.astype(mx.float32) - ref.astype(mx.float32))

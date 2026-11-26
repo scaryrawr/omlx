@@ -758,7 +758,7 @@ validation require a separate memory-safe execution slot.
 Support uses the official implementation merged in
 [Blaizzy/mlx-vlm#2528](https://github.com/Blaizzy/mlx-vlm/pull/2528),
 not a vendored architecture. The dependency pin above includes that merge and
-requires MLX 0.32.4, which oMLX already pins.
+requires MLX 0.32.4 or later.
 
 | Family | Serving inputs | Native Lightning MTP |
 |--------|----------------|----------------------|
