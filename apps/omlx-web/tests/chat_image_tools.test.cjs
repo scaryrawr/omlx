@@ -24,6 +24,11 @@ global.DOMPurify = { sanitize: html => html };
 const images = vm.runInThisContext(
     fs.readFileSync(path.join(web, 'static/js/chat-image-tools.js'), 'utf8') + '\nChatImageTools;'
 );
+
+const videos = vm.runInThisContext(
+    fs.readFileSync(path.join(web, 'static/js/chat-video-tools.js'), 'utf8') + '\nChatVideoTools;'
+);
+
 vm.runInThisContext(fs.readFileSync(path.join(web, 'static/js/chat-history.js'), 'utf8'));
 const script = template.split('{% block scripts %}')[1].match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace('{{ api_key | tojson }}', '""');
@@ -1225,6 +1230,149 @@ test('streamResponse performs discovery, generation, edit and final synthesis in
     assert.equal(app.getStreamSession('owner').isStreaming, false);
 });
 
+const videoId = `video_${'a'.repeat(32)}`;
+
+test('chat lists the public video alias, submits once, and refreshes its saved card', async () => {
+    const app = appFixture();
+    app.videoDiscoveryPossible = true;
+    app.mcpTools = [call('generate_video', {})];
+    const requests = [];
+    global.fetch = async (url, init) => {
+        requests.push(url);
+        assert.equal(init.headers.Authorization, 'Bearer test-key');
+        if (url === '/v1/models/status') return json({ video_generation_ready: true, models: [
+            { id: 'text', model_type: 'llm' },
+            { id: 'canonical', model_alias: 'motion', engine_type: 'video', tasks: ['text-to-video'] },
+            { id: 'hidden', engine_type: 'video', tasks: ['text-to-video'] },
+        ] });
+        if (url === '/v1/models') return json({ data: [{ id: 'motion' }] });
+        if (url === '/v1/chat/completions') {
+            const body = JSON.parse(init.body);
+            const videoTools = body.tools.map(tool => tool.function.name).filter(name => videos.owns(name));
+            const lastMessage = body.messages.at(-1);
+
+            assert.deepEqual(videoTools, ['list_video_models', 'generate_video']);
+
+            if (lastMessage.role !== 'tool') return sse([call('list_video_models', {})]);
+            if (!requests.includes('/v1/videos')) {
+                assert.deepEqual(JSON.parse(lastMessage.content), {
+                    models: [{ id: 'motion', tasks: ['text-to-video'] }],
+                });
+                return sse([call('generate_video', { model: 'motion', prompt: 'Clouds' })]);
+            }
+
+            assert.deepEqual(JSON.parse(lastMessage.content), { id: videoId, status: 'queued', progress: 0 });
+            return sse(null);
+        }
+
+        if (url === '/v1/videos') {
+            assert.equal(init.method, 'POST');
+            assert.deepEqual(JSON.parse(init.body), { model: 'motion', prompt: 'Clouds' });
+            return json({ object: 'video', id: videoId, status: 'queued', progress: 0, ignored: 'not persisted' });
+        }
+        assert.equal(url, `/v1/videos/${videoId}`);
+        return json({ object: 'video', id: videoId, status: 'completed', progress: 100 });
+    };
+
+    await app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    assert.deepEqual(requests, [
+        '/v1/models/status', '/v1/models', '/v1/chat/completions',
+        '/v1/chat/completions', '/v1/videos', '/v1/chat/completions',
+    ]);
+    assert.deepEqual(app.savedChats.get('owner').messages.find(msg => msg._video)._video,
+        { id: videoId, status: 'queued', progress: 0 });
+
+    app.currentChatId = 'owner';
+    app.messages = app.chatSessions.owner.messages;
+    const index = app.messages.findIndex(msg => msg._video);
+    assert.equal(app.isMessageVisible(app.messages[index], index), true);
+    const card = { busy: false, error: '' };
+    await app.runVideoCardAction(app.messages[index], 'refresh', card);
+    assert.deepEqual(card, { busy: false, error: '' });
+    assert.deepEqual(app.savedChats.get('owner').messages[index]._video,
+        { id: videoId, status: 'completed', progress: 100 });
+});
+
+test('video submission accepts only supported tasks and selected inline sources', async () => {
+    const scope = { ...controllerScope(), videoModels: [{ id: 'motion', tasks: ['image-to-video'] }] };
+    const args = { model: 'motion', prompt: 'Make it move' };
+    let posts = 0;
+    global.fetch = async (url, init) => {
+        posts++;
+        assert.equal(url, '/v1/videos');
+        assert.equal(init.method, 'POST');
+        assert.equal(await init.body.get('input_reference').text(), 'source');
+        assert.equal(init.body.has('image_ref'), false);
+        return json({ object: 'video', id: videoId, status: 'queued', progress: 0 });
+    };
+
+    await assert.rejects(videos.execute('generate_video', args, scope), /supporting text-to-video/);
+    await assert.rejects(videos.execute('generate_video', { ...args, image_ref: 'https://example.com/image.png' }, scope), /Invalid video option/);
+    const source = images.reference('owner', upload.id, 'upload', 1);
+    await assert.rejects(videos.execute('generate_video', { ...args, image_ref: source }, { ...scope, messages: [] }),
+        /not in this chat's selected history/);
+    const result = await videos.execute('generate_video', { ...args, image_ref: source }, scope);
+    assert.deepEqual(result.video, { id: videoId, status: 'queued', progress: 0 });
+    assert.equal(posts, 1);
+});
+
+test('video tools leave colliding names to MCP without readiness or tool support', async () => {
+    const app = appFixture();
+    app.mcpTools = [call('generate_video', {})];
+    app.modelToolSupportMap = { plain: false };
+    const models = [{ id: 'motion', tasks: ['text-to-video'] }];
+    assert.deepEqual(app.activeTools('plain', models), app.mcpTools);
+    assert.ok(app.activeTools('text').includes(app.mcpTools[0]));
+    assert.ok(!app.activeTools('text', models).includes(app.mcpTools[0]));
+
+    global.fetch = async (url, init) => {
+        assert.equal(url, '/v1/mcp/execute');
+        assert.equal(JSON.parse(init.body).tool_name, 'generate_video');
+        return json({ content: 'MCP result' });
+    };
+    const result = await app.executeChatTool(call('generate_video', {}), controllerScope());
+    assert.equal(result.content, 'MCP result');
+    assert.equal(result.error, false);
+});
+
+test('video models stay out of the chat picker when status cannot be fetched', async () => {
+    const app = appFixture();
+    global.fetch = async url => url === '/v1/models'
+        ? json({ data: [{ id: 'motion', model_type: 'video' }, { id: 'text', model_type: 'llm' }] })
+        : new Response(null, { status: 503 });
+    await app.loadModels();
+    assert.deepEqual(app.availableModels.map(model => model.id), ['text']);
+});
+
+test('completed video cards fetch MP4s with bearer auth and show download errors', async t => {
+    const app = appFixture();
+    const card = { busy: false, error: '' };
+    const msg = { _video: { id: videoId, status: 'completed', progress: 100 } };
+    const download = {};
+    t.mock.method(URL, 'createObjectURL', blob => {
+        assert.equal(blob.type, 'video/mp4');
+        return 'blob:result';
+    });
+    document.createElement = name => {
+        assert.equal(name, 'a');
+        return { click() { Object.assign(download, { filename: this.download, href: this.href }); } };
+    };
+    t.after(() => { delete document.createElement; });
+    global.fetch = async (url, init) => {
+        assert.equal(url, `/v1/videos/${videoId}/content`);
+        assert.equal(init.headers.Authorization, 'Bearer test-key');
+        return new Response('video', { headers: { 'Content-Type': 'video/mp4' } });
+    };
+
+    await app.runVideoCardAction(msg, 'download', card);
+    assert.deepEqual(download, { filename: `${videoId}.mp4`, href: 'blob:result' });
+    assert.deepEqual(card, { busy: false, error: '' });
+    global.fetch = async () => new Response(null, { status: 401 });
+    await app.runVideoCardAction(msg, 'download', card);
+    assert.equal(card.error, 'chat.video.download_error HTTP 401');
+    assert.equal(card.busy, false);
+});
+
 test('parallel result IDs remain distinct and unfinished sibling outputs are unavailable', async () => {
     const app = appFixture();
     let round = 0;
@@ -1250,6 +1398,45 @@ test('parallel result IDs remain distinct and unfinished sibling outputs are una
         JSON.parse(msg.content).outputs[0].image_ref, images.reference('owner', msg.id, 'tool', 0)
     ));
     assert.match(results[2].content, /not in this chat's selected history/);
+});
+
+test('Stop keeps an acknowledged video job when a sibling tool is still running', async () => {
+    const app = appFixture();
+    app.videoDiscoveryPossible = true;
+    const job = { id: videoId, status: 'queued', progress: 0 };
+    const { promise: submitted, resolve: acknowledge } = Promise.withResolvers();
+    const execute = app.executeChatTool.bind(app);
+    app.executeChatTool = async (tc, scope) => {
+        const result = await execute(tc, scope);
+        if (tc.function.name === 'generate_video') acknowledge(result);
+        return result;
+    };
+    let rounds = 0;
+    global.fetch = async (url, init) => {
+        if (url === '/v1/models/status') return json({ video_generation_ready: true, models: [
+            { id: 'motion', engine_type: 'video', tasks: ['text-to-video'] },
+        ] });
+        if (url === '/v1/models') return json({ data: [{ id: 'motion' }] });
+        if (url === '/v1/videos') return json({ object: 'video', ...job });
+        if (url === '/v1/chat/completions') {
+            rounds++;
+            return sse([call('generate_video', { model: 'motion', prompt: 'Clouds' }), call('slow_tool', {})]);
+        }
+        assert.equal(url, '/v1/mcp/execute');
+        return new Promise((_, reject) => {
+            init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+        });
+    };
+
+    const pending = app.streamResponse({ chatId: 'owner', model: 'text', systemPrompt: '' });
+    assert.deepEqual((await submitted).video, job);
+    app.stopChatStreaming('owner');
+    await pending;
+
+    const tools = app.savedChats.get('owner').messages.filter(msg => msg.role === 'tool');
+    assert.equal(rounds, 1);
+    assert.deepEqual(tools.map(msg => msg.content), [JSON.stringify(job), 'Error: Tool execution stopped by user.']);
+    assert.deepEqual(tools[0]._video, job);
 });
 
 test('Stop remains active through delayed response bodies and blocks registration and recursion', async () => {

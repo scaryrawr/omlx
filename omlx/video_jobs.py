@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from .api.video_models import Video, VideoError, VideoGenerationRequest, VideoList
 from .engine.video import VideoEngine
-from .utils.optional_deps import require_mlx_video_available
+from .utils.optional_deps import require_video_runtime
 from .video_registry import VideoRenderPlan, plan_video
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,17 @@ class VideoJobs:
         self._accepting = False
         self._owner: BufferedRandom | None = None
 
+    @property
+    def ready(self) -> bool:
+        """Return whether the dispatcher can accept video generation work."""
+        if not self._accepting:
+            return False
+        try:
+            require_video_runtime()
+        except (ImportError, RuntimeError):
+            return False
+        return True
+
     async def start(self) -> None:
         """Recover interrupted records before accepting new work."""
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -144,7 +155,10 @@ class VideoJobs:
         if entry.engine_type != "video":
             raise HTTPException(400, "The selected model is not a video model")
         try:
-            require_mlx_video_available()
+            require_video_runtime()
+        except (ImportError, RuntimeError) as exc:
+            raise HTTPException(503, str(exc)) from exc
+        try:
             plan = plan_video(
                 Path(entry.model_path),
                 prompt=request.prompt,
@@ -156,8 +170,6 @@ class VideoJobs:
                 guidance=request.guidance,
                 negative_prompt=request.negative_prompt,
             )
-        except ImportError as exc:
-            raise HTTPException(503, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         if self._pending.qsize() >= 32:

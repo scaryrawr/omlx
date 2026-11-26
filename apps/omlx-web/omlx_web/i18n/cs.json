@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_50": "50 % v paměti",
   "modal.model_settings.dflash_single_stream": "Pouze jeden proud: požadavky se zpracovávají postupně.",
   "chat.image_download": "Stáhnout",
-  "chat.image_reuse": "Použít pro úpravy"
+  "chat.image_reuse": "Použít pro úpravy",
+  "chat.video.job": "Generování videa",
+  "chat.video.queued": "Ve frontě",
+  "chat.video.in_progress": "Probíhá generování",
+  "chat.video.completed": "Připraveno",
+  "chat.video.failed": "Nezdařilo se",
+  "chat.video.refresh": "Zkontrolovat stav",
+  "chat.video.download": "Stáhnout MP4",
+  "chat.video.refresh_error": "Stav videa se nepodařilo zjistit.",
+  "chat.video.download_error": "Video se nepodařilo stáhnout."
 }

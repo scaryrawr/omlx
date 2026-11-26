@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_75": "75% resident",
   "modal.model_settings.model_type_image": "Image",
   "chat.image_download": "Download",
-  "chat.image_reuse": "Reuse for editing"
+  "chat.image_reuse": "Reuse for editing",
+  "chat.video.job": "Video generation",
+  "chat.video.queued": "Queued",
+  "chat.video.in_progress": "Generating",
+  "chat.video.completed": "Ready",
+  "chat.video.failed": "Failed",
+  "chat.video.refresh": "Check status",
+  "chat.video.download": "Download MP4",
+  "chat.video.refresh_error": "Could not check video status.",
+  "chat.video.download_error": "Could not download the video."
 }

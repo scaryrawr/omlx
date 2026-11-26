@@ -263,5 +263,5 @@ const ChatImageTools = (() => {
         return entry.execute(args, scope);
     }
 
-    return { owns, definitions, reference, renderReference, sources, project, rebaseReferences, execute, discover };
+    return { owns, definitions, reference, renderReference, sources, sourceBlob, project, rebaseReferences, execute, discover };
 })();

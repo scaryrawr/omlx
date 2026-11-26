@@ -486,6 +486,13 @@ Two model families share this backend. Wan2.1 and Wan2.2 serve
 text-to-video, image-to-video, and TI2V checkpoints. LTX-2 and LTX-2.3
 serve text-to-video and image-to-video.
 
+In the web chat, select a chat model that supports tool calls and ask it
+to generate a video. Video tools appear when oMLX has a visible video
+model, `mlx-video`, `ffmpeg`, and `ffprobe`. For image-to-video, attach a
+source image or reuse an image from the conversation. The chat returns a
+queued job without waiting for generation. Use **Check status** on the
+job card, then **Download MP4** when the video is ready.
+
 Convert the original Wan checkpoint into a separate model directory before
 serving it. Conversion needs PyTorch; inference does not:
 

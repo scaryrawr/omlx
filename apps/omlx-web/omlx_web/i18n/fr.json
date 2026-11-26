@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_75": "75% resident",
   "modal.model_settings.model_type_image": "Image",
   "chat.image_download": "Télécharger",
-  "chat.image_reuse": "Réutiliser pour modifier"
+  "chat.image_reuse": "Réutiliser pour modifier",
+  "chat.video.job": "Génération vidéo",
+  "chat.video.queued": "En attente",
+  "chat.video.in_progress": "En cours",
+  "chat.video.completed": "Prête",
+  "chat.video.failed": "Échec",
+  "chat.video.refresh": "Vérifier l’état",
+  "chat.video.download": "Télécharger le MP4",
+  "chat.video.refresh_error": "Impossible de vérifier l’état de la vidéo.",
+  "chat.video.download_error": "Impossible de télécharger la vidéo."
 }

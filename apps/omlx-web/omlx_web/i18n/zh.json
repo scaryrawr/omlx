@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_50": "常驻 50%",
   "modal.model_settings.dflash_single_stream": "仅单流：请求逐个执行。",
   "chat.image_download": "下载",
-  "chat.image_reuse": "重新用于编辑"
+  "chat.image_reuse": "重新用于编辑",
+  "chat.video.job": "视频生成",
+  "chat.video.queued": "排队中",
+  "chat.video.in_progress": "生成中",
+  "chat.video.completed": "已完成",
+  "chat.video.failed": "失败",
+  "chat.video.refresh": "查看状态",
+  "chat.video.download": "下载 MP4",
+  "chat.video.refresh_error": "无法查看视频状态。",
+  "chat.video.download_error": "无法下载视频。"
 }

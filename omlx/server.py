@@ -4262,6 +4262,8 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
     status = _with_exposed_profile_status(
         _with_markitdown_status(_server_state.engine_pool.get_status())
     )
+    video_jobs = app.state.video_jobs
+    status["video_generation_ready"] = video_jobs is not None and video_jobs.ready
     active_aliases = _active_model_aliases()
     for m in status["models"]:
         model_id = m["id"]

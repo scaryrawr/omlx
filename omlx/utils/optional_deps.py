@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from importlib.util import find_spec
+from shutil import which
 
 MLX_VLM_PACKAGE = "mlx_vlm"
 MLX_VLM_MISSING_MESSAGE = (
@@ -15,10 +16,13 @@ MLX_VIDEO_MISSING_MESSAGE = (
 )
 
 
-def require_mlx_video_available() -> None:
-    """Raise an installation hint when the optional video runtime is absent."""
+def require_video_runtime() -> None:
+    """Raise an installation hint when video generation prerequisites are absent."""
     if find_spec("mlx_video") is None:
         raise ImportError(MLX_VIDEO_MISSING_MESSAGE)
+    for tool in ("ffmpeg", "ffprobe"):
+        if which(tool) is None:
+            raise RuntimeError(f"Video generation requires {tool} on PATH")
 
 
 def is_mlx_vlm_available() -> bool:

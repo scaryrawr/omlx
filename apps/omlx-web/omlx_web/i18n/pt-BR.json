@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_50": "50% resident",
   "modal.model_settings.dflash_single_stream": "Single-stream only: requests run one at a time.",
   "chat.image_download": "Baixar",
-  "chat.image_reuse": "Reutilizar para editar"
+  "chat.image_reuse": "Reutilizar para editar",
+  "chat.video.job": "Geração de vídeo",
+  "chat.video.queued": "Na fila",
+  "chat.video.in_progress": "Gerando",
+  "chat.video.completed": "Pronto",
+  "chat.video.failed": "Falhou",
+  "chat.video.refresh": "Verificar status",
+  "chat.video.download": "Baixar MP4",
+  "chat.video.refresh_error": "Não foi possível verificar o status do vídeo.",
+  "chat.video.download_error": "Não foi possível baixar o vídeo."
 }

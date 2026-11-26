@@ -2497,5 +2497,14 @@
   "modal.model_settings.moe_expert_offload_resident_50": "50% resident",
   "modal.model_settings.dflash_single_stream": "Single-stream only: requests run one at a time.",
   "chat.image_download": "다운로드",
-  "chat.image_reuse": "편집에 재사용"
+  "chat.image_reuse": "편집에 재사용",
+  "chat.video.job": "동영상 생성",
+  "chat.video.queued": "대기 중",
+  "chat.video.in_progress": "생성 중",
+  "chat.video.completed": "완료",
+  "chat.video.failed": "실패",
+  "chat.video.refresh": "상태 확인",
+  "chat.video.download": "MP4 다운로드",
+  "chat.video.refresh_error": "동영상 상태를 확인할 수 없습니다.",
+  "chat.video.download_error": "동영상을 다운로드할 수 없습니다."
 }
