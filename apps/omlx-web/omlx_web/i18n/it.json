@@ -518,7 +518,6 @@
   "models.detail.view_on_hf": "Visualizza su Hugging Face",
   "models.detail.view_on_ms": "Visualizza su ModelScope",
   "models.detail.close": "Chiudi",
-  "models.detail.lora_info": "Adattatore LoRA: sceglilo nelle impostazioni avanzate di un modello",
   "models.detail.cancel": "Annulla",
   "models.detail.download_all": "Scarica tutto",
   "models.detail.download_selected": "Scarica selezionati",
