@@ -8,6 +8,7 @@ import mlx.core as mx
 import pytest
 
 from omlx.model_settings import validate_minicpm_speculation
+from omlx.scheduler import Scheduler, SchedulerConfig
 from omlx.speculative.dspark_drafter import DSparkDrafter
 from omlx.utils.sampling import make_sampler
 
@@ -216,8 +217,6 @@ def test_release_before_uid_binding_and_nested_scope_cleanup():
 
 
 def test_scheduler_prefill_positions_and_generator_reset_preserve_unbound_context():
-    from omlx.scheduler import Scheduler
-
     drafter = DSparkDrafter(
         _NativeProposalFixture(), block_size=3, source_path="fixture"
     )
@@ -308,12 +307,12 @@ def test_native_helper_attachment_uses_fixed_depth_and_detach_releases_state():
 
 def test_dspark_prefill_bypasses_kv_prefix_without_hidden_history():
     from omlx.request import Request, SamplingParams
-    from omlx.scheduler import Scheduler
 
     drafter = DSparkDrafter(
         _NativeProposalFixture(), block_size=3, source_path="fixture"
     )
     scheduler = Scheduler.__new__(Scheduler)
+    scheduler.config = SchedulerConfig()
     scheduler.model = SimpleNamespace(_omlx_drafter=drafter)
     scheduler.block_aware_cache = MagicMock()
     scheduler._prefix_cache_prepared = set()
