@@ -12,6 +12,8 @@ copies, the OOM guard for the burst-finish RAM growth reported in #1383.
 import threading
 import time
 
+import pytest
+
 from omlx.scheduler import Scheduler, _StoreCacheGate
 
 
