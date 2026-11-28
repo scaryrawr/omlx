@@ -129,9 +129,9 @@ def _assert_parity(omlx_scores: list[float], reference_results: list[dict]):
     reference_ranking = sorted(
         reference_by_index, key=lambda i: reference_by_index[i], reverse=True
     )
-    assert (
-        omlx_ranking == reference_ranking
-    ), f"Ranking mismatch: oMLX={omlx_ranking}, reference={reference_ranking}"
+    assert omlx_ranking == reference_ranking, (
+        f"Ranking mismatch: oMLX={omlx_ranking}, reference={reference_ranking}"
+    )
 
     for idx in range(len(omlx_scores)):
         assert omlx_scores[idx] == pytest.approx(reference_by_index[idx], abs=1e-3), (

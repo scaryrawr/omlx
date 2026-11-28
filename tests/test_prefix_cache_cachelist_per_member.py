@@ -427,11 +427,11 @@ def test_decode_snapshot_fallback_filters_kv(tmp_path):
     stub._extract_cache_states = lambda caches: Scheduler._extract_cache_states(
         stub, caches
     )
-    stub._extract_snapshot_cache_states = (
-        lambda caches: Scheduler._extract_snapshot_cache_states(stub, caches)
+    stub._extract_snapshot_cache_states = lambda caches: (
+        Scheduler._extract_snapshot_cache_states(stub, caches)
     )
-    stub._extract_prefill_snapshot_states = (
-        lambda caches: Scheduler._extract_prefill_snapshot_states(stub, caches)
+    stub._extract_prefill_snapshot_states = lambda caches: (
+        Scheduler._extract_prefill_snapshot_states(stub, caches)
     )
     stub._prefill_snapshot_value = lambda caches: Scheduler._prefill_snapshot_value(
         stub, caches
@@ -477,9 +477,9 @@ def test_store_refuses_blanked_member_source(tmp_path):
         block = cache.paged_cache.allocated_blocks[bid]
         payload, _ = ssd.load_block_with_metadata(block.block_hash)
         layer = payload[0]
-        assert (
-            isinstance(layer, tuple) and layer[0] == "__cache_list_pm__"
-        ), "refused store must not leave short-payload legacy blocks behind"
+        assert isinstance(layer, tuple) and layer[0] == "__cache_list_pm__", (
+            "refused store must not leave short-payload legacy blocks behind"
+        )
     _assert_restored(
         cache.reconstruct_cache(table2), expected_seq_len=num_blocks * BLOCK_SIZE
     )

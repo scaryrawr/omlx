@@ -61,7 +61,7 @@ def apply_mlx_vlm_qwen4_exp_compat_patch() -> bool:
         _patch_prompt_utils()
         _patch_prompt_loop()
         _patch_model_file_bypass()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Qwen4-Exp mlx-vlm registration failed: %s", exc)
         return False
 
@@ -116,7 +116,6 @@ def _patch_prompt_utils() -> None:
     prompt_utils.get_message_json = get_message_json
 
 
-
 def _ple_prefetch_hook(model):
     language_model = getattr(model, "_language_model", None)
     if language_model is None:
@@ -144,7 +143,7 @@ def _prompt_with_ple_lookahead(self, tokens):
         sti += ti
     lengths = [len(p) for p in tokens]
     max_length = max(lengths)
-    padding = [max_length - l for l in lengths]
+    padding = [max_length - prompt_length for prompt_length in lengths]
     max_padding = max(padding)
     if max_padding > 0:
         tokens = _right_pad_prompts(tokens, max_length=max_length)

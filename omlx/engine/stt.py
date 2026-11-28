@@ -432,7 +432,7 @@ class _WhisperRealtimeBackend:
         stable = full[:stable_end]
         prev = self._window_text
         if stable.startswith(prev):
-            delta = stable[len(prev):]
+            delta = stable[len(prev) :]
             self._window_text = stable
         else:
             delta = self._align_revision(prev, stable)
@@ -467,7 +467,7 @@ class _WhisperRealtimeBackend:
         for k in range(max_k, 7, -1):
             pos = new.rfind(prev[-k:])
             if pos != -1:
-                return new[pos + k:]
+                return new[pos + k :]
         return ""
 
     def _rotate_window(self) -> None:
@@ -485,7 +485,8 @@ class _WhisperRealtimeBackend:
 
     def poll_sync(self) -> list[str]:
         min_seconds = (
-            self.CHUNK_SECONDS if self._decoder is not None
+            self.CHUNK_SECONDS
+            if self._decoder is not None
             else self.FIRST_CHUNK_SECONDS
         )
         samples = self._take(int(min_seconds * REALTIME_SAMPLE_RATE))
@@ -501,10 +502,7 @@ class _WhisperRealtimeBackend:
         )
         rotate = self._decoder is not None and (
             window_seconds + chunk_seconds >= self.MAX_WINDOW_SECONDS
-            or (
-                window_seconds >= self.ROTATE_QUIET_SECONDS
-                and rms < self.QUIET_RMS
-            )
+            or (window_seconds >= self.ROTATE_QUIET_SECONDS and rms < self.QUIET_RMS)
         )
         if rotate:
             # Close the window on this chunk (is_last flushes held-back
@@ -524,9 +522,7 @@ class _WhisperRealtimeBackend:
                 return []
             # No pending audio: feed a short silence chunk so decode_chunk
             # runs once more with is_last=True and flushes held-back tokens.
-            samples = np.zeros(
-                int(0.2 * REALTIME_SAMPLE_RATE), dtype=np.float32
-            )
+            samples = np.zeros(int(0.2 * REALTIME_SAMPLE_RATE), dtype=np.float32)
         text = self._decode(samples, is_last=True)
         return [text] if text else []
 
@@ -676,18 +672,14 @@ class RealtimeTranscriptionSession:
         if self._closed:
             return []
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            get_mlx_executor(), self._backend.poll_sync
-        )
+        return await loop.run_in_executor(get_mlx_executor(), self._backend.poll_sync)
 
     async def close(self) -> list[str]:
         if self._closed:
             return []
         self._closed = True
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            get_mlx_executor(), self._backend.close_sync
-        )
+        return await loop.run_in_executor(get_mlx_executor(), self._backend.close_sync)
 
     async def release(self) -> None:
         self._closed = True
@@ -830,7 +822,10 @@ class STTEngine(BaseNonStreamingEngine):
         file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         logger.info(
             "STT transcribe: model=%s, file=%s (%d bytes), language=%s",
-            self._model_name, os.path.basename(audio_path), file_size, language,
+            self._model_name,
+            os.path.basename(audio_path),
+            file_size,
+            language,
         )
 
         model = self._model
@@ -842,6 +837,7 @@ class STTEngine(BaseNonStreamingEngine):
                 return s
             # dataclass → asdict
             import dataclasses
+
             if dataclasses.is_dataclass(s) and not isinstance(s, type):
                 return dataclasses.asdict(s)
             # object with __dict__
@@ -872,16 +868,12 @@ class STTEngine(BaseNonStreamingEngine):
             # result is typically an STTOutput dataclass with:
             # text, segments, language, total_time, etc.
             if hasattr(result, "text"):
-                raw_lang = _normalize_result_language(
-                    getattr(result, "language", None)
-                )
+                raw_lang = _normalize_result_language(getattr(result, "language", None))
                 if raw_lang is None:
                     raw_lang = language
 
                 raw_segs = getattr(result, "segments", None)
-                segments = [
-                    _normalize_segment(s) for s in raw_segs
-                ] if raw_segs else []
+                segments = [_normalize_segment(s) for s in raw_segs] if raw_segs else []
 
                 output = {
                     "text": result.text or "",
@@ -913,15 +905,15 @@ class STTEngine(BaseNonStreamingEngine):
         )
         try:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                get_mlx_executor(), _transcribe_sync
-            )
+            result = await loop.run_in_executor(get_mlx_executor(), _transcribe_sync)
 
             elapsed = time.monotonic() - t0
             text_len = len(result.get("text", ""))
             logger.info(
                 "STT transcribe done: model=%s, %.2fs, %d chars output",
-                self._model_name, elapsed, text_len,
+                self._model_name,
+                elapsed,
+                text_len,
             )
             return result
         finally:
@@ -1026,7 +1018,10 @@ class STTEngine(BaseNonStreamingEngine):
         file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         logger.info(
             "STT stream transcribe: model=%s, file=%s (%d bytes), language=%s",
-            self._model_name, os.path.basename(audio_path), file_size, language,
+            self._model_name,
+            os.path.basename(audio_path),
+            file_size,
+            language,
         )
 
         model = self._model
@@ -1063,9 +1058,7 @@ class STTEngine(BaseNonStreamingEngine):
                     getattr(result, "language", None)
                 ),
                 "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
-                "generation_tokens": int(
-                    getattr(result, "generation_tokens", 0) or 0
-                ),
+                "generation_tokens": int(getattr(result, "generation_tokens", 0) or 0),
             }
 
         activity_id = self._begin_activity(
@@ -1088,7 +1081,10 @@ class STTEngine(BaseNonStreamingEngine):
             await self._finish_activity(activity_id)
             logger.info(
                 "STT stream transcribe done: model=%s, %.2fs, chunks=%d, %d chars",
-                self._model_name, time.monotonic() - t0, chunk_count, text_len,
+                self._model_name,
+                time.monotonic() - t0,
+                chunk_count,
+                text_len,
             )
 
     async def _transcribe_stream_segmented(
@@ -1116,7 +1112,10 @@ class STTEngine(BaseNonStreamingEngine):
         logger.info(
             "STT segmented stream transcribe: model=%s, file=%s (%d bytes), "
             "language=%s",
-            self._model_name, os.path.basename(audio_path), file_size, language,
+            self._model_name,
+            os.path.basename(audio_path),
+            file_size,
+            language,
         )
         t0 = time.monotonic()
 
@@ -1138,6 +1137,7 @@ class STTEngine(BaseNonStreamingEngine):
         text_len = 0
         try:
             for segment in segments:
+
                 def _decode_segment(segment=segment):
                     gen_kwargs = dict(kwargs)
                     generate_language = _normalize_stt_generate_language(
@@ -1148,9 +1148,7 @@ class STTEngine(BaseNonStreamingEngine):
                     gen_kwargs.update(_map_stt_prompt_kwargs(model, prompt))
                     result = model.generate(segment, **gen_kwargs)
                     text = getattr(result, "text", "") or ""
-                    lang = _normalize_result_language(
-                        getattr(result, "language", None)
-                    )
+                    lang = _normalize_result_language(getattr(result, "language", None))
                     return text, lang
 
                 text, lang = await loop.run_in_executor(
@@ -1171,9 +1169,11 @@ class STTEngine(BaseNonStreamingEngine):
         finally:
             await self._finish_activity(activity_id)
             logger.info(
-                "STT segmented stream done: model=%s, %.2fs, segments=%d, "
-                "%d chars",
-                self._model_name, time.monotonic() - t0, len(segments), text_len,
+                "STT segmented stream done: model=%s, %.2fs, segments=%d, %d chars",
+                self._model_name,
+                time.monotonic() - t0,
+                len(segments),
+                text_len,
             )
 
     async def _transcribe_stream_token_ids(
@@ -1203,9 +1203,11 @@ class STTEngine(BaseNonStreamingEngine):
 
         file_size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         logger.info(
-            "STT token stream transcribe: model=%s, file=%s (%d bytes), "
-            "language=%s",
-            self._model_name, os.path.basename(audio_path), file_size, language,
+            "STT token stream transcribe: model=%s, file=%s (%d bytes), language=%s",
+            self._model_name,
+            os.path.basename(audio_path),
+            file_size,
+            language,
         )
         t0 = time.monotonic()
 
@@ -1248,9 +1250,7 @@ class STTEngine(BaseNonStreamingEngine):
                     return int(token)
 
                 while True:
-                    token = await loop.run_in_executor(
-                        get_mlx_executor(), _next_token
-                    )
+                    token = await loop.run_in_executor(get_mlx_executor(), _next_token)
                     if token is sentinel:
                         break
                     ids.append(token)
@@ -1270,7 +1270,7 @@ class STTEngine(BaseNonStreamingEngine):
                     stable = visible[:stable_end]
                     if len(stable) <= len(emitted):
                         continue
-                    delta = stable[len(emitted):]
+                    delta = stable[len(emitted) :]
                     emitted = stable
                     text_len += len(delta)
                     yield {
@@ -1286,7 +1286,7 @@ class STTEngine(BaseNonStreamingEngine):
                 # keeps the max seen and skips empty deltas).
                 if ids:
                     _, visible = model.extract_language(tokenizer.decode(ids))
-                    final_delta = visible[len(emitted):]
+                    final_delta = visible[len(emitted) :]
                     text_len += len(final_delta)
                     yield {
                         "text": final_delta.replace("�", ""),
@@ -1298,7 +1298,10 @@ class STTEngine(BaseNonStreamingEngine):
             await self._finish_activity(activity_id)
             logger.info(
                 "STT token stream done: model=%s, %.2fs, tokens=%d, %d chars",
-                self._model_name, time.monotonic() - t0, total_tokens, text_len,
+                self._model_name,
+                time.monotonic() - t0,
+                total_tokens,
+                text_len,
             )
 
     def supports_realtime_stt(self) -> bool:
@@ -1329,8 +1332,7 @@ class STTEngine(BaseNonStreamingEngine):
             raise RuntimeError("Engine not started. Call start() first.")
         if not self.supports_realtime_stt():
             raise RuntimeError(
-                f"Model '{self._model_name}' does not support realtime "
-                "transcription."
+                f"Model '{self._model_name}' does not support realtime transcription."
             )
         if self._realtime_active:
             raise RuntimeError(

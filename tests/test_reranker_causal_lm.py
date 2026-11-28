@@ -35,9 +35,7 @@ class TestXLMRobertaReranker:
     }
 
     @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
-    def test_xlm_roberta_routes_to_mlx_vlm_and_scores_deterministically(
-        self, tmp_path
-    ):
+    def test_xlm_roberta_routes_to_mlx_vlm_and_scores_deterministically(self, tmp_path):
         """The RoBERTa head comes from mlx-vlm, and scoring is deterministic.
 
         Dropout used to make rerankers non-deterministic when the encoder kept
@@ -197,7 +195,6 @@ class TestCausalLMReranker:
             # fresh logits below are keyed off the call order either way.
             vocab_size = 10000
             seq_len = input_ids.shape[1]
-            logits = mx.zeros((1, seq_len, vocab_size))
             # Set logits at last position
             last_pos = np.zeros(vocab_size)
             if call_count[0] == 0:
@@ -378,8 +375,7 @@ class TestCausalLMPromptAffixes:
             rendered = ""
             for message in messages:
                 rendered += (
-                    f"<|im_start|>{message['role']}\n"
-                    f"{message['content']}<|im_end|>\n"
+                    f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n"
                 )
             if add_generation_prompt:
                 rendered += "<|im_start|>assistant\n"

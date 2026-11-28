@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for omlx.utils.formatting module."""
 
-import pytest
-
 from omlx.utils.formatting import format_bytes
 
 
@@ -82,7 +80,7 @@ class TestFormatBytes:
     def test_realistic_memory_sizes(self):
         """Test realistic Apple Silicon memory sizes."""
         # Common Mac memory configurations
-        assert format_bytes(8 * 1024**3) == "8.00 GB"   # M1 base
+        assert format_bytes(8 * 1024**3) == "8.00 GB"  # M1 base
         assert format_bytes(16 * 1024**3) == "16.00 GB"  # M1 Pro
         assert format_bytes(32 * 1024**3) == "32.00 GB"  # M1 Max
         assert format_bytes(64 * 1024**3) == "64.00 GB"  # M1 Ultra

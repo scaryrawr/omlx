@@ -138,10 +138,15 @@ class NgramHash:
 def _project_each(p, flat):
     """p applied to each row of flat ([count, k]) on its own, with one weight read for all
     rows (mxfp8_gemv_each), or None if p is not an MXFP8 projection."""
-    if not (isinstance(p, QuantizedProjection) and p.mode == "mxfp8" and p.group_size == 32):
+    if not (
+        isinstance(p, QuantizedProjection) and p.mode == "mxfp8" and p.group_size == 32
+    ):
         return None
     x = quantize_activation(flat) if p.quantize_input else flat
-    parts = [mxfp8_gemv_each(x[i : i + 8], p.weight, p.scales) for i in range(0, x.shape[0], 8)]
+    parts = [
+        mxfp8_gemv_each(x[i : i + 8], p.weight, p.scales)
+        for i in range(0, x.shape[0], 8)
+    ]
     if any(part is None for part in parts):
         return None
     return parts[0] if len(parts) == 1 else mx.concatenate(parts, 0)

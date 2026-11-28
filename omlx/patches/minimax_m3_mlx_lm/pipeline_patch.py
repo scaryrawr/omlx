@@ -75,9 +75,7 @@ def assigned_stage() -> tuple[int, int] | None:
     return _ASSIGNED_STAGE
 
 
-def effective_stage(
-    layer_count: int, rank: int, world_size: int
-) -> tuple[int, int]:
+def effective_stage(layer_count: int, rank: int, world_size: int) -> tuple[int, int]:
     """The range a rank will actually hold, assignment or not.
 
     Mirrors ``PipelineMixin``'s reverse split when nothing is pinned, so a
@@ -260,7 +258,10 @@ def apply_minimax_m3_pipeline_patch() -> bool:
         self.num_layers = len(self.layers) - self.start_idx
         logger.info(
             "MiniMax-M3 rank %s holds layers %s-%s (%s of them)",
-            self.pipeline_rank, self.start_idx, self.end_idx, self.num_layers,
+            self.pipeline_rank,
+            self.start_idx,
+            self.end_idx,
+            self.num_layers,
         )
 
     # Architecture capability contract consumed by the worker's pre-load

@@ -186,6 +186,6 @@ def test_real_checkpoint_prefill_selects_ratio128_attention_policy(
             assert ratio128_native_calls == 0
     finally:
         continuation_last_logits = continuation_logits = None
-        last_logits = logits = cache = tokenizer = model = None
+        last_logits = logits = cache = model = None
         gc.collect()
         mx.clear_cache()

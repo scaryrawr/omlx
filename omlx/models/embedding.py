@@ -49,8 +49,6 @@ _CONTEXT_LENGTH_ATTRS = (
 )
 
 
-
-
 @dataclass(frozen=True)
 class _ChatEmbeddingFamily:
     """How an mlx-vlm multimodal embedding family formats its inputs."""
@@ -123,9 +121,7 @@ class _ChatTemplateEmbeddingInputs:
         family = self.family
         conversations = []
         for item in inputs:
-            text = (
-                [{"type": "text", "text": item["text"]}] if item.get("text") else []
-            )
+            text = [{"type": "text", "text": item["text"]}] if item.get("text") else []
             media = []
             if item.get("image"):
                 media.append(
@@ -359,14 +355,18 @@ class MLXEmbeddingModel:
                         return mode, str(cfg_path.relative_to(model_path))
                     return None, str(cfg_path.relative_to(model_path))
             except (OSError, ValueError) as e:
-                logger.debug(f"Could not read pooling config for {self.model_name}: {e}")
+                logger.debug(
+                    f"Could not read pooling config for {self.model_name}: {e}"
+                )
 
         haystack = str(self.model_name).lower()
         config_path = model_path / "config.json"
         if config_path.is_file():
             try:
                 with open(config_path) as fh:
-                    haystack += " " + str(json.load(fh).get("_name_or_path", "")).lower()
+                    haystack += (
+                        " " + str(json.load(fh).get("_name_or_path", "")).lower()
+                    )
             except (OSError, ValueError):
                 pass
         for needle, mode in self._FAMILY_POOLING:
@@ -479,7 +479,9 @@ class MLXEmbeddingModel:
     def _load_mlx_vlm(self) -> None:
         """Load any embedding family mlx-vlm implements."""
         model_path = get_model_path(self.model_name)
-        self._pooling_mode, self._pooling_source = self._resolve_pooling_mode(model_path)
+        self._pooling_mode, self._pooling_source = self._resolve_pooling_mode(
+            model_path
+        )
         config = load_config(model_path)
         ensure_model_code_trusted(
             config,
@@ -502,7 +504,10 @@ class MLXEmbeddingModel:
         if self._pooling_config is not None:
             pooling_config = dict(self._pooling_config)
             # mlx-vlm matches string modes exactly, while omlx accepts aliases.
-            if isinstance(pooling_config.get("pooling_mode"), str) and self._pooling_mode:
+            if (
+                isinstance(pooling_config.get("pooling_mode"), str)
+                and self._pooling_mode
+            ):
                 pooling_config["pooling_mode"] = self._pooling_mode
             model.pooling_config = pooling_config
         elif self._pooling_mode:
@@ -620,9 +625,7 @@ class MLXEmbeddingModel:
                     last_token_pool(last_hidden, attention_mask)
                 )
             if self._pooling_mode == "mean" and attention_mask is not None:
-                return normalize_embeddings(
-                    mean_pooling(last_hidden, attention_mask)
-                )
+                return normalize_embeddings(mean_pooling(last_hidden, attention_mask))
 
         if hasattr(outputs, "text_embeds") and outputs.text_embeds is not None:
             embeddings = outputs.text_embeds
@@ -925,8 +928,7 @@ class MLXEmbeddingModel:
             _ = self._compiled_embed(test_inputs)
 
             logger.info(
-                f"mx.compile enabled for {self.model_name} "
-                f"(primitive embedding path)"
+                f"mx.compile enabled for {self.model_name} (primitive embedding path)"
             )
             return True
         except Exception as e:
@@ -942,7 +944,7 @@ class MLXEmbeddingModel:
             return
 
         logger.info(
-            "Releasing embedding model resources: %s " "(compiled=%s, native=%s)",
+            "Releasing embedding model resources: %s (compiled=%s, native=%s)",
             self.model_name,
             self._is_compiled,
             self._using_native,
@@ -1134,9 +1136,7 @@ class MLXEmbeddingModel:
                 attention_mask = mx.array(masks)
 
             outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-            embeddings_array = self._extract_embeddings_array(
-                outputs, attention_mask
-            )
+            embeddings_array = self._extract_embeddings_array(outputs, attention_mask)
             total_tokens = self._count_prepared_tokens(
                 {"attention_mask": attention_mask, "input_ids": input_ids}
             )
@@ -1295,6 +1295,5 @@ class MLXEmbeddingModel:
         status = "loaded" if self._loaded else "not loaded"
         impl = "native" if self._using_native else "mlx-vlm"
         return (
-            f"<MLXEmbeddingModel model={self.model_name} "
-            f"status={status} impl={impl}>"
+            f"<MLXEmbeddingModel model={self.model_name} status={status} impl={impl}>"
         )

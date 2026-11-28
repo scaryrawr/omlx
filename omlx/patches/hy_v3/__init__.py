@@ -87,9 +87,7 @@ def _patch_infer_tool_parser() -> None:
         if isinstance(chat_template, str) and (
             "<tool_sep" in chat_template and "<arg_key" in chat_template
         ):
-            return (
-                "hy_v3_opensource" if ":opensource" in chat_template else "hy_v3"
-            )
+            return "hy_v3_opensource" if ":opensource" in chat_template else "hy_v3"
         return original(tokenizer)
 
     _infer_tool_parser_with_hy_v3._omlx_hy_v3 = True

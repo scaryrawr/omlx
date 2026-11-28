@@ -416,9 +416,9 @@ def test_unified_index_engram_and_mixed_shard_offload(tmp_path, monkeypatch):
     actual_load = mx.load
 
     def guarded_load(path, *args, **kwargs):
-        assert not str(path).endswith(
-            "mixed.safetensors"
-        ), "Must not load offloaded table through mx.load"
+        assert not str(path).endswith("mixed.safetensors"), (
+            "Must not load offloaded table through mx.load"
+        )
         return actual_load(path, *args, **kwargs)
 
     monkeypatch.setattr(mx, "load", guarded_load)

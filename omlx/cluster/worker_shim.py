@@ -58,7 +58,7 @@ def _render(executable: str, environ: Mapping[str, str]) -> str:
         "# Written by oMLX so another Mac can run this node's interpreter over\n"
         "# SSH. Do not edit; it is rewritten on every server start.\n"
         f"{exports}"
-        f"exec {shlex.quote(executable)} \"$@\"\n"
+        f'exec {shlex.quote(executable)} "$@"\n'
     )
 
 

@@ -10,7 +10,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
-
 from omlx_web import routes as webui
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,9 +27,9 @@ def test_dashboard_renders_only_the_cluster_flow():
 
 
 def test_cluster_navigation_exists_for_desktop_and_mobile():
-    navbar = (
-        ROOT / "omlx_web/templates/dashboard/_navbar.html"
-    ).read_text(encoding="utf-8")
+    navbar = (ROOT / "omlx_web/templates/dashboard/_navbar.html").read_text(
+        encoding="utf-8"
+    )
 
     assert navbar.count("setMainTab('cluster')") == 2
     assert navbar.count("mainTab === 'cluster'") == 4
@@ -38,9 +37,9 @@ def test_cluster_navigation_exists_for_desktop_and_mobile():
 
 
 def test_distributed_inference_remains_an_advanced_restart_scoped_opt_in():
-    settings = (
-        ROOT / "omlx_web/templates/dashboard/_settings.html"
-    ).read_text(encoding="utf-8")
+    settings = (ROOT / "omlx_web/templates/dashboard/_settings.html").read_text(
+        encoding="utf-8"
+    )
 
     assert "settings.advanced.distributed_inference" in settings
     assert "settings.advanced.distributed_inference_enabled" in settings
@@ -70,8 +69,20 @@ def test_dashboard_does_not_reference_an_unbundled_alpine_plugin():
 
 def test_cluster_template_tags_balance():
     void = {
-        "area", "base", "br", "col", "embed", "hr", "img", "input",
-        "link", "meta", "param", "source", "track", "wbr",
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
     }
 
     class Balance(HTMLParser):
@@ -92,9 +103,7 @@ def test_cluster_template_tags_balance():
                 return
             opened, position = self.stack.pop()
             if opened != tag:
-                self.errors.append(
-                    f"</{tag}> closes <{opened}> opened at {position}"
-                )
+                self.errors.append(f"</{tag}> closes <{opened}> opened at {position}")
 
     parser = Balance()
     parser.feed(TEMPLATE.read_text(encoding="utf-8"))
@@ -109,7 +118,7 @@ def test_every_cluster_alpine_expression_parses_as_javascript():
         pytest.skip("node is required to parse Alpine expressions")
     source = TEMPLATE.read_text(encoding="utf-8")
     attribute = re.compile(
-        r'(?P<name>(?:x-[a-z:.\-]+|@[A-Za-z0-9:.\-]+|:[A-Za-z0-9:.\-]+))'
+        r"(?P<name>(?:x-[a-z:.\-]+|@[A-Za-z0-9:.\-]+|:[A-Za-z0-9:.\-]+))"
         r'\s*=\s*"(?P<value>[^"]*)"',
         re.S,
     )

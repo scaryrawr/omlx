@@ -206,7 +206,7 @@ def _get_max_metal_working_set_bytes() -> int:
         info = mx.device_info()
         size = int(info.get("max_recommended_working_set_size", 0) or 0)
         return max(0, size)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0
 
 
@@ -222,6 +222,7 @@ def get_effective_metal_cap_bytes() -> int:
     if sysctl_cap > 0:
         return sysctl_cap
     return _get_max_metal_working_set_bytes()
+
 
 def _wired_limit_suggestion_bytes(desired_bytes: int) -> int:
     """Clamp and align a wired-limit recommendation to leave 5% of RAM.
@@ -247,7 +248,7 @@ def _wired_limit_suggestion_bytes(desired_bytes: int) -> int:
     """
     try:
         total = int(_settings.get_system_memory())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return desired_bytes
     if total <= 0:
         return desired_bytes
@@ -305,7 +306,7 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
 
     try:
         _total = int(_settings.get_system_memory())
-    except Exception:  # noqa: BLE001
+    except Exception:
         _total = 0
     if _total > 0:
         _reserve = _total // 20
@@ -342,7 +343,7 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
                 suggestion // (1024**2),
             )
         return applied, int(previous)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Older macOS (<15) or the API just isn't available. Log + skip.
         logger.warning(
             "mx.set_wired_limit(%s) failed; Metal will use its default cap (%s)",
@@ -741,7 +742,7 @@ class ProcessMemoryEnforcer:
         if stats is None:
             try:
                 available = int(psutil_compat.virtual_memory().available)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "Memory guard could not read available memory; "
                     "using static ceiling fallback: %s",
@@ -1033,7 +1034,7 @@ class ProcessMemoryEnforcer:
             return 0
         try:
             value = reader()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("external process memory read failed", exc_info=True)
             return 0
         return value if isinstance(value, int) else 0
@@ -1389,7 +1390,7 @@ class ProcessMemoryEnforcer:
             if callable(request):
                 try:
                     request()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("Pressure cache reclaim request failed: %s", exc)
                     continue
                 requested += 1
@@ -1509,9 +1510,7 @@ class ProcessMemoryEnforcer:
                     # teardown window after its scheduler has been released.
                     # Treat that like an unloaded entry, not a wrapper break.
                     continue
-                if getattr(
-                    engine, "_prefill_memory_guard_managed_externally", False
-                ):
+                if getattr(engine, "_prefill_memory_guard_managed_externally", False):
                     # DistributedBatchedEngine is a coordinator-side proxy.
                     # Its rank processes own the schedulers and receive their
                     # guard budgets from the signed deployment, so there is no
@@ -1608,7 +1607,7 @@ class ProcessMemoryEnforcer:
                 result = abort_all()
                 if inspect.isawaitable(result):
                     result = await result
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "Emergency memory abort failed for '%s': %s",
                     getattr(entry, "model_id", "<unknown>"),
@@ -1642,7 +1641,7 @@ class ProcessMemoryEnforcer:
                 if callable(has_active):
                     try:
                         busy = has_active() is True
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         busy = True
             if busy:
                 candidates.append((getattr(entry, "last_access", 0.0), mid))

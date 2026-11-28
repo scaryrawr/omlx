@@ -59,9 +59,7 @@ def test_candidates_must_divide_both_nodes_and_heads():
 def test_two_fast_linked_macs_get_tensor_parallelism():
     """The headline case: plug two Macs together, get one model split across both."""
 
-    choice = choose_parallelism(
-        _model(), _nodes(2), transports=[_link("thunderbolt")]
-    )
+    choice = choose_parallelism(_model(), _nodes(2), transports=[_link("thunderbolt")])
 
     assert choice.tensor_parallel_size == 2
     assert choice.pipeline_stages == 1
@@ -151,7 +149,10 @@ def test_transport_summary_reports_the_slowest_link():
 def test_mixed_fabric_is_not_treated_as_fast():
     """One Ethernet hop in the set means TP should not span the whole cluster."""
 
-    assert transports_are_fast_enough([_link("thunderbolt"), _link("ethernet")], 2) is False
+    assert (
+        transports_are_fast_enough([_link("thunderbolt"), _link("ethernet")], 2)
+        is False
+    )
     assert transports_are_fast_enough([_link("thunderbolt"), _link("rdma")], 2) is True
     assert transports_are_fast_enough([_link("ethernet")], 1) is True
 
@@ -204,9 +205,7 @@ def test_autoconfigure_returns_an_activatable_proposal():
         }
     )
     with TestClient(_app()) as client:
-        response = client.post(
-            "/admin/api/cluster/autoconfigure", json=payload
-        )
+        response = client.post("/admin/api/cluster/autoconfigure", json=payload)
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -216,9 +215,8 @@ def test_autoconfigure_returns_an_activatable_proposal():
     assert body["summary"]
     assert body["tensor_parallel_size"] >= 1
     assert body["pipeline_stages"] >= 1
-    assert (
-        body["tensor_parallel_size"] * body["pipeline_stages"]
-        == len(body["activation"]["nodes"])
+    assert body["tensor_parallel_size"] * body["pipeline_stages"] == len(
+        body["activation"]["nodes"]
     )
 
     # The activation block must be shaped for POST /deployments as-is.
@@ -465,7 +463,9 @@ def test_performance_is_measured_and_applied_before_staging(tmp_path, monkeypatc
         }
 
     def staging(_request, choice):
-        events.append(("staging", [item.layer_count for item in choice.plan.assignments]))
+        events.append(
+            ("staging", [item.layer_count for item in choice.plan.assignments])
+        )
         return {"ready": True, "nodes": []}
 
     monkeypatch.setattr(routes, "run_cluster_performance_probe", probe)
@@ -500,9 +500,9 @@ def test_performance_is_measured_and_applied_before_staging(tmp_path, monkeypatc
     assert events[1][1][1] > events[1][1][0]
     assert body["performance_probe"]["status"] == "applied_before_staging"
     assert all(node["performance"] for node in body["activation"]["nodes"])
-    assert body["activation"]["approved_placement"] == body["plan"][
-        "placement_signature"
-    ]
+    assert (
+        body["activation"]["approved_placement"] == body["plan"]["placement_signature"]
+    )
 
 
 def test_rejected_performance_split_is_not_replayed_during_activation(
@@ -670,23 +670,33 @@ def test_head_count_is_read_from_the_model_config(tmp_path):
     from omlx.cluster.planner import inspect_safetensors_layout
 
     (tmp_path / "config.json").write_text(
-        json.dumps({
-            "model_type": "llama",  # a real mlx-lm module that implements shard()
-            "hidden_size": 4096,
-            "num_attention_heads": 32,
-            "num_hidden_layers": 2,
-            "intermediate_size": 11008,
-            "rms_norm_eps": 1e-5,
-            "vocab_size": 32000,
-        })
+        json.dumps(
+            {
+                "model_type": "llama",  # a real mlx-lm module that implements shard()
+                "hidden_size": 4096,
+                "num_attention_heads": 32,
+                "num_hidden_layers": 2,
+                "intermediate_size": 11008,
+                "rms_norm_eps": 1e-5,
+                "vocab_size": 32000,
+            }
+        )
     )
     header = {
-        "model.embed_tokens.weight": {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]},
+        "model.embed_tokens.weight": {
+            "dtype": "F16",
+            "shape": [1],
+            "data_offsets": [0, 2],
+        },
         "model.layers.0.self_attn.q_proj.weight": {
-            "dtype": "F16", "shape": [1], "data_offsets": [2, 6],
+            "dtype": "F16",
+            "shape": [1],
+            "data_offsets": [2, 6],
         },
         "model.layers.1.self_attn.q_proj.weight": {
-            "dtype": "F16", "shape": [1], "data_offsets": [6, 10],
+            "dtype": "F16",
+            "shape": [1],
+            "data_offsets": [6, 10],
         },
     }
     blob = json.dumps(header).encode()
@@ -709,7 +719,9 @@ def test_a_model_without_a_config_gets_no_tensor_parallelism(tmp_path):
 
     header = {
         "model.layers.0.self_attn.q_proj.weight": {
-            "dtype": "F16", "shape": [1], "data_offsets": [0, 4],
+            "dtype": "F16",
+            "shape": [1],
+            "data_offsets": [0, 4],
         },
     }
     blob = json.dumps(header).encode()
@@ -820,8 +832,11 @@ def test_kv_heads_default_to_attention_heads():
 
 def _pair(source, peer, kind="thunderbolt"):
     return SimpleNamespace(
-        kind=kind, source_node_id=source, peer_node_id=peer,
-        link_speed_gbps=120, tb_version="TB5",
+        kind=kind,
+        source_node_id=source,
+        peer_node_id=peer,
+        link_speed_gbps=120,
+        tb_version="TB5",
     )
 
 
@@ -832,14 +847,16 @@ def test_fast_linked_pairs_are_grouped_not_split():
 
     hosts = ["A", "C", "B", "D"]  # deliberately interleaved input order
     fabric = [
-        _pair("A", "B"), _pair("B", "A"),
-        _pair("C", "D"), _pair("D", "C"),
+        _pair("A", "B"),
+        _pair("B", "A"),
+        _pair("C", "D"),
+        _pair("D", "C"),
         _pair("A", "C", kind="ethernet"),
     ]
 
     placement = order_hosts_for_topology(hosts, fabric, 2)
 
-    groups = [set(placement.hosts[i:i + 2]) for i in (0, 2)]
+    groups = [set(placement.hosts[i : i + 2]) for i in (0, 2)]
     assert {"A", "B"} in groups
     assert {"C", "D"} in groups
     # The placement must explain itself: which groups, and on what evidence.
@@ -919,9 +936,10 @@ def test_autoconfigure_reorders_nodes_and_hosts_as_one_rank_map(monkeypatch):
     activation = response.json()["activation"]
     assert [item["node_id"] for item in activation["nodes"]] == ["A", "B", "C", "D"]
     assert [item["node_id"] for item in activation["hosts"]] == ["A", "B", "C", "D"]
-    assert activation["approved_placement"] == response.json()["plan"][
-        "placement_signature"
-    ]
+    assert (
+        activation["approved_placement"]
+        == response.json()["plan"]["placement_signature"]
+    )
 
 
 def test_placement_falls_back_loudly_when_the_fabric_will_not_split():
@@ -1129,14 +1147,18 @@ def test_asking_for_tensor_when_impossible_explains_why():
 
     with pytest.raises(PlanningError, match="does not implement sharding"):
         choose_parallelism(
-            _model(shardable=False), _nodes(2),
-            transports=[_link("thunderbolt")], strategy="tensor",
+            _model(shardable=False),
+            _nodes(2),
+            transports=[_link("thunderbolt")],
+            strategy="tensor",
         )
 
     with pytest.raises(PlanningError, match="head group"):
         choose_parallelism(
-            _model(heads=7), _nodes(2),
-            transports=[_link("thunderbolt")], strategy="tensor",
+            _model(heads=7),
+            _nodes(2),
+            transports=[_link("thunderbolt")],
+            strategy="tensor",
         )
 
 
@@ -1252,13 +1274,19 @@ def test_the_faster_of_two_thunderbolt_links_wins_the_group():
 
     hosts = ["A", "B", "C", "D"]
     fabric = [
-        _pair("A", "B"), _pair("A", "C"), _pair("A", "D"),
-        _pair("B", "C"), _pair("B", "D"), _pair("C", "D"),
+        _pair("A", "B"),
+        _pair("A", "C"),
+        _pair("A", "D"),
+        _pair("B", "C"),
+        _pair("B", "D"),
+        _pair("C", "D"),
     ]
     # A and C were measured fast; B and D slow but still above the floor.
     profiles = [
-        _profile("A", 6.6), _profile("C", 6.6),
-        _profile("B", 1.6), _profile("D", 1.6),
+        _profile("A", 6.6),
+        _profile("C", 6.6),
+        _profile("B", 1.6),
+        _profile("D", 1.6),
     ]
 
     placement = order_hosts_for_topology(hosts, fabric, 2, profiles)
@@ -1304,7 +1332,9 @@ def test_a_slow_group_is_reported_by_measured_bandwidth():
 
     hosts = ["A", "B"]
     fabric = [_pair("A", "B")]
-    assert not tp_groups_spanning_slow_links(hosts, fabric, 2, [_profile("A", 6.6), _profile("B", 6.6)])
+    assert not tp_groups_spanning_slow_links(
+        hosts, fabric, 2, [_profile("A", 6.6), _profile("B", 6.6)]
+    )
     slow = tp_groups_spanning_slow_links(
         hosts, fabric, 2, [_profile("A", 0.4), _profile("B", 0.4)]
     )
@@ -1331,9 +1361,7 @@ def _interfaces(name, addresses, *, rdma=(), thunderbolt=None):
         host=name,
         addresses=interfaces,
         rdma_interfaces=frozenset(rdma),
-        thunderbolt_interfaces=frozenset(
-            rdma if thunderbolt is None else thunderbolt
-        ),
+        thunderbolt_interfaces=frozenset(rdma if thunderbolt is None else thunderbolt),
     )
 
 
@@ -1690,9 +1718,7 @@ def test_a_vlm_load_and_a_rank_of_the_same_model_need_different_things(tmp_path)
     model = _model_dir(tmp_path, model_type="qwen3_5_moe", vision_config={})
 
     rank = {requirement.module for requirement in required_imports(model)}
-    vlm = {
-        requirement.module for requirement in required_imports(model, for_vlm=True)
-    }
+    vlm = {requirement.module for requirement in required_imports(model, for_vlm=True)}
 
     assert "mlx_vlm" not in rank
     assert "mlx_vlm" in vlm

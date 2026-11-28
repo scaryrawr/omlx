@@ -857,7 +857,7 @@ async def _fetch_families(author: str) -> tuple[list[Family], bool]:
                     asyncio.to_thread(read, api, endpoint, row.id, key[1]),
                     timeout=_HF_API_TIMEOUT * 3,
                 )
-            except Exception as e:  # noqa: BLE001 - one build must not sink the list
+            except Exception as e:
                 logger.warning("Could not read model facts for %s: %s", row.id, e)
                 return None
         cache[key] = value

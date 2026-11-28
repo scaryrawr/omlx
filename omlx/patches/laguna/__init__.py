@@ -25,9 +25,10 @@ def apply_laguna_patch() -> bool:
         return False
 
     # Upstream lacks compressed FP8/INT4/NVFP4 loading and oMLX's fused paths.
-    from . import laguna_model, tool_parser
     import mlx_lm.models
     import mlx_lm.tool_parsers
+
+    from . import laguna_model, tool_parser
 
     sys.modules["mlx_lm.models.laguna"] = laguna_model
     mlx_lm.models.laguna = laguna_model

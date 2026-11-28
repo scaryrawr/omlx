@@ -327,9 +327,7 @@ class LagunaSparseMoeBlock(nn.Module):
         )
         self.shared_expert = MLP(args.hidden_size, args.shared_expert_intermediate_size)
 
-    def __call__(
-        self, x: mx.array, residual: mx.array | None = None
-    ) -> mx.array:
+    def __call__(self, x: mx.array, residual: mx.array | None = None) -> mx.array:
         inds, scores = self.gate(x)
         y = self.switch_mlp(x, inds)
         shared = self.shared_expert(x)

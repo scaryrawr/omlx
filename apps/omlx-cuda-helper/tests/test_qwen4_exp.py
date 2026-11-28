@@ -98,9 +98,7 @@ def test_stages_reproduce_the_contract_fixture(bounds, mrope_prefix):
                     expected_dtype,
                     expected.dtype,
                     expected.shape,
-                ), (
-                    tag + name
-                )
+                ), tag + name
                 if data.dtype.kind == "f":
                     np.testing.assert_allclose(
                         data,

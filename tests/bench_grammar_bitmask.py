@@ -27,6 +27,7 @@ pytestmark = pytest.mark.slow
 
 def _make_matchers(compiler, n, schema):
     import xgrammar as xgr
+
     compiled = compiler.compile_json_schema(schema)
     return [xgr.GrammarMatcher(compiled) for _ in range(n)]
 
@@ -80,7 +81,9 @@ class TestBitmaskFillBenchmark:
             for i, m in enumerate(matchers):
                 per_req_bm[:] = -1
                 m.fill_next_token_bitmask(per_req_bm)
-                apply_token_bitmask_mlx(mx.array(per_req_bm), logits[i : i + 1], vocab_size)
+                apply_token_bitmask_mlx(
+                    mx.array(per_req_bm), logits[i : i + 1], vocab_size
+                )
         per_req_us = (time.perf_counter() - t0) / ITERS * 1e6
 
         # --- 2. Sequential fill into shared buffer + batched apply ---

@@ -23,7 +23,6 @@ from omlx.patches.deepseek_v4.cache_extras import PoolingCache
 from omlx.patches.mlx_lm_mtp import prompt_priming
 from omlx.prefill.packed import PackedBatch, PackedRow, PackedRows
 
-
 TINY_CONFIG = {
     "model_type": "qwen3_5",
     "hidden_size": 64,
@@ -404,9 +403,7 @@ class TestCaptureFold:
         mx.eval([c.state for c in ctx.mtp_cache])
 
         ref_cache = _reference_head_cache(model, tokens)
-        for (k, v), (rk, rv) in zip(
-            _kv_entries(ctx.mtp_cache), _kv_entries(ref_cache)
-        ):
+        for (k, v), (rk, rv) in zip(_kv_entries(ctx.mtp_cache), _kv_entries(ref_cache)):
             assert mx.allclose(k, rk, rtol=1e-4, atol=1e-4)
             assert mx.allclose(v, rv, rtol=1e-4, atol=1e-4)
 
@@ -493,9 +490,7 @@ class TestCaptureFold:
         _chunked_prefill(model, warm_cache, tokens[boundary:], [length - boundary])
         warm_final_ctx = prompt_priming._find_ctx(model)
         assert warm_final_ctx is not None
-        assert mx.array_equal(
-            warm_final_ctx.pending_hidden, cold_final_pending
-        ).item()
+        assert mx.array_equal(warm_final_ctx.pending_hidden, cold_final_pending).item()
         model(main_tok[None, :], cache=warm_cache, return_hidden=True)
         warm_primed = prompt_priming.take_primed(model, warm_cache, main_tok)
         assert warm_primed is not None
@@ -614,9 +609,7 @@ class TestCaptureSkips:
         cache = _make_cache(model)
         _chunked_prefill(model, cache, _tokens(6, seed=20), [6])
         assert getattr(model, "_omlx_mtp_prime_ctx", None) is not None
-        assert all(
-            getattr(c, "_omlx_mtp_prime_ctx", None) is None for c in cache
-        )
+        assert all(getattr(c, "_omlx_mtp_prime_ctx", None) is None for c in cache)
 
     def test_latest_prefill_owns_the_model_context(self, model):
         cache_a = _make_cache(model)
@@ -768,13 +761,9 @@ class TestHookFallthrough:
         return cache, main_tok, n
 
     def _register_hook(self, model, monkeypatch, hook):
-        monkeypatch.setattr(
-            type(model), "mtp_take_primed", hook, raising=False
-        )
+        monkeypatch.setattr(type(model), "mtp_take_primed", hook, raising=False)
 
-    def test_declining_hook_falls_through_to_generic_seam(
-        self, model, monkeypatch
-    ):
+    def test_declining_hook_falls_through_to_generic_seam(self, model, monkeypatch):
         self._register_hook(model, monkeypatch, lambda self, cache, tok: None)
         cache, main_tok, n = self._prefill_and_activate(model)
         primed = prompt_priming.take_primed(model, cache, main_tok)
@@ -786,9 +775,7 @@ class TestHookFallthrough:
         """A hook that answers owns the whole seam: its result passes
         through and the generic context is left for it to manage."""
         sentinel = (["head-cache"], 123)
-        self._register_hook(
-            model, monkeypatch, lambda self, cache, tok: sentinel
-        )
+        self._register_hook(model, monkeypatch, lambda self, cache, tok: sentinel)
         cache, main_tok, _ = self._prefill_and_activate(model)
         assert prompt_priming.take_primed(model, cache, main_tok) is sentinel
         assert prompt_priming._find_ctx(model) is not None
@@ -1183,12 +1170,12 @@ def test_prefill_scope_restores_after_exception_and_skips_empty_batches():
     host = HeadHost()
     with prompt_priming.prefill_scope(host, [], [], []):
         assert prompt_priming._PREFILL_SCOPE.get() is None
-    with pytest.raises(ValueError):
-        with prompt_priming.prefill_scope(
-            host, [11], [[1, 2]], [SimpleNamespace(offset=0)]
-        ):
-            assert prompt_priming._PREFILL_SCOPE.get() is not None
-            raise ValueError("cancelled")
+    with (
+        pytest.raises(ValueError),
+        prompt_priming.prefill_scope(host, [11], [[1, 2]], [SimpleNamespace(offset=0)]),
+    ):
+        assert prompt_priming._PREFILL_SCOPE.get() is not None
+        raise ValueError("cancelled")
     assert prompt_priming._PREFILL_SCOPE.get() is None
     prompt_priming.release_uids(host, [11])
     assert not prompt_priming._owned(host)[1].uids
@@ -1396,9 +1383,9 @@ def test_decode_scope_restores_after_exception_and_models_do_not_share_state():
     with (
         pytest.raises(ValueError),
         prompt_priming.decode_scope(first, [1]),
-    ):  # noqa: SIM117
-        with prompt_priming.decode_scope(second, [2]):
-            raise ValueError("cancelled")
+        prompt_priming.decode_scope(second, [2]),
+    ):
+        raise ValueError("cancelled")
     assert prompt_priming._DECODE_SCOPE.get() is None
     assert prompt_priming._owned(first)[1] is not prompt_priming._owned(second)[1]
 

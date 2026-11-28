@@ -528,9 +528,7 @@ def test_restore_slots_grows_back_and_refills_on_misses(tmp_path):
         plan.close()
 
 
-def test_resize_failure_before_publish_leaves_the_bank_unchanged(
-    tmp_path, monkeypatch
-):
+def test_resize_failure_before_publish_leaves_the_bank_unchanged(tmp_path, monkeypatch):
     _, disk, plan = _synthetic_affine_experts(tmp_path, 0.75)
     slots = disk.slots
     try:
@@ -718,8 +716,12 @@ def test_in_place_slot_bytes_match_the_checkpoint(tmp_path):
                     for slab in plan.slabs(disk.slots.prefix, proj, e):
                         field = slab.key.rsplit(".", 1)[1]
                         stored = bytes(plan.read(slab))
-                        got = getattr(disk.slots.expert, proj)[field][disk.slots.slot_of[e]]
-                        ref = getattr(copy.slots.expert, proj)[field][copy.slots.slot_of[e]]
+                        got = getattr(disk.slots.expert, proj)[field][
+                            disk.slots.slot_of[e]
+                        ]
+                        ref = getattr(copy.slots.expert, proj)[field][
+                            copy.slots.slot_of[e]
+                        ]
                         assert np.array(got.view(mx.uint8)).tobytes() == stored
                         assert np.array(ref.view(mx.uint8)).tobytes() == stored
                         checked += 1

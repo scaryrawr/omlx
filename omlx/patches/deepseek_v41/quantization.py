@@ -57,7 +57,11 @@ def _quantize_activation(x, bits=8, group_size=32, e4m3_scale=False):
     else:
         # fast_round_scale: 2^ceil(log2(amax * fp32(1/limit))) from the product's IEEE bits.
         bits32 = (amax * mx.array(1.0 / limit, mx.float32)).view(mx.uint32)
-        exponent = ((bits32 >> 23) & 0xFF).astype(mx.int32) - 127 + ((bits32 & 0x7FFFFF) != 0).astype(mx.int32)
+        exponent = (
+            ((bits32 >> 23) & 0xFF).astype(mx.int32)
+            - 127
+            + ((bits32 & 0x7FFFFF) != 0).astype(mx.int32)
+        )
         scale = _normal_power_of_two(exponent)
     scaled = mx.clip(grouped / scale, -limit, limit)
     if bits == 8:
@@ -128,7 +132,11 @@ def _pack_activation(x, bits, group_size, e4m3_scale):
         scale_bytes = mx.to_fp8(scale)
     else:
         bits32 = (amax * mx.array(1.0 / limit, mx.float32)).view(mx.uint32)
-        exponent = ((bits32 >> 23) & 0xFF).astype(mx.int32) - 127 + ((bits32 & 0x7FFFFF) != 0).astype(mx.int32)
+        exponent = (
+            ((bits32 >> 23) & 0xFF).astype(mx.int32)
+            - 127
+            + ((bits32 & 0x7FFFFF) != 0).astype(mx.int32)
+        )
         scale = _normal_power_of_two(exponent)
         scale_bytes = (exponent + 127).astype(mx.uint8)
     scaled = mx.clip(grouped / scale[..., None], -limit, limit).reshape(x.shape)

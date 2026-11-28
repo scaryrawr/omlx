@@ -1,15 +1,3 @@
-import gc
-import math
-import os
-import struct
-import subprocess
-import sys
-import zlib
-
-# MLX 0.32.2 runs fp32 GPU matmuls at TF32 precision on M5-class tensor units;
-# the fp32 parity tests assert 2e-5, which TF32 cannot hold. Test session only.
-os.environ.setdefault("MLX_ENABLE_TF32", "0")
-
 # SPDX-License-Identifier: Apache-2.0
 """
 Pytest configuration and fixtures for oMLX tests.
@@ -17,9 +5,19 @@ Pytest configuration and fixtures for oMLX tests.
 This module provides common fixtures used across test files.
 """
 
+import gc
+import math
+import os
+import struct
+import subprocess
+import sys
+import zlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import MagicMock
+
+# MLX reads this at import time; parity tests need full fp32, not TF32.
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
 
 import mlx.core as mx
 import pytest
@@ -29,16 +27,16 @@ import pytest
 # present this is a no-op; in the DMG layout it satisfies xgrammar's
 # import-time torch references so the package can load.
 from omlx._torch_stub import install as _install_torch_stub
-_install_torch_stub()
 
 # Run tests under the same M5 sorted gather_qmm reroute the server
 # installs at model load (issue #2267). Without it, kernel-sensitive
 # tests (e.g. the SwitchGLU fusion bit-exactness test, whose inter=32
 # down_proj runs at K=32) fail on M5 hardware. No-op elsewhere.
 from omlx.patches.m5_gather_qmm import apply_m5_gather_qmm_workaround
-apply_m5_gather_qmm_workaround()
-
 from omlx.request import Request, SamplingParams
+
+_install_torch_stub()
+apply_m5_gather_qmm_workaround()
 
 # Tests that keep the GPU busy for seconds on the CI runner. Under --dist
 # loadgroup they share one worker so concurrent command buffers do not trip the
@@ -174,7 +172,11 @@ def use_qmv_wide_reference(monkeypatch):
 
     def quantized_matmul(x, w, *args, **kwargs):
         rows = x.size // x.shape[-1]
-        if not 4 <= rows <= 8 or w.ndim != 2 or kwargs.get("mode", "affine") != "affine":
+        if (
+            not 4 <= rows <= 8
+            or w.ndim != 2
+            or kwargs.get("mode", "affine") != "affine"
+        ):
             return stock(x, w, *args, **kwargs)
         pieces = mx.split(x.reshape(rows, -1), list(range(2, rows - 1, 2)))
         out = mx.concatenate([stock(piece, w, *args, **kwargs) for piece in pieces])
@@ -265,14 +267,14 @@ class MockTokenizer:
         self.pad_token_id = 0
         self.bos_token_id = 1
 
-    def encode(self, text: str, add_special_tokens: bool = True) -> List[int]:
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
         """Encode text to token ids (simple simulation)."""
         # Simple simulation: each word becomes a token
         tokens = []
         if add_special_tokens:
             tokens.append(self.bos_token_id)
         # Simulate tokenization by splitting on spaces
-        for i, word in enumerate(text.split()):
+        for _i, word in enumerate(text.split()):
             # crc32, unlike hash(), is stable across processes.
             token_id = (zlib.crc32(word.encode()) % (self.vocab_size - 10)) + 10
             tokens.append(token_id)
@@ -280,7 +282,7 @@ class MockTokenizer:
 
     def decode(
         self,
-        token_ids: List[int],
+        token_ids: list[int],
         skip_special_tokens: bool = True,
     ) -> str:
         """Decode token ids to text (simple simulation)."""
@@ -296,9 +298,9 @@ class MockTokenizer:
     def __call__(
         self,
         text: str,
-        return_tensors: Optional[str] = None,
+        return_tensors: str | None = None,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Tokenize text and return dict with input_ids."""
         input_ids = self.encode(text)
         return {"input_ids": input_ids}
@@ -325,17 +327,21 @@ class MockModelConfig:
 class MockModel:
     """Mock model for testing without loading real models."""
 
-    def __init__(self, config: Optional[MockModelConfig] = None):
+    def __init__(self, config: MockModelConfig | None = None):
         self.config = config or MockModelConfig()
-        self._parameters: Dict[str, Any] = {}
+        self._parameters: dict[str, Any] = {}
 
     def __call__(self, input_ids: Any, **kwargs: Any) -> Any:
         """Forward pass (returns mock logits)."""
         mock_output = MagicMock()
-        mock_output.shape = (1, len(input_ids) if hasattr(input_ids, "__len__") else 1, self.config.vocab_size)
+        mock_output.shape = (
+            1,
+            len(input_ids) if hasattr(input_ids, "__len__") else 1,
+            self.config.vocab_size,
+        )
         return mock_output
 
-    def parameters(self) -> Dict[str, Any]:
+    def parameters(self) -> dict[str, Any]:
         """Return model parameters."""
         return self._parameters
 

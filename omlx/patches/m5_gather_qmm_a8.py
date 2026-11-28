@@ -741,9 +741,7 @@ def _get_kernel():
     with _lock:
         if _kernel is not None or _kernel_failed:
             return _kernel
-        mlx_src = _nax._read_mlx_headers(
-            _nax._MLX_MM_HEADERS + _nax._MLX_OPS_HEADERS
-        )
+        mlx_src = _nax._read_mlx_headers(_nax._MLX_MM_HEADERS + _nax._MLX_OPS_HEADERS)
         if mlx_src is None:
             _kernel_failed = True
             logger.warning("mlx kernel headers not found; A8 gather disabled")
@@ -774,7 +772,7 @@ def _get_kernel():
                 header=mlx_src + _A8_HEADER,
                 source=_A8_SOURCE,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             _kernel_failed = True
             logger.warning("A8 gather kernel failed to build", exc_info=True)
             return None
@@ -1344,7 +1342,7 @@ def _self_test(key: tuple):
         err = mx.abs(out.astype(mx.float32) - ref).max().item()
         scale = mx.abs(ref).max().item()
         ok = err <= _CANARY_TOLERANCE * scale
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "transformation" in str(e):
             return None
         logger.warning("routed A8 self-test raised for K=%d: %s", K, e)
@@ -1416,8 +1414,9 @@ def _self_test_extended(key: tuple):
             else None
         )
         if swiglu and split:
-            (w, w_ref), (up, up_ref) = quant((experts, n, k_dim), keys[1]), quant(
-                (experts, n, k_dim), keys[2]
+            (w, w_ref), (up, up_ref) = (
+                quant((experts, n, k_dim), keys[1]),
+                quant((experts, n, k_dim), keys[2]),
             )
         else:
             (w, w_ref), up = quant((experts, 2 * n, k_dim), keys[1]), None
@@ -1467,7 +1466,7 @@ def _self_test_extended(key: tuple):
         err = mx.abs(out.astype(mx.float32) - ref).max().item()
         scale = mx.abs(ref).max().item()
         ok = err <= _CANARY_TOLERANCE * scale
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "transformation" in str(e):
             return None
         logger.warning("routed A8 self-test raised for %s: %s", key[1:], e)
@@ -1535,7 +1534,7 @@ def tag_routed_a8_modules(model, min_tokens: int) -> int:
                 continue
             setattr(module, _TAG, floor)
             tagged.append(module)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("routed A8 modules not tagged", exc_info=True)
         for module in tagged:
             setattr(module, _TAG, None)
@@ -1602,7 +1601,7 @@ def try_routed_a8(switch_mlp, token_rows, idx, seq_len=None):
         if h is None:
             return None
         return switch_mlp.down_proj(h, idx, sorted_indices=True)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         name = type(exc).__name__
         if name not in _warned:
             _warned.add(name)

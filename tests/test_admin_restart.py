@@ -21,6 +21,7 @@ from omlx.admin import routes as admin_routes
 @pytest.fixture
 def client(monkeypatch):
     """Build a TestClient with auth bypassed for the restart route."""
+
     async def _fake_require_admin():
         return True
 

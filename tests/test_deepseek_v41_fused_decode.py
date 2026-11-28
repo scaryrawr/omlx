@@ -11,7 +11,7 @@ oQh routed experts.
 
 import zlib
 from dataclasses import replace
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,7 +31,9 @@ from omlx.patches.deepseek_v41.moe_offload import ExpertOffloadPlan, OffloadedEx
 from omlx.patches.deepseek_v41.quantization import QuantizedProjection, pack_activation
 from tests.test_deepseek_v41 import run_two_ranks
 
-_NEEDS_OQH = pytest.mark.skipif(not oqh_fast.has_native(), reason="oQh kernels not built")
+_NEEDS_OQH = pytest.mark.skipif(
+    not oqh_fast.has_native(), reason="oQh kernels not built"
+)
 
 pytestmark = pytest.mark.skipif(
     mx.default_device() != mx.gpu, reason="fused decode kernels are Metal-only"
@@ -73,7 +75,16 @@ _FP32 = ("hc_", "attn_sink", "gate.bias", "compressor.")
 
 # Every width oQ2-oQ3 exports use: affine attention projections of mixed widths, 2-bit w1 / w3
 # and 3-bit w2 routed experts (oQ2.5e), 8-bit shared experts.
-_AFFINE_BITS = {"wq_a": 8, "wkv": 4, "wq_b": 4, "wo_b": 6, "w1": 2, "w3": 2, "w2": 3, "shared_experts": 8}
+_AFFINE_BITS = {
+    "wq_a": 8,
+    "wkv": 4,
+    "wq_b": 4,
+    "wo_b": 6,
+    "w1": 2,
+    "w3": 2,
+    "w2": 3,
+    "shared_experts": 8,
+}
 
 
 def _oqh_experts(weight, bits, key, row_parallel):
@@ -82,12 +93,14 @@ def _oqh_experts(weight, bits, key, row_parallel):
     signs = mx.array(oqh_format.make_signs(key, cols)).astype(mx.float32)
     gram = mx.broadcast_to(mx.eye(cols), (n_exp, cols, cols))
     m = OqhSwitchLinear(cols, rows, n_exp, bits, block)
-    m.weight, m.rscale, _, _ = oqh_quantize.quantize(weight.astype(mx.float32), gram, bits, signs, block)
+    m.weight, m.rscale, _, _ = oqh_quantize.quantize(
+        weight.astype(mx.float32), gram, bits, signs, block
+    )
     m.oqh_signs = signs.reshape(-1, block).astype(mx.bfloat16)
     return m
 
 
-@lru_cache(maxsize=None)
+@cache
 def _parameter(seed, name, shape):
     rng = np.random.default_rng(seed + zlib.crc32(name.encode()))
     data = rng.normal(0, 0.03, shape).astype(np.float32)
@@ -108,18 +121,29 @@ def _release_parameters():
 def build(seed=4121, fmt="mxfp", **overrides):
     model = LanguageModel(replace(config(), **overrides))
     model.load_weights(
-        [(name, _parameter(seed, name, value.shape)) for name, value in tree_flatten(model.parameters())],
+        [
+            (name, _parameter(seed, name, value.shape))
+            for name, value in tree_flatten(model.parameters())
+        ],
         strict=True,
     )
 
     def quantized(weight, bits, mode):
         if fmt == "oqh" and role in ("w1", "w3", "w2"):
-            return _oqh_experts(weight, _AFFINE_BITS[role], role.replace("w3", "w1"), role == "w2")
+            return _oqh_experts(
+                weight, _AFFINE_BITS[role], role.replace("w3", "w1"), role == "w2"
+            )
         if fmt in ("affine", "oqh"):
             bits = _AFFINE_BITS[role]
-            packed, scales, biases = mx.quantize(weight.astype(mx.bfloat16), group_size=64, bits=bits)
-            return QuantizedProjection(packed, scales, bits, "affine", biases=biases, group_size=64)
-        packed, scales = mx.quantize(weight.astype(mx.bfloat16), group_size=32, bits=bits, mode=mode)[:2]
+            packed, scales, biases = mx.quantize(
+                weight.astype(mx.bfloat16), group_size=64, bits=bits
+            )
+            return QuantizedProjection(
+                packed, scales, bits, "affine", biases=biases, group_size=64
+            )
+        packed, scales = mx.quantize(
+            weight.astype(mx.bfloat16), group_size=32, bits=bits, mode=mode
+        )[:2]
         return QuantizedProjection(packed, scales, bits, mode)
 
     for layer in model.layers:
@@ -128,13 +152,25 @@ def build(seed=4121, fmt="mxfp", **overrides):
             role = name
             setattr(att, name, quantized(getattr(att, name).weight, 8, "mxfp8"))
         # convert.py dequantizes the FP8 checkpoint's wo_a to bf16: exactly MXFP8 values
-        packed, scales = mx.quantize(att.wo_a.weight, group_size=32, bits=8, mode="mxfp8")[:2]
-        att.wo_a.weight = mx.dequantize(packed, scales, None, group_size=32, bits=8, mode="mxfp8", dtype=mx.bfloat16)
+        packed, scales = mx.quantize(
+            att.wo_a.weight, group_size=32, bits=8, mode="mxfp8"
+        )[:2]
+        att.wo_a.weight = mx.dequantize(
+            packed, scales, None, group_size=32, bits=8, mode="mxfp8", dtype=mx.bfloat16
+        )
         for name in ("w1", "w2", "w3"):
             role = name
-            setattr(ffn.experts, name, quantized(getattr(ffn.experts, name).weight, 4, "mxfp4"))
+            setattr(
+                ffn.experts,
+                name,
+                quantized(getattr(ffn.experts, name).weight, 4, "mxfp4"),
+            )
             role = "shared_experts"
-            setattr(ffn.shared_experts, name, quantized(getattr(ffn.shared_experts, name).weight, 8, "mxfp8"))
+            setattr(
+                ffn.shared_experts,
+                name,
+                quantized(getattr(ffn.shared_experts, name).weight, 8, "mxfp8"),
+            )
     mx.eval(model.parameters())
     return model
 
@@ -187,7 +223,9 @@ def test_fused_decode_matches_unfused_block(monkeypatch, fmt, tiles, inter):
 
     monkeypatch.setattr(decode_fused, "decode_block", counted)
     supported, fused_on = decode_fused.supported, [False]
-    monkeypatch.setattr(decode_fused, "supported", lambda layer, c: fused_on[0] and supported(layer, c))
+    monkeypatch.setattr(
+        decode_fused, "supported", lambda layer, c: fused_on[0] and supported(layer, c)
+    )
     ids = np.random.default_rng(3).integers(3, 60, 24).tolist()
     caches = []
     for _ in range(2):
@@ -208,7 +246,13 @@ def test_fused_decode_matches_unfused_block(monkeypatch, fmt, tiles, inter):
         h, pre, (expected, _) = unfused.pop(0)
         out = block_call(self, h, pre, *args, **kwargs)
         ref = np.asarray(expected.astype(mx.float32))
-        worst = max(worst, float(np.abs(np.asarray(out[0].astype(mx.float32)) - ref).max() / np.abs(ref).max()))
+        worst = max(
+            worst,
+            float(
+                np.abs(np.asarray(out[0].astype(mx.float32)) - ref).max()
+                / np.abs(ref).max()
+            ),
+        )
         return out
 
     monkeypatch.setattr(Block, "__call__", layer_by_layer)
@@ -231,13 +275,25 @@ def test_fused_decode_rejects_unsupported_layouts():
     assert decode_fused.supported(layer, c)
     att = model.layers[2].attn
     packed, scales = mx.quantize(
-        mx.dequantize(att.wq_b.weight, att.wq_b.scales, None, group_size=32, bits=8, mode="mxfp8", dtype=mx.bfloat16),
-        group_size=32, bits=4, mode="mxfp4",
+        mx.dequantize(
+            att.wq_b.weight,
+            att.wq_b.scales,
+            None,
+            group_size=32,
+            bits=8,
+            mode="mxfp8",
+            dtype=mx.bfloat16,
+        ),
+        group_size=32,
+        bits=4,
+        mode="mxfp4",
     )
     att.wq_b = QuantizedProjection(packed, scales, 4, "mxfp4")
     assert not decode_fused.supported(model.layers[2], c)
     other = model.layers[3].attn
-    scaled = (other.wo_a.weight.astype(mx.float32) * 1.01).astype(mx.bfloat16)   # off the FP8 grid
+    scaled = (other.wo_a.weight.astype(mx.float32) * 1.01).astype(
+        mx.bfloat16
+    )  # off the FP8 grid
     assert not mx.array_equal(scaled, other.wo_a.weight).item()
     other.wo_a.weight = scaled
     assert not decode_fused.supported(model.layers[3], c)
@@ -249,14 +305,28 @@ def test_offloaded_experts_decode_on_the_unfused_path(tmp_path):
     specs, tensors = {}, {}
     for i, layer in enumerate(model.layers):
         prefix = f"language_model.layers.{i}.ffn.experts"
-        specs.update({f"{prefix}.{proj}": dict(bits=4, mode="mxfp4") for proj in ("w1", "w2", "w3")})
-        tensors.update({f"{prefix}.{k}": v for k, v in tree_flatten(layer.ffn.experts.parameters())})
+        specs.update(
+            {
+                f"{prefix}.{proj}": dict(bits=4, mode="mxfp4")
+                for proj in ("w1", "w2", "w3")
+            }
+        )
+        tensors.update(
+            {
+                f"{prefix}.{k}": v
+                for k, v in tree_flatten(layer.ffn.experts.parameters())
+            }
+        )
     mx.save_safetensors(str(tmp_path / "model.safetensors"), tensors)
     raw = {"omlx_deepseek_v41": {"version": 1, "quantized_modules": specs}}
-    plan = ExpertOffloadPlan(tmp_path, raw, {k: "model.safetensors" for k in tensors}, c, 0.5)
+    plan = ExpertOffloadPlan(
+        tmp_path, raw, {k: "model.safetensors" for k in tensors}, c, 0.5
+    )
     try:
         for i, layer in enumerate(model.layers):
-            layer.ffn.experts = OffloadedExpert(layer.ffn.experts, plan, f"language_model.layers.{i}.ffn.experts")
+            layer.ffn.experts = OffloadedExpert(
+                layer.ffn.experts, plan, f"language_model.layers.{i}.ffn.experts"
+            )
         assert not decode_fused.supported(model.layers[0], c)
         # Requests then verify one by one, so the batch policy must not cap their depth.
         assert model.mtp_shared_verify_rows() == 0
@@ -274,15 +344,37 @@ def test_batched_index_queries_match_each_request_alone(batch):
     idx = Indexer(c, 0)
     rng = np.random.default_rng(5)
     for name in ("wq_b", "weights_proj"):
-        weight = mx.array(rng.normal(0, 0.03, getattr(idx, name).weight.shape), mx.bfloat16)
+        weight = mx.array(
+            rng.normal(0, 0.03, getattr(idx, name).weight.shape), mx.bfloat16
+        )
         packed, scales, biases = mx.quantize(weight, group_size=64, bits=4)
-        setattr(idx, name, QuantizedProjection(packed, scales, 4, "affine", biases=biases, group_size=64, quantize_input=True))
-    x, qr = (mx.array(rng.normal(size=(1, batch, n)), mx.bfloat16) for n in (c.dim, c.q_lora_rank))
+        setattr(
+            idx,
+            name,
+            QuantizedProjection(
+                packed,
+                scales,
+                4,
+                "affine",
+                biases=biases,
+                group_size=64,
+                quantize_input=True,
+            ),
+        )
+    x, qr = (
+        mx.array(rng.normal(size=(1, batch, n)), mx.bfloat16)
+        for n in (c.dim, c.q_lora_rank)
+    )
     positions = [9 + r * r % 7 for r in range(batch)]
     q, w = decode_fused._index_queries(idx, x, qr, positions)
     for r, p in enumerate(positions):
-        alone = decode_fused._index_queries(idx, x[:, r : r + 1], qr[:, r : r + 1], range(p, p + 1))
-        assert mx.array_equal(q[:, r : r + 1], alone[0]).item() and mx.array_equal(w[:, r : r + 1], alone[1]).item()
+        alone = decode_fused._index_queries(
+            idx, x[:, r : r + 1], qr[:, r : r + 1], range(p, p + 1)
+        )
+        assert (
+            mx.array_equal(q[:, r : r + 1], alone[0]).item()
+            and mx.array_equal(w[:, r : r + 1], alone[1]).item()
+        )
 
 
 @pytest.mark.parametrize(
@@ -290,7 +382,9 @@ def test_batched_index_queries_match_each_request_alone(batch):
     [
         pytest.param([12, 18, 15], "mxfp", id="irregular-mxfp"),
         pytest.param([12, 15, 18], "affine", id="stepped-affine"),
-        pytest.param([(12, 18, 15)[r % 3] for r in range(17)], "affine", id="two-chunks-affine"),
+        pytest.param(
+            [(12, 18, 15)[r % 3] for r in range(17)], "affine", id="two-chunks-affine"
+        ),
     ],
 )
 def test_batched_decode_matches_single_requests(monkeypatch, lengths, fmt):
@@ -330,25 +424,41 @@ def test_batched_decode_matches_single_requests(monkeypatch, lengths, fmt):
             cache = model.make_cache()
             mx.eval(model(mx.array([p[:-1]]), cache=cache))
             target.append(cache)
-    batched = [DeepseekV41Cache.merge([rows[r][i] for r in range(batch)]) for i in range(len(rows[0]))]
+    batched = [
+        DeepseekV41Cache.merge([rows[r][i] for r in range(batch)])
+        for i in range(len(rows[0]))
+    ]
     for item in batched:
         item.prepare(lengths=[4] * batch)
     tokens = [p[-1] for p in prompts]
     for step in range(2):
-        expected = [np.asarray(model(mx.array([[t]]), cache=c_)[0, -1].astype(mx.float32)) for t, c_ in zip(tokens, singles)]
-        got = np.asarray(model(mx.array([[t] for t in tokens]), cache=batched)[:, -1].astype(mx.float32))
+        expected = [
+            np.asarray(model(mx.array([[t]]), cache=c_)[0, -1].astype(mx.float32))
+            for t, c_ in zip(tokens, singles)
+        ]
+        got = np.asarray(
+            model(mx.array([[t] for t in tokens]), cache=batched)[:, -1].astype(
+                mx.float32
+            )
+        )
         for r in range(batch):
-            np.testing.assert_allclose(got[r], expected[r], rtol=0, atol=1e-6 * np.abs(expected[r]).max())
+            np.testing.assert_allclose(
+                got[r], expected[r], rtol=0, atol=1e-6 * np.abs(expected[r]).max()
+            )
             for i, (item, single) in enumerate(zip(batched, singles[r])):
                 row = item.extract(r)
                 assert row.size() == single.size()
                 assert row._ds41_buffers is rows[r][i]._ds41_buffers
         assert all(item.lengths.tolist() == [3 - step] * batch for item in batched)
         tokens = [int(e.argmax()) for e in expected]
-    chunks = [min(decode_fused.MAX_BATCH, batch - start)
-              for start in range(0, batch, decode_fused.MAX_BATCH)]
+    chunks = [
+        min(decode_fused.MAX_BATCH, batch - start)
+        for start in range(0, batch, decode_fused.MAX_BATCH)
+    ]
     assert batches == [n for n in chunks for _ in model.layers] * 2
-    assert attention["batched"] == len(batches)   # windows are full: request-batched attention
+    assert attention["batched"] == len(
+        batches
+    )  # windows are full: request-batched attention
 
 
 def test_batched_attention_reads_each_requests_selected_rows():
@@ -364,18 +474,32 @@ def test_batched_attention_reads_each_requests_selected_rows():
     def normal(*shape):
         return mx.array(rng.normal(0, 1, shape).astype(np.float32)).astype(mx.bfloat16)
 
-    kvs = [pack_activation(normal(1, n, d), bits=4, group_size=16, e4m3_scale=True) for n in (9, 5, 0, 12)]
+    kvs = [
+        pack_activation(normal(1, n, d), bits=4, group_size=16, e4m3_scale=True)
+        for n in (9, 5, 0, 12)
+    ]
     # (request, rows): request 0 has rows 0..8, request 2 has none.
-    queries = [(0, [5, 9]), (0, [0, 3, 8]), (0, [-1, 2, 7]), (1, [1, 4]), (2, []), (3, [-1, -1, 11])]
+    queries = [
+        (0, [5, 9]),
+        (0, [0, 3, 8]),
+        (0, [-1, 2, 7]),
+        (1, [1, 4]),
+        (2, []),
+        (3, [-1, -1, 11]),
+    ]
     parts = [(kvs[r], mx.array(ids, mx.int32).reshape(1, 1, -1)) for r, ids in queries]
     b_n = len(queries)
     q = normal(b_n, h * d)
     win = pack_activation(normal(b_n, w, d))
-    cos, sin = (mx.array(rng.normal(0, 1, (b_n, rd // 2)).astype(np.float32)) for _ in range(2))
+    cos, sin = (
+        mx.array(rng.normal(0, 1, (b_n, rd // 2)).astype(np.float32)) for _ in range(2)
+    )
     got = decode_fused.window_attention_bq(att, q, win, parts, {}, cos, sin, c)
     wi = mx.arange(w, dtype=mx.int32).reshape(1, 1, w)
     for b, (kv, ids) in enumerate(parts):
-        alone = decode_fused.split_attention(q[b], win[b : b + 1], kv, wi, ids, att.attn_sink, cos[b], sin[b], c)
+        alone = decode_fused.split_attention(
+            q[b], win[b : b + 1], kv, wi, ids, att.attn_sink, cos[b], sin[b], c
+        )
         assert mx.array_equal(got[b], alone).item(), b
 
 
@@ -398,7 +522,11 @@ def test_batched_fp8_mma_projection_within_fp32_summation_of_exact(
 
     names = []
     real_kernel = decode_layer.kernel
-    monkeypatch.setattr(decode_layer, "kernel", lambda name, *f: (names.append(name), real_kernel(name, *f))[1])
+    monkeypatch.setattr(
+        decode_layer,
+        "kernel",
+        lambda name, *f: (names.append(name), real_kernel(name, *f))[1],
+    )
     att = shared_build().layers[0].attn
     k = att.wq_a.weight.shape[1] * 4
     x = _aq(np.random.default_rng(nb), nb, k)
@@ -406,7 +534,15 @@ def test_batched_fp8_mma_projection_within_fp32_summation_of_exact(
     assert names == ["gemv_fp8_mma"]
     X = np.asarray(x).astype(np.float64)
     for proj, y in ((att.wq_a, ya), (att.wkv, yb)):
-        W = mx.dequantize(proj.weight, proj.scales, None, group_size=32, bits=8, mode="mxfp8", dtype=mx.float32)
+        W = mx.dequantize(
+            proj.weight,
+            proj.scales,
+            None,
+            group_size=32,
+            bits=8,
+            mode="mxfp8",
+            dtype=mx.float32,
+        )
         W = np.asarray(W).astype(np.float64)
         exact = X @ W.T
         bound = k * 2.0**-24 * (np.abs(X) @ np.abs(W).T)
@@ -420,7 +556,8 @@ def test_batched_fp8_mma_projection_within_fp32_summation_of_exact(
 def test_batched_mma_kernels_match_rows_kernels(monkeypatch, shared_build, nb):
     """Each simdgroup-matrix kernel (wq_b+RoPE, wo_a+act_quant, MoE shared expert) agrees with
     its fp8_rows_nb counterpart up to summation rounding; MoE routing is untouched."""
-    from omlx.patches.deepseek_v41 import decode_layer as DL, decode_moe
+    from omlx.patches.deepseek_v41 import decode_layer as decode_layer
+    from omlx.patches.deepseek_v41 import decode_moe
 
     model = shared_build()
     c = model._config
@@ -432,32 +569,81 @@ def test_batched_mma_kernels_match_rows_kernels(monkeypatch, shared_build, nb):
     cos = mx.array(rng.normal(0, 1, (nb, c.rope_head_dim // 2)).astype(np.float32))
     sin = mx.array(rng.normal(0, 1, (nb, c.rope_head_dim // 2)).astype(np.float32))
     ks = decode_fused._mma_split(nq // 8, c.q_lora_rank // 32)
-    tmpl = [("N", nq), ("K", c.q_lora_rank), ("HD", c.head_dim), ("RD", c.rope_head_dim), ("NB", nb)]
-    q_mma = DL.kernel("wqb_rope_mma", (decode_moe.MXFP8,))(
-        inputs=[qrq, att.wq_b.weight, att.wq_b.scales, decode_moe._biases(att.wq_b), cos, sin], template=tmpl + [("KS", ks)],
-        grid=(nq // 8 * ks * 32, 1, 1), threadgroup=(ks * 32, 1, 1),
-        output_shapes=[(nb * nq,)], output_dtypes=[mx.bfloat16])[0]
-    q_rows = DL.kernel("wqb_rope_nb", (decode_moe.MXFP8,))(
-        inputs=[qrq, att.wq_b.weight, att.wq_b.scales, decode_moe._biases(att.wq_b), cos, sin], template=tmpl,
-        grid=(nq // 8 * 64, 1, 1), threadgroup=(64, 1, 1),
-        output_shapes=[(nb * nq,)], output_dtypes=[mx.bfloat16])[0]
-    np.testing.assert_allclose(q_mma.astype(mx.float32), q_rows.astype(mx.float32), rtol=2**-6, atol=1e-6)
+    tmpl = [
+        ("N", nq),
+        ("K", c.q_lora_rank),
+        ("HD", c.head_dim),
+        ("RD", c.rope_head_dim),
+        ("NB", nb),
+    ]
+    q_mma = decode_layer.kernel("wqb_rope_mma", (decode_moe.MXFP8,))(
+        inputs=[
+            qrq,
+            att.wq_b.weight,
+            att.wq_b.scales,
+            decode_moe._biases(att.wq_b),
+            cos,
+            sin,
+        ],
+        template=tmpl + [("KS", ks)],
+        grid=(nq // 8 * ks * 32, 1, 1),
+        threadgroup=(ks * 32, 1, 1),
+        output_shapes=[(nb * nq,)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
+    q_rows = decode_layer.kernel("wqb_rope_nb", (decode_moe.MXFP8,))(
+        inputs=[
+            qrq,
+            att.wq_b.weight,
+            att.wq_b.scales,
+            decode_moe._biases(att.wq_b),
+            cos,
+            sin,
+        ],
+        template=tmpl,
+        grid=(nq // 8 * 64, 1, 1),
+        threadgroup=(64, 1, 1),
+        output_shapes=[(nb * nq,)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
+    np.testing.assert_allclose(
+        q_mma.astype(mx.float32), q_rows.astype(mx.float32), rtol=2**-6, atol=1e-6
+    )
     oq = _aq(rng, nb, nq)
     wq, ws = decode_fused._woa_mxfp8(att)
-    tmpl = [("R", c.o_lora_rank), ("K", nq // c.o_groups), ("G", c.o_groups), ("NB", nb)]
-    y_mma = DL.kernel("woa_mma")(
-        inputs=[oq, wq, ws], template=tmpl + [("KS", 2)], grid=(rows // 32 * 256, 1, 1), threadgroup=(256, 1, 1),
-        output_shapes=[(nb * rows,)], output_dtypes=[mx.float32])[0]
-    y_rows = DL.kernel("woa_nb")(
-        inputs=[oq, wq, ws], template=tmpl, grid=(rows // 32 * 256, 1, 1), threadgroup=(256, 1, 1),
-        output_shapes=[(nb * rows,)], output_dtypes=[mx.float32])[0]
-    assert np.mean(np.asarray(y_mma) == np.asarray(y_rows)) > 0.99   # act_quant can flip a step at a rounding tie
+    tmpl = [
+        ("R", c.o_lora_rank),
+        ("K", nq // c.o_groups),
+        ("G", c.o_groups),
+        ("NB", nb),
+    ]
+    y_mma = decode_layer.kernel("woa_mma")(
+        inputs=[oq, wq, ws],
+        template=tmpl + [("KS", 2)],
+        grid=(rows // 32 * 256, 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(nb * rows,)],
+        output_dtypes=[mx.float32],
+    )[0]
+    y_rows = decode_layer.kernel("woa_nb")(
+        inputs=[oq, wq, ws],
+        template=tmpl,
+        grid=(rows // 32 * 256, 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(nb * rows,)],
+        output_dtypes=[mx.float32],
+    )[0]
+    assert (
+        np.mean(np.asarray(y_mma) == np.asarray(y_rows)) > 0.99
+    )  # act_quant can flip a step at a rounding tie
     x = mx.array(rng.normal(0, 1, (nb, c.dim)).astype(np.float32)).astype(mx.bfloat16)
     out_mma, idx_mma, _ = decode_moe.fused_decode_moe_nb(blk.ffn, x, c)
     monkeypatch.setattr(decode_moe, "use_mma", lambda nb: False)
     out_rows, idx_rows, _ = decode_moe.fused_decode_moe_nb(blk.ffn, x, c)
     np.testing.assert_array_equal(idx_mma, idx_rows)
-    np.testing.assert_allclose(out_mma.astype(mx.float32), out_rows.astype(mx.float32), rtol=2**-6, atol=1e-5)
+    np.testing.assert_allclose(
+        out_mma.astype(mx.float32), out_rows.astype(mx.float32), rtol=2**-6, atol=1e-5
+    )
 
 
 @pytest.mark.parametrize("fmt", ["mxfp", "affine"])
@@ -483,15 +669,22 @@ def test_second_column_tile_matches_an_eight_vector_tile(shared_build, fmt):
     sin = mx.array(rng.normal(0, 1, (16, c.rope_head_dim // 2)).astype(np.float32))
     wide = decode_fused.wqb_rope_nb(att, qrq, cos, sin, c, True)
     for half in halves:
-        assert mx.array_equal(wide[half], decode_fused.wqb_rope_nb(att, qrq[half], cos[half], sin[half], c, True)).item()
+        assert mx.array_equal(
+            wide[half],
+            decode_fused.wqb_rope_nb(att, qrq[half], cos[half], sin[half], c, True),
+        ).item()
     oq = _aq(rng, 16, c.n_heads * c.head_dim)
     wide = decode_fused.woa_nb(att, oq, c, True)
     for half in halves:
-        assert mx.array_equal(wide[half], decode_fused.woa_nb(att, oq[half], c, True)).item()
+        assert mx.array_equal(
+            wide[half], decode_fused.woa_nb(att, oq[half], c, True)
+        ).item()
     h = mx.array(rng.normal(0, 1, (16, c.dim)).astype(np.float32)).astype(mx.bfloat16)
     wide = decode_moe.fused_decode_moe_nb(blk.ffn, h, c, mma=True)[0]
     for half in halves:
-        assert mx.array_equal(wide[half], decode_moe.fused_decode_moe_nb(blk.ffn, h[half], c, mma=True)[0]).item()
+        assert mx.array_equal(
+            wide[half], decode_moe.fused_decode_moe_nb(blk.ffn, h[half], c, mma=True)[0]
+        ).item()
 
 
 def test_small_batches_keep_rows_kernels(monkeypatch, shared_build):
@@ -500,9 +693,21 @@ def test_small_batches_keep_rows_kernels(monkeypatch, shared_build):
 
     names = []
     real_kernel = decode_layer.kernel
-    monkeypatch.setattr(decode_layer, "kernel", lambda name, *f: (names.append(name), real_kernel(name, *f))[1])
+    monkeypatch.setattr(
+        decode_layer,
+        "kernel",
+        lambda name, *f: (names.append(name), real_kernel(name, *f))[1],
+    )
     att = shared_build().layers[0].attn
-    decode_fused.gemv_fp8_nb(_aq(np.random.default_rng(3), decode_moe.MMA_MIN_BATCH - 1, att.wq_a.weight.shape[1] * 4), att.wq_a, att.wkv)
+    decode_fused.gemv_fp8_nb(
+        _aq(
+            np.random.default_rng(3),
+            decode_moe.MMA_MIN_BATCH - 1,
+            att.wq_a.weight.shape[1] * 4,
+        ),
+        att.wq_a,
+        att.wkv,
+    )
     assert names == ["gemv_fp8_nb"]
 
 
@@ -520,15 +725,30 @@ def test_affine_codes_read_in_place_are_exact(bits):
         affine_codes_lane<{bits}>(reinterpret_cast<const device uchar*>(words + i), q);
         for (int j = 0; j < {n}; ++j) out[i * {n} + j] = q[j] * aff_unit<{bits}>(j);
     """
-    kernel = mx.fast.metal_kernel(name=f"v41_test_affine_in_place_{bits}", input_names=["words"],
-                                  output_names=["out"], source=source, header=decode_moe._HEADER)
+    kernel = mx.fast.metal_kernel(
+        name=f"v41_test_affine_in_place_{bits}",
+        input_names=["words"],
+        output_names=["out"],
+        source=source,
+        header=decode_moe._HEADER,
+    )
     rng = np.random.default_rng(bits)
     codes = rng.integers(0, 1 << bits, (64, n))
-    codes[0], codes[1] = 0, (1 << bits) - 1   # all-zero and all-max words
-    words = np.array([sum(int(c) << (bits * j) for j, c in enumerate(row)) for row in codes], np.uint32)
-    out = kernel(inputs=[mx.array(words)], grid=(64, 1, 1), threadgroup=(64, 1, 1),
-                 output_shapes=[(64 * n,)], output_dtypes=[mx.float32])[0]
-    np.testing.assert_array_equal(np.asarray(out).reshape(64, n), codes.astype(np.float32))
+    codes[0], codes[1] = 0, (1 << bits) - 1  # all-zero and all-max words
+    words = np.array(
+        [sum(int(c) << (bits * j) for j, c in enumerate(row)) for row in codes],
+        np.uint32,
+    )
+    out = kernel(
+        inputs=[mx.array(words)],
+        grid=(64, 1, 1),
+        threadgroup=(64, 1, 1),
+        output_shapes=[(64 * n,)],
+        output_dtypes=[mx.float32],
+    )[0]
+    np.testing.assert_array_equal(
+        np.asarray(out).reshape(64, n), codes.astype(np.float32)
+    )
 
 
 def test_paired_weight_decoders_are_exact():
@@ -546,16 +766,34 @@ def test_paired_weight_decoders_are_exact():
             for (int j = 0; j < 8; ++j) out4[i * 8 + j] = v[j] * 16384.0f;
         }
     """
-    kernel = mx.fast.metal_kernel(name="v41_test_weight_decoders", input_names=["words8", "words4"],
-                                  output_names=["out8", "out4"], source=source, header=decode_moe._HEADER)
+    kernel = mx.fast.metal_kernel(
+        name="v41_test_weight_decoders",
+        input_names=["words8", "words4"],
+        output_names=["out8", "out4"],
+        source=source,
+        header=decode_moe._HEADER,
+    )
     codes = np.arange(256, dtype=np.uint8)
-    words8 = codes.view(np.uint32)                                   # code 4i + j at bits 8j of word i
-    words4 = np.array([sum(n << (4 * j) for j, n in enumerate(range(8 * w, 8 * w + 8))) for w in range(2)], np.uint32)
-    out8, out4 = kernel(inputs=[mx.array(words8), mx.array(words4)], grid=(64, 1, 1), threadgroup=(64, 1, 1),
-                        output_shapes=[(256,), (16,)], output_dtypes=[mx.float32, mx.float32])
+    words8 = codes.view(np.uint32)  # code 4i + j at bits 8j of word i
+    words4 = np.array(
+        [
+            sum(n << (4 * j) for j, n in enumerate(range(8 * w, 8 * w + 8)))
+            for w in range(2)
+        ],
+        np.uint32,
+    )
+    out8, out4 = kernel(
+        inputs=[mx.array(words8), mx.array(words4)],
+        grid=(64, 1, 1),
+        threadgroup=(64, 1, 1),
+        output_shapes=[(256,), (16,)],
+        output_dtypes=[mx.float32, mx.float32],
+    )
     c = codes.astype(np.int64)
     e, m = (c >> 3) & 15, c & 7
-    e4m3 = np.where(e == 0, m * 2.0**-9, 2.0 ** (e - 7.0) * (1 + m / 8)) * np.where(c & 128, -1, 1)
+    e4m3 = np.where(e == 0, m * 2.0**-9, 2.0 ** (e - 7.0) * (1 + m / 8)) * np.where(
+        c & 128, -1, 1
+    )
     e2m1 = np.array([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6])
     np.testing.assert_array_equal(np.asarray(out8), e4m3.astype(np.float32))
     np.testing.assert_array_equal(np.asarray(out4), e2m1.astype(np.float32))
@@ -563,7 +801,9 @@ def test_paired_weight_decoders_are_exact():
     assert np.array_equal(np.signbit(np.asarray(out4)), np.arange(16) >= 8)
 
 
-@pytest.mark.parametrize("fmt", ["mxfp", "affine", pytest.param("oqh", marks=_NEEDS_OQH)])
+@pytest.mark.parametrize(
+    "fmt", ["mxfp", "affine", pytest.param("oqh", marks=_NEEDS_OQH)]
+)
 @pytest.mark.parametrize("nb", [3, 16])
 def test_batched_moe_matches_single_token_moe(monkeypatch, shared_build, nb, fmt):
     """Without matrix tiles, each token of the batched MoE gets the single-token kernels'
@@ -572,19 +812,28 @@ def test_batched_moe_matches_single_token_moe(monkeypatch, shared_build, nb, fmt
     from omlx.patches.deepseek_v41 import decode_moe
 
     monkeypatch.setattr(decode_moe, "use_mma", lambda nb: False)
-    model = shared_build(fmt=fmt, n_routed_experts=16, n_activated_experts=4)   # >2 slots: their sum order shows
+    model = shared_build(
+        fmt=fmt, n_routed_experts=16, n_activated_experts=4
+    )  # >2 slots: their sum order shows
     c = model._config
     rng = np.random.default_rng(23 + nb)
     x = rng.normal(0, 1, (nb, c.dim)).astype(np.float32)
-    x[nb // 2:] = x[: nb - nb // 2] + rng.normal(0, 0.05, (nb - nb // 2, c.dim))   # neighbours share experts
+    x[nb // 2 :] = x[: nb - nb // 2] + rng.normal(
+        0, 0.05, (nb - nb // 2, c.dim)
+    )  # neighbours share experts
     x = mx.array(x).astype(mx.bfloat16)
     shared = 0
     for layer in model.layers:
         out, idx, w = decode_moe.fused_decode_moe_nb(layer.ffn, x, c)
         for r in range(nb):
-            single, single_idx, single_w = decode_moe.fused_decode_moe(layer.ffn, x[r].reshape(1, 1, -1), c)
+            single, single_idx, single_w = decode_moe.fused_decode_moe(
+                layer.ffn, x[r].reshape(1, 1, -1), c
+            )
             assert mx.array_equal(out[r], single.reshape(-1)).item()
-            assert mx.array_equal(idx[r], single_idx).item() and mx.array_equal(w[r], single_w).item()
+            assert (
+                mx.array_equal(idx[r], single_idx).item()
+                and mx.array_equal(w[r], single_w).item()
+            )
         shared += len(np.unique(np.asarray(idx))) < nb * c.n_activated_experts
     assert shared
 
@@ -599,7 +848,7 @@ def test_batched_engram_projects_each_request_like_a_single_request(batch):
     from omlx.patches.deepseek_v41.engram import Engram
 
     c = tiny(
-        dim=512,   # wkv output 2560 wide: there MLX's B-row kernel rounds differently
+        dim=512,  # wkv output 2560 wide: there MLX's B-row kernel rounds differently
         engram_layer_ids=(1,),
         engram_num_embeddings=(97,),
         engram_vocab_size=5,
@@ -609,17 +858,27 @@ def test_batched_engram_projects_each_request_like_a_single_request(batch):
         engram_compressed_vocab_size=64,
     )
     engram = Engram(c, 0)
-    rng = np.random.default_rng(19)   # draws whose B-row projection differs in a few elements
-    engram.embed.weight = mx.array(rng.normal(0, 1, engram.embed.weight.shape).astype(np.float32)).astype(mx.bfloat16)
-    weight = mx.array(rng.normal(0, 0.02, engram.wkv.weight.shape).astype(np.float32)).astype(mx.bfloat16)
+    rng = np.random.default_rng(
+        19
+    )  # draws whose B-row projection differs in a few elements
+    engram.embed.weight = mx.array(
+        rng.normal(0, 1, engram.embed.weight.shape).astype(np.float32)
+    ).astype(mx.bfloat16)
+    weight = mx.array(
+        rng.normal(0, 0.02, engram.wkv.weight.shape).astype(np.float32)
+    ).astype(mx.bfloat16)
     packed, scales = mx.quantize(weight, group_size=32, bits=8, mode="mxfp8")[:2]
     engram.wkv = QuantizedProjection(packed, scales, 8, "mxfp8")
     ids = rng.integers(0, 97, (batch, 1, 3 * 8))
-    ids[-1] = ids[0]   # requests can share an n-gram: their rows must stay one per request
+    ids[-1] = ids[
+        0
+    ]  # requests can share an n-gram: their rows must stay one per request
     # Engram computes in fp32 and returns h's dtype: fp32 h keeps every projection bit visible.
     h = mx.array(rng.normal(0, 1, (batch, 1, c.hc_mult, c.dim)).astype(np.float32))
     batched = engram(h, ids)
-    single = mx.concatenate([engram(h[r : r + 1], ids[r : r + 1]) for r in range(batch)])
+    single = mx.concatenate(
+        [engram(h[r : r + 1], ids[r : r + 1]) for r in range(batch)]
+    )
     assert mx.array_equal(batched, single).item()
 
 
@@ -633,11 +892,15 @@ def test_batched_engram_projects_each_request_like_a_single_request(batch):
         pytest.param(6, 3, 2, "affine", id="filling-window-6-3-affine"),
     ],
 )
-def test_verify_block_matches_token_by_token_decode(monkeypatch, rows, accepted, prompt_length, fmt):
+def test_verify_block_matches_token_by_token_decode(
+    monkeypatch, rows, accepted, prompt_length, fmt
+):
     """An MTP verify block through the fused kernels gives every token bit for bit the
     logits of decoding it alone, and after a partial rollback the cache continues exactly
     like one that decoded only the accepted tokens."""
-    model = verify_exact(build(fmt=fmt, vocab_size=4096))   # the vocab head kernel (per-row exact) needs >= 4096 rows
+    model = verify_exact(
+        build(fmt=fmt, vocab_size=4096)
+    )  # the vocab head kernel (per-row exact) needs >= 4096 rows
     calls = []
     real = decode_fused.decode_block_verify
 
@@ -648,13 +911,19 @@ def test_verify_block_matches_token_by_token_decode(monkeypatch, rows, accepted,
     monkeypatch.setattr(decode_fused, "decode_block_verify", counted)
     blocks = []
     real_block = decode_fused.compress_index_block
-    monkeypatch.setattr(decode_fused, "compress_index_block", lambda *a: (blocks.append(1), real_block(*a))[1])
+    monkeypatch.setattr(
+        decode_fused,
+        "compress_index_block",
+        lambda *a: (blocks.append(1), real_block(*a))[1],
+    )
     rng = np.random.default_rng(29 + rows)
     prompt = rng.integers(3, 60, prompt_length).tolist()
-    tokens = rng.integers(3, 60, rows + 1).tolist()   # confirmed token, drafts, next step
+    tokens = rng.integers(
+        3, 60, rows + 1
+    ).tolist()  # confirmed token, drafts, next step
     sequential, verified, accepted_only = (model.make_cache() for _ in range(3))
-    for cache in (sequential, verified, accepted_only):
-        mx.eval(model(mx.array([prompt]), cache=cache))
+    for cache_state in (sequential, verified, accepted_only):
+        mx.eval(model(mx.array([prompt]), cache=cache_state))
     expected = [model(mx.array([[t]]), cache=sequential)[0, -1] for t in tokens[:rows]]
     got = model(mx.array([tokens[:rows]]), cache=verified, n_confirmed=1)
     for j in range(rows):
@@ -667,7 +936,9 @@ def test_verify_block_matches_token_by_token_decode(monkeypatch, rows, accepted,
         mx.eval(model(mx.array([[t]]), cache=accepted_only))
     assert verified[0].size() == accepted_only[0].size()
     nxt = mx.array([[tokens[accepted + 1]]])
-    assert mx.array_equal(model(nxt, cache=verified), model(nxt, cache=accepted_only)).item()
+    assert mx.array_equal(
+        model(nxt, cache=verified), model(nxt, cache=accepted_only)
+    ).item()
 
 
 def test_requests_verified_together_match_their_batched_decode():
@@ -691,10 +962,14 @@ def test_requests_verified_together_match_their_batched_decode():
         return caches
 
     def batch(rows):
-        return [DeepseekV41Cache.merge([rc[i] for rc in rows]) for i in range(len(rows[0]))]
+        return [
+            DeepseekV41Cache.merge([rc[i] for rc in rows]) for i in range(len(rows[0]))
+        ]
 
     def decode(cache, column):
-        return model(mx.array([[block[column]] for block in blocks]), cache=cache)[:, -1]
+        return model(mx.array([[block[column]] for block in blocks]), cache=cache)[
+            :, -1
+        ]
 
     sequential, accepted_only = batch(prefilled()), batch(prefilled())
     expected = [decode(sequential, j) for j in range(3)]
@@ -704,8 +979,8 @@ def test_requests_verified_together_match_their_batched_decode():
     assert hidden.shape == (2, 3, 3 * model._config.dim)
     for j, want in enumerate(expected):
         assert mx.array_equal(logits[:, j], want).item(), f"row {j}"
-    for cache in together:
-        assert model.mtp_partial_rollback(cache, 1, 2)
+    for cache_state in together:
+        assert model.mtp_partial_rollback(cache_state, 1, 2)
     for j in range(2):
         decode(accepted_only, j)
     together = batch(together)
@@ -749,7 +1024,12 @@ def test_mtp_generation_matches_greedy_with_fused_kernels(monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(decode_fused, "decode_block_verify", counted)
-    generator = BatchGenerator(model, max_tokens=12, prefill_step_size=4, sampler=lambda logits: mx.argmax(logits, -1))
+    generator = BatchGenerator(
+        model,
+        max_tokens=12,
+        prefill_step_size=4,
+        sampler=lambda logits: mx.argmax(logits, -1),
+    )
     result = []
     try:
         generator.insert([prompt])
@@ -766,9 +1046,15 @@ def test_mtp_generation_matches_greedy_with_fused_kernels(monkeypatch):
 
 @pytest.mark.parametrize(
     ("count", "align"),
-    [(2, 0), pytest.param(2, 8, id="2-boundary-aligned"), pytest.param(5, 0, id="5-capped-depth")],
+    [
+        (2, 0),
+        pytest.param(2, 8, id="2-boundary-aligned"),
+        pytest.param(5, 0, id="5-capped-depth"),
+    ],
 )
-def test_mtp_generation_of_several_requests_verifies_them_together(monkeypatch, count, align):
+def test_mtp_generation_of_several_requests_verifies_them_together(
+    monkeypatch, count, align
+):
     """Requests decoding with DSpark verify their blocks in one forward and each
     reproduces its own greedy decoding token for token."""
     from mlx_lm.generate import BatchGenerator
@@ -816,12 +1102,18 @@ def test_mtp_generation_of_several_requests_verifies_them_together(monkeypatch, 
     real_jobs = batch_generator._dspark_draft_jobs
 
     def drafted(jobs):
-        anchored.extend(int(state.next_main[0]) == int(committed[-1]) for _, state, _, committed, _ in jobs)
+        anchored.extend(
+            int(state.next_main[0]) == int(committed[-1])
+            for _, state, _, committed, _ in jobs
+        )
         return real_jobs(jobs)
 
     monkeypatch.setattr(batch_generator, "_dspark_draft_jobs", drafted)
     generator = BatchGenerator(
-        model, max_tokens=8, prefill_step_size=4, prefill_batch_size=count,
+        model,
+        max_tokens=8,
+        prefill_step_size=4,
+        prefill_batch_size=count,
         sampler=lambda logits: mx.argmax(logits, -1),
     )
     result = {}
@@ -835,7 +1127,9 @@ def test_mtp_generation_of_several_requests_verifies_them_together(monkeypatch, 
                 break
     finally:
         generator.close()
-    assert together and max(shape[0] for shape in together) == count, "the requests must verify in one forward"
+    assert together and max(shape[0] for shape in together) == count, (
+        "the requests must verify in one forward"
+    )
     assert anchored and all(anchored)
     for uid, want in zip(uids, expected):
         assert result[uid][:8] == want
@@ -942,6 +1236,7 @@ def test_cluster_mtp_verifies_several_requests_together(tmp_path):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     run_two_ranks(tmp_path, _CLUSTER_MTP_BATCH_RANK, Path(__file__).parent, port)
+
 
 # One rank of the cluster decode test below.
 _CLUSTER_DECODE_RANK = """

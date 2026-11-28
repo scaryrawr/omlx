@@ -34,7 +34,7 @@ def test_qsa_cache_is_not_retained_in_boundary_snapshots(cache_cls):
             lambda request_id, snapshot_cache, token_count: captured.append(
                 snapshot_cache
             )
-        )
+        ),
     )
     request = SimpleNamespace(request_id="qsa-smoke")
 
@@ -187,10 +187,7 @@ def test_qwen4_mask_dense_seam_reaches_bounded_sdpa256(monkeypatch):
     # (2-D-only predicate), unlike the env knob which only exists here.
     prefill_len = 64  # > indexer_budget(16): the sparse mask engages
     position_ids = mx.stack(
-        [
-            mx.arange(prefill_len, dtype=mx.int32) * (1 + plane)
-            for plane in range(3)
-        ]
+        [mx.arange(prefill_len, dtype=mx.int32) * (1 + plane) for plane in range(3)]
     ).reshape(3, 1, prefill_len)
 
     # Fresh sdpa256 install with test-sized KV floor. Rebind the concrete

@@ -199,8 +199,7 @@ def test_qwen35_mxfp4_routes_narrow_long_prefill():
     diff = mx.abs(ref.astype(mx.float32) - got.astype(mx.float32))
     assert mx.max(diff).item() <= 0.02
     assert (
-        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item()
-        == 0
+        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item() == 0
     )
 
 
@@ -228,8 +227,7 @@ def test_qwen35_affine_routes_narrow_long_prefill(bits):
     diff = mx.abs(ref.astype(mx.float32) - got.astype(mx.float32))
     assert mx.max(diff).item() <= 1.0
     assert (
-        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item()
-        == 0
+        mx.max(mx.abs(ref.astype(mx.float32) - fallback.astype(mx.float32))).item() == 0
     )
 
 

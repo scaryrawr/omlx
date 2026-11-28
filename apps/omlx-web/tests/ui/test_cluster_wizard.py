@@ -20,7 +20,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from omlx_web import routes as webui
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -342,7 +341,9 @@ def test_configured_deployment_panel_lists_devices_and_deactivates():
 
 
 def test_change_model_reuses_onboarding_with_current_serving_settings():
-    result = _run_wizard(_WIZARD_TWO_MACS + """
+    result = _run_wizard(
+        _WIZARD_TWO_MACS
+        + """
 global.setTimeout = () => 0;
 const deployment = {
   deployment_id: 'pool-a', model: '/models/old',
@@ -391,7 +392,8 @@ component.apiFetch = async (url, options = {}) => {
     calls,
   }));
 })();
-""")
+"""
+    )
 
     assert result["stage"] == "plan"
     assert result["deployments"] == []
@@ -566,8 +568,8 @@ process.stdout.write(JSON.stringify(samples));
 def test_runtime_poll_failure_revokes_a_previous_ready_snapshot():
     fixtures = _fixtures()
     result = _run_wizard(f"""
-component.deploymentsPayload = {json.dumps(fixtures['deployments_active.json']['deployments'])};
-component.runtimePayload = {json.dumps(fixtures['runtime_ready.json'])};
+component.deploymentsPayload = {json.dumps(fixtures["deployments_active.json"]["deployments"])};
+component.runtimePayload = {json.dumps(fixtures["runtime_ready.json"])};
 component.runtimeLoaded = true;
 const before = component.deploymentRuntimeState();
 component.apiFetch = async () => {{ throw new Error('runtime endpoint down'); }};
@@ -1153,7 +1155,9 @@ process.stdout.write(JSON.stringify({
 
 
 def test_serving_profile_drives_the_server_owned_signed_plan():
-    result = _run_wizard(_WIZARD_TWO_MACS + """
+    result = _run_wizard(
+        _WIZARD_TWO_MACS
+        + """
 component.setExecutionProfile('throughput');
 component.modelOptions = [{ model_path: '/models/m', id: 'm' }];
 component.selectedModelPath = '/models/m';
@@ -1186,7 +1190,8 @@ component.apiFetch = async (url, options) => {
     })),
   }));
 })();
-""")
+"""
+    )
 
     assert result["selected"] == "throughput"
     assert result["posted"] == "throughput"
@@ -1510,19 +1515,19 @@ const component = clusterWizard();
 _WIZARD_TWO_MACS = """
 const roles = JSON.parse(
   require('fs').readFileSync(
-    %s,
+    {},
     'utf8',
   ),
 ).roles;
-component.devicesPayload = {
-  self: { node_id: 'node-a', friendly_name: 'Node A', caps: { ram_gb: 256 }, addrs: [] },
+component.devicesPayload = {{
+  self: {{ node_id: 'node-a', friendly_name: 'Node A', caps: {{ ram_gb: 256 }}, addrs: [] }},
   paired: [
-    { node_id: 'node-b', friendly_name: 'Node B', caps: { ram_gb: 128 }, addrs: [], paired: true },
+    {{ node_id: 'node-b', friendly_name: 'Node B', caps: {{ ram_gb: 128 }}, addrs: [], paired: true }},
   ],
   discovered: [],
-};
+}};
 component.roleOptions = roles;
-""" % json.dumps(str(FIXTURES / "node_roles.json"))
+""".format(json.dumps(str(FIXTURES / "node_roles.json")))
 
 
 def test_cuda_guide_pairs_windows_with_a_mac_address_the_pc_can_reach():
@@ -1609,7 +1614,8 @@ def test_fit_failure_banner_is_actionable_and_never_silent():
 
 def test_role_picker_defaults_reserve_math_and_replan():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 const gib = 1024 ** 3;
 let replans = 0;
 component.runPlan = async () => { replans += 1; };
@@ -1644,7 +1650,8 @@ process.stdout.write(JSON.stringify({
 
 def test_fit_failure_parses_the_shortfall_and_flips_only_on_click():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 const gib = 1024 ** 3;
 // A 274 GiB model across a 256 + 128 GiB pair: the workstation reserve on
 // this Mac is exactly what makes the plan fail.
@@ -1734,7 +1741,8 @@ def test_persistent_prompt_cache_defaults_on_and_can_be_disabled():
     assert "cluster.plan.prompt_reuse_blurb" in template
 
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 const posted = [];
 component.apiFetch = async (url, options) => {
   if (url.endsWith('/node-budgets')) return {nodes: component.planNodes()};
@@ -1779,7 +1787,9 @@ component.selectedModelPath = '/models/m';
 
 def test_every_strategy_uses_server_autoconfigure_and_its_tp_choice():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + _WIZARD_TIMER_STUBS + """
+        _WIZARD_TWO_MACS
+        + _WIZARD_TIMER_STUBS
+        + """
 const bodies = [];
 function proposalFor(strategy) {
   const tp = strategy === 'pipeline' ? 1 : 2;
@@ -1847,9 +1857,9 @@ component.selectedModelPath = '/models/m';
         if b["url"].endswith("/deployments") and b["marker"] is not None
     ]
     assert [item["strategy"] for item in proposals] == ["tensor", "auto", "pipeline"]
-    assert all(
-        item.get("tp") is None for item in proposals
-    ), "the browser must not choose a TP degree"
+    assert all(item.get("tp") is None for item in proposals), (
+        "the browser must not choose a TP degree"
+    )
     assert len(deploys) == 1
     assert deploys[0]["url"] == "/admin/api/cluster/deployments"
     assert deploys[0].get("strategy") is None
@@ -1888,7 +1898,8 @@ process.stdout.write(JSON.stringify({
 
 def test_catalogue_drives_the_recommendation_badge_and_capability_locks():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 let catalogueCalls = 0;
 component.apiFetch = async (url) => {
   if (url.endsWith('/catalogue')) {
@@ -1979,51 +1990,52 @@ slow.selectedModelPath = '/models/m';
 
 def test_calibration_requires_a_real_model_and_performance_probe_success():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 const proposal = JSON.parse(
   require('fs').readFileSync(
-    %s,
+    {},
     'utf8',
   ),
 );
 const bodies = [];
 let probeOk = false;
-component.apiFetch = async (url, options) => {
-  if (url.endsWith('/node-budgets')) return {nodes: component.planNodes()};
-  if (url.endsWith('/autoconfigure')) {
+component.apiFetch = async (url, options) => {{
+  if (url.endsWith('/node-budgets')) return {{nodes: component.planNodes()}};
+  if (url.endsWith('/autoconfigure')) {{
     bodies.push(JSON.parse(options.body));
-    return {
+    return {{
       ...proposal,
       performance_probe: probeOk
-        ? { ok: true, status: 'applied_before_staging' }
-        : { ok: false, status: 'memory_fallback', reason: 'probe unavailable' },
-    };
-  }
-  return { deployments: [] };
-};
+        ? {{ ok: true, status: 'applied_before_staging' }}
+        : {{ ok: false, status: 'memory_fallback', reason: 'probe unavailable' }},
+    }};
+  }}
+  return {{ deployments: [] }};
+}};
 
-(async () => {
+(async () => {{
   // The checks step precedes model selection: it must not fake calibration
   // with a placeholder model size.
   await component.runBenchmark();
-  const withoutModel = { calls: bodies.length, ...component.checks.benchmark };
-  component.modelOptions = [{
+  const withoutModel = {{ calls: bodies.length, ...component.checks.benchmark }};
+  component.modelOptions = [{{
     model_path: '/models/m', id: 'm', model_source: 'worker.example',
-    locations: [{
+    locations: [{{
       ssh: 'worker.example', python_executable: '/peer/venv/bin/python',
-    }],
-  }];
+    }}],
+  }}];
   component.selectedModelPath = '/models/m';
   await component.runBenchmark();
-  const failedProbe = { ...component.checks.benchmark };
+  const failedProbe = {{ ...component.checks.benchmark }};
   probeOk = true;
   await component.runBenchmark();
-  const passedProbe = { ...component.checks.benchmark };
-  process.stdout.write(JSON.stringify({
+  const passedProbe = {{ ...component.checks.benchmark }};
+  process.stdout.write(JSON.stringify({{
     withoutModel, failedProbe, passedProbe, bodies,
-  }));
-})();
-""" % json.dumps(str(FIXTURES / "autoconfigure_proposal.json")),
+  }}));
+}})();
+""".format(json.dumps(str(FIXTURES / "autoconfigure_proposal.json"))),
     )
 
     assert result["withoutModel"]["calls"] == 0
@@ -2145,7 +2157,8 @@ process.stdout.write(JSON.stringify({
 
 def test_peer_runtime_warning_is_amber_and_does_not_block_planning():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + """
+        _WIZARD_TWO_MACS
+        + """
 component.checks.started = true;
 component.checks.probes = {
   'node-b': {
@@ -2204,17 +2217,18 @@ global.setTimeout = () => 0;
 _WIZARD_SIGNED_PROPOSAL = """
 const signedProposal = JSON.parse(
   require('fs').readFileSync(
-    %s,
+    {},
     'utf8',
   ),
 );
 component.planProposal = signedProposal;
 component.plan = signedProposal.plan;
-""" % json.dumps(str(FIXTURES / "autoconfigure_proposal.json"))
+""".format(json.dumps(str(FIXTURES / "autoconfigure_proposal.json")))
 
 # Two Macs, model complete on node-a only (estimated_size proxy: a holder is
 # a location whose size matches the largest location).
-_WIZARD_PARTIAL_MODEL = """
+_WIZARD_PARTIAL_MODEL = (
+    """
 component.modelOptions = [{
   model_path: '/models/m', id: 'm', model_source: '127.0.0.1',
   locations: [
@@ -2222,7 +2236,9 @@ component.modelOptions = [{
   ],
 }];
 component.selectedModelPath = '/models/m';
-""" + _WIZARD_SIGNED_PROPOSAL
+"""
+    + _WIZARD_SIGNED_PROPOSAL
+)
 
 
 def _stage_node(
@@ -2256,43 +2272,43 @@ def test_staging_runs_before_activation_with_identical_bodies():
         + """
 const calls = [];
 const jobId = 'a'.repeat(24);
-component.apiFetch = async (url, options) => {
+component.apiFetch = async (url, options) => {{
   const body = options && options.body ? JSON.parse(options.body) : null;
-  calls.push({ url, body });
-  if (url.endsWith('/stage')) {
-    return { job_id: jobId, status: 'running', ready: false, error: '', nodes: {
-      'node-a': %s,
-      'node-b': %s,
-    } };
-  }
-  if (url.endsWith('/stage/' + jobId)) {
-    return { job_id: jobId, status: 'completed', ready: true, error: '', nodes: {
-      'node-a': %s,
-      'node-b': %s,
-    } };
-  }
-  return { deployments: [] };
-};
+  calls.push({{ url, body }});
+  if (url.endsWith('/stage')) {{
+    return {{ job_id: jobId, status: 'running', ready: false, error: '', nodes: {{
+      'node-a': {},
+      'node-b': {},
+    }} }};
+  }}
+  if (url.endsWith('/stage/' + jobId)) {{
+    return {{ job_id: jobId, status: 'completed', ready: true, error: '', nodes: {{
+      'node-a': {},
+      'node-b': {},
+    }} }};
+  }}
+  return {{ deployments: [] }};
+}};
 
-(async () => {
+(async () => {{
   const missing = component.nodesMissingModel().map((node) => node.node_id);
   await component.activatePlan();
-  const midFlight = {
+  const midFlight = {{
     label: component.stagingButtonLabel(),
     timer: component.stagingTimer !== null,
     busy: component.activateBusy,
     overall: component.stagingOverallLabel(),
-  };
+  }};
   await component.pollStagingJob();
-  process.stdout.write(JSON.stringify({
+  process.stdout.write(JSON.stringify({{
     missing,
     midFlight,
     urls: calls.map((entry) => entry.url),
-    stageBody: (calls.find((entry) => entry.url.endsWith('/stage')) || {}).body,
+    stageBody: (calls.find((entry) => entry.url.endsWith('/stage')) || {{}}).body,
     deployBody: (calls.find(
       (entry) => entry.url.endsWith('/deployments') && entry.body,
-    ) || {}).body,
-    after: {
+    ) || {{}}).body,
+    after: {{
       stage: component.stage,
       plan: component.plan,
       planProposal: component.planProposal,
@@ -2300,11 +2316,10 @@ component.apiFetch = async (url, options) => {
       stagingActivation: component.stagingActivation,
       timer: component.stagingTimer,
       busy: component.activateBusy,
-    },
-  }));
-})();
-"""
-        % (
+    }},
+  }}));
+}})();
+""".format(
             json.dumps(_stage_node("node-a", 0, "ready")),
             json.dumps(_stage_node("node-b", 1, "copying", 10, 3, 100, 30)),
             json.dumps(_stage_node("node-a", 0, "ready")),
@@ -2358,7 +2373,10 @@ component.apiFetch = async (url, options) => {
 
 def test_staging_is_skipped_when_every_mac_has_the_model():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + _WIZARD_TIMER_STUBS + _WIZARD_SIGNED_PROPOSAL + """
+        _WIZARD_TWO_MACS
+        + _WIZARD_TIMER_STUBS
+        + _WIZARD_SIGNED_PROPOSAL
+        + """
 component.modelOptions = [{
   model_path: '/models/m', id: 'm', model_source: '127.0.0.1',
   locations: [
@@ -2394,7 +2412,10 @@ component.apiFetch = async (url, options) => {
 
 def test_stage_409_replans_like_activation_409():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + _WIZARD_TIMER_STUBS + _WIZARD_PARTIAL_MODEL + """
+        _WIZARD_TWO_MACS
+        + _WIZARD_TIMER_STUBS
+        + _WIZARD_PARTIAL_MODEL
+        + """
 const calls = [];
 component.apiFetch = async (url, options) => {
   calls.push(url);
@@ -2447,7 +2468,10 @@ component.apiFetch = async (url, options) => {
 
 def test_stage_poll_404_is_a_retryable_lost_job():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + _WIZARD_TIMER_STUBS + _WIZARD_PARTIAL_MODEL + """
+        _WIZARD_TWO_MACS
+        + _WIZARD_TIMER_STUBS
+        + _WIZARD_PARTIAL_MODEL
+        + """
 const jobId = 'a'.repeat(24);
 let stagePosts = 0;
 component.apiFetch = async (url, options) => {
@@ -2496,37 +2520,36 @@ def test_stage_job_failure_keeps_per_node_errors_and_retries():
         + """
 const jobId = 'a'.repeat(24);
 let stagePosts = 0;
-component.apiFetch = async (url, options) => {
-  if (url.endsWith('/stage')) {
+component.apiFetch = async (url, options) => {{
+  if (url.endsWith('/stage')) {{
     stagePosts += 1;
-    return { job_id: jobId, status: 'running', ready: false, error: '', nodes: {} };
-  }
-  if (url.includes('/stage/')) {
-    return { job_id: jobId, status: 'failed', ready: false,
+    return {{ job_id: jobId, status: 'running', ready: false, error: '', nodes: {{}} }};
+  }}
+  if (url.includes('/stage/')) {{
+    return {{ job_id: jobId, status: 'failed', ready: false,
       error: 'Model staging failed on node-b',
-      nodes: {
-        'node-a': %s,
-        'node-b': %s,
-      } };
-  }
-  return { deployments: [] };
-};
+      nodes: {{
+        'node-a': {},
+        'node-b': {},
+      }} }};
+  }}
+  return {{ deployments: [] }};
+}};
 
-(async () => {
+(async () => {{
   await component.activatePlan();
   await component.pollStagingJob();
-  const failed = {
+  const failed = {{
     error: component.stagingError,
     nodeError: component.stagingJob.nodes['node-b'].error,
     busy: component.activateBusy,
     timer: component.stagingTimer,
     toasts: component.toasts.map((toast) => toast.type),
-  };
+  }};
   await component.activatePlan();
-  process.stdout.write(JSON.stringify({ failed, stagePosts }));
-})();
-"""
-        % (
+  process.stdout.write(JSON.stringify({{ failed, stagePosts }}));
+}})();
+""".format(
             json.dumps(_stage_node("node-a", 0, "ready")),
             json.dumps(
                 _stage_node(
@@ -2571,21 +2594,20 @@ def test_staging_progress_rows_render_per_node_file_counts():
     result = _run_wizard(
         _WIZARD_TWO_MACS
         + """
-component.stagingJob = { job_id: 'a'.repeat(24), status: 'running', nodes: {
-  'node-a': %s,
-  'node-b': %s,
-  'node-c': %s,
-  'node-d': %s,
-  'node-e': %s,
-} };
-process.stdout.write(JSON.stringify({
+component.stagingJob = {{ job_id: 'a'.repeat(24), status: 'running', nodes: {{
+  'node-a': {},
+  'node-b': {},
+  'node-c': {},
+  'node-d': {},
+  'node-e': {},
+}} }};
+process.stdout.write(JSON.stringify({{
   labels: component.stagingNodes().map((node) => [
     node.node_id, component.stagingNodeLabel(node),
   ]),
   overall: component.stagingOverallLabel(),
-}));
-"""
-        % (
+}}));
+""".format(
             # Complete model already local: ready with nothing copied.
             json.dumps(_stage_node("node-a", 0, "ready")),
             json.dumps(_stage_node("node-b", 1, "copying", 10, 3, 100, 30)),
@@ -2617,7 +2639,10 @@ process.stdout.write(JSON.stringify({
 
 def test_old_server_without_stage_degrades_to_direct_activation():
     result = _run_wizard(
-        _WIZARD_TWO_MACS + _WIZARD_TIMER_STUBS + _WIZARD_PARTIAL_MODEL + """
+        _WIZARD_TWO_MACS
+        + _WIZARD_TIMER_STUBS
+        + _WIZARD_PARTIAL_MODEL
+        + """
 const calls = [];
 component.apiFetch = async (url, options) => {
   const body = options && options.body ? JSON.parse(options.body) : null;
@@ -2661,7 +2686,8 @@ component.apiFetch = async (url, options) => {
 
 @pytest.mark.parametrize("delayed_action", ["poll", "begin"])
 def test_cancel_ignores_older_join_response(delayed_action):
-    result = _run_wizard("""
+    result = _run_wizard(
+        """
 let resolveOld;
 const notices = [];
 component.notify = (kind, message) => notices.push({kind, message});
@@ -2677,7 +2703,8 @@ component.apiFetch = (url) => url.endsWith('/cancel')
   await pending;
   process.stdout.write(JSON.stringify({join: component.join, notices}));
 })().catch(error => { console.error(error); process.exit(1); });
-""".replace("DELAYED_ACTION", json.dumps(delayed_action)))
+""".replace("DELAYED_ACTION", json.dumps(delayed_action))
+    )
     assert result["join"]["state"] == "idle"
     assert result["join"]["busy"] is False
     assert result["join"]["cleanup_pending"] is True

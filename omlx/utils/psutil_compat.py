@@ -56,7 +56,7 @@ if sys.platform == "darwin":
         _libc.host_page_size(_MACH_HOST, ctypes.byref(_ps))
         if _ps.value > 0:
             _VM_PAGE_SIZE = int(_ps.value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _libc = None
         _MACH_HOST = None
 else:
@@ -98,7 +98,7 @@ def get_total_memory() -> int:
         if total > 0:
             _cached_total_memory = total
             return total
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("psutil total memory fallback failed: %s", exc)
 
     return 0
@@ -142,7 +142,7 @@ def get_macos_vm_stats() -> dict[str, int] | None:
         if count.value > _VM_EXTERNAL_INDEX:
             result["external"] = int(stats[_VM_EXTERNAL_INDEX]) * ps
         return result
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

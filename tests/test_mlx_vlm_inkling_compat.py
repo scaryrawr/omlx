@@ -116,7 +116,14 @@ def test_route_kernel_accepts_constant_address_space(applied, monkeypatch, token
     logits = mx.broadcast_to(mx.array([[1.0, 2.0, 3.0, 4.0, 0.0]]), (tokens, 5))
     indices, weights, shared = language._route_kernel(
         inputs=[logits, mx.zeros((4,)), mx.array([1.0])],
-        template=[("T", mx.float32), ("N", tokens), ("R", 4), ("SH", 1), ("K", 2), ("I", 16)],
+        template=[
+            ("T", mx.float32),
+            ("N", tokens),
+            ("R", 4),
+            ("SH", 1),
+            ("K", 2),
+            ("I", 16),
+        ],
         grid=(32, tokens, 1),
         threadgroup=(32, 1, 1),
         output_shapes=[(tokens, 2), (tokens, 2), (tokens, 16)],
@@ -321,9 +328,7 @@ def test_image_processor_patch_grid(applied):
     )
 
     proc = processing_inkling.InklingImageProcessor()
-    image = Image.fromarray(
-        np.full((100, 50, 3), 128, dtype=np.uint8)
-    )  # H=100, W=50
+    image = Image.fromarray(np.full((100, 50, 3), 128, dtype=np.uint8))  # H=100, W=50
     out = proc.preprocess([image])
     # rows = ceil(100/40) = 3, cols = 50//40 + 1 = 2 (reference grid).
     assert out["num_patches"].tolist() == [6]
@@ -335,9 +340,7 @@ def test_image_processor_patch_grid(applied):
     expected = (-1.0 / 255.0 - proc.image_mean[0]) / proc.image_std[0]
     assert abs(float(padded_pixel) - float(expected)) < 1e-5
     # Temporal duplication is exact.
-    assert np.array_equal(
-        out["pixel_values"][:, 0], out["pixel_values"][:, 1]
-    )
+    assert np.array_equal(out["pixel_values"][:, 0], out["pixel_values"][:, 1])
 
 
 def _tiny_text_config():
@@ -381,9 +384,7 @@ def _tiny_language_model():
             mx.random.normal(attn.rel_proj.shape).astype(attn.rel_proj.dtype) * 0.05
         )
         if hasattr(layer.mlp, "gate_weight"):
-            layer.mlp.gate_weight = (
-                mx.random.normal(layer.mlp.gate_weight.shape) * 0.05
-            )
+            layer.mlp.gate_weight = mx.random.normal(layer.mlp.gate_weight.shape) * 0.05
     mx.eval(model.parameters())
     return model
 
@@ -435,9 +436,7 @@ def test_batched_right_padded_prefill_parity(applied, strict_math_device):
     # right-pad, chunked prefill, finalize.
     cache_1 = model.make_cache()
     cache_2 = model.make_cache()
-    merged = [
-        CacheList.merge([c1, c2]) for c1, c2 in zip(cache_1, cache_2)
-    ]
+    merged = [CacheList.merge([c1, c2]) for c1, c2 in zip(cache_1, cache_2)]
     padded = [tokens_a + [0] * (lb - la), tokens_b]
     for c in merged:
         c.prepare(lengths=[la, lb], right_padding=[lb - la, 0])
@@ -461,14 +460,11 @@ def test_batched_right_padded_prefill_parity(applied, strict_math_device):
             got = batch_conv[slot][0:1]
             want = single_conv[slot]
             assert mx.max(mx.abs(got - want)).item() < 1e-4, (
-                f"layer {layer_idx} conv slot {slot} diverged in batch "
-                "(pad pollution)"
+                f"layer {layer_idx} conv slot {slot} diverged in batch (pad pollution)"
             )
 
     # Last valid-token logits of A == single-run logits.
-    diff = mx.max(
-        mx.abs(logits_batch[0, la - 1] - logits_a[0, -1])
-    ).item()
+    diff = mx.max(mx.abs(logits_batch[0, la - 1] - logits_a[0, -1])).item()
     assert diff < 1e-3, f"prefill logits diverged: {diff}"
 
     # One decode step: exercises left_padding key masking + per-seq tau.
@@ -694,9 +690,7 @@ def test_fuse_qkvr_only_stacks_compatible_layers(applied):
     for layer_idx in range(2):
         prefix = f"language_model.model.layers.{layer_idx}.self_attn."
         for proj_idx, name in enumerate("qkvr"):
-            weights[f"{prefix}{name}_proj.weight"] = mx.full(
-                (2, 4), proj_idx + 1
-            )
+            weights[f"{prefix}{name}_proj.weight"] = mx.full((2, 4), proj_idx + 1)
 
     out = fuse_qkvr(weights, config)
     split_prefix = "language_model.model.layers.0.self_attn."
@@ -738,9 +732,10 @@ def test_moe_route_kernel_matches_reference(applied):
     selected = mx.take_along_axis(logits[:, :4], expected_idx, axis=-1)
     combined = mx.concatenate([selected, logits[:, 4:]], axis=-1)
     log_weights = -mx.logaddexp(mx.zeros_like(combined), -combined)
-    weights = mx.exp(
-        log_weights - mx.logsumexp(log_weights, axis=-1, keepdims=True)
-    ) * moe.route_scale
+    weights = (
+        mx.exp(log_weights - mx.logsumexp(log_weights, axis=-1, keepdims=True))
+        * moe.route_scale
+    )
     expected_gamma = mx.repeat(weights[:, 2:], moe.intermediate_size, axis=-1)
     mx.eval(idx, topk_w, gamma, expected_idx, weights, expected_gamma)
 
@@ -780,18 +775,12 @@ def test_quantized_down_combine_kernel_matches_dequantized_reference(applied):
     mx.random.seed(17)
     n_tokens, top_k, n_experts = 2, 6, 8
     input_dims, output_dims = 2048, 64
-    weights = mx.random.normal((n_experts, output_dims, input_dims)).astype(
+    weights = mx.random.normal((n_experts, output_dims, input_dims)).astype(mx.bfloat16)
+    packed, scales, biases = mx.quantize(weights, group_size=64, bits=4, mode="affine")
+    inputs = (mx.random.normal((n_tokens, top_k, input_dims)) * 0.01).astype(
         mx.bfloat16
     )
-    packed, scales, biases = mx.quantize(
-        weights, group_size=64, bits=4, mode="affine"
-    )
-    inputs = (
-        mx.random.normal((n_tokens, top_k, input_dims)) * 0.01
-    ).astype(mx.bfloat16)
-    indices = mx.array(
-        [[0, 2, 3, 5, 6, 7], [1, 2, 4, 5, 6, 7]], dtype=mx.uint32
-    )
+    indices = mx.array([[0, 2, 3, 5, 6, 7], [1, 2, 4, 5, 6, 7]], dtype=mx.uint32)
     route_weights = mx.softmax(
         mx.random.normal((n_tokens, top_k)).astype(mx.float32), axis=-1
     ).astype(mx.bfloat16)

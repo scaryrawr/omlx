@@ -77,7 +77,9 @@ SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("name,shape,dim,group_size", SHAPES, ids=[s[0] for s in SHAPES])
+@pytest.mark.parametrize(
+    "name,shape,dim,group_size", SHAPES, ids=[s[0] for s in SHAPES]
+)
 @pytest.mark.parametrize("weight_scale", [0.0, 0.02, 0.5])
 def test_stays_within_one_bf16_ulp_of_the_hand_rolled_formulation(
     name, shape, dim, group_size, weight_scale
@@ -121,12 +123,14 @@ def test_deviation_is_smaller_than_the_models_own_batching_spread():
     module = _module(10240, 2560, weight)
 
     ours = mx.abs(
-        module(x).astype(mx.float32) - _reference(x, weight, 1e-6, 2560).astype(mx.float32)
+        module(x).astype(mx.float32)
+        - _reference(x, weight, 1e-6, 2560).astype(mx.float32)
     )
     # the same reference formulation, one row at a time vs all four at once
     batched = _reference(x, weight, 1e-6, 2560)
     per_row = mx.concatenate(
-        [_reference(x[:, i : i + 1], weight, 1e-6, 2560) for i in range(x.shape[1])], axis=1
+        [_reference(x[:, i : i + 1], weight, 1e-6, 2560) for i in range(x.shape[1])],
+        axis=1,
     )
     theirs = mx.abs(batched.astype(mx.float32) - per_row.astype(mx.float32))
 
@@ -136,7 +140,9 @@ def test_deviation_is_smaller_than_the_models_own_batching_spread():
     )
 
 
-@pytest.mark.parametrize("name,shape,dim,group_size", SHAPES, ids=[s[0] for s in SHAPES])
+@pytest.mark.parametrize(
+    "name,shape,dim,group_size", SHAPES, ids=[s[0] for s in SHAPES]
+)
 def test_fp32_inputs_stay_within_a_few_ulp(name, shape, dim, group_size):
     """fp32 has no bf16 rounding to mask the kernel's different summation order."""
     mx.random.seed(11)
@@ -169,9 +175,13 @@ def test_the_grouped_scale_is_not_rounded_to_bf16():
     x = (mx.random.normal((1, 4, 10240)) * 1.5).astype(mx.bfloat16)
     got = _module(10240, 2560, weight)(x)
     naive = (
-        mx.fast.rms_norm(x.reshape(1, 4, 4, 2560), None, 1e-6).astype(mx.float32)
-        * rounded.reshape(-1, 2560)
-    ).reshape(x.shape).astype(mx.bfloat16)
+        (
+            mx.fast.rms_norm(x.reshape(1, 4, 4, 2560), None, 1e-6).astype(mx.float32)
+            * rounded.reshape(-1, 2560)
+        )
+        .reshape(x.shape)
+        .astype(mx.bfloat16)
+    )
     assert not mx.array_equal(got, naive).item()
 
 
@@ -210,11 +220,15 @@ def test_cached_scale_is_bit_identical_and_follows_a_reloaded_weight():
     cached = language.Qwen4ExpRMSNorm(256, eps=1e-6, cache_scale=True)
     plain = language.Qwen4ExpRMSNorm(256, eps=1e-6)
     for seed in (1, 2):
-        weight = (0.1 * mx.random.normal((256,), key=mx.random.key(seed))).astype(mx.bfloat16)
+        weight = (0.1 * mx.random.normal((256,), key=mx.random.key(seed))).astype(
+            mx.bfloat16
+        )
         cached.load_weights([("weight", weight)])
         plain.load_weights([("weight", weight)])
         for _ in range(2):
-            assert mx.array_equal(cached(x).view(mx.uint16), plain(x).view(mx.uint16)).item()
+            assert mx.array_equal(
+                cached(x).view(mx.uint16), plain(x).view(mx.uint16)
+            ).item()
 
 
 def test_deviation_rate_across_the_whole_geometry_is_a_few_ppm():
@@ -240,4 +254,6 @@ def test_deviation_rate_across_the_whole_geometry_is_a_few_ppm():
                 worst = max(worst, mx.max(rel).item())
 
     assert worst <= BF16_ULP, f"{worst / BF16_ULP:.2f} ULP exceeds one"
-    assert moved / total <= 50e-6, f"{moved / total * 1e6:.2f} ppm over {total} elements"
+    assert moved / total <= 50e-6, (
+        f"{moved / total * 1e6:.2f} ppm over {total} elements"
+    )

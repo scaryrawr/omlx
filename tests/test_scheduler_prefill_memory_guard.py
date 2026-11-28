@@ -908,9 +908,7 @@ def test_admission_estimate_is_the_single_formula():
     assert est.floor_chunk == floor
     assert est.kv_len == pre_chunk_kv_len
     assert est.kv_exact == int(
-        scheduler.memory_monitor.estimate_resident_kv_bytes(
-            32768, chunk_tokens=floor
-        )
+        scheduler.memory_monitor.estimate_resident_kv_bytes(32768, chunk_tokens=floor)
     )
     assert est.transient == int(
         scheduler._admission_transient_bound(floor, pre_chunk_kv_len)
@@ -1278,18 +1276,24 @@ def test_qwen4_pricing_tracks_execution_route():
 
     # Runtime requires the exact floating-point QSA cache type. Quantized QSA
     # caches use the official dense path and must be priced that way before it runs.
-    assert route(
-        query_tokens=n,
-        cache_tokens=2048,
-        position_ids=equal,
-        prompt_cache=[QSAKVCache()],
-    ) is True
-    assert route(
-        query_tokens=n,
-        cache_tokens=2048,
-        position_ids=equal,
-        prompt_cache=[QSAQuantizedKVCache()],
-    ) is False
+    assert (
+        route(
+            query_tokens=n,
+            cache_tokens=2048,
+            position_ids=equal,
+            prompt_cache=[QSAKVCache()],
+        )
+        is True
+    )
+    assert (
+        route(
+            query_tokens=n,
+            cache_tokens=2048,
+            position_ids=equal,
+            prompt_cache=[QSAQuantizedKVCache()],
+        )
+        is False
+    )
 
 
 def test_qwen4_preflight_doors_admit_at_the_gathered_price():
@@ -1310,10 +1314,7 @@ def test_qwen4_preflight_doors_admit_at_the_gathered_price():
         patch("omlx.scheduler.get_phys_footprint", return_value=current),
     ):
         scheduler.preflight_or_raise(num_prompt_tokens=233_472)
-        assert (
-            scheduler.preflight_eviction_request(num_prompt_tokens=233_472)
-            is None
-        )
+        assert scheduler.preflight_eviction_request(num_prompt_tokens=233_472) is None
 
 
 def test_qwen4_image_request_preflight_admits_at_gathered_price():

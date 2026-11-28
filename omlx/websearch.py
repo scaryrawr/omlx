@@ -238,9 +238,7 @@ class BraveProvider(SearchProvider):
 
     ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
-    def __init__(
-        self, api_key: str, transport: httpx.AsyncBaseTransport | None = None
-    ):
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None):
         self._api_key = (api_key or "").strip()
         self._transport = transport
 
@@ -406,7 +404,9 @@ async def _attach_page_contents(
 
     async def fill(result: dict[str, Any]) -> None:
         payload = await run_fetch_url(
-            result["url"], transport=transport, max_chars=max_chars,
+            result["url"],
+            transport=transport,
+            max_chars=max_chars,
             truncate=truncate,
         )
         if payload.get("ok"):
@@ -453,9 +453,7 @@ async def _search_with_provider(
         )
     results: list[dict[str, Any]] = []
     for row in rows:
-        cleaned = sanitize_result(
-            row.get("title"), row.get("url"), row.get("snippet")
-        )
+        cleaned = sanitize_result(row.get("title"), row.get("url"), row.get("snippet"))
         if cleaned is not None:
             results.append(cleaned)
         if len(results) >= max_results:
@@ -630,9 +628,7 @@ async def run_fetch_url(
                         current = str(httpx.URL(current).join(location))
                         continue
                     if response.status_code != 200:
-                        raise _error_from_status(
-                            response.status_code, "The web server"
-                        )
+                        raise _error_from_status(response.status_code, "The web server")
                     content_type = (
                         (response.headers.get("content-type") or "")
                         .split(";", 1)[0]

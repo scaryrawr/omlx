@@ -69,6 +69,7 @@ _MANIFEST_VERSION = 3
 
 def _wire_state(entry: Any) -> tuple[Any, Any]:
     from mlx_lm.models.cache import CacheList, QuantizedKVCache
+
     from omlx.cache.type_registry import CacheTypeRegistry
 
     if isinstance(entry, CacheList):

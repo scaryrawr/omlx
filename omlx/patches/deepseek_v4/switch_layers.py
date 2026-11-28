@@ -6,14 +6,14 @@
 from __future__ import annotations
 
 import math
-from functools import lru_cache
+from functools import cache
 
 import mlx.core as mx
 import mlx.nn as nn
-
 from mlx_lm.models.activations import swiglu
-from omlx.custom_kernels.quant_matmul import fast as quant_fast
+
 from omlx.custom_kernels.nax import is_nax_available
+from omlx.custom_kernels.quant_matmul import fast as quant_fast
 from omlx.patches.m5_gather_qmm import fused_gate_up_activation
 from omlx.patches.m5_gather_qmm_nax import split_affine_swiglu
 from omlx.patches.moe_routes import sort_routes
@@ -82,7 +82,7 @@ def _scatter_unsort(x, inv_order, shape=None):
     return x
 
 
-@lru_cache(maxsize=None)
+@cache
 def _mxfp4_block_builder(num_experts: int, bm: int):
     source = r"""
         const uint expert = thread_index_in_threadgroup;
@@ -464,7 +464,7 @@ class SwitchGLU(nn.Module):
         input_dims: int,
         hidden_dims: int,
         num_experts: int,
-        activation=SwiGLU(),
+        activation=None,
         bias: bool = False,
     ):
         super().__init__()
@@ -472,7 +472,7 @@ class SwitchGLU(nn.Module):
         self.gate_proj = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.up_proj = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.down_proj = SwitchLinear(hidden_dims, input_dims, num_experts, bias=bias)
-        self.activation = activation
+        self.activation = SwiGLU() if activation is None else activation
 
     def projections(self) -> tuple:
         """Expert projections in call order: gate/up (or fused), then down."""
@@ -725,14 +725,16 @@ class SwitchMLP(nn.Module):
         input_dims: int,
         hidden_dims: int,
         num_experts: int,
-        activation=nn.GELU(approx="precise"),
+        activation=None,
         bias: bool = False,
     ):
         super().__init__()
 
         self.fc1 = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.fc2 = SwitchLinear(hidden_dims, input_dims, num_experts, bias=bias)
-        self.activation = activation
+        self.activation = (
+            nn.GELU(approx="precise") if activation is None else activation
+        )
 
     def __call__(self, x, indices) -> mx.array:
         x = mx.expand_dims(x, (-2, -3))

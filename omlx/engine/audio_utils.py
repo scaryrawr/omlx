@@ -35,7 +35,6 @@ def wav_header(sample_rate: int, channels: int = 1, sample_width: int = 2) -> by
     )
 
 
-
 def wav_bytes_to_pcm_frames(wav_bytes: bytes) -> tuple[int, int, int, bytes]:
     """Extract WAV metadata and raw PCM frames from WAV bytes."""
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
@@ -44,7 +43,6 @@ def wav_bytes_to_pcm_frames(wav_bytes: bytes) -> tuple[int, int, int, bytes]:
         sample_width = wf.getsampwidth()
         pcm_bytes = wf.readframes(wf.getnframes())
     return sample_rate, channels, sample_width, pcm_bytes
-
 
 
 def audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:

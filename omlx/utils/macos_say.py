@@ -23,7 +23,21 @@ _BASE_WPM = 175
 _TIMEOUT_S = 120
 
 OPENAI_VOICES = frozenset(
-    "alloy ash ballad coral echo fable onyx nova sage shimmer verse marin cedar".split()
+    [
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "sage",
+        "shimmer",
+        "verse",
+        "marin",
+        "cedar",
+    ]
 )
 
 # argv: optional language. The text comes on stdin, never on the command line.
@@ -96,9 +110,7 @@ def pick_voice(text: str, language: str | None) -> str:
     if language and language.strip():
         argv.append(language.strip())
     try:
-        p = subprocess.run(
-            argv, input=text, capture_output=True, text=True, timeout=15
-        )
+        p = subprocess.run(argv, input=text, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("macos-say: voice pick timed out") from exc
     if p.returncode != 0:

@@ -7,9 +7,7 @@ Dataset bundled from allenai/ai2_arc (Challenge split) on HuggingFace.
 """
 
 import logging
-import re
 from pathlib import Path
-from typing import Optional
 
 from .base import BaseBenchmark
 from .datasets import deterministic_sample, load_jsonl
@@ -35,13 +33,15 @@ class ARCChallengeBenchmark(BaseBenchmark):
             labels = item.get("labels", [])
             if not choices or not labels:
                 continue
-            normalized.append({
-                "id": item.get("id", ""),
-                "question": item["question"],
-                "choices": choices,
-                "labels": labels,
-                "answer": item["answer"],
-            })
+            normalized.append(
+                {
+                    "id": item.get("id", ""),
+                    "question": item["question"],
+                    "choices": choices,
+                    "labels": labels,
+                    "answer": item["answer"],
+                }
+            )
 
         logger.info(f"ARC-Challenge: loaded {len(normalized)} questions")
 
@@ -58,8 +58,7 @@ class ARCChallengeBenchmark(BaseBenchmark):
         labels = item["labels"]
 
         parts = [
-            "Answer the following science question. "
-            "Answer with just the letter.\n",
+            "Answer the following science question. Answer with just the letter.\n",
             f"Question: {question}\n",
         ]
         for label, choice in zip(labels, choices):
@@ -76,5 +75,5 @@ class ARCChallengeBenchmark(BaseBenchmark):
     def check_answer(self, predicted: str, item: dict) -> bool:
         return predicted == item["answer"]
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         return None

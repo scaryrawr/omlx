@@ -12,7 +12,6 @@ from mlx_vlm.models.diffusion_gemma import Model, ModelConfig
 from omlx.engine.vlm import _strip_vision_config_if_orphaned
 from omlx.utils.model_loading import maybe_apply_pre_load_patches
 
-
 _TOWER_KEYS = {
     "tower": "model.encoder.vision_tower.weight",
     "moondream_tower": "model.vision.encoder.blocks.0.attn.qkv.weight",
@@ -102,9 +101,11 @@ def test_keeps_owned_vision_weights_and_restores_after_load_error(tmp_path):
     model.embed_vision = nn.Linear(2, 2, bias=False)
     weights = [("embed_vision.weight", mx.ones((2, 2)))]
     before = (vu.update_module_configs, nn.Module.load_weights)
-    with pytest.raises(ValueError, match="Missing"):
-        with _strip_vision_config_if_orphaned(tmp_path):
-            model.load_weights(weights, strict=True)
-            assert mx.array_equal(model.embed_vision.weight, mx.ones((2, 2))).item()
-            model.load_weights([], strict=True)
+    with (
+        pytest.raises(ValueError, match="Missing"),
+        _strip_vision_config_if_orphaned(tmp_path),
+    ):
+        model.load_weights(weights, strict=True)
+        assert mx.array_equal(model.embed_vision.weight, mx.ones((2, 2))).item()
+        model.load_weights([], strict=True)
     assert (vu.update_module_configs, nn.Module.load_weights) == before

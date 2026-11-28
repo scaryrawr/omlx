@@ -2134,11 +2134,8 @@ def test_claude_gateway_preserves_profile_settings(
     pool.get_entry.return_value = None
     pool.get_active_model_aliases.return_value = {}
     pool.get_status.return_value = {"models": [{"id": source_id, "model_type": "llm"}]}
-    pool.resolve_model_id.side_effect = (
-        lambda name, settings_manager: settings_manager.get_exposed_profile_source_model_id(
-            name
-        )
-        or name
+    pool.resolve_model_id.side_effect = lambda name, settings_manager: (
+        settings_manager.get_exposed_profile_source_model_id(name) or name
     )
     state = ServerState()
     state.engine_pool = pool

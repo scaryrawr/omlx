@@ -19,9 +19,9 @@ import os
 import re
 import tempfile
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import AsyncIterator, Optional
 
 import anyio
 from fastapi import (
@@ -212,16 +212,13 @@ async def _read_upload(file: UploadFile) -> bytes:
         if total > limit:
             raise HTTPException(
                 status_code=413,
-                detail=(
-                    f"Audio file exceeds maximum allowed size "
-                    f"({limit} bytes)"
-                ),
+                detail=(f"Audio file exceeds maximum allowed size ({limit} bytes)"),
             )
         chunks.append(chunk)
     return b"".join(chunks)
 
 
-def _decode_ref_audio_base64(request: AudioSpeechRequest) -> Optional[bytes]:
+def _decode_ref_audio_base64(request: AudioSpeechRequest) -> bytes | None:
     """Validate and decode optional base64 ref_audio from a TTS request."""
     if request.ref_audio is None:
         return None
@@ -243,31 +240,26 @@ def _decode_ref_audio_base64(request: AudioSpeechRequest) -> Optional[bytes]:
         )
     try:
         return base64.b64decode(request.ref_audio, validate=True)
-    except Exception:
+    except Exception as _cause:
         raise HTTPException(
             status_code=400,
             detail="Invalid base64 encoding in 'ref_audio' field",
-        )
+        ) from _cause
 
 
-def _write_ref_audio_tempfile(audio_bytes: Optional[bytes]) -> Optional[str]:
+def _write_ref_audio_tempfile(audio_bytes: bytes | None) -> str | None:
     """Persist decoded ref audio to a temp file if present."""
     if audio_bytes is None:
         return None
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    try:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         tmp.write(audio_bytes)
         return tmp.name
-    finally:
-        tmp.close()
 
 
-def _cleanup_tempfile(path: Optional[str]) -> None:
+def _cleanup_tempfile(path: str | None) -> None:
     if path and os.path.exists(path):
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
 
 def _resolve_tts_streaming_interval(request: AudioSpeechRequest) -> float:
@@ -350,7 +342,7 @@ def _split_tts_text(text: str, max_chars: int = 300) -> list[str]:
 async def _stream_speech_response(
     engine,
     request: AudioSpeechRequest,
-    ref_audio_path: Optional[str],
+    ref_audio_path: str | None,
     streaming_interval: float,
 ) -> AsyncIterator[bytes]:
     """Stream sentence-level TTS as a single WAV header plus PCM chunks."""
@@ -362,11 +354,19 @@ async def _stream_speech_response(
         ):
             logger.info(
                 "TTS native streaming start: model=%s, text_len=%d, voice=%s, language=%s",
-                request.model, len(request.input), request.voice, request.language or "auto",
+                request.model,
+                len(request.input),
+                request.voice,
+                request.language or "auto",
             )
-            stream_format: Optional[tuple[int, int, int]] = None
+            stream_format: tuple[int, int, int] | None = None
             try:
-                async for sample_rate, channels, sample_width, pcm_bytes in engine.stream_synthesize_pcm(
+                async for (
+                    sample_rate,
+                    channels,
+                    sample_width,
+                    pcm_bytes,
+                ) in engine.stream_synthesize_pcm(
                     request.input,
                     voice=request.voice,
                     language=request.language,
@@ -410,10 +410,14 @@ async def _stream_speech_response(
         segments = _split_tts_text(request.input)
         logger.info(
             "TTS streaming start: model=%s, text_len=%d, segments=%d, voice=%s, language=%s",
-            request.model, len(request.input), len(segments), request.voice, request.language or "auto",
+            request.model,
+            len(request.input),
+            len(segments),
+            request.voice,
+            request.language or "auto",
         )
 
-        stream_format: Optional[tuple[int, int, int]] = None
+        stream_format: tuple[int, int, int] | None = None
         for idx, segment in enumerate(segments, start=1):
             wav_bytes = await engine.synthesize(
                 segment,
@@ -429,11 +433,17 @@ async def _stream_speech_response(
                 repetition_penalty=request.repetition_penalty,
                 max_tokens=request.max_tokens,
             )
-            sample_rate, channels, sample_width, pcm_bytes = wav_bytes_to_pcm_frames(wav_bytes)
+            sample_rate, channels, sample_width, pcm_bytes = wav_bytes_to_pcm_frames(
+                wav_bytes
+            )
             fmt = (sample_rate, channels, sample_width)
             if stream_format is None:
                 stream_format = fmt
-                yield wav_header(sample_rate=sample_rate, channels=channels, sample_width=sample_width)
+                yield wav_header(
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    sample_width=sample_width,
+                )
             elif fmt != stream_format:
                 raise RuntimeError(
                     "Inconsistent WAV format across TTS segments: "
@@ -441,7 +451,10 @@ async def _stream_speech_response(
                 )
             logger.debug(
                 "TTS streaming segment %d/%d: text_len=%d, pcm_bytes=%d",
-                idx, len(segments), len(segment), len(pcm_bytes),
+                idx,
+                len(segments),
+                len(segment),
+                len(pcm_bytes),
             )
             if pcm_bytes:
                 yield pcm_bytes
@@ -492,9 +505,7 @@ async def _stream_transcription_events(
         async for chunk in engine.transcribe_stream(tmp_path, **transcribe_kwargs):
             # Cumulative totals arrive on the chunks that know them
             # (typically the final one); keep the max seen.
-            prompt_tokens = max(
-                prompt_tokens, int(chunk.get("prompt_tokens") or 0)
-            )
+            prompt_tokens = max(prompt_tokens, int(chunk.get("prompt_tokens") or 0))
             generation_tokens = max(
                 generation_tokens, int(chunk.get("generation_tokens") or 0)
             )
@@ -522,12 +533,12 @@ async def _stream_transcription_events(
 async def create_transcription(
     file: UploadFile = File(...),
     model: str = Form(...),
-    language: Optional[str] = Form(None),
-    prompt: Optional[str] = Form(None),
+    language: str | None = Form(None),
+    prompt: str | None = Form(None),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
     stream: bool = Form(False),
-    max_tokens: Optional[int] = Form(None, gt=0),
+    max_tokens: int | None = Form(None, gt=0),
     word_timestamps: bool = Form(False),
     chunking_strategy: str | None = Form(None),
 ):
@@ -666,10 +677,8 @@ async def create_transcription(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
 
     _record_audio_request(resolved_model)
 
@@ -732,7 +741,7 @@ def _lfm3_speech(engine):
     return engine.speech if isinstance(engine, VLMBatchedEngine) else None
 
 
-def _verify_ws_api_key(websocket: WebSocket, api_key: Optional[str]) -> bool:
+def _verify_ws_api_key(websocket: WebSocket, api_key: str | None) -> bool:
     """Verify an in-band API key, including the manual inference opt-in.
 
     WebSocket connections from browsers cannot carry an Authorization
@@ -780,7 +789,7 @@ async def realtime_transcription(websocket: WebSocket) -> None:
 
     try:
         start = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await _reject("Handshake timeout")
         return
     except WebSocketDisconnect:
@@ -1003,7 +1012,9 @@ def _parse_session_update(config: dict) -> dict:
     if max_tokens == "inf":
         max_tokens = 0
     if max_tokens is not None and (
-        not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 0
+        not isinstance(max_tokens, int)
+        or isinstance(max_tokens, bool)
+        or max_tokens < 0
     ):
         raise RealtimeVoiceError(
             "invalid_value", "max_output_tokens must be an integer"
@@ -1186,11 +1197,25 @@ async def realtime_voice(websocket: WebSocket, model: str | None = None) -> None
         )
         if isinstance(session, HaruRealtimeSession):
             await _run_haru_voice(
-                websocket, send, send_error, session, session_id, model, resolved_model, pool
+                websocket,
+                send,
+                send_error,
+                session,
+                session_id,
+                model,
+                resolved_model,
+                pool,
             )
         else:
             await _run_realtime_voice(
-                websocket, send, send_error, session, session_id, model, resolved_model, pool
+                websocket,
+                send,
+                send_error,
+                session,
+                session_id,
+                model,
+                resolved_model,
+                pool,
             )
     except WebSocketDisconnect:
         pass
@@ -1222,13 +1247,16 @@ def _update_haru_session(session: HaruRealtimeSession, config, model: str) -> No
         raise RealtimeVoiceError("invalid_value", "audio must be an object")
     audio_in, audio_out = audio.get("input", {}), audio.get("output", {})
     if not isinstance(audio_in, dict) or not isinstance(audio_out, dict):
-        raise RealtimeVoiceError("invalid_value", "audio input and output must be objects")
+        raise RealtimeVoiceError(
+            "invalid_value", "audio input and output must be objects"
+        )
     if (
         config.get("turn_detection") is not None
         or audio_in.get("turn_detection") is not None
     ):
         raise RealtimeVoiceError(
-            "unsupported", "Haru does not support turn detection; stream audio including silence"
+            "unsupported",
+            "Haru does not support turn detection; stream audio including silence",
         )
     for value in (
         config.get("input_audio_format"),
@@ -1247,7 +1275,8 @@ def _update_haru_session(session: HaruRealtimeSession, config, model: str) -> No
         or audio_out.get("voice") is not None
     ):
         raise RealtimeVoiceError(
-            "unsupported", "Haru supports audio output only, without model changes, tools or voices"
+            "unsupported",
+            "Haru supports audio output only, without model changes, tools or voices",
         )
     if (
         config.keys()
@@ -1268,7 +1297,9 @@ def _update_haru_session(session: HaruRealtimeSession, config, model: str) -> No
         or audio_in.keys() - {"format", "turn_detection"}
         or audio_out.keys() - {"format", "voice"}
     ):
-        raise RealtimeVoiceError("unsupported", "Haru does not support this session setting")
+        raise RealtimeVoiceError(
+            "unsupported", "Haru does not support this session setting"
+        )
     if "instructions" in config:
         session.update_instructions(config["instructions"])
 
@@ -1310,16 +1341,23 @@ async def _run_haru_voice(
         if not announced:
             await send({"type": "response.created", "response": response})
             await send({"type": "response.output_item.added", **output, "item": item})
-            await send({
-                "type": "response.content_part.added", **where,
-                "part": {"type": "output_audio", "transcript": ""},
-            })
+            await send(
+                {
+                    "type": "response.content_part.added",
+                    **where,
+                    "part": {"type": "output_audio", "transcript": ""},
+                }
+            )
             announced = True
         if frame.text:
             transcript.append(frame.text)
-            await send({
-                "type": "response.output_audio_transcript.delta", **where, "delta": frame.text,
-            })
+            await send(
+                {
+                    "type": "response.output_audio_transcript.delta",
+                    **where,
+                    "delta": frame.text,
+                }
+            )
         delta = base64.b64encode(pcm16_bytes(frame.audio)).decode("ascii")
         await send({"type": "response.output_audio.delta", **where, "delta": delta})
 
@@ -1332,16 +1370,23 @@ async def _run_haru_voice(
                 "content": [part],
             }
             await send({"type": "response.output_audio.done", **where})
-            await send({
-                "type": "response.output_audio_transcript.done", **where,
-                "transcript": part["transcript"],
-            })
+            await send(
+                {
+                    "type": "response.output_audio_transcript.done",
+                    **where,
+                    "transcript": part["transcript"],
+                }
+            )
             await send({"type": "response.content_part.done", **where, "part": part})
-            await send({"type": "response.output_item.done", **output, "item": final_item})
-            await send({
-                "type": "response.done",
-                "response": {**response, "status": status, "output": [final_item]},
-            })
+            await send(
+                {"type": "response.output_item.done", **output, "item": final_item}
+            )
+            await send(
+                {
+                    "type": "response.done",
+                    "response": {**response, "status": status, "output": [final_item]},
+                }
+            )
             _record_audio_request(resolved_model)
         await websocket.close(code=1000)
 
@@ -1375,21 +1420,31 @@ async def _run_haru_voice(
             try:
                 if kind == "session.update":
                     config = event.get("session")
-                    if received_audio and isinstance(config, dict) and "instructions" in config:
+                    if (
+                        received_audio
+                        and isinstance(config, dict)
+                        and "instructions" in config
+                    ):
                         raise RealtimeVoiceError(
                             "instructions_locked",
                             "instructions cannot change after the first audio append",
                         )
                     _update_haru_session(session, config, model)
-                    await send({
-                        "type": "session.updated",
-                        "session": _realtime_session_object(session_id, model, session),
-                    })
+                    await send(
+                        {
+                            "type": "session.updated",
+                            "session": _realtime_session_object(
+                                session_id, model, session
+                            ),
+                        }
+                    )
                 elif kind == "input_audio_buffer.append":
                     pcm = session.decode_append(event.get("audio"))
                     if len(pending_audio) + len(pcm) > 8 * HARU_MAX_APPEND_BYTES:
                         await send_error(
-                            "audio_buffer_limit", "Haru cannot keep up with incoming audio", client_event_id
+                            "audio_buffer_limit",
+                            "Haru cannot keep up with incoming audio",
+                            client_event_id,
                         )
                         return "incomplete"
                     pending_audio.extend(pcm)
@@ -1403,7 +1458,8 @@ async def _run_haru_voice(
                     return "cancelled"
                 else:
                     raise RealtimeVoiceError(
-                        "unsupported", f"Haru does not support {kind!r}; stream PCM continuously"
+                        "unsupported",
+                        f"Haru does not support {kind!r}; stream PCM continuously",
                     )
             except RealtimeVoiceError as exc:
                 await send_error(exc.code, str(exc), client_event_id)
@@ -1431,7 +1487,9 @@ async def _run_haru_voice(
         stream.result()
         await finish("completed")
     else:
-        await send_error("model_unloaded", f"The model is being unloaded: {watcher.result()}")
+        await send_error(
+            "model_unloaded", f"The model is being unloaded: {watcher.result()}"
+        )
         await websocket.close(code=1012)
 
 
@@ -1742,7 +1800,7 @@ async def _run_realtime_voice(
 
 
 @router.get("/v1/audio/voices")
-async def list_model_voices(model: Optional[str] = None, realtime: bool = False):
+async def list_model_voices(model: str | None = None, realtime: bool = False):
     """List built-in speaker/voice names for a TTS model.
 
     With ``realtime=true`` it lists the voices a /v1/realtime session on the
@@ -1763,9 +1821,7 @@ async def list_model_voices(model: Optional[str] = None, realtime: bool = False)
     resolved = _resolve_model(model)
     entry = pool.get_entry(resolved)
     if entry is None:
-        raise HTTPException(
-            status_code=404, detail=f"Model '{resolved}' not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Model '{resolved}' not found")
 
     model_dir = Path(entry.model_path)
     voices: list[str] = []
@@ -1793,11 +1849,13 @@ async def list_model_voices(model: Optional[str] = None, realtime: bool = False)
         }
     voices_dir = model_dir / "voices"
     if voices_dir.is_dir():
-        voices = sorted({
-            f.stem
-            for f in voices_dir.iterdir()
-            if f.suffix in (".safetensors", ".pt")
-        })
+        voices = sorted(
+            {
+                f.stem
+                for f in voices_dir.iterdir()
+                if f.suffix in (".safetensors", ".pt")
+            }
+        )
     else:
         try:
             config = json.loads((model_dir / "config.json").read_text())
@@ -2039,10 +2097,8 @@ async def process_audio(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
 
     _record_audio_request(resolved_model)
 

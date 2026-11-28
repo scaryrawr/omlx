@@ -24,7 +24,7 @@ from tokenizers import Tokenizer, models
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import test_prefill_helper as cases  # noqa: E402
+import test_prefill_helper as cases
 
 # DeepSeek V4.1 field -> its name in a checkpoint's text_config.
 _DEEPSEEK_V41_NAMES = {

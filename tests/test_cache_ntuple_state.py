@@ -682,6 +682,7 @@ class TestPrefixCacheNTupleSubState:
 def test_chunked_cache_round_trip_preserves_trimmed_absolute_positions():
     import mlx.core as mx
     from mlx_lm.models.cache import ChunkedKVCache
+
     from omlx.cache.type_registry import CacheTypeRegistry
 
     original = ChunkedKVCache(chunk_size=4)

@@ -631,13 +631,15 @@ async def test_oq_a8_is_refused_outside_validated_families(config_type):
     entry.config_model_type = config_type
     settings = ModelSettings()
 
-    with patch.object(admin_routes, "_oq_a8_kernels_available", return_value=True):
-        with pytest.raises(admin_routes.HTTPException) as excinfo:
-            await _update_settings(
-                pool,
-                settings,
-                admin_routes.ModelSettingsRequest(a8_prefill_enabled=True),
-            )
+    with (
+        patch.object(admin_routes, "_oq_a8_kernels_available", return_value=True),
+        pytest.raises(admin_routes.HTTPException) as excinfo,
+    ):
+        await _update_settings(
+            pool,
+            settings,
+            admin_routes.ModelSettingsRequest(a8_prefill_enabled=True),
+        )
 
     assert excinfo.value.status_code == 400
     assert "Flash-Next" in excinfo.value.detail
@@ -747,10 +749,14 @@ async def test_oq_a8_choice_is_kept_without_native_int8_kernels():
         )
         assert settings.a8_prefill_enabled is False
         await _update_settings(
-            pool, settings, admin_routes.ModelSettingsRequest(prefill_helper_node_id="m5")
+            pool,
+            settings,
+            admin_routes.ModelSettingsRequest(prefill_helper_node_id="m5"),
         )
         await _update_settings(
-            pool, settings, admin_routes.ModelSettingsRequest(prefill_helper_node_id=None)
+            pool,
+            settings,
+            admin_routes.ModelSettingsRequest(prefill_helper_node_id=None),
         )
     assert settings.a8_prefill_enabled is False
 

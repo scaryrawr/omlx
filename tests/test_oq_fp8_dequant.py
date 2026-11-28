@@ -138,9 +138,7 @@ def test_weight_scale_pair_discovery_and_dequant(tmp_path):
     got = idx._dequant_one(wk)
     expected = mx.from_fp8(codes, dtype=mx.bfloat16).astype(mx.float32) * scale_expand
     assert got.shape == (128, 256)
-    assert mx.allclose(
-        got.astype(mx.float32), expected, atol=1e-2, rtol=1e-2
-    ).item()
+    assert mx.allclose(got.astype(mx.float32), expected, atol=1e-2, rtol=1e-2).item()
 
 
 @pytest.mark.skipif(not os.path.isdir(M3_DIR), reason="M3 not present")

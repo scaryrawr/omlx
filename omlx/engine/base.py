@@ -158,9 +158,7 @@ async def _run_scheduler_preflight_with_cleanup_retry(
         # This also avoids evicting an idle model for bytes that IOKit is
         # already returning asynchronously.
         if waited_for_cleanup and now < deadline:
-            refresh_usage = getattr(
-                scheduler, "refresh_route_preflight_usage", None
-            )
+            refresh_usage = getattr(scheduler, "refresh_route_preflight_usage", None)
             if executor is not None and callable(refresh_usage):
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(executor, refresh_usage)

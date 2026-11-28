@@ -46,10 +46,7 @@ def test_commit_uses_opaque_atomic_sidecar_path_and_api(tmp_path):
 
         digest = hashlib.sha256(signature.encode()).hexdigest()
         expected = (
-            cache_dir
-            / "_gdn_sidecars"
-            / digest
-            / f"{source_hash.hex()}.safetensors"
+            cache_dir / "_gdn_sidecars" / digest / f"{source_hash.hex()}.safetensors"
         )
         assert final_path == expected
         assert final_path.exists()
@@ -91,14 +88,17 @@ def test_failed_replacement_preserves_existing_sidecar(tmp_path, monkeypatch):
         # promotion attempt and have nothing to restore when os.replace fails.
         other_stage = tmp_path / "other.stage"
         other_stage.write_bytes(b"d" * 11)
-        assert manager.commit_gdn_checkpoint_file(
-            b"other-block",
-            other_stage,
-            token_count=2048,
-            model_name="model",
-            cache_signature=signature,
-            block_size=2048,
-        ) is not None
+        assert (
+            manager.commit_gdn_checkpoint_file(
+                b"other-block",
+                other_stage,
+                token_count=2048,
+                model_name="model",
+                cache_signature=signature,
+                block_size=2048,
+            )
+            is not None
+        )
 
         replacement = tmp_path / "replacement.stage"
         replacement.write_bytes(b"n" * 15)
@@ -366,7 +366,6 @@ def test_sidecars_are_indexed_from_stat_and_lru_survives_restart(
     finally:
         restarted.close()
 
-
     if auto_size:
         monkeypatch.setattr(
             shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(1000, 996, 4)
@@ -378,6 +377,7 @@ def test_sidecars_are_indexed_from_stat_and_lru_survives_restart(
             assert not paths[1].exists()
         finally:
             reduced.close()
+
 
 @pytest.mark.parametrize("auto_size", [False, True])
 def test_sidecar_and_main_block_share_global_lru_budget(

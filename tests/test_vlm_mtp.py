@@ -527,8 +527,9 @@ def test_root_and_canonical_mtp_weights_are_rejected():
 
 
 def test_qwen_vlm_outer_load_weights_remaps_root_mtp(monkeypatch):
-    from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
     from mlx_vlm.models import qwen3_5 as q35_outer
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_vlm_runtime
 
     class FakeModel:
         def load_weights(self, weights, strict=True):
@@ -687,10 +688,9 @@ def test_qwen_gdn_padded_prefill_matches_unpadded_state(chunk_size):
     from mlx_vlm.models.cache import ArraysCache
     from mlx_vlm.models.qwen3_5 import language
     from mlx_vlm.models.qwen3_5.config import TextConfig
+    from test_mtp_prompt_priming import TINY_CONFIG
 
     from omlx.patches.qwen35_ssm_mask import apply_qwen35_ssm_mask_patch
-
-    from test_mtp_prompt_priming import TINY_CONFIG
 
     apply_qwen35_ssm_mask_patch()
     mx.random.seed(173)
@@ -776,8 +776,9 @@ def test_dense_vlm_runtime_delegates_foreign_subclasses_unchanged():
 
 def test_moe_vlm_sanitize_unfuses_gate_up_by_midpoint(monkeypatch):
     """The VLM MoE sanitize patch must preserve upstream midpoint slicing."""
-    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
     from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
 
     monkeypatch.setattr(qwen35_moe_vlm_model, "_APPLIED", False)
     if hasattr(qwen3_5_moe.Model, "_omlx_mtp_vlm_patched"):
@@ -856,8 +857,9 @@ def _per_expert_vlm_self(num_experts=2, num_hidden_layers=1):
 def test_moe_vlm_sanitize_stacks_per_expert_backbone(monkeypatch):
     """Ornith / raw Qwen3.5 ship backbone MoE layers as per-expert tensors.
     The model-level sanitize must stack them into switch_mlp form."""
-    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
     from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
 
     monkeypatch.setattr(qwen35_moe_vlm_model, "_APPLIED", False)
     if hasattr(qwen3_5_moe.Model, "_omlx_mtp_vlm_patched"):
@@ -882,8 +884,9 @@ def test_moe_vlm_sanitize_stacks_per_expert_backbone(monkeypatch):
 def test_moe_vlm_sanitize_stacks_per_expert_backbone_quantized(monkeypatch):
     """A per-expert *quantized* backbone carries .scales/.biases. The
     model-level sanitize must stack all three, leaving no orphan keys."""
-    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
     from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
 
     monkeypatch.setattr(qwen35_moe_vlm_model, "_APPLIED", False)
     if hasattr(qwen3_5_moe.Model, "_omlx_mtp_vlm_patched"):
@@ -913,8 +916,9 @@ def test_moe_vlm_sanitize_stacks_per_expert_mtp_quantized(monkeypatch):
     """A per-expert *quantized* MTP head also carries .scales/.biases.
     The model-level VLM sanitize path must keep parity with the runtime
     sanitize path and stack all three suffixes."""
-    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
     from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe
+
+    from omlx.patches.mlx_vlm_mtp import qwen35_moe_vlm_model
 
     monkeypatch.setattr(qwen35_moe_vlm_model, "_APPLIED", False)
     if hasattr(qwen3_5_moe.Model, "_omlx_mtp_vlm_patched"):

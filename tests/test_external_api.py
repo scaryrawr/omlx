@@ -167,12 +167,14 @@ class TestStreamChatCompletion:
             captured["auth"] = request.headers.get("authorization")
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    {"choices": [{"delta": {"role": "assistant"}}]},
-                    _content_chunk("Hello "),
-                    _content_chunk("world"),
-                    _usage_chunk(prompt=1000, completion=128),
-                ]),
+                content=_sse_body(
+                    [
+                        {"choices": [{"delta": {"role": "assistant"}}]},
+                        _content_chunk("Hello "),
+                        _content_chunk("world"),
+                        _usage_chunk(prompt=1000, completion=128),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -218,10 +220,12 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    _content_chunk("x"),
-                    _usage_chunk(prompt=100, completion=10, cached=64),
-                ]),
+                content=_sse_body(
+                    [
+                        _content_chunk("x"),
+                        _usage_chunk(prompt=100, completion=10, cached=64),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -239,12 +243,14 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    ": keepalive",
-                    "data: not-json",
-                    _content_chunk("ok"),
-                    _usage_chunk(),
-                ]),
+                content=_sse_body(
+                    [
+                        ": keepalive",
+                        "data: not-json",
+                        _content_chunk("ok"),
+                        _usage_chunk(),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -262,10 +268,12 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    _content_chunk("everything at once"),
-                    _usage_chunk(prompt=10, completion=20),
-                ]),
+                content=_sse_body(
+                    [
+                        _content_chunk("everything at once"),
+                        _usage_chunk(prompt=10, completion=20),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -283,11 +291,13 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    {"choices": [{"delta": {"reasoning_content": "thinking..."}}]},
-                    _content_chunk("answer"),
-                    _usage_chunk(),
-                ]),
+                content=_sse_body(
+                    [
+                        {"choices": [{"delta": {"reasoning_content": "thinking..."}}]},
+                        _content_chunk("answer"),
+                        _usage_chunk(),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -309,11 +319,13 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    {"choices": [{"delta": {"reasoning": "thinking..."}}]},
-                    _content_chunk("answer"),
-                    _usage_chunk(),
-                ]),
+                content=_sse_body(
+                    [
+                        {"choices": [{"delta": {"reasoning": "thinking..."}}]},
+                        _content_chunk("answer"),
+                        _usage_chunk(),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -336,11 +348,13 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    {"choices": [{"delta": {"reasoning": "step one "}}]},
-                    {"choices": [{"delta": {"reasoning": "step two"}}]},
-                    _usage_chunk(completion=2),
-                ]),
+                content=_sse_body(
+                    [
+                        {"choices": [{"delta": {"reasoning": "step one "}}]},
+                        {"choices": [{"delta": {"reasoning": "step two"}}]},
+                        _usage_chunk(completion=2),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -364,10 +378,12 @@ class TestStreamChatCompletion:
         def handler(request):
             return httpx.Response(
                 200,
-                content=_sse_body([
-                    {"choices": [{"delta": {"role": "assistant"}}]},
-                    _usage_chunk(),
-                ]),
+                content=_sse_body(
+                    [
+                        {"choices": [{"delta": {"role": "assistant"}}]},
+                        _usage_chunk(),
+                    ]
+                ),
             )
 
         client = _client(handler)
@@ -402,9 +418,7 @@ class TestStreamChatCompletion:
 
     async def test_http_error_includes_json_detail(self):
         def handler(request):
-            return httpx.Response(
-                500, json={"error": {"message": "model exploded"}}
-            )
+            return httpx.Response(500, json={"error": {"message": "model exploded"}})
 
         client = _client(handler)
         try:

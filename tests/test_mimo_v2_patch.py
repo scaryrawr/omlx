@@ -631,8 +631,9 @@ def test_official_mxfp4_checkpoint_loads_without_requantizing(tmp_path, model_ty
         group_size=32,
         bits=4,
         mode="mxfp4",
-        class_predicate=lambda path, layer: ".switch_mlp." in path
-        and hasattr(layer, "to_quantized"),
+        class_predicate=lambda path, layer: (
+            ".switch_mlp." in path and hasattr(layer, "to_quantized")
+        ),
     )
     weights = {}
     for name, value in tree_flatten(model.parameters()):
@@ -706,8 +707,9 @@ def test_mtp_partial_rollback_after_rotation(accepted):
     assert model.mtp_partial_rollback(speculative, accepted, 3)
     model(verify[:, : accepted + 1], cache=reference)
     continuation = mx.array([[14]])
-    actual, expected = model(continuation, cache=speculative), model(
-        continuation, cache=reference
+    actual, expected = (
+        model(continuation, cache=speculative),
+        model(continuation, cache=reference),
     )
     mx.eval(actual, expected)
     assert [c.offset for c in speculative] == [c.offset for c in reference]
@@ -1173,16 +1175,18 @@ def _decode_model(seed=3, **overrides):
         model,
         group_size=64,
         bits=8,
-        class_predicate=lambda p, mod: isinstance(mod, nn.Linear)
-        and "switch_mlp" not in p,
+        class_predicate=lambda p, mod: (
+            isinstance(mod, nn.Linear) and "switch_mlp" not in p
+        ),
     )
     nn.quantize(
         model,
         group_size=32,
         bits=4,
         mode="mxfp4",
-        class_predicate=lambda p, mod: "switch_mlp" in p
-        and hasattr(mod, "to_quantized"),
+        class_predicate=lambda p, mod: (
+            "switch_mlp" in p and hasattr(mod, "to_quantized")
+        ),
     )
     casts = [
         (k, v.astype(mx.bfloat16))

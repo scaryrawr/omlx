@@ -48,15 +48,21 @@ class _LegacyAdapter:
 
 def test_mark_text_positions_uses_the_batch_uid_of_a_proven_request():
     adapter = _Adapter()
-    scheduler._mark_text_positions(adapter, SimpleNamespace(text_positions_proven=True), 0)
+    scheduler._mark_text_positions(
+        adapter, SimpleNamespace(text_positions_proven=True), 0
+    )
     scheduler._mark_text_positions(adapter, SimpleNamespace(), 1)  # never proven
-    scheduler._mark_text_positions(adapter, SimpleNamespace(text_positions_proven=False), 2)
+    scheduler._mark_text_positions(
+        adapter, SimpleNamespace(text_positions_proven=False), 2
+    )
     assert adapter.marked == [0]
 
 
 def test_mark_text_positions_tolerates_wrappers_without_the_seam():
     legacy = _LegacyAdapter()
-    scheduler._mark_text_positions(legacy, SimpleNamespace(text_positions_proven=True), 0)
+    scheduler._mark_text_positions(
+        legacy, SimpleNamespace(text_positions_proven=True), 0
+    )
     assert legacy.batches == []
 
 
@@ -92,7 +98,9 @@ def test_mtp_proxy_exposes_uid_aware_seams_for_class_level_lookup():
     assert adapter.steps == [([3.0], [7]), ([3.0], [7])]
     assert adapter.batches == []
 
-    scheduler._mark_text_positions(proxy, SimpleNamespace(text_positions_proven=True), 7)
+    scheduler._mark_text_positions(
+        proxy, SimpleNamespace(text_positions_proven=True), 7
+    )
     assert adapter.marked == [7]
 
 

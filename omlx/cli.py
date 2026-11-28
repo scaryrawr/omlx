@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import errno
 import faulthandler
 import math
@@ -177,21 +178,22 @@ def serve_command(args):
     """Start the OpenAI-compatible multi-model server."""
     import logging
     import os
+
     import uvicorn
 
-    from ._version import __version__
     from . import process_title
+    from ._version import __version__
     from .integrations.base import bracket_host
-    from .settings import (
-        GRACEFUL_SHUTDOWN_TIMEOUT_S,
-        burst_decode_env,
-        init_settings,
-    )
     from .logging_config import (
         AdminStatsAccessFilter,
         configure_file_logging,
         console_log_level,
         is_console_handler,
+    )
+    from .settings import (
+        GRACEFUL_SHUTDOWN_TIMEOUT_S,
+        burst_decode_env,
+        init_settings,
     )
 
     process_title.set_process_title()
@@ -221,13 +223,13 @@ def serve_command(args):
         os.environ.setdefault("OMLX_QWEN35_ANE_COMPILE_CACHE", "1")
 
     # Register TRACE level (5) — includes full message content
-    TRACE = 5
-    logging.addLevelName(TRACE, "TRACE")
+    trace = 5
+    logging.addLevelName(trace, "TRACE")
 
     # Configure logging (use settings value which has proper priority)
     level_name = settings.server.log_level.upper()
     log_level = (
-        TRACE if level_name == "TRACE" else getattr(logging, level_name, logging.INFO)
+        trace if level_name == "TRACE" else getattr(logging, level_name, logging.INFO)
     )
     logging.basicConfig(
         level=log_level,
@@ -253,7 +255,7 @@ def serve_command(args):
     logging.getLogger("uvicorn.access").addFilter(AdminStatsAccessFilter())
 
     # Suppress noisy third-party loggers unless trace level
-    if log_level > TRACE:
+    if log_level > trace:
         logging.getLogger("httpcore").setLevel(logging.INFO)
         logging.getLogger("httpx").setLevel(logging.INFO)
 
@@ -328,160 +330,170 @@ def serve_command(args):
     # On Metal/MLX crashes (#511, #520), this dumps all Python thread
     # tracebacks to the server log before the process terminates.
     crash_log_path = log_dir / "crash.log"
-    _crash_file = open(crash_log_path, "a")
-    faulthandler.enable(file=_crash_file, all_threads=True)
+    with open(crash_log_path, "a") as _crash_file:
+        faulthandler.enable(file=_crash_file, all_threads=True)
 
-    # Bind the socket before importing/initializing the server. Uvicorn's
-    # normal startup runs ASGI lifespan before binding host/port, which means
-    # pinned models can be preloaded before a port conflict is detected.
-    bind_hosts = [h.strip() for h in settings.server.host.split(",") if h.strip()]
-    # A secondary address such as a VPN IP can be missing until its link is up.
-    for h in bind_hosts[1:]:
-        if not _is_local_address(h):
-            print(f"Warning: skipping {h}, it is not assigned to any local interface")
-            bind_hosts.remove(h)
-    for h in bind_hosts:
-        print(f"Binding server at http://{bracket_host(h)}:{settings.server.port}")
-    # uvicorn does not support "trace" — map to "debug" for its internal logging
-    uvicorn_level = (
-        "debug" if settings.server.log_level == "trace" else settings.server.log_level
-    )
-    # Only show access logs at trace level
-    show_access_log = settings.server.log_level == "trace"
-    uvicorn_config = uvicorn.Config(
-        "omlx.server:app",
-        host=bind_hosts[0],
-        port=settings.server.port,
-        log_level=uvicorn_level,
-        access_log=show_access_log,
-        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_S,
-    )
-    # Bind a socket per host so an occupied port fails fast before model preload.
-    # uvicorn.Server.run(sockets=[...]) accepts a list and listens on all of them.
-    serve_sockets = [uvicorn_config.bind_socket()]
-    for h in bind_hosts[1:]:
-        extra_cfg = uvicorn.Config(
+        # Bind the socket before importing/initializing the server. Uvicorn's
+        # normal startup runs ASGI lifespan before binding host/port, which means
+        # pinned models can be preloaded before a port conflict is detected.
+        bind_hosts = [h.strip() for h in settings.server.host.split(",") if h.strip()]
+        # A secondary address such as a VPN IP can be missing until its link is up.
+        for h in bind_hosts[1:]:
+            if not _is_local_address(h):
+                print(
+                    f"Warning: skipping {h}, it is not assigned to any local interface"
+                )
+                bind_hosts.remove(h)
+        for h in bind_hosts:
+            print(f"Binding server at http://{bracket_host(h)}:{settings.server.port}")
+        # uvicorn does not support "trace" — map to "debug" for its internal logging
+        uvicorn_level = (
+            "debug"
+            if settings.server.log_level == "trace"
+            else settings.server.log_level
+        )
+        # Only show access logs at trace level
+        show_access_log = settings.server.log_level == "trace"
+        uvicorn_config = uvicorn.Config(
             "omlx.server:app",
-            host=h,
+            host=bind_hosts[0],
             port=settings.server.port,
             log_level=uvicorn_level,
             access_log=show_access_log,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_S,
         )
-        serve_sockets.append(extra_cfg.bind_socket())
+        # Bind a socket per host so an occupied port fails fast before model preload.
+        # uvicorn.Server.run(sockets=[...]) accepts a list and listens on all of them.
+        serve_sockets = [uvicorn_config.bind_socket()]
+        for h in bind_hosts[1:]:
+            extra_cfg = uvicorn.Config(
+                "omlx.server:app",
+                host=h,
+                port=settings.server.port,
+                log_level=uvicorn_level,
+                access_log=show_access_log,
+            )
+            serve_sockets.append(extra_cfg.bind_socket())
 
-    # Read by omlx.server at import time.
-    if getattr(args, "headless", False):
-        os.environ["OMLX_HEADLESS"] = "1"
+        # Read by omlx.server at import time.
+        if getattr(args, "headless", False):
+            os.environ["OMLX_HEADLESS"] = "1"
 
-    try:
-        # Import server and config after the port is known to be available.
-        from .server import init_server
-        from .config import parse_size
+        try:
+            # Import server and config after the port is known to be available.
+            from .config import parse_size
+            from .server import init_server
 
-        model_dirs = settings.get_effective_model_dirs()
-        print(f"Base path: {settings.base_path}")
-        print(f"Model directories: {', '.join(str(d) for d in model_dirs)}")
-        # State first: a bare tier line reads as "this is enforced" even when
-        # the guard is off, and with it off the tier governs nothing.
-        if settings.memory.prefill_memory_guard:
-            print(f"Memory guard: on (tier: {settings.memory.memory_guard_tier})")
-        else:
-            print("Memory guard: off")
-
-        # Store MCP config path for FastAPI startup
-        # Priority: CLI arg > settings.json
-        mcp_config = args.mcp_config or settings.mcp.config_path
-        if mcp_config:
-            print(f"MCP config: {mcp_config}")
-            os.environ["OMLX_MCP_CONFIG"] = mcp_config
-
-        # Build scheduler config for BatchedEngine. Settings already include
-        # the CLI args and leave the SSD cache dir unset when it is off.
-        scheduler_config = settings.to_scheduler_config()
-        if args.no_cache:
-            scheduler_config.paged_ssd_cache_dir = None
-        paged_ssd_cache_dir = scheduler_config.paged_ssd_cache_dir
-        if paged_ssd_cache_dir:
-            cache_max_size_bytes = scheduler_config.paged_ssd_cache_max_size
-        else:
-            scheduler_config.paged_ssd_cache_max_size = 0
-            cache_max_size_bytes = 0
-
-        # Hot cache: CLI arg > settings
-        if paged_ssd_cache_dir:
-            if args.hot_cache_max_size:
-                hot_cache_max_bytes = parse_size(args.hot_cache_max_size)
+            model_dirs = settings.get_effective_model_dirs()
+            print(f"Base path: {settings.base_path}")
+            print(f"Model directories: {', '.join(str(d) for d in model_dirs)}")
+            # State first: a bare tier line reads as "this is enforced" even when
+            # the guard is off, and with it off the tier governs nothing.
+            if settings.memory.prefill_memory_guard:
+                print(f"Memory guard: on (tier: {settings.memory.memory_guard_tier})")
             else:
-                hot_cache_max_bytes = settings.cache.get_hot_cache_max_size_bytes()
-            scheduler_config.hot_cache_max_size = hot_cache_max_bytes
-        else:
-            scheduler_config.hot_cache_max_size = 0
+                print("Memory guard: off")
 
-        # Write-through: explicit CLI flag > settings file (already mapped by
-        # settings.to_scheduler_config()).
-        if getattr(args, "hot_cache_write_through", None) is not None:
-            scheduler_config.hot_cache_write_through = bool(
-                args.hot_cache_write_through
-            )
+            # Store MCP config path for FastAPI startup
+            # Priority: CLI arg > settings.json
+            mcp_config = args.mcp_config or settings.mcp.config_path
+            if mcp_config:
+                print(f"MCP config: {mcp_config}")
+                os.environ["OMLX_MCP_CONFIG"] = mcp_config
 
-        if args.no_cache:
-            print(
-                "Mode: Multi-model serving (no oMLX cache, mlx-lm BatchGenerator only)"
-            )
-        elif paged_ssd_cache_dir:
-            print("Mode: Multi-model serving (continuous batching + paged SSD cache)")
-            # Format cache size for display
-            cache_max_size_display = f"{cache_max_size_bytes / (1024**3):.1f}GB"
-            if scheduler_config.paged_ssd_cache_auto_size:
-                cache_max_size_display = f"auto, current limit {cache_max_size_display}"
-            print(
-                f"paged SSD cache: {paged_ssd_cache_dir} (max: {cache_max_size_display})"
-            )
-            if scheduler_config.hot_cache_max_size > 0:
-                hot_display = f"{scheduler_config.hot_cache_max_size / (1024**3):.1f}GB"
-                print(f"Hot cache: {hot_display} (in-memory)")
-        else:
-            print("Mode: Multi-model serving (continuous batching, no cache)")
-            if settings.cache.is_ssd_cache_dir_unavailable():
-                print(
-                    "paged SSD cache: off until restart, directory unavailable: "
-                    f"{settings.cache.unavailable_ssd_cache_dir}"
+            # Build scheduler config for BatchedEngine. Settings already include
+            # the CLI args and leave the SSD cache dir unset when it is off.
+            scheduler_config = settings.to_scheduler_config()
+            if args.no_cache:
+                scheduler_config.paged_ssd_cache_dir = None
+            paged_ssd_cache_dir = scheduler_config.paged_ssd_cache_dir
+            if paged_ssd_cache_dir:
+                cache_max_size_bytes = scheduler_config.paged_ssd_cache_max_size
+            else:
+                scheduler_config.paged_ssd_cache_max_size = 0
+                cache_max_size_bytes = 0
+
+            # Hot cache: CLI arg > settings
+            if paged_ssd_cache_dir:
+                if args.hot_cache_max_size:
+                    hot_cache_max_bytes = parse_size(args.hot_cache_max_size)
+                else:
+                    hot_cache_max_bytes = settings.cache.get_hot_cache_max_size_bytes()
+                scheduler_config.hot_cache_max_size = hot_cache_max_bytes
+            else:
+                scheduler_config.hot_cache_max_size = 0
+
+            # Write-through: explicit CLI flag > settings file (already mapped by
+            # settings.to_scheduler_config()).
+            if getattr(args, "hot_cache_write_through", None) is not None:
+                scheduler_config.hot_cache_write_through = bool(
+                    args.hot_cache_write_through
                 )
 
-        # Set MLX buffer cache limit high to prevent the allocator from
-        # immediately releasing Metal buffers when the cache is full.
-        # Without this, allocator::free() can call buf->release() while the
-        # GPU is still using the buffer, causing kernel panics on M4.
-        # With a large cache limit, freed buffers always stay in the pool
-        # and are only released via mx.clear_cache() (which we protect
-        # with mx.synchronize()). See issue #300.
-        import mlx.core as mx
+            if args.no_cache:
+                print(
+                    "Mode: Multi-model serving (no oMLX cache, mlx-lm BatchGenerator only)"
+                )
+            elif paged_ssd_cache_dir:
+                print(
+                    "Mode: Multi-model serving (continuous batching + paged SSD cache)"
+                )
+                # Format cache size for display
+                cache_max_size_display = f"{cache_max_size_bytes / (1024**3):.1f}GB"
+                if scheduler_config.paged_ssd_cache_auto_size:
+                    cache_max_size_display = (
+                        f"auto, current limit {cache_max_size_display}"
+                    )
+                print(
+                    f"paged SSD cache: {paged_ssd_cache_dir} (max: {cache_max_size_display})"
+                )
+                if scheduler_config.hot_cache_max_size > 0:
+                    hot_display = (
+                        f"{scheduler_config.hot_cache_max_size / (1024**3):.1f}GB"
+                    )
+                    print(f"Hot cache: {hot_display} (in-memory)")
+            else:
+                print("Mode: Multi-model serving (continuous batching, no cache)")
+                if settings.cache.is_ssd_cache_dir_unavailable():
+                    print(
+                        "paged SSD cache: off until restart, directory unavailable: "
+                        f"{settings.cache.unavailable_ssd_cache_dir}"
+                    )
 
-        total_mem = mx.device_info().get("memory_size", 0)
-        if total_mem > 0:
-            mx.set_cache_limit(total_mem)
+            # Set MLX buffer cache limit high to prevent the allocator from
+            # immediately releasing Metal buffers when the cache is full.
+            # Without this, allocator::free() can call buf->release() while the
+            # GPU is still using the buffer, causing kernel panics on M4.
+            # With a large cache limit, freed buffers always stay in the pool
+            # and are only released via mx.clear_cache() (which we protect
+            # with mx.synchronize()). See issue #300.
+            import mlx.core as mx
 
-        # Initialize server
-        # Note: pinned_models and default_model are managed via admin page (model_settings.json)
-        # Sampling parameters (max_tokens, temperature, etc.) are per-model settings
-        init_server(
-            model_dirs=[str(d) for d in model_dirs],
-            scheduler_config=scheduler_config,
-            api_key=settings.auth.api_key,
-            global_settings=settings,
-        )
+            total_mem = mx.device_info().get("memory_size", 0)
+            if total_mem > 0:
+                mx.set_cache_limit(total_mem)
 
-        for h in bind_hosts:
-            print(f"Starting server at http://{bracket_host(h)}:{settings.server.port}")
-        try:
-            uvicorn.Server(uvicorn_config).run(sockets=serve_sockets)
-        except KeyboardInterrupt:
-            pass
-    finally:
-        # Uvicorn closes sockets during normal shutdown; this covers failures
-        # after bind succeeds but before the server takes ownership.
-        for sock in serve_sockets:
-            sock.close()
+            # Initialize server
+            # Note: pinned_models and default_model are managed via admin page (model_settings.json)
+            # Sampling parameters (max_tokens, temperature, etc.) are per-model settings
+            init_server(
+                model_dirs=[str(d) for d in model_dirs],
+                scheduler_config=scheduler_config,
+                api_key=settings.auth.api_key,
+                global_settings=settings,
+            )
+
+            for h in bind_hosts:
+                print(
+                    f"Starting server at http://{bracket_host(h)}:{settings.server.port}"
+                )
+            with contextlib.suppress(KeyboardInterrupt):
+                uvicorn.Server(uvicorn_config).run(sockets=serve_sockets)
+        finally:
+            # Uvicorn closes sockets during normal shutdown; this covers failures
+            # after bind succeeds but before the server takes ownership.
+            for sock in serve_sockets:
+                sock.close()
 
 
 def launch_command(args, extra_args: list[str] | None = None):
@@ -660,9 +672,10 @@ def launch_command(args, extra_args: list[str] | None = None):
             model_inventory = {}
 
     if tool_name == "opencode" and not model and not models_discovery_succeeded:
-        model = _optional_str(
-            getattr(settings.integrations, "opencode_model", None)
-        ) or default_model
+        model = (
+            _optional_str(getattr(settings.integrations, "opencode_model", None))
+            or default_model
+        )
 
     if native_model_picker:
         if not is_codex_chat_model(
@@ -827,7 +840,9 @@ def launch_command(args, extra_args: list[str] | None = None):
         reasoning=model_info.get("enable_thinking"),
         models_status_map=models_status_map,
         models_discovery_succeeded=models_discovery_succeeded,
-        reasoning_effort_options=tuple(model_info.get("reasoning_effort_options") or ()),
+        reasoning_effort_options=tuple(
+            model_info.get("reasoning_effort_options") or ()
+        ),
         reasoning_effort_default=model_info.get("reasoning_effort_default"),
         tools_profile=getattr(args, "tools_profile", "coding"),
         extra_args=tuple(extra_args or ()),
@@ -859,7 +874,9 @@ def launch_command(args, extra_args: list[str] | None = None):
         and args.model
         and not (model_info.get("loaded") or model_info.get("is_loading"))
     ):
-        load_model_id = model_info.get("source_model_id") or model_info.get("id") or model
+        load_model_id = (
+            model_info.get("source_model_id") or model_info.get("id") or model
+        )
         try:
             resp = requests.post(
                 f"{base_url}/v1/models/{quote(load_model_id, safe='')}/load",
@@ -1246,7 +1263,9 @@ def cluster_command(args) -> int:
             for rank, definition in enumerate(args.node or []):
                 node_id, separator, raw_size = definition.rpartition("=")
                 if not separator or not node_id.strip() or not raw_size.strip():
-                    raise ValueError("--node must use NAME=SIZE (for example studio=256GB)")
+                    raise ValueError(
+                        "--node must use NAME=SIZE (for example studio=256GB)"
+                    )
                 nodes.append(
                     NodeBudget(
                         node_id=node_id.strip(),

@@ -184,9 +184,9 @@ def _assert_restored(result, expected_seq_len):
         assert slot is not None
         assert slot.dtype == mx.float32
         assert tuple(slot.shape) == (1, 3, channels)
-        assert (
-            mx.max(mx.abs(slot - (expected_seq_len + i / 10.0))).item() == 0.0
-        ), f"conv slot {i} does not match boundary {expected_seq_len} snapshot"
+        assert mx.max(mx.abs(slot - (expected_seq_len + i / 10.0))).item() == 0.0, (
+            f"conv slot {i} does not match boundary {expected_seq_len} snapshot"
+        )
 
 
 def test_single_block_roundtrip(tmp_path):
@@ -327,17 +327,17 @@ def test_prefill_snapshot_decoupled_from_live_cache():
     stub._extract_cache_states = lambda caches: Scheduler._extract_cache_states(
         stub, caches
     )
-    stub._extract_snapshot_cache_states = (
-        lambda caches: Scheduler._extract_snapshot_cache_states(stub, caches)
+    stub._extract_snapshot_cache_states = lambda caches: (
+        Scheduler._extract_snapshot_cache_states(stub, caches)
     )
-    stub._extract_prefill_snapshot_states = (
-        lambda caches: Scheduler._extract_prefill_snapshot_states(stub, caches)
+    stub._extract_prefill_snapshot_states = lambda caches: (
+        Scheduler._extract_prefill_snapshot_states(stub, caches)
     )
     stub._prefill_snapshot_value = lambda caches: Scheduler._prefill_snapshot_value(
         stub, caches
     )
-    stub._enable_mtp_boundary_alignment = (
-        lambda: Scheduler._enable_mtp_boundary_alignment(stub)
+    stub._enable_mtp_boundary_alignment = lambda: (
+        Scheduler._enable_mtp_boundary_alignment(stub)
     )
     stub._eval_snapshot_cache = lambda caches: None
 
@@ -360,8 +360,7 @@ def test_prefill_snapshot_decoupled_from_live_cache():
     # boundary's values even after the live cache moves on.
     kv_state = extracted[0]["state"][0]
     assert kv_state == (), (
-        "pm-eligible snapshot should blank the sliceable KV member, "
-        f"got {kv_state!r}"
+        f"pm-eligible snapshot should blank the sliceable KV member, got {kv_state!r}"
     )
     conv_slot0 = extracted[0]["state"][1][0]
     assert mx.max(mx.abs(conv_slot0 - BLOCK_SIZE)).item() == 0.0
@@ -528,9 +527,9 @@ def test_glm_pooling_cachelist_blanked_kv_roundtrips(tmp_path):
         compact_pooling_cache_snapshot(extracted, end, BLOCK_SIZE)
         snapshot_layer = extracted[0]
         assert snapshot_layer["state"][0] == (), "KV member must be blanked"
-        assert (
-            "pooling_delta_ranges" in snapshot_layer
-        ), f"boundary @{end}: compaction did not tag pooled delta ranges"
+        assert "pooling_delta_ranges" in snapshot_layer, (
+            f"boundary @{end}: compaction did not tag pooled delta ranges"
+        )
         assert snapshot_layer["state"][1][2].shape[1] == rows_per_block
         boundaries[end] = extracted
 
@@ -587,7 +586,9 @@ def test_glm_pooling_cachelist_blanked_kv_roundtrips(tmp_path):
         assert mx.max(row).item() == float(i + 1), f"pooled row {i} misplaced"
 
 
-@pytest.mark.parametrize("cache_module", ["mlx_lm.models.cache", "mlx_vlm.models.cache"])
+@pytest.mark.parametrize(
+    "cache_module", ["mlx_lm.models.cache", "mlx_vlm.models.cache"]
+)
 def test_arrays_cache_extract_none_guard(cache_module):
     """Extract a batch row while preserving untouched recurrent slots."""
     from importlib import import_module
@@ -679,9 +680,8 @@ def test_kv_batch_pooling_cachelist_pm_roundtrip(tmp_path):
     the scheduler's non-pm fallback blanked the KV member of this layer
     while the legacy restore last-blocked the refilled per-block slices —
     silently truncating the KV sequence to one block."""
-    from omlx.patches.deepseek_v4.cache_extras import BatchPoolingCache
-
     from omlx.patches.deepseek_v4 import apply_pooling_cache_support
+    from omlx.patches.deepseek_v4.cache_extras import BatchPoolingCache
     from omlx.scheduler import Scheduler
 
     apply_pooling_cache_support()
@@ -798,7 +798,9 @@ def _glm_pooling_fixture(tmp_path):
 
 @pytest.mark.parametrize("refill", ["completion", "parser_stop"])
 @pytest.mark.parametrize("num_blocks", [1, 3])
-def test_glm_pm_promoted_boundary_preserves_pooling_history(tmp_path, refill, num_blocks):
+def test_glm_pm_promoted_boundary_preserves_pooling_history(
+    tmp_path, refill, num_blocks
+):
     """The scheduler promotes the final snapshot out of the intermediate map.
 
     Its pooled rows are still a delta, even after refilling the blank KV
@@ -838,8 +840,12 @@ def test_glm_pm_promoted_boundary_preserves_pooling_history(tmp_path, refill, nu
     restored = cache.reconstruct_cache(table)
     assert restored is not None
     restored_kv, restored_pool = restored[0].caches
-    assert mx.array_equal(restored_kv.keys_and_values()[0], kv.keys_and_values()[0]).item()
-    assert mx.array_equal(restored_kv.keys_and_values()[1], kv.keys_and_values()[1]).item()
+    assert mx.array_equal(
+        restored_kv.keys_and_values()[0], kv.keys_and_values()[0]
+    ).item()
+    assert mx.array_equal(
+        restored_kv.keys_and_values()[1], kv.keys_and_values()[1]
+    ).item()
     assert restored_pool.pooled.shape == pool.pooled.shape
     assert mx.array_equal(restored_pool.pooled, pool.pooled).item()
 

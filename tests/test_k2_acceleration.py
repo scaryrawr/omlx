@@ -226,6 +226,7 @@ def test_ane_prefill_preserves_eight_decode_rows_and_cache_after_removal(
     mock_tokenizer, monkeypatch, prefix
 ):
     from mlx_lm.generate import BatchGenerator, GenerationBatch
+
     from omlx.custom_kernels.quant_matmul import ane as fast
     from omlx.request import Request, SamplingParams
     from omlx.scheduler import Scheduler, SchedulerConfig

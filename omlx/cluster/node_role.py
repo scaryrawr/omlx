@@ -248,7 +248,9 @@ def metal_cap_bytes(*, ssh_target: str | None = None, runner: Any = None) -> int
             "sysctl -n iogpu.wired_limit_mb",
         ]
     try:
-        result = runner(command, capture_output=True, text=True, timeout=15, check=False)
+        result = runner(
+            command, capture_output=True, text=True, timeout=15, check=False
+        )
     except (OSError, subprocess.SubprocessError):
         return 0
     if getattr(result, "returncode", 1) != 0:
@@ -269,7 +271,9 @@ def installed_memory_bytes(*, ssh_target: str | None = None, runner: Any = None)
             "sysctl -n hw.memsize",
         ]
     try:
-        result = runner(command, capture_output=True, text=True, timeout=15, check=False)
+        result = runner(
+            command, capture_output=True, text=True, timeout=15, check=False
+        )
     except (OSError, subprocess.SubprocessError):
         return 0
     return _parse_wired_limit_mb(getattr(result, "stdout", ""))
@@ -327,9 +331,7 @@ def suggest_budget(
     """What this Mac should offer the cluster, measured rather than assumed."""
 
     node_role = role_for(role)
-    source = capacity_source or (
-        "admission_ceiling" if capacity_bytes else "metal_cap"
-    )
+    source = capacity_source or ("admission_ceiling" if capacity_bytes else "metal_cap")
     capacity = capacity_bytes
     if not capacity and _is_local(ssh_target):
         # Prefer the ceiling the memory guard admits against, so the planner

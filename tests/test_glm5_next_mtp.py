@@ -41,7 +41,7 @@ from omlx.patches.mlx_lm_mtp import batch_generator as bg
 from omlx.patches.mlx_lm_mtp import batched_head
 from omlx.patches.mlx_lm_mtp import prompt_priming as pp
 from omlx.patches.mlx_vlm_glm5_next_compat import decode_kernels as dk
-from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime  # noqa: E402
+from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime
 from omlx.patches.mlx_vlm_mtp.glm5_next_batch_rollback import rollback_rows
 from omlx.speculative import dflash as dd
 
@@ -271,7 +271,7 @@ def test_sanitize_loads_quantized_nextn_fusion(applied, config, bits, prefix):
         weights[PFX + "eh_proj." + name] = value
     source_prefix = prefix.format(i=N_MAIN)
     weights = {
-        source_prefix + key[len(PFX):] if key.startswith(PFX) else key: value
+        source_prefix + key[len(PFX) :] if key.startswith(PFX) else key: value
         for key, value in weights.items()
     }
     sanitized = applied.LanguageModel.sanitize(_Host(config), weights)
@@ -285,8 +285,11 @@ def test_sanitize_loads_quantized_nextn_fusion(applied, config, bits, prefix):
         applied.LanguageModel.sanitize(_Host(config), sanitized),
     ):
         block.load_weights(
-            [(key[len("mtp.0."):], value)
-             for key, value in checkpoint.items() if key.startswith("mtp.0.")],
+            [
+                (key[len("mtp.0.") :], value)
+                for key, value in checkpoint.items()
+                if key.startswith("mtp.0.")
+            ],
             strict=True,
         )
         assert mx.array_equal(block.eh_proj(inputs), source(inputs)).item()
@@ -330,8 +333,9 @@ def test_rollback_matches_the_recurrent_cache_family(applied, config, monkeypatc
 
     _Recurrent.__name__ = "SizedArraysCache"
 
-    def fake_gdu(q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None,
-                 mask=None):
+    def fake_gdu(
+        q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None, mask=None
+    ):
         seen.append("replayed")
         return None, mx.zeros((1, 1, 1, 1))
 
@@ -355,8 +359,9 @@ def test_rollback_replays_with_the_gate_mask(applied, config, monkeypatch):
 
     seen_masks = []
 
-    def fake_gdu(q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None,
-                 mask=None):
+    def fake_gdu(
+        q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None, mask=None
+    ):
         seen_masks.append(mask)
         return None, mx.zeros((1, 1, 1, 1))
 
@@ -385,8 +390,9 @@ def test_rollback_rewinds_the_recurrent_position(applied, config, monkeypatch):
     """
     import mlx_lm.models.cache as cache_mod
 
-    def fake_gdu(q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None,
-                 mask=None):
+    def fake_gdu(
+        q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None, mask=None
+    ):
         return None, mx.zeros((1, 1, 1, 1))
 
     monkeypatch.setattr(applied, "gated_delta_update", fake_gdu, raising=False)
@@ -411,8 +417,10 @@ def test_rollback_refuses_before_trimming_when_a_layer_cannot_undo(
     """A trim that fails after earlier layers trimmed leaves the layers at
     mixed lengths, so the whole rollback is declined before anything moves.
     """
-    def fake_gdu(q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None,
-                 mask=None):
+
+    def fake_gdu(
+        q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None, mask=None
+    ):
         return None, mx.zeros((1, 1, 1, 1))
 
     monkeypatch.setattr(applied, "gated_delta_update", fake_gdu, raising=False)
@@ -542,10 +550,18 @@ def test_priming_captures_ordinary_text_but_not_verify_or_embedded_inputs(
 
 def _gdn_capture(gate_mask=None, block=4, K=4):
     """One layer's capture tuple, shaped as the verify forward records it."""
-    return [(mx.zeros((1, block, 1, 1)),) * 5 + (
-        mx.zeros((1, 1)), mx.zeros((1, 1)), None,
-        mx.zeros((1, block + K - 1, 2)), K, 0.0, gate_mask,
-    )]
+    return [
+        (mx.zeros((1, block, 1, 1)),) * 5
+        + (
+            mx.zeros((1, 1)),
+            mx.zeros((1, 1)),
+            None,
+            mx.zeros((1, block + K - 1, 2)),
+            K,
+            0.0,
+            gate_mask,
+        )
+    ]
 
 
 class _FakeSparse:
@@ -634,8 +650,9 @@ def test_rollback_refuses_when_the_capture_is_short(applied, config, monkeypatch
     """
     import mlx_lm.models.cache as cache_mod
 
-    def fake_gdu(q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None,
-                 mask=None):
+    def fake_gdu(
+        q, k, v, a, b, A_log, dt_bias, state=None, lower_bound=None, mask=None
+    ):
         return None, mx.zeros((1, 1, 1, 1))
 
     monkeypatch.setattr(applied, "gated_delta_update", fake_gdu, raising=False)
@@ -752,9 +769,7 @@ def make_host(dtype=mx.float32, *, mtp_layers=0, **overrides):
 
 
 # Block 2 leaves rows mid-window; block 8 completes two kpool windows per row.
-@pytest.mark.parametrize(
-    "size,depth,dtype", [(2, 1, mx.float32), (4, 7, mx.bfloat16)]
-)
+@pytest.mark.parametrize("size,depth,dtype", [(2, 1, mx.float32), (4, 7, mx.bfloat16)])
 def test_vector_restore_and_continuation_match_scalar(size, depth, dtype):
     mx.random.seed(349)
     host = make_host(dtype)
@@ -875,7 +890,7 @@ def test_masked_replay_restores_metadata(dtype):
     cache.left_padding = mx.array([-4 - row for row in range(size)])
     counts = [0, 3, 1, 2]
     refs = []
-    for row, count in enumerate(counts):
+    for _row, count in enumerate(counts):
         ref = copy.deepcopy(cache)
         host.rollback_speculative_cache([ref], [entry], count, width)
         refs.append(ref)
@@ -986,8 +1001,9 @@ def test_history_and_clone_match_independent_heads(size, stochastic, quantized):
             host.mtp[0],
             bits=8,
             group_size=32,
-            class_predicate=lambda path, module: hasattr(module, "to_quantized")
-            and not path.endswith("mlp.gate"),
+            class_predicate=lambda path, module: (
+                hasattr(module, "to_quantized") and not path.endswith("mlp.gate")
+            ),
         )
     model = SimpleNamespace(_language_model=host, mtp_forward=host.mtp_forward)
     states = [
@@ -1140,9 +1156,9 @@ def _rand_affine(out_dims, in_dims, bits, group_size=64, scale=0.004):
     w = w * 2 + mx.random.randint(0, 2, w.shape).astype(mx.uint32)
     groups = in_dims // group_size
     s = (mx.random.uniform(0.5, 1.5, (out_dims, groups)) * scale).astype(mx.bfloat16)
-    b = (
-        -mx.random.uniform(0.5, 1.5, (out_dims, groups)) * scale * 2**bits / 2
-    ).astype(mx.bfloat16)
+    b = (-mx.random.uniform(0.5, 1.5, (out_dims, groups)) * scale * 2**bits / 2).astype(
+        mx.bfloat16
+    )
     return w, s, b
 
 
@@ -1158,7 +1174,6 @@ def _model(seed, kda_bits, heads=16):
     from mlx_vlm.models import glm5_next
 
     from omlx.patches.deepseek_v4.switch_layers import SwitchLinear
-
     from omlx.patches.mlx_vlm_mtp import is_mtp_attach_enabled, set_mtp_attach_enabled
 
     _, language = _runtime()
@@ -1367,7 +1382,11 @@ def check_verify_matches_reference(
                 outs.append(out)
             language._DECODE_FUSION = saved
             fused_out, reference_out = outs
-            kda = [l.self_attn for l in fused_model.model.layers if l.is_linear]
+            kda = [
+                layer_index.self_attn
+                for layer_index in fused_model.model.layers
+                if layer_index.is_linear
+            ]
             for attn, entry in zip(kda, fused_out.gdn_states):
                 # Under armed routes a layer with separately quantized
                 # projections keeps the reference body for multi-row blocks.
@@ -1469,7 +1488,7 @@ def _native_indexer_available() -> bool:
             fast.has_symbol("dsa_indexer_scores")
             and fast.has_symbol("dsa_topk_indices")
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -1531,7 +1550,7 @@ def test_fused_verify_cycles_are_bitwise_reference_with_nax_tf32():
     one-token HC expand also engages."""
     here = Path(__file__).resolve().parent
     code = (
-        "import sys; sys.path[:0] = [%r, %r]\n"
+        f"import sys; sys.path[:0] = [{str(here)!r}, {str(here.parent)!r}]\n"
         "import test_glm5_next_mtp as t\n"
         "t.dk.moe_router = t._stock_verify_router(t.dk.moe_router)\n"
         "import conftest, pytest\n"
@@ -1544,7 +1563,7 @@ def test_fused_verify_cycles_are_bitwise_reference_with_nax_tf32():
         "            t.check_verify_matches_reference(seed, ctx, t._CYCLES[:12], bits)))\n"
         "used.append(sorted(t.check_verify_matches_reference(\n"
         "    19, 300, t._CYCLES, t.KDA_BITS['mixed-v/4-bit'], armed=True)))\n"
-        "print(dk.nax_relaxed_fp32_matmul(), used)\n" % (str(here), str(here.parent))
+        "print(dk.nax_relaxed_fp32_matmul(), used)\n"
     )
     env = dict(os.environ, MLX_ENABLE_TF32="1")
     done = subprocess.run(
@@ -1772,8 +1791,9 @@ def test_fused_capture_refuses_a_mismatched_block_before_touching_caches():
 @pytest.mark.usefixtures("glm5_fused_decode")
 def test_batched_rollback_rejects_a_fused_capture():
     _, language = _runtime()
-    from omlx.patches.mlx_vlm_mtp.glm5_next_batch_rollback import rollback_rows
     from mlx_vlm.models.cache import ArraysCache
+
+    from omlx.patches.mlx_vlm_mtp.glm5_next_batch_rollback import rollback_rows
 
     cache = ArraysCache(size=2)
     cache[0], cache[1] = mx.zeros((2, 3, 8)), mx.zeros((2, 1, 1, 1))
@@ -1921,14 +1941,20 @@ def test_block_drafter_generation_matches_plain_decode(monkeypatch):
 
     def unpadded(self, n):
         pad = self.left_padding
-        if pad is not None and self.lengths is None and pad.size == 1 and pad.item() <= 0:
+        if (
+            pad is not None
+            and self.lengths is None
+            and pad.size == 1
+            and pad.item() <= 0
+        ):
             return None
         return make_mask(self, n)
 
     monkeypatch.setattr(ArraysCache, "make_mask", unpadded)
     monkeypatch.setattr(mlx_lm_mtp, "_MTP_ACTIVE", True)
     prompt = [
-        int(v) for v in mx.random.randint(0, VOCAB, (300,), key=mx.random.key(5)).tolist()
+        int(v)
+        for v in mx.random.randint(0, VOCAB, (300,), key=mx.random.key(5)).tolist()
     ]
     plain = _generate(_model(5, KDA_BITS["8-bit/5-bit"]), prompt, 24, True, False)
 

@@ -36,8 +36,7 @@ bit for bit, except where the two key counts straddle a chunk-size step.
 from __future__ import annotations
 
 import math
-from functools import lru_cache
-from typing import Optional
+from functools import cache
 
 import mlx.core as mx
 
@@ -358,7 +357,7 @@ _PASS2_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _pass1_kernel():
     return mx.fast.metal_kernel(
         name="omlx_sdpa_flash_pass1",
@@ -369,7 +368,7 @@ def _pass1_kernel():
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _pass2_kernel():
     return mx.fast.metal_kernel(
         name="omlx_sdpa_flash_pass2",
@@ -395,12 +394,12 @@ def _head_split(rows: int) -> int:
     return 2 if rows == 1 else 1
 
 
-@lru_cache(maxsize=None)
+@cache
 def _params_array(chunk: int):
     return mx.array([chunk], dtype=mx.int32)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _scale_array(scale: float):
     return mx.array([scale], dtype=mx.float32)
 
@@ -415,7 +414,7 @@ def _dummy(dtype):
     return arr
 
 
-def sdpa_flash(q, k, v, scale: float, mask, sinks) -> Optional[mx.array]:
+def sdpa_flash(q, k, v, scale: float, mask, sinks) -> mx.array | None:
     """Attention of ``q (B, H, L, D)`` over ``k (B, Hk, S, D)`` /
     ``v (B, Hk, S, Dv)`` for ``L <= MAX_ROWS`` rows, returned as
     ``(B, L, H * Dv)``.
@@ -473,7 +472,15 @@ def sdpa_flash(q, k, v, scale: float, mask, sinks) -> Optional[mx.array]:
     qb = gqa * L // 8
     hs = _head_split(L)
     o_part, m_part, l_part = _pass1_kernel()(
-        inputs=[q, k, v, _scale_array(float(scale)), _params_array(int(chunk)), mask_arr, sinks_arr],
+        inputs=[
+            q,
+            k,
+            v,
+            _scale_array(float(scale)),
+            _params_array(int(chunk)),
+            mask_arr,
+            sinks_arr,
+        ],
         template=[
             ("T", dtype),
             ("D", int(D)),
@@ -489,7 +496,11 @@ def sdpa_flash(q, k, v, scale: float, mask, sinks) -> Optional[mx.array]:
         ],
         grid=(32 * qb * hs * Hk, B, splits),
         threadgroup=(32 * qb * hs, 1, 1),
-        output_shapes=[(B * L * H, splits, Dv), (B * L * H, splits), (B * L * H, splits)],
+        output_shapes=[
+            (B * L * H, splits, Dv),
+            (B * L * H, splits),
+            (B * L * H, splits),
+        ],
         output_dtypes=[mx.float32, mx.float32, mx.float32],
     )
     (out,) = _pass2_kernel()(

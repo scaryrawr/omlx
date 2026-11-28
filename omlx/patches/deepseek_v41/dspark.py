@@ -35,7 +35,12 @@ class DSparkAttention(Attention):
             for p in range(item.offset, item.offset + x.shape[1])
         ]
         kv = quantize_activation(
-            rope(self.kv_norm(self.wkv(mx.concatenate(main_xs, axis=1))), positions, c, False)
+            rope(
+                self.kv_norm(self.wkv(mx.concatenate(main_xs, axis=1))),
+                positions,
+                c,
+                False,
+            )
         )
         at = 0
         for x, item in zip(main_xs, caches):
@@ -46,13 +51,19 @@ class DSparkAttention(Attention):
         c = self._config
         caches = cache if isinstance(cache, list) else [cache]
         batch, length, _ = x.shape
-        positions = [p for item in caches for p in range(item.offset, item.offset + length)]
+        positions = [
+            p for item in caches for p in range(item.offset, item.offset + length)
+        ]
 
         def flat(t):
             return t.reshape(1, batch * length, *t.shape[2:])
 
         q = rope(
-            flat(self.wq_b(self.q_norm(self.wq_a(x))).reshape(batch, length, c.n_heads, c.head_dim)),
+            flat(
+                self.wq_b(self.q_norm(self.wq_a(x))).reshape(
+                    batch, length, c.n_heads, c.head_dim
+                )
+            ),
             positions,
             c,
             False,
@@ -63,12 +74,18 @@ class DSparkAttention(Attention):
         sizes = [item.keys.shape[2] for item in caches]
         top = max(sizes)
         rings = mx.concatenate(
-            [mx.pad(item.keys[:, 0], [(0, 0), (top - size, 0), (0, 0)]) for item, size in zip(caches, sizes)]
+            [
+                mx.pad(item.keys[:, 0], [(0, 0), (top - size, 0), (0, 0)])
+                for item, size in zip(caches, sizes)
+            ]
         )
         kv = mx.concatenate([rings, draft_kv], axis=1)
         mask = None
         if min(sizes) != top:
-            mask = mx.arange(top + length) >= mx.array([top - size for size in sizes])[:, None, None, None]
+            mask = (
+                mx.arange(top + length)
+                >= mx.array([top - size for size in sizes])[:, None, None, None]
+            )
         # V4.1 does not apply V4's per-head query RMS normalization.
         # The checkpoint's sink and attention accumulation are FP32. SDPA
         # requires a matching sink dtype, so promote this small draft block

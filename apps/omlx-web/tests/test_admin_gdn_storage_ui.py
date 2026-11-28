@@ -25,9 +25,7 @@ GDN_I18N_KEYS = {
 
 
 def test_settings_template_exposes_gdn_storage_policy_and_codecs():
-    template = (
-        ROOT / "omlx_web/templates/dashboard/_settings.html"
-    ).read_text()
+    template = (ROOT / "omlx_web/templates/dashboard/_settings.html").read_text()
 
     advanced_start = template.index("<!-- Advanced Settings")
     gdn_policy_start = template.index("settings.advanced.gdn_cache_policy")

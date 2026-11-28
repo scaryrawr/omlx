@@ -175,9 +175,7 @@ def _find_attention_layers(model) -> list[tuple[int, Any]]:
     """
     results = []
     for idx, layer in enumerate(model.layers):
-        if hasattr(layer, "self_attn"):
-            results.append((idx, layer))
-        elif getattr(layer, "block_type", None) == "*":
+        if hasattr(layer, "self_attn") or getattr(layer, "block_type", None) == "*":
             results.append((idx, layer))
     return results
 
@@ -308,9 +306,9 @@ def _linear_output_dims(linear) -> int | None:
     if linear is None:
         return None
     if hasattr(linear, "out_features"):
-        return getattr(linear, "out_features")
+        return linear.out_features
     if hasattr(linear, "output_dims"):
-        return getattr(linear, "output_dims")
+        return linear.output_dims
     weight = getattr(linear, "weight", None)
     if weight is not None and getattr(weight, "shape", None):
         return weight.shape[0]
@@ -364,11 +362,10 @@ def _is_gemma4_attention(attn_obj) -> bool:
     """Detect Gemma 4 attention by its shared-KV / offset call contract."""
     if not hasattr(attn_obj, "q_norm") or not hasattr(attn_obj, "rope"):
         return False
-    call = getattr(attn_obj, "__call__", None)
-    if call is None:
+    if not callable(attn_obj):
         return False
     try:
-        params = inspect.signature(call).parameters
+        params = inspect.signature(attn_obj.__call__).parameters
     except (TypeError, ValueError):
         return False
     return "shared_kv" in params and "offset" in params
@@ -460,9 +457,7 @@ def _hold_value(value: Any, seen: set[int]) -> Any:
 
 def _restore_value(held: Any) -> Any:
     if isinstance(held, _HeldObject):
-        vars(held.obj).update(
-            {k: _restore_value(v) for k, v in held.attrs.items()}
-        )
+        vars(held.obj).update({k: _restore_value(v) for k, v in held.attrs.items()})
         return held.obj
     if isinstance(held, (list, tuple)):
         return type(held)(_restore_value(v) for v in held)
@@ -667,7 +662,11 @@ def score_tokens(
             cache,
             step_size=prefill_step_size,
             progress_callback=(
-                (lambda processed, total: progress_callback(cached_len + processed, n_prompt, "scoring"))
+                (
+                    lambda processed, total: progress_callback(
+                        cached_len + processed, n_prompt, "scoring"
+                    )
+                )
                 if progress_callback is not None
                 else None
             ),
@@ -680,7 +679,11 @@ def score_tokens(
             cache,
             step_size=prefill_step_size,
             progress_callback=(
-                (lambda processed, total: progress_callback(processed, total, "scoring"))
+                (
+                    lambda processed, total: progress_callback(
+                        processed, total, "scoring"
+                    )
+                )
                 if progress_callback is not None
                 else None
             ),
@@ -695,8 +698,7 @@ def score_tokens(
     # Recurrent state and wrapped rotating buffers cannot be trimmed like KV.
     leaves = _cache_leaves(cache)
     held_states = [
-        None if _is_sliceable_kv(leaf) else _hold_leaf_state(leaf)
-        for leaf in leaves
+        None if _is_sliceable_kv(leaf) else _hold_leaf_state(leaf) for leaf in leaves
     ]
 
     # Phase 2: Lookahead decode with query capture
@@ -785,9 +787,7 @@ def select_chunks(
     if full_chunks:
         score_parts.append(
             mx.mean(
-                importance[: full_chunks * chunk_size].reshape(
-                    full_chunks, chunk_size
-                ),
+                importance[: full_chunks * chunk_size].reshape(full_chunks, chunk_size),
                 axis=1,
             )
         )

@@ -4,13 +4,16 @@
 import asyncio
 
 import pytest
+from tests.ui.test_cluster_wizard import _WIZARD_TWO_MACS, _run_wizard
 
 from omlx.cluster import routes
 from tests.test_cluster_pairing import _loopback_pair
-from tests.ui.test_cluster_wizard import _WIZARD_TWO_MACS, _run_wizard
+
 
 def test_initial_plan_uses_measured_budgets_and_role_fraction():
-    result = _run_wizard(_WIZARD_TWO_MACS + """
+    result = _run_wizard(
+        _WIZARD_TWO_MACS
+        + """
 component.selectedModelPath = '/models/m';
 component.modelOptions = [{model_path: '/models/m'}];
 let posted;
@@ -21,7 +24,8 @@ component.apiFetch = async (url, options) => {
   return {ready_to_activate: true, plan: {placement_signature: 'a'.repeat(16)}, activation: {approved_placement: 'a'.repeat(16)}};
 };
 (async () => {await component.runPlan(); process.stdout.write(JSON.stringify(posted.nodes));})();
-""")
+"""
+    )
     assert len(result) == 2
     assert all(
         node["capacity_bytes"] == 32 * 1024**3 and node["reserve_bytes"] == 8 * 1024**3
@@ -57,7 +61,9 @@ component.stagingActivation = {deployment_id: 'old-pool'};
 
 
 def test_blockers_and_unpaired_versions_do_not_start_work():
-    result = _run_wizard(_WIZARD_TWO_MACS + """
+    result = _run_wizard(
+        _WIZARD_TWO_MACS
+        + """
 component.devicesPayload.self.version = '1.0';
 component.devicesPayload.paired[0].version = '1.0';
 component.devicesPayload.discovered = [{node_id: 'unpaired', version: 'wrong', paired: false}];
@@ -66,7 +72,8 @@ component.planProposal = {activation: {}, ready_to_activate: false, ready_to_sta
 let calls = 0;
 component.postActivation = async () => calls++;
 (async () => {await component.activatePlan(); process.stdout.write(JSON.stringify({calls, mismatches: component.versionMismatches()}));})();
-""")
+"""
+    )
     assert result == {"calls": 0, "mismatches": []}
 
 
@@ -104,7 +111,9 @@ def test_ui_ipv6_address_reaches_join_request(tmp_path, ip):
 
 
 def test_model_change_keeps_other_saved_setup_and_opens_picker():
-    result = _run_wizard(_WIZARD_TWO_MACS + """
+    result = _run_wizard(
+        _WIZARD_TWO_MACS
+        + """
 component.deploymentsPayload = [{deployment_id:'A',model:'/a'}, {deployment_id:'B',model:'/b'}];
 component.runtimeLoaded = true; component.runtimePayload = {jobs:[],launchers:[]};
 component.apiFetch = async () => ({}); component.notify = () => {};
@@ -114,7 +123,8 @@ component.refreshRuntime = async () => {}; component.loadModels = () => {}; comp
  const a = component.deploymentsPayload[0]; component.beginModelChange(a); await component.changeClusterModel(a);
  process.stdout.write(JSON.stringify({screen:component.wizardState(),saved:component.deploymentsPayload.map(d=>d.deployment_id)}));
 })();
-""")
+"""
+    )
     assert result == {"screen": "plan", "saved": ["B"]}
 
 

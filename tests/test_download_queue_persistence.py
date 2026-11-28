@@ -37,8 +37,9 @@ def queue(request, tmp_path):
     async def _run(self, task_id, token):
         tokens["token"] = token
 
-    with patch.object(cls, "_run_download", new=_run), patch(
-        "omlx.admin.ms_downloader.MS_SDK_AVAILABLE", True
+    with (
+        patch.object(cls, "_run_download", new=_run),
+        patch("omlx.admin.ms_downloader.MS_SDK_AVAILABLE", True),
     ):
         yield SimpleNamespace(
             cls=cls,
@@ -51,9 +52,7 @@ def queue(request, tmp_path):
 class TestQueuePersistence:
     """The queue persists to disk and survives a restart."""
 
-    def test_a_resumable_row_keeps_the_token_and_a_finished_one_does_not(
-        self, queue
-    ):
+    def test_a_resumable_row_keeps_the_token_and_a_finished_one_does_not(self, queue):
         downloader, tasks_file = queue.downloader, queue.tasks_file
         task = DownloadTask(task_id="t1", repo_id="private/model")
         task.token = "SECRET"
@@ -79,9 +78,7 @@ class TestQueuePersistence:
         assert rows[0]["status"] == DownloadStatus.PENDING.value
 
         assert await downloader.cancel_download(task.task_id) is True
-        assert _read_rows(tasks_file)[0]["status"] == (
-            DownloadStatus.CANCELLED.value
-        )
+        assert _read_rows(tasks_file)[0]["status"] == (DownloadStatus.CANCELLED.value)
 
     @pytest.mark.asyncio
     async def test_remove_task_persists_without_row(self, queue):
@@ -103,9 +100,7 @@ class TestQueuePersistence:
         model_dir = tmp_path / "models"
         model_dir.mkdir(parents=True, exist_ok=True)
         tasks_file = tmp_path / "state" / "hf_queue.json"
-        downloader = HFDownloader(
-            model_dir=str(model_dir), tasks_file=tasks_file
-        )
+        downloader = HFDownloader(model_dir=str(model_dir), tasks_file=tasks_file)
         task = DownloadTask(task_id="t1", repo_id="owner/model")
         downloader._tasks[task.task_id] = task
 
@@ -141,20 +136,37 @@ class TestQueuePersistence:
     @pytest.mark.asyncio
     async def test_restore_resumes_interrupted_rows(self, queue):
         downloader, tasks_file = queue.downloader, queue.tasks_file
-        _write_rows(tasks_file, [
-            {"task_id": "done", "repo_id": "owner/done", "status": "completed",
-             "progress": 100.0, "created_at": 100.0},
-            {"task_id": "fail", "repo_id": "owner/fail", "status": "failed",
-             "error": "boom", "created_at": 200.0},
-            {"task_id": "live", "repo_id": "owner/live",
-             "status": "downloading", "created_at": 300.0, "retry_count": 2},
-        ])
+        _write_rows(
+            tasks_file,
+            [
+                {
+                    "task_id": "done",
+                    "repo_id": "owner/done",
+                    "status": "completed",
+                    "progress": 100.0,
+                    "created_at": 100.0,
+                },
+                {
+                    "task_id": "fail",
+                    "repo_id": "owner/fail",
+                    "status": "failed",
+                    "error": "boom",
+                    "created_at": 200.0,
+                },
+                {
+                    "task_id": "live",
+                    "repo_id": "owner/live",
+                    "status": "downloading",
+                    "created_at": 300.0,
+                    "retry_count": 2,
+                },
+            ],
+        )
 
         await downloader.restore_tasks()
 
         resumed = [
-            t for t in downloader._tasks.values()
-            if t.status == DownloadStatus.PENDING
+            t for t in downloader._tasks.values() if t.status == DownloadStatus.PENDING
         ]
         assert [t.repo_id for t in resumed] == ["owner/live"]
         assert resumed[0].created_at == 300.0
@@ -162,9 +174,7 @@ class TestQueuePersistence:
         # Failed rows stay retryable; completed rows are dropped.
         assert downloader._tasks["fail"].error == "boom"
         assert "done" not in downloader._tasks
-        live_rows = [
-            r for r in _read_rows(tasks_file) if r["repo_id"] == "owner/live"
-        ]
+        live_rows = [r for r in _read_rows(tasks_file) if r["repo_id"] == "owner/live"]
         assert live_rows
         assert live_rows[0]["status"] == DownloadStatus.PENDING.value
 
@@ -177,15 +187,12 @@ class TestQueuePersistence:
             "status": "downloading",
             "created_at": 100.0,
         }
-        _write_rows(
-            tasks_file, [dict(row, task_id="a"), dict(row, task_id="b")]
-        )
+        _write_rows(tasks_file, [dict(row, task_id="a"), dict(row, task_id="b")])
 
         await downloader.restore_tasks()  # duplicate must not raise
 
         active = [
-            t for t in downloader._tasks.values()
-            if t.status == DownloadStatus.PENDING
+            t for t in downloader._tasks.values() if t.status == DownloadStatus.PENDING
         ]
         assert len(active) == 1
         assert active[0].repo_id == "owner/dup"
@@ -209,11 +216,14 @@ class TestQueuePersistence:
         self, queue, caplog
     ):
         downloader, tasks_file = queue.downloader, queue.tasks_file
-        _write_rows(tasks_file, [
-            {"task_id": "bad", "status": "failed", "token": "SUPERSECRET"},
-            {"task_id": "unknown", "repo_id": "owner/x", "status": "paused?"},
-            {"task_id": "fail", "repo_id": "owner/fail", "status": "failed"},
-        ])
+        _write_rows(
+            tasks_file,
+            [
+                {"task_id": "bad", "status": "failed", "token": "SUPERSECRET"},
+                {"task_id": "unknown", "repo_id": "owner/x", "status": "paused?"},
+                {"task_id": "fail", "repo_id": "owner/fail", "status": "failed"},
+            ],
+        )
 
         with caplog.at_level(logging.WARNING):
             await downloader.restore_tasks()
@@ -223,9 +233,7 @@ class TestQueuePersistence:
         assert "SUPERSECRET" not in caplog.text
 
     @pytest.mark.asyncio
-    async def test_credential_persists_and_restores_without_reaching_api(
-        self, queue
-    ):
+    async def test_credential_persists_and_restores_without_reaching_api(self, queue):
         downloader, tasks_file = queue.downloader, queue.tasks_file
         task = await downloader.start_download("owner/model", "GEHEIM")
         await asyncio.sleep(0)  # let the scheduled download coroutine run
@@ -242,16 +250,13 @@ class TestQueuePersistence:
         queue.tokens.clear()
         with patch("omlx.admin.hf_downloader.abort_xet_session"):
             await downloader.shutdown()
-        fresh = queue.cls(
-            model_dir=str(downloader._model_dir), tasks_file=tasks_file
-        )
+        fresh = queue.cls(model_dir=str(downloader._model_dir), tasks_file=tasks_file)
         await fresh.restore_tasks()
         await asyncio.sleep(0)
 
         assert queue.tokens["token"] == "GEHEIM"
         resumed = [
-            t for t in fresh._tasks.values()
-            if t.status == DownloadStatus.PENDING
+            t for t in fresh._tasks.values() if t.status == DownloadStatus.PENDING
         ]
         assert [t.repo_id for t in resumed] == ["owner/model"]
         assert resumed[0].token == "GEHEIM"
@@ -259,9 +264,7 @@ class TestQueuePersistence:
         assert _read_rows(tasks_file)[0]["token"] == "GEHEIM"
 
     @pytest.mark.asyncio
-    async def test_retry_recovers_credential_and_persists_bookkeeping(
-        self, queue
-    ):
+    async def test_retry_recovers_credential_and_persists_bookkeeping(self, queue):
         downloader, tasks_file = queue.downloader, queue.tasks_file
         old = DownloadTask(
             task_id="old",

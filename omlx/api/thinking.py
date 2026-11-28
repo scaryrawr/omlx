@@ -11,12 +11,11 @@ their chain-of-thought reasoning in <think>...</think> tags.
 
 import re
 from collections.abc import Callable, Sequence
-from typing import List, Optional, Tuple
 
 # Tags used for thinking blocks
 _OPEN_TAG = "<think>"
 _CLOSE_TAG = "</think>"
-_OPEN_LEN = len(_OPEN_TAG)   # 7
+_OPEN_LEN = len(_OPEN_TAG)  # 7
 _CLOSE_LEN = len(_CLOSE_TAG)  # 8
 _MINIMAX_OPEN_TAG = "<mm:think>"
 _MINIMAX_CLOSE_TAG = "</mm:think>"
@@ -34,10 +33,10 @@ def normalize_think_tags(text: str) -> str:
 
 
 # Regex for non-streaming extraction (complete text)
-_THINKING_PATTERN = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+_THINKING_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # Handle case where <think> is missing but </think> is present
 # (scheduler prepends <think>\n but the tag may be split)
-_THINKING_TAIL_PATTERN = re.compile(r'^(.*?)</think>', re.DOTALL)
+_THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think>", re.DOTALL)
 
 
 def _safe_tokenizer_attr(tokenizer, attr: str, default=None):
@@ -127,15 +126,11 @@ def prompt_opens_thinking(
     in the visible tag. When the caller already has prompt ids from the same
     tokenizer path as the scheduler, those ids are authoritative.
     """
-    think_tag = (
-        _safe_tokenizer_attr(tokenizer, "think_start", _OPEN_TAG) or _OPEN_TAG
-    )
+    think_tag = _safe_tokenizer_attr(tokenizer, "think_start", _OPEN_TAG) or _OPEN_TAG
     if tokenizer is None:
         return prompt.rstrip().endswith(think_tag), think_tag
 
-    think_start_id = _single_token_id(
-        _safe_tokenizer_attr(tokenizer, "think_start_id")
-    )
+    think_start_id = _single_token_id(_safe_tokenizer_attr(tokenizer, "think_start_id"))
     if think_start_id is None:
         think_start_id = _convert_token_to_id(tokenizer, think_tag)
     if think_start_id is None:
@@ -169,7 +164,7 @@ def extract_thinking(
     truncated: bool = False,
     start_in_thinking: bool = False,
     leading_only: bool = False,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Extract thinking and content from complete text.
 
     Handles:
@@ -233,7 +228,7 @@ def extract_thinking(
         if not match:
             break
         thinking_parts.append(match.group(1))
-        remaining = remaining[:match.start()] + remaining[match.end():]
+        remaining = remaining[: match.start()] + remaining[match.end() :]
 
     if truncated and _OPEN_TAG in remaining:
         before, after = remaining.split(_OPEN_TAG, 1)
@@ -245,19 +240,19 @@ def extract_thinking(
         return (thinking, remaining.strip())
 
     # Handle partial: content before </think> without <think> tag
-    if '</think>' in text and '<think>' not in text:
+    if "</think>" in text and "<think>" not in text:
         match = _THINKING_TAIL_PATTERN.match(text)
         if match:
             thinking = match.group(1).strip()
-            remaining = text[match.end():].strip()
+            remaining = text[match.end() :].strip()
             return (thinking, remaining)
 
     # Malformed: <think> opened but never closed. Drop the open tag and
     # treat the remainder as content so the answer body is not empty.
-    if '<think>' in text and '</think>' not in text:
-        idx = text.index('<think>')
+    if "<think>" in text and "</think>" not in text:
+        idx = text.index("<think>")
         before = text[:idx]
-        after = text[idx + _OPEN_LEN:]
+        after = text[idx + _OPEN_LEN :]
         return ("", (before + after).strip())
 
     return ("", text)
@@ -265,7 +260,7 @@ def extract_thinking(
 
 def _extract_leading_thinking(
     text: str, truncated: bool, start_in_thinking: bool
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     body = text.lstrip()
     if body.startswith(_OPEN_TAG):
         body = body[_OPEN_LEN:]
@@ -320,10 +315,10 @@ class ThinkingParser:
         # text once more as content — the client will show both panels but
         # the answer body is no longer empty.
         self._close_seen: bool = False
-        self._thinking_accumulated: List[str] = []
+        self._thinking_accumulated: list[str] = []
         self._content_emitted: bool = False
 
-    def feed(self, text: str) -> Tuple[str, str]:
+    def feed(self, text: str) -> tuple[str, str]:
         """Feed a text chunk, return (thinking_delta, content_delta).
 
         Args:
@@ -347,7 +342,7 @@ class ThinkingParser:
             if self._tags_done:
                 content_out.append(text[i:])
                 break
-            if text[i] == '<':
+            if text[i] == "<":
                 # Check if this could be a tag start
                 remaining = text[i:]
 
@@ -385,9 +380,9 @@ class ThinkingParser:
                 # Not a tag, emit the '<' as regular content
                 self._text_seen = True
                 if self._in_thinking:
-                    thinking_out.append('<')
+                    thinking_out.append("<")
                 else:
-                    content_out.append('<')
+                    content_out.append("<")
                     if self._leading_only:
                         self._tags_done = True
                 i += 1
@@ -418,7 +413,7 @@ class ThinkingParser:
 
     def finish(
         self, *, truncated: bool = False, has_tool_calls: bool = False
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """Flush any remaining buffered content.
 
         Should be called when the stream is complete to emit any
@@ -503,12 +498,12 @@ class ThinkingBudgetProcessor:
 
     def __init__(
         self,
-        think_end_token_ids: List[int],
+        think_end_token_ids: list[int],
         budget: int,
-        think_start_token_id: Optional[int] = None,
-        leading_token_ids: Optional[List[int]] = None,
-        trailing_token_ids: Optional[List[int]] = None,
-        token_to_piece: Optional[Callable[[int], str | bytes | None]] = None,
+        think_start_token_id: int | None = None,
+        leading_token_ids: list[int] | None = None,
+        trailing_token_ids: list[int] | None = None,
+        token_to_piece: Callable[[int], str | bytes | None] | None = None,
         start_in_thinking: bool = True,
     ):
         self._think_end_ids = think_end_token_ids
@@ -531,7 +526,7 @@ class ThinkingBudgetProcessor:
         self._done: bool = False
         self._first_call: bool = True
         # Sliding window for multi-token end detection
-        self._recent_tokens: List[int] = []
+        self._recent_tokens: list[int] = []
         self._last_token_utf8_complete: bool = True
         self._pending_utf8: bytes = b""
 
@@ -618,7 +613,11 @@ class ThinkingBudgetProcessor:
             return
 
         # Detect re-entry into thinking (rare but possible)
-        if not self._in_thinking and self._think_start_id and token_id == self._think_start_id:
+        if (
+            not self._in_thinking
+            and self._think_start_id
+            and token_id == self._think_start_id
+        ):
             self._in_thinking = True
             self._done = False
             self._thinking_tokens = 0

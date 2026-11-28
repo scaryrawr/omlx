@@ -253,7 +253,7 @@ class BailingHybridOutputParserSession:
 
             self._stream_filter = ToolCallStreamFilter(tokenizer)
             self._visible_filter = ToolCallStreamFilter(tokenizer)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("Ling stream filter unavailable: %s", e)
             self._stream_filter = None
             self._visible_filter = None
@@ -340,7 +340,7 @@ class BailingHybridOutputParserSession:
                             "arguments": call.function.arguments,
                         }
                     )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("Ling tool-call parse failed: %s", e)
 
         return OutputParserFinalizeResult(
@@ -602,7 +602,7 @@ class DeepSeekV4OutputParserSession:
 
             self._stream_filter = ToolCallStreamFilter(tokenizer)
             self._visible_filter = ToolCallStreamFilter(tokenizer)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("DeepSeek V4 stream filter unavailable: %s", e)
             self._stream_filter = None
             self._visible_filter = None
@@ -683,7 +683,7 @@ class DeepSeekV4OutputParserSession:
                         "arguments": call.function.arguments,
                     }
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("DeepSeek V4 tool-call parse failed: %s", e)
 
         return OutputParserFinalizeResult(
@@ -709,7 +709,7 @@ class MiniMaxM3OutputParserSession:
 
             self._stream_filter = ToolCallStreamFilter(tokenizer)
             self._visible_filter = ToolCallStreamFilter(tokenizer)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("MiniMax M3 stream filter unavailable: %s", e)
             self._stream_filter = None
             self._visible_filter = None
@@ -812,7 +812,7 @@ class MiniMaxM3OutputParserSession:
                     for call in parsed_calls
                     if isinstance(call, dict) and call.get("name")
                 ]
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("MiniMax M3 tool-call parse failed: %s", e)
 
         return OutputParserFinalizeResult(
@@ -1538,9 +1538,7 @@ def detect_output_parser(
             thinking_start_text=_INKLING_CONTENT_THINKING,
             thinking_start_output_text="<think>\n",
             thinking_end_text=_INKLING_END_MESSAGE,
-            thinking_end_trailing_text=(
-                _INKLING_MESSAGE_MODEL + _INKLING_CONTENT_TEXT
-            ),
+            thinking_end_trailing_text=(_INKLING_MESSAGE_MODEL + _INKLING_CONTENT_TEXT),
             protocol_marker_texts=_INKLING_MARKERS,
         )
 

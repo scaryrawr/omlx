@@ -64,7 +64,8 @@ def decode_e4m3(raw):
     exponent = ((raw >> 3) & 15).astype(np.int32)
     fraction = (raw & 7).astype(np.float32)
     magnitude = np.where(
-        exponent == 0, fraction * 2.0**-9,
+        exponent == 0,
+        fraction * 2.0**-9,
         np.ldexp(1.0 + fraction / 8, exponent - 7),
     )
     magnitude = np.where((raw & 127) == 127, np.nan, magnitude)
@@ -73,16 +74,20 @@ def decode_e4m3(raw):
 
 def reference_activation(raw, bits=8, group=32, e4m3=False):
     """Nearest representable value, with even-code tie breaking."""
+
     def nearest(values, levels):
-        order = np.concatenate([np.arange(0, len(levels), 2), np.arange(1, len(levels), 2)])
+        order = np.concatenate(
+            [np.arange(0, len(levels), 2), np.arange(1, len(levels), 2)]
+        )
         index = np.abs(np.abs(values)[..., None] - levels[order]).argmin(-1)
         return np.copysign(levels[order[index]], values)
 
     fp8 = decode_e4m3(np.arange(127, dtype=np.uint8))
-    levels = fp8 if bits == 8 else np.array([0, .5, 1, 1.5, 2, 3, 4, 6], np.float32)
+    levels = fp8 if bits == 8 else np.array([0, 0.5, 1, 1.5, 2, 3, 4, 6], np.float32)
     rows = raw.reshape(*raw.shape[:-1], -1, group)
-    scale = np.maximum(np.abs(rows).max(-1, keepdims=True) / levels[-1],
-                       2.0**-9 if e4m3 else 2.0**-126)
+    scale = np.maximum(
+        np.abs(rows).max(-1, keepdims=True) / levels[-1], 2.0**-9 if e4m3 else 2.0**-126
+    )
     scale = nearest(scale, fp8) if e4m3 else np.exp2(np.ceil(np.log2(scale)))
     return (nearest(rows / scale, levels) * scale).reshape(raw.shape)
 

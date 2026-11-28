@@ -65,6 +65,7 @@ def stub_module(monkeypatch):
         importlib.reload(sys.modules["omlx._torch_stub"])
         return sys.modules["omlx._torch_stub"]
     import omlx._torch_stub as m
+
     return m
 
 
@@ -72,9 +73,7 @@ def test_install_returns_true_and_populates_sys_modules(stub_module):
     # Force "no real torch": remove any existing torch import.
     for k in _TOUCHED:
         sys.modules.pop(k, None)
-    with mock.patch(
-        "importlib.util.find_spec", side_effect=lambda name: None
-    ):
+    with mock.patch("importlib.util.find_spec", side_effect=lambda name: None):
         applied = stub_module.install()
     assert applied is True
     for k in _TOUCHED:
@@ -83,9 +82,22 @@ def test_install_returns_true_and_populates_sys_modules(stub_module):
     assert torch.__version__.endswith("+omlx-stub")
     # The dtype set xgrammar/tvm_ffi look up at import time.
     for dt in (
-        "int8", "int16", "int32", "int", "int64", "long", "uint8",
-        "float16", "half", "float32", "float", "float64", "double",
-        "bfloat16", "bool", "short",
+        "int8",
+        "int16",
+        "int32",
+        "int",
+        "int64",
+        "long",
+        "uint8",
+        "float16",
+        "half",
+        "float32",
+        "float",
+        "float64",
+        "double",
+        "bfloat16",
+        "bool",
+        "short",
     ):
         assert hasattr(torch, dt), f"torch.{dt} missing"
     # Tensor aliases that xgrammar's contrib/hf.py uses in annotations.
@@ -94,9 +106,7 @@ def test_install_returns_true_and_populates_sys_modules(stub_module):
     # Submodules tvm_ffi reaches into.
     assert sys.modules["torch.cuda"].is_available() is False
     assert sys.modules["torch.cuda"].device_count() == 0
-    assert (
-        sys.modules["torch.cuda.amp.common"].amp_definitely_not_available() is True
-    )
+    assert sys.modules["torch.cuda.amp.common"].amp_definitely_not_available() is True
     assert sys.modules["torch.backends.mps"].is_available() is False
     assert sys.modules["torch.backends.mps"].is_built() is False
     assert sys.modules["torch.version"].cuda is None
@@ -295,12 +305,13 @@ def test_missing_top_level_attribute_raises_attributeerror_and_logs(
     with mock.patch("importlib.util.find_spec", side_effect=lambda name: None):
         stub_module.install()
     torch = sys.modules["torch"]
-    with caplog.at_level("WARNING", logger="omlx._torch_stub"):
-        with pytest.raises(AttributeError, match="torch.compile"):
-            torch.compile  # noqa: B018
+    with (
+        caplog.at_level("WARNING", logger="omlx._torch_stub"),
+        pytest.raises(AttributeError, match="torch.compile"),
+    ):
+        torch.compile  # noqa: B018
     assert any(
-        "missing attribute: torch.compile" in rec.message
-        for rec in caplog.records
+        "missing attribute: torch.compile" in rec.message for rec in caplog.records
     ), caplog.records
     # ``hasattr`` must continue to return False (i.e. the AttributeError
     # path is reachable) — regression for replacing the raise with a
@@ -333,12 +344,10 @@ def test_known_probe_names_log_at_debug_not_warning(stub_module, caplog):
             torch.totally_unknown_attr  # noqa: B018
 
     dtype_records = [
-        rec for rec in caplog.records
-        if "torch.float8_e4m3fn" in rec.message
+        rec for rec in caplog.records if "torch.float8_e4m3fn" in rec.message
     ]
     unknown_records = [
-        rec for rec in caplog.records
-        if "torch.totally_unknown_attr" in rec.message
+        rec for rec in caplog.records if "torch.totally_unknown_attr" in rec.message
     ]
     assert dtype_records, "known-probe name should still log at DEBUG"
     assert unknown_records, "unknown name should still log"
@@ -417,9 +426,7 @@ def test_install_is_thread_safe(stub_module):
     def worker():
         try:
             barrier.wait(timeout=2.0)
-            with mock.patch(
-                "importlib.util.find_spec", side_effect=lambda name: None
-            ):
+            with mock.patch("importlib.util.find_spec", side_effect=lambda name: None):
                 results.append(stub_module.install())
         except Exception as e:
             errors.append(e)
@@ -449,7 +456,8 @@ def test_xgrammar_imports_against_stub_only(stub_module, tmp_path):
     stub doesn't cover, this fails loudly at the import step.
     """
     script = tmp_path / "probe.py"
-    script.write_text(textwrap.dedent("""
+    script.write_text(
+        textwrap.dedent("""
         import sys
 
         # Block real torch end-to-end without touching sys.path (which
@@ -496,7 +504,8 @@ def test_xgrammar_imports_against_stub_only(stub_module, tmp_path):
             apply_token_bitmask_mlx,
         )
         print("OK")
-    """))
+    """)
+    )
     env = dict(os.environ)
     env.pop("TVM_FFI_DISABLE_TORCH_C_DLPACK", None)
     out = subprocess.check_output(

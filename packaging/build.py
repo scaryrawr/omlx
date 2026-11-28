@@ -53,10 +53,10 @@ def clean_all(preserve_venv: bool = False):
     venv_dirs = {BUILD_DIR, EXPORT_DIR, WHEELS_DIR, SCRIPT_DIR / "requirements"}
 
     dirs_to_clean = [
-        BUILD_DIR,      # _build/
-        EXPORT_DIR,     # _export/
-        WHEELS_DIR,     # _wheels/
-        DIST_DIR,       # dist/
+        BUILD_DIR,  # _build/
+        EXPORT_DIR,  # _export/
+        WHEELS_DIR,  # _wheels/
+        DIST_DIR,  # dist/
         SCRIPT_DIR / "requirements",  # venvstacks lock files
     ]
 
@@ -123,9 +123,7 @@ def _resolve_mlx_version(toml_path: Path) -> str:
     import json
     import urllib.request
 
-    data = json.loads(
-        urllib.request.urlopen("https://pypi.org/pypi/mlx/json").read()
-    )
+    data = json.loads(urllib.request.urlopen("https://pypi.org/pypi/mlx/json").read())
     return data["info"]["version"]
 
 
@@ -166,15 +164,23 @@ def swap_platform_wheels(
     wheels_tmp.mkdir()
 
     for pkg in packages:
-        run_cmd([
-            sys.executable, "-m", "pip", "download",
-            f"{pkg}=={mlx_version}",
-            "--platform", platform_tag,
-            f"--python-version={python_version}",
-            "--only-binary", ":all:",
-            "--no-deps",
-            "-d", str(wheels_tmp),
-        ])
+        run_cmd(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "download",
+                f"{pkg}=={mlx_version}",
+                "--platform",
+                platform_tag,
+                f"--python-version={python_version}",
+                "--only-binary",
+                ":all:",
+                "--no-deps",
+                "-d",
+                str(wheels_tmp),
+            ]
+        )
 
     # Remove existing mlx/mlx-metal from site-packages
     for item in site_packages.iterdir():
@@ -194,7 +200,6 @@ def swap_platform_wheels(
     # Cleanup
     shutil.rmtree(wheels_tmp)
     print(f"  ✓ Swapped to {platform_tag}")
-
 
 
 def _parse_git_requirements(toml_path: Path) -> list[tuple[str, str]]:
@@ -220,7 +225,6 @@ def _wheel_version(whl_path: Path) -> str:
 def _wheel_pkg_name(whl_path: Path) -> str:
     """Extract normalized package name from wheel filename."""
     return whl_path.stem.split("-")[0].replace("_", "-").lower()
-
 
 
 def _find_target_python() -> str:
@@ -265,8 +269,16 @@ def _build_sdist_wheel(pkg_name: str) -> bool:
     target_python = _find_target_python()
     print(f"  Building wheel for {pkg_name} (sdist-only, using {target_python})...")
     result = subprocess.run(
-        [target_python, "-m", "pip", "wheel", pkg_name, "--no-deps",
-         "-w", str(WHEELS_DIR)],
+        [
+            target_python,
+            "-m",
+            "pip",
+            "wheel",
+            pkg_name,
+            "--no-deps",
+            "-w",
+            str(WHEELS_DIR),
+        ],
         capture_output=False,
     )
     return result.returncode == 0
@@ -302,12 +314,18 @@ def build_local_wheels(source_toml: Path | None = None):
     for full_req, git_url in git_reqs:
         pkg_name = full_req.split("@")[0].strip()
         print(f"  Building wheel for {pkg_name} ...")
-        run_cmd([
-            sys.executable, "-m", "pip", "wheel",
-            git_url,
-            "--no-deps",
-            "-w", str(WHEELS_DIR),
-        ])
+        run_cmd(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "wheel",
+                git_url,
+                "--no-deps",
+                "-w",
+                str(WHEELS_DIR),
+            ]
+        )
 
     # Build version mapping from git-pinned wheels only
     # (used for rewriting venvstacks.toml git URLs to local file:// paths)
@@ -338,7 +356,9 @@ def _lock_with_sdist_retry(lock_cmd: list, max_retries: int = 10):
     built = set()
     for attempt in range(max_retries):
         result = subprocess.run(
-            lock_cmd, capture_output=True, text=True,
+            lock_cmd,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             if result.stdout:
@@ -350,9 +370,7 @@ def _lock_with_sdist_retry(lock_cmd: list, max_retries: int = 10):
         combined = stderr + stdout
 
         # Pattern: "Because <pkg>==<ver> has no usable wheels"
-        match = re.search(
-            r"Because\s+(\S+)==\S+\s+has no usable wheels", combined
-        )
+        match = re.search(r"Because\s+(\S+)==\S+\s+has no usable wheels", combined)
         if not match:
             # Not a sdist-only failure — print output and abort
             if stdout:
@@ -518,9 +536,7 @@ def _generate_venvstacks_toml() -> Path:
         merged = list(merged_map.values())
 
         formatted_array = (
-            "requirements = [\n"
-            + "".join(f'    "{r}",\n' for r in merged)
-            + "]"
+            "requirements = [\n" + "".join(f'    "{r}",\n' for r in merged) + "]"
         )
 
         # Find the section starting with [[frameworks]] or [[applications]]
@@ -542,9 +558,7 @@ def _generate_venvstacks_toml() -> Path:
                 continue
             if not layer_re.search(section):
                 continue
-            new_section, n = placeholder_re.subn(
-                formatted_array, section, count=1
-            )
+            new_section, n = placeholder_re.subn(formatted_array, section, count=1)
             if n == 0:
                 continue
             sections[i] = new_section
@@ -613,7 +627,8 @@ def _venvstacks_driver() -> list[str]:
     try:
         subprocess.run(
             [sys.executable, "-c", "import venvstacks"],
-            check=True, capture_output=True,
+            check=True,
+            capture_output=True,
         )
         return [sys.executable, "-m", "venvstacks"]
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -665,10 +680,14 @@ def build_venvstacks():
     # If lock fails due to sdist-only packages (no pre-built wheel on PyPI),
     # _lock_with_sdist_retry() builds them locally and retries automatically.
     print("\n  Locking environments...")
-    lock_cmd = venvstacks_cmd + [
-        "lock",
-        str(resolved_toml),
-    ] + local_wheels_args
+    lock_cmd = (
+        venvstacks_cmd
+        + [
+            "lock",
+            str(resolved_toml),
+        ]
+        + local_wheels_args
+    )
     if version_map:
         # Force re-lock when git packages changed (hashes will differ)
         lock_cmd += ["--reset-lock", "*"]
@@ -678,22 +697,30 @@ def build_venvstacks():
 
     # Step 4: Build environments
     print("\n  Building environments (this may take a while)...")
-    run_cmd(venvstacks_cmd + [
-        "build",
-        str(resolved_toml),
-        "--no-lock",
-    ] + local_wheels_args)
+    run_cmd(
+        venvstacks_cmd
+        + [
+            "build",
+            str(resolved_toml),
+            "--no-lock",
+        ]
+        + local_wheels_args
+    )
 
     # Step 5: Export to local directory for app bundle
     print("\n  Exporting environments...")
     if EXPORT_DIR.exists():
         shutil.rmtree(EXPORT_DIR)
 
-    run_cmd(venvstacks_cmd + [
-        "local-export",
-        str(resolved_toml),
-        "--output-dir", str(EXPORT_DIR),
-    ])
+    run_cmd(
+        venvstacks_cmd
+        + [
+            "local-export",
+            str(resolved_toml),
+            "--output-dir",
+            str(EXPORT_DIR),
+        ]
+    )
 
     # Cleanup the generated resolved toml — always temporary now that it's
     # produced fresh each build from pyproject.toml + venvstacks.toml.
@@ -740,25 +767,27 @@ def _install_mlx_audio(export_dir: Path):
     audio_wheels.mkdir()
 
     # Build wheel
-    run_cmd([
-        sys.executable, "-m", "pip", "wheel",
-        "--no-deps", "--wheel-dir", str(audio_wheels),
-        _MLX_AUDIO_GIT,
-    ])
+    run_cmd(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
+            str(audio_wheels),
+            _MLX_AUDIO_GIT,
+        ]
+    )
 
     # Install into framework site-packages
-    fw_site = (
-        export_dir
-        / "framework-mlx-base"
-        / "lib"
-        / "python3.11"
-        / "site-packages"
-    )
+    fw_site = export_dir / "framework-mlx-base" / "lib" / "python3.11" / "site-packages"
     if not fw_site.exists():
         print(f"  ✗ site-packages not found: {fw_site}")
         return
 
     import zipfile
+
     for whl in audio_wheels.glob("*.whl"):
         print(f"    Installing {whl.name} (--no-deps)")
         with zipfile.ZipFile(whl) as zf:
@@ -780,24 +809,26 @@ def _install_paroquant(export_dir: Path):
         shutil.rmtree(paro_wheels)
     paro_wheels.mkdir()
 
-    run_cmd([
-        sys.executable, "-m", "pip", "wheel",
-        "--no-deps", "--wheel-dir", str(paro_wheels),
-        f"paroquant=={_PAROQUANT_VERSION}",
-    ])
-
-    fw_site = (
-        export_dir
-        / "framework-mlx-base"
-        / "lib"
-        / "python3.11"
-        / "site-packages"
+    run_cmd(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
+            str(paro_wheels),
+            f"paroquant=={_PAROQUANT_VERSION}",
+        ]
     )
+
+    fw_site = export_dir / "framework-mlx-base" / "lib" / "python3.11" / "site-packages"
     if not fw_site.exists():
         print(f"  ✗ site-packages not found: {fw_site}")
         return
 
     import zipfile
+
     for whl in paro_wheels.glob("*.whl"):
         print(f"    Installing {whl.name} (--no-deps)")
         with zipfile.ZipFile(whl) as zf:
@@ -836,13 +867,7 @@ def _install_xgrammar(export_dir: Path):
     isn't enough — an interruption between the two extracts would otherwise
     leave a half-installed state the next run accepts.
     """
-    fw_site = (
-        export_dir
-        / "framework-mlx-base"
-        / "lib"
-        / "python3.11"
-        / "site-packages"
-    )
+    fw_site = export_dir / "framework-mlx-base" / "lib" / "python3.11" / "site-packages"
     sentinel = fw_site / (
         f"_omlx_xgrammar_{_XGRAMMAR_VERSION}_tvmffi_{_TVM_FFI_VERSION}.installed"
     )
@@ -857,21 +882,31 @@ def _install_xgrammar(export_dir: Path):
     xgr_wheels.mkdir()
 
     # Explicit platform tags so the build host's Python version doesn't matter.
-    run_cmd([
-        sys.executable, "-m", "pip", "download",
-        "--no-deps", "--dest", str(xgr_wheels),
-        "--python-version", "3.11",
-        "--platform", "macosx_11_0_arm64",
-        "--only-binary=:all:",
-        f"xgrammar=={_XGRAMMAR_VERSION}",
-        f"apache-tvm-ffi=={_TVM_FFI_VERSION}",
-    ])
+    run_cmd(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "download",
+            "--no-deps",
+            "--dest",
+            str(xgr_wheels),
+            "--python-version",
+            "3.11",
+            "--platform",
+            "macosx_11_0_arm64",
+            "--only-binary=:all:",
+            f"xgrammar=={_XGRAMMAR_VERSION}",
+            f"apache-tvm-ffi=={_TVM_FFI_VERSION}",
+        ]
+    )
 
     if not fw_site.exists():
         print(f"  ✗ site-packages not found: {fw_site}")
         return
 
     import zipfile
+
     for whl in xgr_wheels.glob("*.whl"):
         print(f"    Installing {whl.name} (--no-deps)")
         with zipfile.ZipFile(whl) as zf:
@@ -927,13 +962,7 @@ def _install_spacy_model(export_dir: Path):
     import urllib.request
     import zipfile
 
-    fw_site = (
-        export_dir
-        / "framework-mlx-base"
-        / "lib"
-        / "python3.11"
-        / "site-packages"
-    )
+    fw_site = export_dir / "framework-mlx-base" / "lib" / "python3.11" / "site-packages"
     if not fw_site.exists():
         print(f"  ✗ site-packages not found: {fw_site}")
         return
@@ -962,16 +991,20 @@ def _install_spacy_model(export_dir: Path):
 # video input decodes frames with cv2.
 _STRIP_PACKAGES = [
     "torch",
-    "sympy",           # torch dep (safety net)
-    "pyarrow",         # datasets dep
-    "pandas",          # datasets dep
-    "datasets",        # modelscope dep, not used at inference
+    "sympy",  # torch dep (safety net)
+    "pyarrow",  # datasets dep
+    "pandas",  # datasets dep
+    "datasets",  # modelscope dep, not used at inference
     # dist-info dirs (matched by prefix)
 ]
 
 # Prefixes for dist-info directories to remove alongside the packages above.
 _STRIP_DIST_PREFIXES = [
-    "torch-", "sympy-", "pyarrow-", "pandas-", "datasets-",
+    "torch-",
+    "sympy-",
+    "pyarrow-",
+    "pandas-",
+    "datasets-",
 ]
 
 _JIEBA_DIRS_UNUSED_BY_MISAKI = [
@@ -983,13 +1016,7 @@ _JIEBA_DIRS_UNUSED_BY_MISAKI = [
 
 def _strip_unused_packages(export_dir: Path):
     """Remove large packages not needed for inference from exported framework."""
-    fw_site = (
-        export_dir
-        / "framework-mlx-base"
-        / "lib"
-        / "python3.11"
-        / "site-packages"
-    )
+    fw_site = export_dir / "framework-mlx-base" / "lib" / "python3.11" / "site-packages"
     if not fw_site.exists():
         return
 
@@ -998,9 +1025,8 @@ def _strip_unused_packages(export_dir: Path):
 
     for item in sorted(fw_site.iterdir()):
         name = item.name
-        should_strip = (
-            name in _STRIP_PACKAGES
-            or any(name.startswith(p) for p in _STRIP_DIST_PREFIXES)
+        should_strip = name in _STRIP_PACKAGES or any(
+            name.startswith(p) for p in _STRIP_DIST_PREFIXES
         )
         if should_strip and item.exists():
             size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
@@ -1041,7 +1067,8 @@ def _strip_unused_packages(export_dir: Path):
     # install() would short-circuit, and xgrammar would import the broken
     # half-torch and fail at runtime with confusing errors. Fail fast.
     surviving_torch = [
-        p.name for p in fw_site.iterdir()
+        p.name
+        for p in fw_site.iterdir()
         if p.name == "torch"
         or p.name.startswith("torch-")
         or p.name.startswith("torch_")
@@ -1054,8 +1081,6 @@ def _strip_unused_packages(export_dir: Path):
             "to fail at runtime against a half-installed torch. Add the "
             "leftover names to _STRIP_PACKAGES / _STRIP_DIST_PREFIXES."
         )
-
-
 
 
 def _compute_donor_fingerprint() -> str:
@@ -1091,28 +1116,38 @@ def _write_export_fingerprint():
 def main():
     parser = argparse.ArgumentParser(
         description="Build venvstacks Python layers consumed by the Swift "
-                    "macOS bundle. The legacy PyObjC menubar `.app` and DMG "
-                    "pipeline lived here too; both retired with the Swift "
-                    "rewrite. Today this script is invoked by "
-                    "`apps/omlx-mac/Scripts/build.sh` to produce / fingerprint "
-                    "the export layers — there is no full-app path anymore."
+        "macOS bundle. The legacy PyObjC menubar `.app` and DMG "
+        "pipeline lived here too; both retired with the Swift "
+        "rewrite. Today this script is invoked by "
+        "`apps/omlx-mac/Scripts/build.sh` to produce / fingerprint "
+        "the export layers — there is no full-app path anymore."
     )
-    parser.add_argument("--venvstacks-only", action="store_true",
-                        help="Run venvstacks lock+build+export and stop. "
-                             "Currently the only supported run mode.")
-    parser.add_argument("--print-fingerprint", action="store_true",
-                        help="Print the donor fingerprint and exit. "
-                             "`build.sh` uses this to detect drift between "
-                             "sources and the cached `_export/`.")
-    parser.add_argument("--write-engine-commits",
-                        metavar="OMLX_PACKAGE_DIR",
-                        help="Write _engine_commits.json into the given "
-                             "staged omlx package directory and exit. "
-                             "`build.sh` uses this after copying Resources/omlx.")
-    parser.add_argument("--macos-target",
-                        help="Target macOS version for mlx/mlx-metal wheels "
-                             "(e.g. 26.0). Downloads platform-specific wheels "
-                             "with M5 Neural Accelerator support.")
+    parser.add_argument(
+        "--venvstacks-only",
+        action="store_true",
+        help="Run venvstacks lock+build+export and stop. "
+        "Currently the only supported run mode.",
+    )
+    parser.add_argument(
+        "--print-fingerprint",
+        action="store_true",
+        help="Print the donor fingerprint and exit. "
+        "`build.sh` uses this to detect drift between "
+        "sources and the cached `_export/`.",
+    )
+    parser.add_argument(
+        "--write-engine-commits",
+        metavar="OMLX_PACKAGE_DIR",
+        help="Write _engine_commits.json into the given "
+        "staged omlx package directory and exit. "
+        "`build.sh` uses this after copying Resources/omlx.",
+    )
+    parser.add_argument(
+        "--macos-target",
+        help="Target macOS version for mlx/mlx-metal wheels "
+        "(e.g. 26.0). Downloads platform-specific wheels "
+        "with M5 Neural Accelerator support.",
+    )
     args = parser.parse_args()
 
     if args.print_fingerprint:

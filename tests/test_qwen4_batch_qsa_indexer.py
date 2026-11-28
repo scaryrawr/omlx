@@ -8,7 +8,7 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from omlx.patches.mlx_vlm_qwen4_exp_compat import (  # noqa: E402
+from omlx.patches.mlx_vlm_qwen4_exp_compat import (
     apply_mlx_vlm_qwen4_exp_compat_patch,
 )
 

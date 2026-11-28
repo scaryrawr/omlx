@@ -33,11 +33,12 @@ Apply this before ``mlx_vlm.utils.load`` so the patched ``__init__`` runs.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from omlx.utils.layer_pipeline import LayerPipeline
 import mlx.core as mx
 import mlx.nn as nn
+
+from omlx.utils.layer_pipeline import LayerPipeline
 
 from .. import glm53_kda_prework
 from ..mlx_lm_mtp import prompt_priming
@@ -91,7 +92,7 @@ def apply() -> bool:
         apply_mlx_vlm_glm5_next_compat_patch()
         from mlx_vlm.models.glm5_next import config as g5_config
         from mlx_vlm.models.glm5_next import language as g5_lang
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"mlx_vlm.glm5_next not importable for MTP runtime: {e}")
         return False
 
@@ -100,7 +101,7 @@ def apply() -> bool:
 
         # PoolingCache's undo log reads cache_rollback's armed flag.
         cache_rollback.apply()
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("cache_rollback.apply() failed", exc_info=True)
 
     _patch_text_config(g5_config)
@@ -139,9 +140,7 @@ def _patch_text_config(g5_config: Any) -> None:
         if params:
             n = params.get("num_nextn_predict_layers")
             if n is None:
-                n = (params.get("text_config") or {}).get(
-                    "num_nextn_predict_layers", 0
-                )
+                n = (params.get("text_config") or {}).get("num_nextn_predict_layers", 0)
             instance.num_nextn_predict_layers = int(n or 0)
         return instance
 
@@ -158,9 +157,9 @@ def _register_mtp_classes(g5_lang: Any) -> None:
     if hasattr(g5_lang, "Glm5NextMTPBlock"):
         return
 
-    Glm5NextSparseAttention = g5_lang.Glm5NextSparseAttention
-    Glm5NextMoE = g5_lang.Glm5NextMoE
-    Glm5NextMLP = g5_lang.Glm5NextMLP
+    glm5_next_sparse_attention_cls = g5_lang.Glm5NextSparseAttention
+    glm5_next_mo_e_cls = g5_lang.Glm5NextMoE
+    glm5_next_m_l_p_cls = g5_lang.Glm5NextMLP
 
     class _MTPDecoderLayer(nn.Module):
         """``Glm5NextDecoderLayer`` minus HyperConnection.
@@ -173,9 +172,11 @@ def _register_mtp_classes(g5_lang: Any) -> None:
 
         def __init__(self, config: Any):
             super().__init__()
-            self.self_attn = Glm5NextSparseAttention(config)
+            self.self_attn = glm5_next_sparse_attention_cls(config)
             n_routed = getattr(config, "n_routed_experts", None)
-            self.mlp = Glm5NextMoE(config) if n_routed else Glm5NextMLP(config)
+            self.mlp = (
+                glm5_next_mo_e_cls(config) if n_routed else glm5_next_m_l_p_cls(config)
+            )
             self.input_layernorm = nn.RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
@@ -319,12 +320,28 @@ def _patch_linear_attention(g5_lang: Any) -> None:
             # Entry state + block inputs; rollback replays the accepted prefix.
             gdn_sink.append(
                 (
-                    q, k, v, a, b_o, A_log, dt_bias, state,
-                    conv_input, self.conv_kernel_size, lower_bound, gate_mask,
+                    q,
+                    k,
+                    v,
+                    a,
+                    b_o,
+                    A_log,
+                    dt_bias,
+                    state,
+                    conv_input,
+                    self.conv_kernel_size,
+                    lower_bound,
+                    gate_mask,
                 )
             )
         out, state = gated_delta_update(
-            q, k, v, a, b_o, A_log, dt_bias,
+            q,
+            k,
+            v,
+            a,
+            b_o,
+            A_log,
+            dt_bias,
             state=state,
             mask=gate_mask,
             lower_bound=lower_bound,
@@ -420,9 +437,17 @@ def _patch_model_call(g5_lang: Any) -> None:
     create_attention_mask = g5_lang.create_attention_mask
     create_ssm_mask = g5_lang.create_ssm_mask
 
-    def __call__(self, inputs, cache=None, inputs_embeds=None,
-                 return_raw_hidden: bool = False, gdn_sink=None,
-                 hidden_sink=None, capture_layer_ids=None, capture_sink=None):
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        inputs_embeds=None,
+        return_raw_hidden: bool = False,
+        gdn_sink=None,
+        hidden_sink=None,
+        capture_layer_ids=None,
+        capture_sink=None,
+    ):
         h = self.embed_tokens(inputs) if inputs_embeds is None else inputs_embeds
 
         if cache is None:
@@ -482,7 +507,9 @@ def _patch_model_call(g5_lang: Any) -> None:
             elif pipeline is not None:
                 pipeline.push(h)
             elif eval_every and (i + 1) % eval_every == 0 and i + 1 < n_layers:
-                mx.async_eval(h.arrays() if defer and isinstance(h, deferred_cls) else h)
+                mx.async_eval(
+                    h.arrays() if defer and isinstance(h, deferred_cls) else h
+                )
         if pipeline is not None:
             pipeline.drain()
         if capture_sink is not None:
@@ -521,8 +548,8 @@ def _patch_language_model(g5_lang: Any) -> None:
     original_sanitize = cls.sanitize
 
     def __init__(self, args, config=None):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import get_mtp_depth, is_mtp_active, is_mtp_depth_fixed
+        from . import is_mtp_attach_enabled
 
         original_init(self, args, config)
         self._omlx_mtp_multi_request = True
@@ -552,7 +579,9 @@ def _patch_language_model(g5_lang: Any) -> None:
                 logger.info(
                     "glm5_next MTP chain depth capped at %d (requested %d): the "
                     "indexer PoolingCache cannot undo a %d-row verify block",
-                    _MAX_CHAIN_DEPTH, requested_depth, requested_depth + 1,
+                    _MAX_CHAIN_DEPTH,
+                    requested_depth,
+                    requested_depth + 1,
                 )
             # ``make_mtp_cache`` pairs each block with a PoolingCache, whose
             # ``offset`` is the pooled row count and not a token count. The
@@ -571,8 +600,9 @@ def _patch_language_model(g5_lang: Any) -> None:
             # controller needs a high marginal-cost prior or it over-drafts.
             self._omlx_mtp_marginal_ms = 35.0
 
-    def __call__(self, inputs=None, inputs_embeds=None, cache=None, mask=None,
-                 **kwargs):
+    def __call__(
+        self, inputs=None, inputs_embeds=None, cache=None, mask=None, **kwargs
+    ):
         """Backbone forward, optionally returning the raw hidden for MTP.
 
         Note the argument order: glm5_next is ``(inputs, inputs_embeds,
@@ -608,8 +638,11 @@ def _patch_language_model(g5_lang: Any) -> None:
                 requested = list(drafter.target_layer_ids)
             captured = [] if requested else None
             out = self.model(
-                inputs, cache=cache, inputs_embeds=inputs_embeds,
-                capture_layer_ids=requested, capture_sink=captured,
+                inputs,
+                cache=cache,
+                inputs_embeds=inputs_embeds,
+                capture_layer_ids=requested,
+                capture_sink=captured,
             )
             if inputs_embeds is None and prompt_priming.capture_eligible(self, cache):
                 prompt_priming.maybe_capture(self, inputs, out, cache)
@@ -633,9 +666,13 @@ def _patch_language_model(g5_lang: Any) -> None:
         hidden_sink: list = []
         captured: list = []
         out = self.model(
-            inputs, cache=cache, inputs_embeds=inputs_embeds,
-            gdn_sink=gdn_sink, hidden_sink=hidden_sink,
-            capture_layer_ids=requested, capture_sink=captured,
+            inputs,
+            cache=cache,
+            inputs_embeds=inputs_embeds,
+            gdn_sink=gdn_sink,
+            hidden_sink=hidden_sink,
+            capture_layer_ids=requested,
+            capture_sink=captured,
         )
         if self.args.tie_word_embeddings:
             logits = self.model.embed_tokens.as_linear(out)
@@ -648,8 +685,7 @@ def _patch_language_model(g5_lang: Any) -> None:
             shared_kv_states={},
         )
 
-    def rollback_speculative_cache(self, caches, gdn_states, accepted,
-                                   block_size):
+    def rollback_speculative_cache(self, caches, gdn_states, accepted, block_size):
         """Rewind every cache after a speculative round. Ported from PR #2044.
 
         KDA layers hold recurrent state with no trim semantics, so the
@@ -685,9 +721,7 @@ def _patch_language_model(g5_lang: Any) -> None:
         # Refusing raises, and the generator falls back to a standard step
         # with every cache still intact. Same contract as
         # mtp_partial_rollback on the mlx-lm path.
-        n_recurrent = sum(
-            1 for c in caches if c is not None and _is_recurrent(c)
-        )
+        n_recurrent = sum(1 for c in caches if c is not None and _is_recurrent(c))
         if n_recurrent and len(gdn_states or ()) < n_recurrent:
             raise RuntimeError(
                 f"glm5_next rollback: {len(gdn_states or ())} captured gdn "
@@ -719,12 +753,20 @@ def _patch_language_model(g5_lang: Any) -> None:
                 continue
             # The gate mask joined the capture tuple later; older callers
             # can still hand over the 11-element form.
-            (q_, k_, v_, a_, b_, A_log_, dt_bias_, init_state,
-             conv_input, K, lb) = entry[:11]
+            (q_, k_, v_, a_, b_, A_log_, dt_bias_, init_state, conv_input, K, lb) = (
+                entry[:11]
+            )
             gate_mask = entry[11] if len(entry) > 11 else None
             _, state_n = gated_delta_update(
-                q_[:, :n], k_[:, :n], v_[:, :n], a_[:, :n], b_[:, :n],
-                A_log_, dt_bias_, state=init_state, lower_bound=lb,
+                q_[:, :n],
+                k_[:, :n],
+                v_[:, :n],
+                a_[:, :n],
+                b_[:, :n],
+                A_log_,
+                dt_bias_,
+                state=init_state,
+                lower_bound=lb,
                 mask=gate_mask[:, :n] if gate_mask is not None else None,
             )
             restored.append((conv_input[:, n : n + K - 1], state_n))
@@ -755,7 +797,9 @@ def _patch_language_model(g5_lang: Any) -> None:
                 if trimmed != trim:
                     logger.warning(
                         "glm5_next rollback: %s trimmed %s of %s rows",
-                        type(c).__name__, trimmed, trim,
+                        type(c).__name__,
+                        trimmed,
+                        trim,
                     )
         return max_a
 
@@ -802,8 +846,14 @@ def _patch_language_model(g5_lang: Any) -> None:
             caches.append(PoolingCache(blk.block.self_attn.indexer.index_kpool))
         return caches
 
-    def mtp_forward(self, h, input_ids, cache=None, return_hidden: bool = False,
-                    logits_keep: int = 0):
+    def mtp_forward(
+        self,
+        h,
+        input_ids,
+        cache=None,
+        return_hidden: bool = False,
+        logits_keep: int = 0,
+    ):
         """Run the MTP block(s), then shared_head norm + shared lm_head.
 
         ``h`` is the trunk's raw hidden for the first fold, or the head's own
@@ -881,8 +931,10 @@ def _patch_language_model(g5_lang: Any) -> None:
             # applies to the backbone so the head's router tensors match.
             for k, v in already.items():
                 if (
-                    (k.endswith("mlp.gate.weight")
-                     or k.endswith("e_score_correction_bias"))
+                    (
+                        k.endswith("mlp.gate.weight")
+                        or k.endswith("e_score_correction_bias")
+                    )
                     and hasattr(v, "dtype")
                     and mx.issubdtype(v.dtype, mx.floating)
                     and v.dtype != mx.float32
@@ -995,7 +1047,7 @@ def _patch_vlm_model_adapter() -> None:
     """
     try:
         from omlx.models.vlm import VLMModelAdapter
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"VLMModelAdapter not importable: {e}")
         return
 
@@ -1012,11 +1064,20 @@ def _patch_vlm_model_adapter() -> None:
 
     if not hasattr(VLMModelAdapter, "mtp_forward"):
 
-        def mtp_forward(self, hidden_states, next_token_ids, mtp_cache,
-                        return_hidden: bool = False, logits_keep: int = 0):
+        def mtp_forward(
+            self,
+            hidden_states,
+            next_token_ids,
+            mtp_cache,
+            return_hidden: bool = False,
+            logits_keep: int = 0,
+        ):
             return self._language_model.mtp_forward(
-                hidden_states, next_token_ids, mtp_cache,
-                return_hidden=return_hidden, logits_keep=logits_keep,
+                hidden_states,
+                next_token_ids,
+                mtp_cache,
+                return_hidden=return_hidden,
+                logits_keep=logits_keep,
             )
 
         VLMModelAdapter.mtp_forward = mtp_forward
@@ -1030,11 +1091,9 @@ def _patch_vlm_model_adapter() -> None:
 
         VLMModelAdapter.make_mtp_cache = make_mtp_cache
 
-
     if not hasattr(VLMModelAdapter, "rollback_speculative_cache"):
 
-        def rollback_speculative_cache(self, caches, gdn_states, accepted,
-                                       block_size):
+        def rollback_speculative_cache(self, caches, gdn_states, accepted, block_size):
             return self._language_model.rollback_speculative_cache(
                 caches, gdn_states, accepted, block_size
             )

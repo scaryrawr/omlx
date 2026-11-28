@@ -27,9 +27,7 @@ class _Blob:
         self.data.extend(bytes((-len(self.data)) % 64))
         offset = len(self.data)
         header = bytearray(64)
-        struct.pack_into(
-            "<IIQQ", header, 0, 0xDEADBEEF, 1, len(raw), offset + 64
-        )
+        struct.pack_into("<IIQQ", header, 0, 0xDEADBEEF, 1, len(raw), offset + 64)
         self.data.extend(header)
         self.data.extend(raw)
         self.count += 1

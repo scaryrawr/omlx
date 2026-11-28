@@ -739,11 +739,9 @@ class BlockAwarePrefixCache(CacheManager):
         if block is None or block.block_hash is None or self.paged_ssd_cache is None:
             return False
         metadata = self.paged_ssd_cache.get_block_metadata(block.block_hash)
-        return (
-            metadata is not None
-            and self._canonical_layer_cache_types(metadata.layer_cache_types)
-            == self._canonical_layer_cache_types(layer_cache_types)
-        )
+        return metadata is not None and self._canonical_layer_cache_types(
+            metadata.layer_cache_types
+        ) == self._canonical_layer_cache_types(layer_cache_types)
 
     def _detect_window_padding_from_blocks(
         self,
@@ -1025,8 +1023,7 @@ class BlockAwarePrefixCache(CacheManager):
                     layer_state.get(
                         "class_name", layer_state.get("cache_type", "KVCache")
                     )
-                    if layer_state.get("class_name", "")
-                    in _PACKED_CACHE_TYPES
+                    if layer_state.get("class_name", "") in _PACKED_CACHE_TYPES
                     else layer_state.get("cache_type", "KVCache")
                 )
                 for layer_state in cache_data
@@ -1805,8 +1802,7 @@ class BlockAwarePrefixCache(CacheManager):
                     layer_state.get(
                         "class_name", layer_state.get("cache_type", "KVCache")
                     )
-                    if layer_state.get("class_name", "")
-                    in _PACKED_CACHE_TYPES
+                    if layer_state.get("class_name", "") in _PACKED_CACHE_TYPES
                     else layer_state.get("cache_type", "KVCache")
                 )
                 for layer_state in cache_data
@@ -2103,7 +2099,7 @@ class BlockAwarePrefixCache(CacheManager):
             "MiniMaxM3BatchKVCache",
         }
         max_seq_len = 0
-        for layer_idx, layer_state in enumerate(cache_data):
+        for _layer_idx, layer_state in enumerate(cache_data):
             try:
                 if "state" not in layer_state:
                     continue
@@ -2742,7 +2738,12 @@ class BlockAwarePrefixCache(CacheManager):
                         for ss in state
                     )
 
-                    def _wrap_sub_marker(sub_idx, elements, storage_class_name=None):
+                    def _wrap_sub_marker(
+                        sub_idx,
+                        elements,
+                        storage_class_name=None,
+                        sub_class_names=sub_class_names,
+                    ):
                         return _wrap_cachelist_sub_marker(
                             sub_idx, elements, sub_class_names, storage_class_name
                         )
@@ -3073,9 +3074,10 @@ class BlockAwarePrefixCache(CacheManager):
             handler = CacheTypeRegistry.get_handler_by_class_name(cache_type)
             if handler.supports_block_slicing:
                 continue
-            if layer_idx < len(all_block_data[last_idx]):
-                if self._is_placeholder_state(all_block_data[last_idx][layer_idx]):
-                    problematic_layers.append(layer_idx)
+            if (layer_idx < len(all_block_data[last_idx])) and (
+                self._is_placeholder_state(all_block_data[last_idx][layer_idx])
+            ):
+                problematic_layers.append(layer_idx)
 
         if not problematic_layers:
             return None  # Last block already has valid state for all layers
@@ -3371,7 +3373,7 @@ class BlockAwarePrefixCache(CacheManager):
             )
             snapshot_drop_state: dict[str, Any] = {}
 
-            for idx, block_id in enumerate(block_table.block_ids):
+            for _idx, block_id in enumerate(block_table.block_ids):
                 block = self.paged_cache.allocated_blocks.get(block_id)
                 if not block:
                     logger.debug(
@@ -3437,14 +3439,15 @@ class BlockAwarePrefixCache(CacheManager):
 
                     # Validate num_layers to catch cross-model cache issues
                     block_num_layers = block_metadata.get("num_layers", 0)
-                    if self.expected_num_layers > 0 and block_num_layers > 0:
-                        if block_num_layers != self.expected_num_layers:
-                            logger.warning(
-                                f"Cache layer count mismatch: block has {block_num_layers} layers, "
-                                f"expected {self.expected_num_layers}. Invalidating cache hit."
-                            )
-                            self._forget_incompatible_ssd_block(block.block_hash)
-                            break  # Stop here, don't use this block
+                    if (self.expected_num_layers > 0 and block_num_layers > 0) and (
+                        block_num_layers != self.expected_num_layers
+                    ):
+                        logger.warning(
+                            f"Cache layer count mismatch: block has {block_num_layers} layers, "
+                            f"expected {self.expected_num_layers}. Invalidating cache hit."
+                        )
+                        self._forget_incompatible_ssd_block(block.block_hash)
+                        break  # Stop here, don't use this block
 
                     if "block_size" in block_metadata:
                         block_size = block_metadata.get("block_size", 0)
@@ -3924,7 +3927,9 @@ class BlockAwarePrefixCache(CacheManager):
                     )
 
                     cache_class = (
-                        Affine8KVCache if expected_scheme == "affine8" else Affine4KVCache
+                        Affine8KVCache
+                        if expected_scheme == "affine8"
+                        else Affine4KVCache
                     )
                     parts = []
                     affine_meta = None
@@ -4082,7 +4087,10 @@ class BlockAwarePrefixCache(CacheManager):
                         "BatchPoolingCache",
                     }
 
-                    def _is_non_sliceable_sub_class(class_name: str) -> bool:
+                    def _is_non_sliceable_sub_class(
+                        class_name: str,
+                        non_sliceable_sub_classes=non_sliceable_sub_classes,
+                    ) -> bool:
                         return (
                             class_name in non_sliceable_sub_classes
                             or CacheTypeRegistry.is_rotating_family(class_name)
@@ -5027,7 +5035,7 @@ class BlockAwarePrefixCache(CacheManager):
             _sync_and_clear_cache()
             logger.debug("Restore pool flush cleared %d bytes", pool_bytes)
             return True
-        except Exception as exc:  # noqa: BLE001 - best effort, never fail a restore
+        except Exception as exc:
             if is_command_buffer_error(exc):
                 raise
             logger.debug("Restore pool flush failed", exc_info=True)
@@ -5307,11 +5315,9 @@ class BlockAwarePrefixCache(CacheManager):
                     cache_type = layer_cache_types[layer_idx]
 
                 # CacheList: sub-cache list format, skip standard (keys, values) unpacking
-                if cache_type == "CacheList":
+                if (cache_type == "CacheList") and (isinstance(layer_data, list)):
                     # CacheList data is either List[Tuple] (last block) or Tuple (placeholder)
-                    if isinstance(layer_data, list):
-                        continue  # Sub-cache list — valid
-                    # Fall through to standard check for placeholder (zeros tuple)
+                    continue  # Sub-cache list — valid
 
                 if not isinstance(layer_data, (list, tuple)) or len(layer_data) < 2:
                     logger.debug(
@@ -5397,7 +5403,6 @@ class BlockAwarePrefixCache(CacheManager):
 
         parent_hash = b""
         prefix_len = 0
-        num_blocks = 0
         chain_hashes: list[bytes] = []
 
         for start in range(0, len(tokens), self.block_size):
@@ -5413,7 +5418,6 @@ class BlockAwarePrefixCache(CacheManager):
                 model_name=self.paged_cache.model_name,
             )
             prefix_len += len(block_tokens)
-            num_blocks += 1
             chain_hashes.append(parent_hash)
 
             entry = self._prefix_index.get(parent_hash)

@@ -161,9 +161,7 @@ def test_cluster_inventory_endpoint_unions_local_and_peer_models(monkeypatch):
     monkeypatch.setattr(
         routes,
         "remote_model_inventory",
-        lambda host, *, python_executable: [
-            _model(size=236, path="/models/m3")
-        ],
+        lambda host, *, python_executable: [_model(size=236, path="/models/m3")],
     )
 
     response = _client().post(

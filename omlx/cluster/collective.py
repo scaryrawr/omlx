@@ -331,8 +331,7 @@ def _run_local_minimax_decode_smoke(
     if completed.returncode != 0:
         suffix = f": {detail}" if detail else ""
         raise CollectiveSmokeError(
-            f"MLX MiniMax decode smoke exited with code "
-            f"{completed.returncode}{suffix}"
+            f"MLX MiniMax decode smoke exited with code {completed.returncode}{suffix}"
         )
     by_rank = {
         record["rank"]: record

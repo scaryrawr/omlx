@@ -95,9 +95,7 @@ def _data_token(cluster_key: bytes, session: bytes) -> bytes:
 def _identity(address: str, port: int) -> dict[str, Any] | None:
     url = f"http://{address}:{port}/api/cluster/node_id"
     try:
-        with urllib.request.urlopen(
-            url, timeout=3
-        ) as response:  # noqa: S310 - a paired LAN address
+        with urllib.request.urlopen(url, timeout=3) as response:
             reply = json.loads(response.read(65536))
     except urllib.error.URLError as error:
         # macOS refuses a process without Local Network access this way.

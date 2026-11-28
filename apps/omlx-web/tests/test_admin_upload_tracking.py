@@ -221,9 +221,9 @@ def test_upload_queue_has_explicit_states_and_no_fake_percentage():
     queue = html.split("<!-- Upload Queue -->", 1)[1].split(
         "<!-- Upload Confirmation Modal -->", 1
     )[0]
-    assert 'x-show="uploadTasks.length > 0" x-cloak>' not in queue.split(
-        "<template", 1
-    )[0]
+    assert (
+        'x-show="uploadTasks.length > 0" x-cloak>' not in queue.split("<template", 1)[0]
+    )
     for key in QUEUE_KEYS:
         if key == "queue_error":
             continue

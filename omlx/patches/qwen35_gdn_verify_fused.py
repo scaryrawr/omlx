@@ -514,7 +514,13 @@ def record_deferred_states(cache, index, start, final, length, resolve):
     of the state after ``m`` tokens), ``m = length`` keeps ``final`` and
     ``m = 0`` restores ``start``."""
     transaction = cache._speculation
-    transaction["records"][int(index)] = ("deferred", start, final, int(length), resolve)
+    transaction["records"][int(index)] = (
+        "deferred",
+        start,
+        final,
+        int(length),
+        resolve,
+    )
 
 
 def _commit_deferred(cache, index, record, lengths):

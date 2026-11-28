@@ -1326,7 +1326,9 @@ class _FakeHaru:
         self.entered.set()
         assert self.unblock.wait(5)
         return SimpleNamespace(
-            audio=np.full(3200, 0.5), text="hi ", done=len(self.samples) == self.finish_on
+            audio=np.full(3200, 0.5),
+            text="hi ",
+            done=len(self.samples) == self.finish_on,
         )
 
     def synchronize_decoder(self):
@@ -1339,14 +1341,15 @@ def haru_engine(monkeypatch, tmp_path):
     (tmp_path / "config.json").write_text('{"model_type":"haru"}')
     engine = STSEngine(str(tmp_path), config_model_type="haru")
     with ThreadPoolExecutor(1, thread_name_prefix="mlx-haru-test") as executor:
-        monkeypatch.setattr("omlx.engine.haru_realtime.get_mlx_executor", lambda: executor)
+        monkeypatch.setattr(
+            "omlx.engine.haru_realtime.get_mlx_executor", lambda: executor
+        )
         monkeypatch.setattr("omlx.engine.sts.get_mlx_executor", lambda: executor)
         monkeypatch.setattr(
-            "omlx.engine.haru_realtime.haru_default_instructions", lambda: "Default Haru prompt"
+            "omlx.engine.haru_realtime.haru_default_instructions",
+            lambda: "Default Haru prompt",
         )
-        monkeypatch.setitem(
-            sts._FAMILY_LOADERS, "haru", lambda _: model
-        )
+        monkeypatch.setitem(sts._FAMILY_LOADERS, "haru", lambda _: model)
         asyncio.run(engine.start())
         try:
             yield engine, model
@@ -1355,7 +1358,9 @@ def haru_engine(monkeypatch, tmp_path):
 
 
 def _send_pcm(ws, pcm: bytes):
-    ws.send_json({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()})
+    ws.send_json(
+        {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()}
+    )
 
 
 class TestHaruRealtimeWebSocket:
@@ -1366,13 +1371,22 @@ class TestHaruRealtimeWebSocket:
         second = np.full(3200, 16384, dtype="<i2").tobytes()
         with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
             config = ws.receive_json()["session"]
-            assert config["capabilities"] == {"duplex": True, "input_image": False, "tools": False}
+            assert config["capabilities"] == {
+                "duplex": True,
+                "input_image": False,
+                "tools": False,
+            }
             assert config["instructions"] == "Default Haru prompt"
             assert config["audio"]["input"] == {
                 "format": {"type": "audio/pcm", "rate": 24000},
                 "turn_detection": None,
             }
-            ws.send_json({"type": "session.update", "session": {"instructions": "Speak Japanese."}})
+            ws.send_json(
+                {
+                    "type": "session.update",
+                    "session": {"instructions": "Speak Japanese."},
+                }
+            )
             assert ws.receive_json()["session"]["instructions"] == "Speak Japanese."
 
             _send_pcm(ws, first[:6399])
@@ -1405,13 +1419,27 @@ class TestHaruRealtimeWebSocket:
         assert response["id"] == events[0]["response"]["id"]
         assert response["status"] == "completed"
         assert response["output"][0]["id"] == events[1]["item"]["id"]
-        assert response["output"][0]["content"] == [{"type": "output_audio", "transcript": "hi hi "}]
-        assert np.frombuffer(base64.b64decode(events[5]["delta"]), dtype="<i2")[0] == 16383
+        assert response["output"][0]["content"] == [
+            {"type": "output_audio", "transcript": "hi hi "}
+        ]
+        assert (
+            np.frombuffer(base64.b64decode(events[5]["delta"]), dtype="<i2")[0] == 16383
+        )
         assert upstream.prompt == "Speak Japanese."
-        np.testing.assert_array_equal(upstream.samples[0], np.full(3200, -1, dtype=np.float32))
-        np.testing.assert_array_equal(upstream.samples[1], np.full(3200, 0.5, dtype=np.float32))
+        np.testing.assert_array_equal(
+            upstream.samples[0], np.full(3200, -1, dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            upstream.samples[1], np.full(3200, 0.5, dtype=np.float32)
+        )
         assert _eventually(lambda: pool.release_engine.await_count == 1)
-        assert [name for name, _ in upstream.calls] == ["create", "start", "step", "step", "synchronize"]
+        assert [name for name, _ in upstream.calls] == [
+            "create",
+            "start",
+            "step",
+            "step",
+            "synchronize",
+        ]
         assert {thread for _, thread in upstream.calls} == {"mlx-haru-test_0"}
 
     def test_unsupported_controls_and_terminal_cancel(self, haru_engine):
@@ -1423,11 +1451,35 @@ class TestHaruRealtimeWebSocket:
                 ({"type": "input_audio_buffer.commit"}, "unsupported"),
                 ({"type": "response.create"}, "unsupported"),
                 ({"type": "conversation.item.truncate"}, "unsupported"),
-                ({"type": "session.update", "session": {"turn_detection": {"type": "server_vad"}}}, "unsupported"),
-                ({"type": "session.update", "session": {"voice": "alloy"}}, "unsupported"),
-                ({"type": "session.update", "session": {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}}}, "unsupported"),
+                (
+                    {
+                        "type": "session.update",
+                        "session": {"turn_detection": {"type": "server_vad"}},
+                    },
+                    "unsupported",
+                ),
+                (
+                    {"type": "session.update", "session": {"voice": "alloy"}},
+                    "unsupported",
+                ),
+                (
+                    {
+                        "type": "session.update",
+                        "session": {
+                            "audio": {
+                                "input": {
+                                    "format": {"type": "audio/pcm", "rate": 16000}
+                                }
+                            }
+                        },
+                    },
+                    "unsupported",
+                ),
                 ({"type": "input_audio_buffer.append", "audio": "?"}, "invalid_value"),
-                ({"type": "input_audio_buffer.append", "audio": _pcm(1.1)}, "audio_buffer_limit"),
+                (
+                    {"type": "input_audio_buffer.append", "audio": _pcm(1.1)},
+                    "audio_buffer_limit",
+                ),
             ):
                 ws.send_json({**event, "event_id": "bad"})
                 error = ws.receive_json()["error"]
@@ -1444,7 +1496,9 @@ class TestHaruRealtimeWebSocket:
             assert ws.receive()["code"] == 1000
         assert _eventually(lambda: pool.release_engine.await_count == 2)
 
-    def test_small_audio_appends_do_not_overflow_during_one_model_frame(self, haru_engine):
+    def test_small_audio_appends_do_not_overflow_during_one_model_frame(
+        self, haru_engine
+    ):
         engine, upstream = haru_engine
         upstream.unblock.clear()
         (p1, p2, p3), _, client = _voice_client(engine)
@@ -1457,7 +1511,12 @@ class TestHaruRealtimeWebSocket:
                 # Replay 140 ms of 10 ms chunks while one model step is in flight.
                 for i in range(14):
                     _send_pcm(ws, np.full(240, i, dtype="<i2").tobytes())
-                ws.send_json({"type": "session.update", "session": {"output_modalities": ["audio"]}})
+                ws.send_json(
+                    {
+                        "type": "session.update",
+                        "session": {"output_modalities": ["audio"]},
+                    }
+                )
                 assert ws.receive_json()["type"] == "session.updated"
             finally:
                 upstream.unblock.set()
@@ -1465,7 +1524,9 @@ class TestHaruRealtimeWebSocket:
         expected = np.repeat(np.arange(14, dtype=np.float32), 240)[:3200] / 32768
         np.testing.assert_array_equal(upstream.samples[1], expected)
 
-    def test_cancel_stops_a_multi_frame_append_without_releasing_lease_early(self, haru_engine):
+    def test_cancel_stops_a_multi_frame_append_without_releasing_lease_early(
+        self, haru_engine
+    ):
         engine, upstream = haru_engine
         upstream.unblock.clear()
         (p1, p2, p3), pool, client = _voice_client(engine)
@@ -1478,24 +1539,37 @@ class TestHaruRealtimeWebSocket:
                 ws.send_json({"type": "response.cancel"})
                 events = _until(ws, "response.done")
                 assert events[-1]["response"]["status"] == "cancelled"
-                assert not any(e["type"] == "response.output_audio.delta" for e in events)
+                assert not any(
+                    e["type"] == "response.output_audio.delta" for e in events
+                )
                 pool.release_engine.assert_not_awaited()
             finally:
                 upstream.unblock.set()
         assert _eventually(lambda: pool.release_engine.await_count == 1)
-        assert [name for name, _ in upstream.calls] == ["create", "start", "step", "synchronize"]
+        assert [name for name, _ in upstream.calls] == [
+            "create",
+            "start",
+            "step",
+            "synchronize",
+        ]
 
-    def test_unload_holds_lease_and_gpu_cap_until_decoder_drain(self, haru_engine, monkeypatch):
+    def test_unload_holds_lease_and_gpu_cap_until_decoder_drain(
+        self, haru_engine, monkeypatch
+    ):
         engine, upstream = haru_engine
         upstream.unblock.clear()
         (p1, p2, p3), pool, client = _voice_client(engine)
-        pool.get_abort_requested_reason.side_effect = (
-            lambda _: "test unload" if upstream.entered.is_set() else None
+        pool.get_abort_requested_reason.side_effect = lambda _: (
+            "test unload" if upstream.entered.is_set() else None
         )
         limiter = MagicMock()
         monkeypatch.setattr("omlx.api.audio_routes.REALTIME_UNLOAD_POLL_SECONDS", 0.01)
-        monkeypatch.setattr("omlx.api.audio_routes._get_gpu_power_limiter", lambda: limiter)
-        monkeypatch.setattr("omlx.api.audio_routes._realtime_gpu_power_limit", lambda *_: 10)
+        monkeypatch.setattr(
+            "omlx.api.audio_routes._get_gpu_power_limiter", lambda: limiter
+        )
+        monkeypatch.setattr(
+            "omlx.api.audio_routes._realtime_gpu_power_limit", lambda *_: 10
+        )
         with p1, p2, p3, client, client.websocket_connect(VOICE_PATH) as ws:
             ws.receive_json()
             try:
@@ -1507,7 +1581,11 @@ class TestHaruRealtimeWebSocket:
                 limiter.acquire.assert_called_once_with(10)
                 pool.release_engine.assert_not_awaited()
                 limiter.release.assert_not_called()
-                assert [name for name, _ in upstream.calls] == ["create", "start", "step"]
+                assert [name for name, _ in upstream.calls] == [
+                    "create",
+                    "start",
+                    "step",
+                ]
             finally:
                 upstream.unblock.set()
         assert _eventually(lambda: pool.release_engine.await_count == 1)
@@ -1523,7 +1601,8 @@ class TestHaruRealtimeWebSocket:
         monkeypatch.setattr("omlx.api.audio_routes._get_engine_pool", lambda: pool)
         monkeypatch.setattr("omlx.api.audio_routes._resolve_model", lambda model: model)
         monkeypatch.setattr(
-            "omlx.api.audio_routes.haru_default_instructions", lambda: "Default Haru prompt"
+            "omlx.api.audio_routes.haru_default_instructions",
+            lambda: "Default Haru prompt",
         )
         with TestClient(app) as client:
             response = client.get("/v1/audio/voices?model=haru&realtime=true")

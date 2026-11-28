@@ -180,7 +180,11 @@ class VLMModelAdapter(nn.Module):
         head = copy.copy(self._nemotron_mtp_head)
         head.reset(self._vlm_model)
         head.prefill_from_target_hidden(
-            tokens, hidden, bonus, lambda logits: mx.argmax(logits, axis=-1), greedy=True
+            tokens,
+            hidden,
+            bonus,
+            lambda logits: mx.argmax(logits, axis=-1),
+            greedy=True,
         )
         mx.eval([entry.state for entry in head._cache])
         return head._cache, tokens.shape[1]
@@ -250,9 +254,14 @@ class VLMModelAdapter(nn.Module):
         if self._nemotron_mtp_head is not None:
             head = self._nemotron_mtp_head
             hidden, next_hidden = head._forward_hidden(
-                head._input_embed(next_token_ids), hidden_states, next_token_ids, mtp_cache
+                head._input_embed(next_token_ids),
+                hidden_states,
+                next_token_ids,
+                mtp_cache,
             )
-            logits = head._lm_head_fn(hidden[:, -logits_keep:] if logits_keep else hidden)
+            logits = head._lm_head_fn(
+                hidden[:, -logits_keep:] if logits_keep else hidden
+            )
             return (logits, next_hidden) if return_hidden else logits
         return self._language_model.mtp_forward(
             hidden_states,
@@ -310,7 +319,9 @@ class VLMModelAdapter(nn.Module):
     @property
     def model_type(self) -> str:
         """Expose model_type for config access."""
-        if hasattr(self._vlm_model, "config") and hasattr(self._vlm_model.config, "model_type"):
+        if hasattr(self._vlm_model, "config") and hasattr(
+            self._vlm_model.config, "model_type"
+        ):
             return self._vlm_model.config.model_type
         return "vlm"
 
@@ -347,6 +358,7 @@ class VLMModelAdapter(nn.Module):
         if hasattr(self._language_model, "make_cache"):
             return self._language_model.make_cache()
         from mlx_lm.models.cache import KVCache
+
         return [KVCache() for _ in range(len(self.layers))]
 
     def restore_cache(self, caches):
@@ -674,7 +686,9 @@ class VLMModelAdapter(nn.Module):
         if hook is not None:
             hook(next_ids, current_ids)
 
-    def prefetch_engram(self, next_ids: mx.array, current_ids: mx.array, cache=None) -> None:
+    def prefetch_engram(
+        self, next_ids: mx.array, current_ids: mx.array, cache=None
+    ) -> None:
         """Forward the next-chunk Engram notice to DeepSeek V4.1."""
         hook = getattr(self._language_model, "prefetch_engram", None)
         if hook is not None:
@@ -802,7 +816,11 @@ class VLMModelAdapter(nn.Module):
         elif self._pending_embeds is not None:
             result = self._forward_with_embeddings(input_ids, cache, **kwargs)
         else:
-            if self._uses_mrope and self._batch_rope_deltas is not None and cache is not None:
+            if (
+                self._uses_mrope
+                and self._batch_rope_deltas is not None
+                and cache is not None
+            ):
                 offsets = None
                 for c in cache:
                     c = self._offset_owner(c)
@@ -842,14 +860,16 @@ class VLMModelAdapter(nn.Module):
                 else:
                     if hasattr(self._vlm_model, "_set_position_state"):
                         self._vlm_model._set_position_state(input_ids)
-                    result = self._language_model(
-                        input_ids, cache=cache, **kwargs
-                    )
+                    result = self._language_model(input_ids, cache=cache, **kwargs)
             elif self._uses_mrope and cache is not None:
                 offsets = None
                 for c in cache:
                     c = self._offset_owner(c)
-                    if hasattr(c, "offset") and isinstance(c.offset, mx.array) and c.offset.ndim > 0:
+                    if (
+                        hasattr(c, "offset")
+                        and isinstance(c.offset, mx.array)
+                        and c.offset.ndim > 0
+                    ):
                         offsets = c.offset
                         break
                 if offsets is not None:
@@ -871,15 +891,16 @@ class VLMModelAdapter(nn.Module):
                     # on spatial_merge_size (#241, #2387).
                     if hasattr(self._vlm_model, "_set_position_state"):
                         self._vlm_model._set_position_state(input_ids)
-                    result = self._language_model(
-                        input_ids, cache=cache, **kwargs
-                    )
+                    result = self._language_model(input_ids, cache=cache, **kwargs)
             else:
                 if hasattr(self._vlm_model, "_set_position_state"):
                     self._vlm_model._set_position_state(input_ids)
                 result = self._language_model(input_ids, cache=cache, **kwargs)
 
-        if self.model_type == "minicpmv4_7" and getattr(result, "gdn_states", None) is not None:
+        if (
+            self.model_type == "minicpmv4_7"
+            and getattr(result, "gdn_states", None) is not None
+        ):
             self._minicpm_speculative_transactions.append(result.gdn_states)
         if minicpm_captures is not None:
             try:
@@ -917,7 +938,7 @@ class VLMModelAdapter(nn.Module):
         total_len = self._pending_embeds.shape[1]
 
         end_offset = min(self._embed_offset + chunk_len, total_len)
-        chunk_embeds = self._pending_embeds[:, self._embed_offset:end_offset, :]
+        chunk_embeds = self._pending_embeds[:, self._embed_offset : end_offset, :]
 
         result = self._language_model(
             input_ids,
@@ -934,7 +955,9 @@ class VLMModelAdapter(nn.Module):
 
         return result
 
-    def get_input_embeddings(self, input_ids: mx.array, pixel_values: mx.array | None = None, **kwargs) -> Any:
+    def get_input_embeddings(
+        self, input_ids: mx.array, pixel_values: mx.array | None = None, **kwargs
+    ) -> Any:
         """
         Compute vision+text merged embeddings.
 

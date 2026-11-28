@@ -233,7 +233,9 @@ def make_sampler(
     if xtc_special_tokens is None:
         xtc_special_tokens = []
     if temp == 0:
-        sampler = lambda x: mx.argmax(x, axis=-1)
+
+        def sampler(x):
+            return mx.argmax(x, axis=-1)
     else:
         sampling_methods = []
         if 0 < top_p < 1.0 and top_k > 0 and min_p == 0.0 and xtc_probability <= 0.0:

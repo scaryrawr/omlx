@@ -159,6 +159,7 @@ def _remap_root_mtp_weights(model: Any, weights: Any) -> Any:
 # TextConfig — retain mtp_num_hidden_layers as instance attribute.
 # ---------------------------------------------------------------------------
 
+
 def _patch_text_config(q35_config: Any) -> None:
     """Wrap ``TextConfig.from_dict`` so ``mtp_num_hidden_layers`` survives.
 
@@ -191,14 +192,15 @@ def _patch_text_config(q35_config: Any) -> None:
 # MTPDecoderLayer + MTPModule — dense VLM classes.
 # ---------------------------------------------------------------------------
 
+
 def _register_mtp_classes_for_vlm(q35_lang: Any) -> None:
     """Attach ``MTPDecoderLayer`` / ``MTPModule`` to the mlx-vlm qwen3_5
     language module. Dense uses ``Qwen3_5MLP`` (no MoE branch)."""
     if hasattr(q35_lang, "MTPModule"):
         return
 
-    Attention = q35_lang.Qwen3_5Attention
-    MLP = q35_lang.Qwen3_5MLP
+    attention_cls = q35_lang.Qwen3_5Attention
+    mlp = q35_lang.Qwen3_5MLP
     from mlx_vlm.models.qwen3_5.language import create_attention_mask
 
     class MTPDecoderLayer(nn.Module):
@@ -206,12 +208,12 @@ def _register_mtp_classes_for_vlm(q35_lang: Any) -> None:
 
         def __init__(self, args):
             super().__init__()
-            self.self_attn = Attention(args)
+            self.self_attn = attention_cls(args)
             self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
             self.post_attention_layernorm = nn.RMSNorm(
                 args.hidden_size, eps=args.rms_norm_eps
             )
-            self.mlp = MLP(args.hidden_size, args.intermediate_size)
+            self.mlp = mlp(args.hidden_size, args.intermediate_size)
 
         def __call__(self, x, mask=None, cache=None, position_ids=None):
             r = self.self_attn(self.input_layernorm(x), mask, cache, position_ids)
@@ -269,6 +271,7 @@ def _register_mtp_classes_for_vlm(q35_lang: Any) -> None:
 # ---------------------------------------------------------------------------
 # LanguageModel — wrap __init__, support return_hidden, add mtp_forward/cache.
 # ---------------------------------------------------------------------------
+
 
 def _patch_vlm_language_model(q35_lang: Any) -> None:
     cls = q35_lang.LanguageModel
@@ -373,9 +376,7 @@ def _patch_vlm_language_model(q35_lang: Any) -> None:
         # both of which the MTP cycle needs. Caller layers (block drafters)
         # are merged with the head's last layer into one capture request.
         requested = list(kwargs.pop("capture_layer_ids", None) or [])
-        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
-            original_call, "__globals__", {}
-        ):
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(original_call, "__globals__", {}):
             kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
@@ -475,9 +476,7 @@ def _patch_inner_model_capture(q35_lang: Any) -> None:
                 try:
                     prompt_priming.maybe_capture(host, inputs, out, cache)
                 except Exception:
-                    logger.debug(
-                        "MTP prompt-priming capture failed", exc_info=True
-                    )
+                    logger.debug("MTP prompt-priming capture failed", exc_info=True)
         return out
 
     cls.__call__ = __call__
@@ -487,6 +486,7 @@ def _patch_inner_model_capture(q35_lang: Any) -> None:
 # ---------------------------------------------------------------------------
 # VLMModelAdapter — add MTP pass-through methods at runtime.
 # ---------------------------------------------------------------------------
+
 
 def _patch_vlm_model_adapter() -> None:
     """Extend ``omlx.models.vlm.VLMModelAdapter`` with MTP plumbing.

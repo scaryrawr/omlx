@@ -84,9 +84,7 @@ def _assert_fixture(chunks):
                     expected_dtype,
                     expected.dtype,
                     expected.shape,
-                ), (
-                    tag + name
-                )
+                ), tag + name
                 np.testing.assert_allclose(
                     data,
                     expected,

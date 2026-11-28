@@ -8,8 +8,7 @@ requiring actual MCP server connections.
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -18,7 +17,6 @@ from omlx.mcp.types import (
     MCPServerConfig,
     MCPServerState,
     MCPTool,
-    MCPToolResult,
     MCPTransport,
 )
 
@@ -284,9 +282,13 @@ class TestMCPClientConnect:
     async def test_connect_stdio_success(self, stdio_client: MCPClient):
         """Test successful stdio connection."""
         # Mock the internal methods instead of trying to patch imports
-        with patch.object(stdio_client, "_connect_stdio", new_callable=AsyncMock) as mock_connect, \
-             patch.object(stdio_client, "_initialize_session", new_callable=AsyncMock), \
-             patch.object(stdio_client, "_discover_tools", new_callable=AsyncMock):
+        with (
+            patch.object(
+                stdio_client, "_connect_stdio", new_callable=AsyncMock
+            ) as mock_connect,
+            patch.object(stdio_client, "_initialize_session", new_callable=AsyncMock),
+            patch.object(stdio_client, "_discover_tools", new_callable=AsyncMock),
+        ):
             mock_connect.return_value = None
             # Set up session to pass the check
             stdio_client._session = MagicMock()
@@ -300,9 +302,11 @@ class TestMCPClientConnect:
     @pytest.mark.asyncio
     async def test_connect_sse_success(self, sse_client: MCPClient):
         """Test successful SSE connection."""
-        with patch.object(sse_client, "_connect_sse", new_callable=AsyncMock), \
-             patch.object(sse_client, "_initialize_session", new_callable=AsyncMock), \
-             patch.object(sse_client, "_discover_tools", new_callable=AsyncMock):
+        with (
+            patch.object(sse_client, "_connect_sse", new_callable=AsyncMock),
+            patch.object(sse_client, "_initialize_session", new_callable=AsyncMock),
+            patch.object(sse_client, "_discover_tools", new_callable=AsyncMock),
+        ):
             sse_client._session = MagicMock()
 
             result = await sse_client.connect()
@@ -402,9 +406,10 @@ class TestMCPClientConnect:
 
         fake_ctx = MagicMock()
         fake_ctx.__aenter__.return_value = (MagicMock(), MagicMock())
-        with patch(
-            "mcp.client.stdio.stdio_client", return_value=fake_ctx
-        ) as mock_stdio, patch("mcp.ClientSession", return_value=MagicMock()):
+        with (
+            patch("mcp.client.stdio.stdio_client", return_value=fake_ctx) as mock_stdio,
+            patch("mcp.ClientSession", return_value=MagicMock()),
+        ):
             await client._connect_stdio()
 
         server_params = mock_stdio.call_args.args[0]
@@ -432,7 +437,6 @@ class TestMCPClientConnect:
     async def test_connect_import_error(self, stdio_client: MCPClient):
         """Test connection fails gracefully when MCP SDK not installed."""
         # Remove _connect_stdio to test original implementation
-        original = MCPClient._connect_stdio
 
         async def mock_connect_stdio(self):
             raise ImportError("MCP SDK required")
@@ -561,9 +565,14 @@ class TestMCPClientDisconnect:
         mock_stdio = AsyncMock()
 
         with (
-            patch.object(client, "_connect_stdio", new_callable=AsyncMock) as mock_connect,
-            patch.object(client, "_initialize_session", new_callable=AsyncMock) as mock_init,
+            patch.object(
+                client, "_connect_stdio", new_callable=AsyncMock
+            ) as mock_connect,
+            patch.object(
+                client, "_initialize_session", new_callable=AsyncMock
+            ) as mock_init,
         ):
+
             async def setup_partial_resources():
                 client._stdio_client = mock_stdio
                 client._session = AsyncMock()
@@ -593,8 +602,9 @@ class TestMCPClientDisconnect:
 
         with (
             patch("omlx.mcp.client.MCPClient._connect_streamable_http") as mock_connect,
-            patch.object(client, "_initialize_session", new_callable=AsyncMock) as mock_init,
+            patch.object(client, "_initialize_session", new_callable=AsyncMock),
         ):
+
             async def setup_and_fail():
                 client._http_client = mock_http_client
                 client._streamable_http_client = mock_streamable
@@ -672,6 +682,7 @@ class TestMCPClientCallTool:
     @pytest.mark.asyncio
     async def test_call_tool_timeout(self, connected_client: MCPClient):
         """Test tool call timeout."""
+
         async def slow_call(*args, **kwargs):
             await asyncio.sleep(10)
 

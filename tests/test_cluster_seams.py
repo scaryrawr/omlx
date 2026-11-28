@@ -215,9 +215,9 @@ def test_every_get_route_answers_without_a_server_error(cluster_home):
             response = client.get(route.path)
             # 503 is a legitimate "not configured on this host" answer; only a
             # 500 means the handler itself is mis-wired.
-            assert (
-                response.status_code != 500
-            ), f"GET {route.path} returned {response.status_code}: {response.text[:200]}"
+            assert response.status_code != 500, (
+                f"GET {route.path} returned {response.status_code}: {response.text[:200]}"
+            )
             checked += 1
     assert checked >= 3, "expected to smoke several GET routes"
 
@@ -255,5 +255,3 @@ def test_post_routes_reject_a_bad_body_rather_than_crashing():
             )
             checked += 1
     assert checked >= 1
-
-

@@ -32,7 +32,7 @@ def native_kernel_status() -> dict[str, dict[str, object]]:
             fast = importlib.import_module(f"{__name__}.{name}.fast")
             available = bool(fast.is_native_available())
             error = fast.import_error()
-        except Exception as exc:  # noqa: BLE001 - status must never break
+        except Exception as exc:
             available = False
             error = exc
         status[name] = {

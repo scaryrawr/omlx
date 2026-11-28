@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 from copy import deepcopy
+from pathlib import Path
 
 import mlx_lm.utils as mlx_lm_utils
 import pytest
 
+from omlx.patches import hy_v3
 from omlx.utils import model_loading
 from omlx.utils.model_loading import normalize_hy_v3_rope_config
 
@@ -131,6 +134,25 @@ _HY3_RELEASE_TEMPLATE = (
     "<arg_key:opensource>k</arg_key:opensource></tool_call:opensource>"
 )
 _GLM_TEMPLATE = "<tool_call>f<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>"
+
+
+def test_hy_v3_release_fallback_parses_tool_call():
+    spec = importlib.util.spec_from_file_location(
+        "mlx_lm.tool_parsers.hy_v3_opensource",
+        Path(hy_v3.__file__).with_name("hy_v3_opensource_tool_parser.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    parser = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(parser)
+
+    assert parser.parse_tool_call(
+        "<tool_call:opensource>get_weather<tool_sep:opensource>"
+        "<arg_key:opensource>city</arg_key:opensource>"
+        "<arg_value:opensource>Paris</arg_value:opensource>"
+        "<arg_key:opensource>days</arg_key:opensource>"
+        "<arg_value:opensource>2</arg_value:opensource>"
+        "</tool_call:opensource>"
+    ) == {"name": "get_weather", "arguments": {"city": "Paris", "days": 2}}
 
 
 @pytest.mark.parametrize(

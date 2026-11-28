@@ -126,11 +126,15 @@ def _register_mtp_classes_for_vlm(q35moe_lang: Any) -> None:
 
     from mlx_vlm.models.qwen3_5.language import (
         Qwen3_5Attention as MoeAttention,
+    )
+    from mlx_vlm.models.qwen3_5.language import (
         Qwen3_5MLP as MoeMLP,
+    )
+    from mlx_vlm.models.qwen3_5.language import (
         create_attention_mask,
     )
 
-    SparseMoeBlock = q35moe_lang.Qwen3_5MoeSparseMoeBlock
+    sparse_moe_block_cls = q35moe_lang.Qwen3_5MoeSparseMoeBlock
 
     class MTPDecoderLayer(nn.Module):
         """Full-attention transformer layer used inside the VLM MTP head.
@@ -148,7 +152,7 @@ def _register_mtp_classes_for_vlm(q35moe_lang: Any) -> None:
                 args.hidden_size, eps=args.rms_norm_eps
             )
             if int(getattr(args, "num_experts", 0) or 0) > 0:
-                self.mlp = SparseMoeBlock(args)
+                self.mlp = sparse_moe_block_cls(args)
             else:
                 self.mlp = MoeMLP(args.hidden_size, args.intermediate_size)
 
@@ -221,8 +225,8 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
     original_call = cls.__call__
 
     def __init__(self, args, config=None):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
+        from . import is_mtp_attach_enabled
 
         # Subclasses own their MTP wiring, as in the dense Qwen wrapper.
         if type(self) is not cls:
@@ -311,9 +315,7 @@ def _patch_vlm_language_model(q35moe_lang: Any) -> None:
         # with the head's last layer into one capture request.
         requested = list(kwargs.pop("capture_layer_ids", None) or [])
         exact_verify = getattr(self, "speculative_verify_logits", None)
-        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(
-            exact_verify, "__globals__", {}
-        ):
+        if "_EXACT_SPECULATIVE_VERIFIER" in getattr(exact_verify, "__globals__", {}):
             kwargs["speculative_verify"] = True
         last_layer_idx = len(self.model.layers) - 1
         out = original_call(
@@ -501,8 +503,8 @@ def _patch_vlm_outer_model_sanitize(q35moe_outer: Any) -> None:
         # Backbone MoE: fused gate_up_proj (Qwen3.6) or per-expert tensors
         # (Ornith / raw Qwen3.5). Unfuse the fused form; fall back to
         # per-expert stacking when fused keys are absent.
-        for l in range(self.config.text_config.num_hidden_layers):
-            prefix = f"model.language_model.layers.{l}.mlp"
+        for layer_index in range(self.config.text_config.num_hidden_layers):
+            prefix = f"model.language_model.layers.{layer_index}.mlp"
             if f"{prefix}.switch_mlp.gate_proj.weight" in weights:
                 continue  # already in switch_mlp form
             if not _unfuse_layer_experts(weights, prefix):

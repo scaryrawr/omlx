@@ -6,8 +6,9 @@ to enable unit testing without loading actual ML models.
 """
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any
 
 
 @dataclass
@@ -19,8 +20,8 @@ class MockResponse:
 
     uid: int
     token: int
-    finish_reason: Optional[str] = None
-    prompt_cache: Optional[Any] = None
+    finish_reason: str | None = None
+    prompt_cache: Any | None = None
 
 
 class MockBatchGenerator:
@@ -34,10 +35,10 @@ class MockBatchGenerator:
         self.model = model
         self.tokenizer = tokenizer
         self.max_tokens = kwargs.get("max_tokens", 100)
-        self.stop_tokens: Set[int] = set()
-        self._queues: Dict[int, deque] = {}
+        self.stop_tokens: set[int] = set()
+        self._queues: dict[int, deque] = {}
         self._uid_counter = 0
-        self._preset_responses: List[List[MockResponse]] = []
+        self._preset_responses: list[list[MockResponse]] = []
         self._response_index = 0
 
         # Store constructor arguments for testing
@@ -47,13 +48,13 @@ class MockBatchGenerator:
 
     def insert(
         self,
-        token_sequences: List[List[int]],
-        max_tokens: Optional[List[int]] = None,
-        caches: Optional[List[Any]] = None,
-        samplers: Optional[List[Callable]] = None,
-        logits_processors: Optional[List[Any]] = None,
+        token_sequences: list[list[int]],
+        max_tokens: list[int] | None = None,
+        caches: list[Any] | None = None,
+        samplers: list[Callable] | None = None,
+        logits_processors: list[Any] | None = None,
         **kwargs: Any,
-    ) -> List[int]:
+    ) -> list[int]:
         """Insert sequences into the batch for generation.
 
         Args:
@@ -67,7 +68,7 @@ class MockBatchGenerator:
             List of UIDs assigned to each sequence
         """
         uids = []
-        for i, tokens in enumerate(token_sequences):
+        for _i, _tokens in enumerate(token_sequences):
             uid = self._uid_counter
             # Default tokens for mock generation
             self._queues[uid] = deque([100, 101, 102])
@@ -75,14 +76,16 @@ class MockBatchGenerator:
             uids.append(uid)
         return uids
 
-    def next(self) -> List[MockResponse]:
+    def next(self) -> list[MockResponse]:
         """Generate the next token for all active sequences.
 
         Returns:
             List of MockResponse objects for each active sequence
         """
         # Use preset responses if available
-        if self._preset_responses and self._response_index < len(self._preset_responses):
+        if self._preset_responses and self._response_index < len(
+            self._preset_responses
+        ):
             responses = self._preset_responses[self._response_index]
             self._response_index += 1
             return responses
@@ -93,12 +96,14 @@ class MockBatchGenerator:
             if queue:
                 token = queue.popleft()
                 finish = "stop" if not queue else None
-                responses.append(MockResponse(uid=uid, token=token, finish_reason=finish))
+                responses.append(
+                    MockResponse(uid=uid, token=token, finish_reason=finish)
+                )
                 if not queue:
                     del self._queues[uid]
         return responses
 
-    def remove(self, uids: List[int]) -> None:
+    def remove(self, uids: list[int]) -> None:
         """Remove sequences from the batch.
 
         Args:
@@ -107,7 +112,7 @@ class MockBatchGenerator:
         for uid in uids:
             self._queues.pop(uid, None)
 
-    def set_responses(self, responses: List[List[MockResponse]]) -> None:
+    def set_responses(self, responses: list[list[MockResponse]]) -> None:
         """Set preset responses for testing.
 
         Args:
@@ -121,7 +126,7 @@ class MockBatchGenerator:
 class MockBlockTable:
     """Mock BlockTable for paged cache testing."""
 
-    block_ids: List[int] = field(default_factory=list)
+    block_ids: list[int] = field(default_factory=list)
     num_tokens: int = 0
 
 
@@ -132,13 +137,13 @@ class MockPagedCacheManager:
     """
 
     def __init__(self, **kwargs: Any):
-        self.blocks: List[Any] = []
-        self.request_tables: Dict[str, MockBlockTable] = {}
+        self.blocks: list[Any] = []
+        self.request_tables: dict[str, MockBlockTable] = {}
         self.block_size = kwargs.get("block_size", 256)
         self.max_blocks = kwargs.get("max_blocks", 1000)
         self.cold_block_count = 0
 
-    def get_block_table(self, request_id: str) -> Optional[MockBlockTable]:
+    def get_block_table(self, request_id: str) -> MockBlockTable | None:
         """Get the block table for a request.
 
         Args:
@@ -149,7 +154,7 @@ class MockPagedCacheManager:
         """
         return self.request_tables.get(request_id)
 
-    def release_for_eviction(self, block_ids: List[int]) -> int:
+    def release_for_eviction(self, block_ids: list[int]) -> int:
         """Release blocks for eviction.
 
         Args:
@@ -168,7 +173,7 @@ class MockPagedCacheManager:
         """
         self.request_tables.pop(request_id, None)
 
-    def get_evictable_blocks(self, count: int) -> List[Any]:
+    def get_evictable_blocks(self, count: int) -> list[Any]:
         """Get evictable blocks in LRU order.
 
         Args:
@@ -206,12 +211,12 @@ class MockBlockAwarePrefixCache:
     """
 
     def __init__(self, **kwargs: Any):
-        self._entries: Dict[str, Any] = {}
-        self._cold_restore_callback: Optional[Callable] = None
+        self._entries: dict[str, Any] = {}
+        self._cold_restore_callback: Callable | None = None
 
     def fetch_cache(
-        self, request_id: str, tokens: List[int]
-    ) -> tuple[Optional[MockBlockTable], List[int]]:
+        self, request_id: str, tokens: list[int]
+    ) -> tuple[MockBlockTable | None, list[int]]:
         """Fetch cached prefix for a request.
 
         Args:
@@ -223,7 +228,7 @@ class MockBlockAwarePrefixCache:
         """
         return None, tokens
 
-    def reconstruct_cache(self, block_table: MockBlockTable) -> Optional[Any]:
+    def reconstruct_cache(self, block_table: MockBlockTable) -> Any | None:
         """Reconstruct cache from block table.
 
         Args:
@@ -237,11 +242,11 @@ class MockBlockAwarePrefixCache:
     def store_cache(
         self,
         request_id: str,
-        tokens: List[int],
+        tokens: list[int],
         cache: Any,
         model_cache_config: Any = None,
         **kwargs: Any,
-    ) -> Optional[MockBlockTable]:
+    ) -> MockBlockTable | None:
         """Store cache for a request.
 
         Args:
@@ -267,7 +272,7 @@ class MockBlockAwarePrefixCache:
         """Clear all cache entries."""
         self._entries.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics.
 
         Returns:
@@ -296,7 +301,7 @@ class MockSSDCacheManager:
     """Mock SSD cache manager for testing."""
 
     def __init__(self, **kwargs: Any):
-        self._blocks: Dict[bytes, Any] = {}
+        self._blocks: dict[bytes, Any] = {}
 
     def has_block(self, block_hash: bytes) -> bool:
         """Check if a block exists in SSD cache.
@@ -309,7 +314,7 @@ class MockSSDCacheManager:
         """
         return block_hash in self._blocks
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get SSD cache statistics.
 
         Returns:
@@ -322,7 +327,7 @@ class MockMemoryMonitor:
     """Mock memory monitor for testing."""
 
     def __init__(self, **kwargs: Any):
-        self._model_info: Dict[str, Any] = {}
+        self._model_info: dict[str, Any] = {}
 
     def set_model_info(
         self,

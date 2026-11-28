@@ -95,9 +95,7 @@ def test_stages_reproduce_the_contract_fixture(bounds):
                     expected_dtype,
                     expected.dtype,
                     expected.shape,
-                ), (
-                    tag + name
-                )
+                ), tag + name
                 np.testing.assert_allclose(
                     data,
                     expected,

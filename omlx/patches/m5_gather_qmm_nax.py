@@ -103,7 +103,7 @@ import math
 import threading
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -145,7 +145,7 @@ _MLX_MM_HEADERS = (
 )
 
 
-def _read_mlx_headers(paths: tuple[str, ...]) -> Optional[str]:
+def _read_mlx_headers(paths: tuple[str, ...]) -> str | None:
     """Flatten mlx kernel headers from the installed package.
 
     ``mx.fast.metal_kernel`` already prepends mlx's ``utils.h`` preamble, so
@@ -1438,12 +1438,12 @@ def supports(
     x: mx.array,
     w: mx.array,
     scales: mx.array,
-    biases: Optional[mx.array],
+    biases: mx.array | None,
     indices: mx.array,
     group_size: int,
     bits: int,
     mode: str,
-    row_map: Optional[mx.array] = None,
+    row_map: mx.array | None = None,
     *,
     allow_low_bit_affine: bool = False,
 ) -> bool:
@@ -1643,7 +1643,7 @@ def _canary_problem(dtype, mode, bits, group_size, N, K, x_scale=0.5):
     return wq, scales, biases, wd, x, idx
 
 
-def _self_test(key: tuple) -> Optional[bool]:
+def _self_test(key: tuple) -> bool | None:
     """Run one kernel instantiation on a small canary.
 
     K % 64 == 0 must be bit-identical to mlx's sorted kernel (correct
@@ -1678,15 +1678,12 @@ def _self_test(key: tuple) -> Optional[bool]:
             ok = bool(mx.array_equal(out, ref).item())
             detail = "not bit-identical to mlx's sorted kernel"
         else:
-            ref = (
-                x.astype(mx.float32)
-                @ wd[idx].swapaxes(-1, -2).astype(mx.float32)
-            )
+            ref = x.astype(mx.float32) @ wd[idx].swapaxes(-1, -2).astype(mx.float32)
             err = mx.abs(out.astype(mx.float32) - ref).max().item()
             scale = mx.abs(ref).max().item()
             ok = err <= scale / 64
             detail = f"max err {err:.3g} vs fp32 reference (max {scale:.3g})"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "transformation" in str(e):
             return None
         logger.warning(
@@ -1753,7 +1750,7 @@ def _ref_scaled_swiglu_oai(
 
 
 def reference_activation(
-    x_up: mx.array, x_gate: mx.array, limit: Optional[float] = None
+    x_up: mx.array, x_gate: mx.array, limit: float | None = None
 ) -> mx.array:
     """The unfused path's activation: ``silu(gate) * up`` as MLX's compiled
     kernel computes it, clamped first like GLM-5.3 when ``limit`` is set."""
@@ -1783,7 +1780,7 @@ def _bits_equal(a: mx.array, b: mx.array) -> bool:
     return bool(mx.array_equal(a.view(view), b.view(view)).item())
 
 
-def _self_test_act(key: tuple) -> Optional[bool]:
+def _self_test_act(key: tuple) -> bool | None:
     """Run one activation-epilogue instantiation on a small canary against
     the unfused path: the plain kernel with the same configuration, split
     into gate and up, then the reference activation (bitwise, including the
@@ -1811,7 +1808,7 @@ def _self_test_act(key: tuple) -> Optional[bool]:
         else:
             ref = reference_activation(x_up, x_gate, limit)
         ok = _bits_equal(out, ref)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "transformation" in str(e):
             return None
         logger.warning(
@@ -1829,7 +1826,7 @@ def _self_test_act(key: tuple) -> Optional[bool]:
     return ok
 
 
-def _self_test_act_map(key: tuple) -> Optional[bool]:
+def _self_test_act_map(key: tuple) -> bool | None:
     """Run one row-mapped activation-epilogue instantiation on a canary: a
     scrambled, repeating row map over a smaller token array must reproduce
     the unmapped epilogue on the materialised rows ``x[row_map]`` bitwise
@@ -1855,7 +1852,7 @@ def _self_test_act_map(key: tuple) -> Optional[bool]:
         if out is None or ref is None:
             return False
         ok = _bits_equal(out, ref)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "transformation" in str(e):
             return None
         logger.warning(
@@ -1890,16 +1887,16 @@ def sorted_gather_qmm(
     x: mx.array,
     w: mx.array,
     scales: mx.array,
-    biases: Optional[mx.array],
+    biases: mx.array | None,
     indices: mx.array,
     *,
     group_size: int,
     bits: int,
     mode: str = "affine",
     stream=None,
-    plan: Optional[Plan] = None,
+    plan: Plan | None = None,
     verify: bool = True,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """``x @ w[indices].T`` for sorted rows on the tensor units.
 
     ``indices`` must group each expert's rows in one contiguous run (see
@@ -1929,18 +1926,18 @@ def sorted_gather_qmm_swiglu(
     x: mx.array,
     w: mx.array,
     scales: mx.array,
-    biases: Optional[mx.array],
+    biases: mx.array | None,
     indices: mx.array,
     *,
     group_size: int,
     bits: int,
     mode: str = "affine",
-    limit: Optional[float] = None,
+    limit: float | None = None,
     stream=None,
-    plan: Optional[Plan] = None,
+    plan: Plan | None = None,
     verify: bool = True,
-    row_map: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    row_map: mx.array | None = None,
+) -> mx.array | None:
     """The SwiGLU of a fused gate/up projection for sorted rows, in one kernel.
 
     ``w`` (with ``scales``/``biases``) holds each expert's gate rows followed
@@ -1994,8 +1991,19 @@ def sorted_gather_qmm_swiglu(
         ):
             return None
     return _launch(
-        x, w, scales, biases, indices, group_size, bits, mode, plan, stream,
-        epi=epi, limit=limit, row_map=row_map,
+        x,
+        w,
+        scales,
+        biases,
+        indices,
+        group_size,
+        bits,
+        mode,
+        plan,
+        stream,
+        epi=epi,
+        limit=limit,
+        row_map=row_map,
     )
 
 
@@ -2013,10 +2021,10 @@ def sorted_gather_qmm_swiglu_oai(
     beta: float,
     expert_scales: tuple[mx.array, mx.array],
     stream=None,
-    plan: Optional[Plan] = None,
+    plan: Plan | None = None,
     verify: bool = True,
-    row_map: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    row_map: mx.array | None = None,
+) -> mx.array | None:
     """MiniMax M3.1's scaled SwiGLU-OAI of separate gate and up projections
     for sorted rows, in one kernel.
 
@@ -2060,8 +2068,20 @@ def sorted_gather_qmm_swiglu_oai(
         ):
             return None
     return _launch(
-        x, w, scales, None, indices, group_size, bits, mode, plan, stream,
-        epi=_EPI_OAI, limit=consts, row_map=row_map, up=(wu, su),
+        x,
+        w,
+        scales,
+        None,
+        indices,
+        group_size,
+        bits,
+        mode,
+        plan,
+        stream,
+        epi=_EPI_OAI,
+        limit=consts,
+        row_map=row_map,
+        up=(wu, su),
         expert_scales=expert_scales,
     )
 

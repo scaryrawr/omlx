@@ -104,9 +104,7 @@ class TestClampMath:
 
     def test_clamp_actually_binds(self):
         # unclamped silu(20) * 30 would be ~600
-        got = bh.clamped_swiglu(
-            mx.array([[20.0]]), mx.array([[30.0]]), 4.0
-        )
+        got = bh.clamped_swiglu(mx.array([[20.0]]), mx.array([[30.0]]), 4.0)
         assert float(got.item()) <= 4.0 * 4.0 + 1e-4
 
     def test_switchglu_signature_order(self):

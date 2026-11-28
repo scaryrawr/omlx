@@ -45,9 +45,7 @@ def test_two_stage_admission_rejects_threshold_boundaries(
         conversation_token_count
     )
 
-    assert (
-        _plan(remaining_tokens, system_prompt_end=system_token_count) is None
-    )
+    assert _plan(remaining_tokens, system_prompt_end=system_token_count) is None
 
 
 @pytest.mark.parametrize(

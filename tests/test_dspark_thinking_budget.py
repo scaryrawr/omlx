@@ -25,7 +25,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import mlx.core as mx
-import pytest
 
 from omlx.api.thinking import ThinkingBudgetProcessor
 from omlx.patches.mlx_lm_mtp import batch_generator as bg
@@ -192,7 +191,9 @@ class TestBudgetCounterDrift:
     def test_no_drafts_k0_single_call(self, monkeypatch):
         proc = _make_budget_processor(10_000)
         # k=0: single plain step, 1 call, 1 emit.
-        emitted, delta = _run_cycle(monkeypatch, proc, emitted=10, k=0, accept_m=0, draft_ids=[])
+        emitted, delta = _run_cycle(
+            monkeypatch, proc, emitted=10, k=0, accept_m=0, draft_ids=[]
+        )
         assert emitted == 1
         assert delta == emitted
 
@@ -210,7 +211,9 @@ class TestBudgetFiresAtBudgetTokens:
         # starts forcing (budget reached).
         while not proc._forcing and cycle < 50:
             m = 2 if cycle % 3 else 1
-            emitted, delta = _run_cycle(monkeypatch, proc, emitted=10 + emitted_total, k=2, accept_m=m)
+            emitted, delta = _run_cycle(
+                monkeypatch, proc, emitted=10 + emitted_total, k=2, accept_m=m
+            )
             emitted_total += emitted
             cycle += 1
         assert proc._forcing, "budget should have forced close-think"

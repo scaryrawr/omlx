@@ -1,6 +1,6 @@
 # Copyright © 2026 Apple Inc.
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: N803, N806, UP006, UP007, UP035, UP045
+# ruff: noqa: UP006, UP007, UP035, UP045
 
 import logging
 import math
@@ -149,7 +149,9 @@ def _local_padding_free(local_cache: Any) -> bool:
     return free
 
 
-def _single_row_decode_mask(mask: Optional[mx.array], local_cache: Any, B: int, L: int) -> Optional[mx.array]:
+def _single_row_decode_mask(
+    mask: Optional[mx.array], local_cache: Any, B: int, L: int
+) -> Optional[mx.array]:
     """Drop the local mask for one-row decode on a padding-free single-row batch cache.
 
     ``BatchRotatingKVCache.make_mask`` returns an array even when every slot is valid. Once the row holds no padding
@@ -891,10 +893,7 @@ def _sparse_pooled_attention(
             sinks,
         ).astype(q.dtype)
     if exact_local:
-        if B == 1:
-            query_rows = q
-        else:
-            query_rows = q[:, :, 0].transpose(1, 0, 2)[None]
+        query_rows = q if B == 1 else q[:, :, 0].transpose(1, 0, 2)[None]
         local_rows = [local_kv[idx : idx + 1] for idx in range(B)]
         row_scores = exact_local_scores(query_rows, local_rows, scale)
         local_scores = (
@@ -1060,7 +1059,6 @@ class DeepseekV4MoE(nn.Module):
 
 
 class Compressor(nn.Module):
-
     def __init__(self, config: ModelArgs, compress_ratio: int, head_dim: int):
         super().__init__()
         self.compress_ratio = compress_ratio
@@ -1362,9 +1360,7 @@ class Indexer(nn.Module):
         self.weights_proj = nn.Linear(config.hidden_size, self.n_heads, bias=False)
         self.compressor = Compressor(config, compress_ratio, self.head_dim)
         self.scale = self.head_dim**-0.5
-        self._m2_mma_score = _dsv4f_m2_mma_score_enabled(
-            config, compress_ratio
-        )
+        self._m2_mma_score = _dsv4f_m2_mma_score_enabled(config, compress_ratio)
 
     def __call__(
         self,
@@ -1745,7 +1741,12 @@ class LocalAttention(nn.Module):
         kv = self.rope(kv, offset)
         sinks = self.attn_sink.astype(q.dtype)
         mask = _single_row_decode_mask(mask, cache, B, L)
-        if is_dspark_verify_armed() and B == 1 and 1 < L <= 6 and _local_padding_free(cache):
+        if (
+            is_dspark_verify_armed()
+            and B == 1
+            and 1 < L <= 6
+            and _local_padding_free(cache)
+        ):
             key_rows = _consume_rotating_verify_rows(cache, kv)
             out = _batched_m1_attention(q, key_rows, self.scale, sinks)
             out = _project_attention_output(self, out, offset)
@@ -1859,7 +1860,12 @@ class CompressedAttention(nn.Module):
         kv = self.rope(kv, offset)
         sinks = self.attn_sink.astype(q.dtype)
         mask = _single_row_decode_mask(mask, local_cache, B, L)
-        if is_dspark_verify_armed() and B == 1 and 1 < L <= 6 and _local_padding_free(local_cache):
+        if (
+            is_dspark_verify_armed()
+            and B == 1
+            and 1 < L <= 6
+            and _local_padding_free(local_cache)
+        ):
             compressed_kv, compressed_gate = self.compressor.project(x)
             pooled_rows = _consume_verify_rows(
                 self.compressor,
@@ -1912,7 +1918,12 @@ class CompressedAttention(nn.Module):
             and _standard_mask
             and pooled.shape[1] > 0
             and L > 4
-            and not (self.decode_consistent and B == 1 and L == 1 and _local_padding_free(local_cache))
+            and not (
+                self.decode_consistent
+                and B == 1
+                and L == 1
+                and _local_padding_free(local_cache)
+            )
             and _native_sparse_attention_available()
         ):
             pooled_indices = mx.broadcast_to(
@@ -1939,7 +1950,12 @@ class CompressedAttention(nn.Module):
             if pooled.shape[1] > 0:
                 kv = mx.concatenate([kv, pooled[:, None]], axis=2)
             mask = _extend_mask(mask, pooled_mask, kv.shape[2])
-            if self.decode_consistent and B == 1 and L == 1 and _local_padding_free(local_cache):
+            if (
+                self.decode_consistent
+                and B == 1
+                and L == 1
+                and _local_padding_free(local_cache)
+            ):
                 out = exact_attention(q, [kv], self.scale, sinks)
             else:
                 out = scaled_dot_product_attention(
@@ -2031,7 +2047,12 @@ class SparseCompressedAttention(nn.Module):
         kv = self.rope(kv, offset)
         sinks = self.attn_sink.astype(q.dtype)
         mask = _single_row_decode_mask(mask, local_cache, B, L)
-        if is_dspark_verify_armed() and B == 1 and L <= 6 and _local_padding_free(local_cache):
+        if (
+            is_dspark_verify_armed()
+            and B == 1
+            and L <= 6
+            and _local_padding_free(local_cache)
+        ):
             compressed_kv, compressed_gate = self.compressor.project(x)
             index_kv, index_gate = self.indexer.compressor.project(x)
             pooled_rows = _consume_verify_rows(
@@ -2177,7 +2198,12 @@ class SparseCompressedAttention(nn.Module):
             )[:, None]
 
         if pooled.shape[1] == 0:
-            if self.decode_consistent and B == 1 and L == 1 and _local_padding_free(local_cache):
+            if (
+                self.decode_consistent
+                and B == 1
+                and L == 1
+                and _local_padding_free(local_cache)
+            ):
                 out = exact_attention(q, [kv], self.scale, sinks)
             else:
                 out = None
@@ -2203,7 +2229,12 @@ class SparseCompressedAttention(nn.Module):
                         sinks=sinks,
                     )
         elif pooled.shape[1] <= self.indexer.index_topk:
-            if self.decode_consistent and B == 1 and L == 1 and _local_padding_free(local_cache):
+            if (
+                self.decode_consistent
+                and B == 1
+                and L == 1
+                and _local_padding_free(local_cache)
+            ):
                 full_kv = mx.concatenate([kv, pooled[:, None]], axis=2)
                 out = exact_attention(q, [full_kv], self.scale, sinks)
             else:

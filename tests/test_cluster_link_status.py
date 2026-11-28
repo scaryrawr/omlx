@@ -434,7 +434,9 @@ def test_link_verification_checks_route_and_ping_from_both_macs():
         calls.append((host, tuple(command)))
         if command[0] == "/sbin/route":
             interface = "en4" if host == "127.0.0.1" else "en5"
-            return subprocess.CompletedProcess(command, 0, f"interface: {interface}\n", "")
+            return subprocess.CompletedProcess(
+                command, 0, f"interface: {interface}\n", ""
+            )
         return subprocess.CompletedProcess(command, 0, "one packet received\n", "")
 
     verified, reason = verify_link_reachability(link, runner=runner)

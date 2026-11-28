@@ -106,7 +106,7 @@ def _preflight_package_version():
             return {"mlx": "9.9.9", "mlx-lm": "8.8.8"}[name]
 
     namespace: dict = {"m": _StaleMetadata}
-    exec(script[start:end], namespace)  # noqa: S102 - the shipped script itself
+    exec(script[start:end], namespace)
     return namespace["package_version"]
 
 

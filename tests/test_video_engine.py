@@ -176,9 +176,15 @@ video_worker.main()
 
 def test_dual_wan_worker_passes_guidance_for_both_models(tmp_path):
     pytest.importorskip("mlx_video")
-    (tmp_path / "config.json").write_text(json.dumps({
-        "model_type": "t2v", "model_version": "2.2", "dual_model": True,
-    }))
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "t2v",
+                "model_version": "2.2",
+                "dual_model": True,
+            }
+        )
+    )
     plan = _plan(tmp_path)
     plan.guidance = 5.0
     spec = tmp_path / "render.json"
@@ -202,7 +208,9 @@ video_worker.main()
 """
     process = subprocess.Popen(
         [sys.executable, "-c", code, str(spec)],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         start_new_session=True,
     )
     try:
@@ -222,16 +230,26 @@ def test_ltx_worker_rejects_checkpoint_tokenizer_code(tmp_path):
     model = _ltx_checkpoint(tmp_path)
     tokenizer = model / "tokenizer"
     tokenizer.mkdir()
-    (tokenizer / "tokenizer_config.json").write_text(json.dumps({
-        "auto_map": {"AutoTokenizer": ["custom.EvilTokenizer", None]},
-    }))
+    (tokenizer / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "auto_map": {"AutoTokenizer": ["custom.EvilTokenizer", None]},
+            }
+        )
+    )
     marker = tmp_path / "executed"
     (tokenizer / "custom.py").write_text(
         f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
         "class EvilTokenizer:\n    pass\n"
     )
-    plan = plan_video(model, prompt="A lake", seconds="4", size="1280x704",
-                      seed=0, has_reference=False)
+    plan = plan_video(
+        model,
+        prompt="A lake",
+        seconds="4",
+        size="1280x704",
+        seed=0,
+        has_reference=False,
+    )
     spec = tmp_path / "render.json"
     spec.write_text(plan.model_dump_json())
     code = """
@@ -250,7 +268,9 @@ video_worker.main()
 """
     process = subprocess.Popen(
         [sys.executable, "-c", code, str(spec)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         start_new_session=True,
     )
     try:
@@ -278,11 +298,21 @@ def test_ltx_worker_loads_standard_tokenizer(tmp_path):
     Tokenizer(models.WordLevel({"[UNK]": 0, "lake": 1}, unk_token="[UNK]")).save(
         str(tokenizer / "tokenizer.json")
     )
-    (tokenizer / "tokenizer_config.json").write_text(json.dumps({
-        "tokenizer_class": "PreTrainedTokenizerFast",
-    }))
-    plan = plan_video(model, prompt="A lake", seconds="4", size="1280x704",
-                      seed=0, has_reference=False)
+    (tokenizer / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+            }
+        )
+    )
+    plan = plan_video(
+        model,
+        prompt="A lake",
+        seconds="4",
+        size="1280x704",
+        seed=0,
+        has_reference=False,
+    )
     spec = tmp_path / "render.json"
     spec.write_text(plan.model_dump_json())
     code = """
@@ -308,7 +338,9 @@ video_worker.main()
 """
     process = subprocess.Popen(
         [sys.executable, "-c", code, str(spec)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         start_new_session=True,
     )
     try:
@@ -325,7 +357,9 @@ video_worker.main()
 
 
 @pytest.mark.parametrize("layer_name", ["ResidualBlock", "Resample"])
-def test_wan_worker_reclaims_decoder_cache_without_changing_output(tmp_path, layer_name):
+def test_wan_worker_reclaims_decoder_cache_without_changing_output(
+    tmp_path, layer_name
+):
     pytest.importorskip("mlx_video")
     spec = tmp_path / "render.json"
     spec.write_text(_plan(tmp_path).model_dump_json())
@@ -386,7 +420,9 @@ video_worker.main()
 
 
 @pytest.mark.parametrize("reason", ["cancel", "memory"])
-async def test_abort_reaps_worker_before_releasing_activity(tmp_path, monkeypatch, reason):
+async def test_abort_reaps_worker_before_releasing_activity(
+    tmp_path, monkeypatch, reason
+):
     engine = VideoEngine(str(tmp_path))
     original = asyncio.create_subprocess_exec
     entered = asyncio.Event()
@@ -428,7 +464,9 @@ async def test_abort_reaps_worker_before_releasing_activity(tmp_path, monkeypatc
                     await asyncio.wait_for(task, 5)
             else:
                 assert await engine.abort_all_requests() == 1
-                with pytest.raises(RuntimeError, match="Video worker exited with code -15"):
+                with pytest.raises(
+                    RuntimeError, match="Video worker exited with code -15"
+                ):
                     await asyncio.wait_for(task, 5)
         finally:
             if not task.done():
@@ -453,7 +491,8 @@ async def test_abort_kills_worker_that_ignores_sigterm(tmp_path, monkeypatch):
         kwargs["stdout"] = asyncio.subprocess.PIPE
         kwargs["stderr"] = asyncio.subprocess.PIPE
         process = await original(
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             "import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             "print('ready', flush=True); sys.stdin.buffer.read()",
             **kwargs,
@@ -471,7 +510,9 @@ async def test_abort_kills_worker_that_ignores_sigterm(tmp_path, monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     with (tmp_path / ".owner").open("a+b") as owner:
-        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        task = asyncio.create_task(
+            engine.generate(_plan(tmp_path), tmp_path, owner.fileno())
+        )
         try:
             await asyncio.wait_for(entered.wait(), 5)
             assert await engine.abort_all_requests() == 1
@@ -523,7 +564,9 @@ sys.stdin.buffer.read()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     with (tmp_path / ".owner").open("a+b") as owner:
-        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        task = asyncio.create_task(
+            engine.generate(_plan(tmp_path), tmp_path, owner.fileno())
+        )
         try:
             await asyncio.wait_for(entered.wait(), 5)
             assert await engine.abort_all_requests() == 1
@@ -572,7 +615,9 @@ async def test_unconfirmed_worker_remains_accounted_and_blocks_new_work(
     monkeypatch.setattr(video, "list_process_group_pids", lambda pid: [pid])
     monkeypatch.setattr(video, "get_phys_footprint", lambda pid: 200)
     with (tmp_path / ".owner").open("a+b") as owner:
-        task = asyncio.create_task(engine.generate(_plan(tmp_path), tmp_path, owner.fileno()))
+        task = asyncio.create_task(
+            engine.generate(_plan(tmp_path), tmp_path, owner.fileno())
+        )
         await asyncio.wait_for(entered.wait(), 5)
         task.cancel()
         with pytest.raises(RuntimeError, match="did not exit after SIGKILL"):
@@ -594,7 +639,9 @@ def test_video_workers_participate_in_external_memory_accounting(tmp_path, monke
 
 
 @pytest.mark.parametrize("fails", [False, True])
-async def test_video_unload_reports_its_engine_type(tmp_path, monkeypatch, caplog, fails):
+async def test_video_unload_reports_its_engine_type(
+    tmp_path, monkeypatch, caplog, fails
+):
     from omlx.engine_pool import EngineEntry, EnginePool
 
     engine = VideoEngine(str(tmp_path))

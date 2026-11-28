@@ -22,10 +22,13 @@ _SCALE = r"""
     const float step = as_type<float>(uint(step_exponent + 127) << 23);
 """
 
-_ROUND = _SCALE + r"""
+_ROUND = (
+    _SCALE
+    + r"""
     const float q = sign(scaled) * min(rint(a / step) * step, 448.0f);
     if (i < n) y[i] = T(q * scale);
 """
+)
 
 # MLX to_fp8 (E4M3FN) bit conversion; q is already on the FP8 grid.
 _FP8_HEADER = r"""
@@ -65,14 +68,18 @@ _PACK_SOURCE = (
 """
 )
 
-_SOURCE = r"""
+_SOURCE = (
+    r"""
     const uint i = thread_position_in_grid.x;
     uint n = 1;
     for (int dim = 0; dim < x_ndim; ++dim) n *= x_shape[dim];
     const float v = i < n ? float(x[i]) : 0.0f;
-""" + _ROUND
+"""
+    + _ROUND
+)
 
-_TAIL_SOURCE = r"""
+_TAIL_SOURCE = (
+    r"""
     const uint i = thread_position_in_grid.x;
     uint n = 1;
     for (int dim = 0; dim < gate_ndim; ++dim) n *= gate_shape[dim];
@@ -90,7 +97,9 @@ _TAIL_SOURCE = r"""
         if (WEIGHTED) value *= weights[i / D];
         v = float(T(value));
     }
-""" + _ROUND
+"""
+    + _ROUND
+)
 
 
 @cache

@@ -54,8 +54,7 @@ import ctypes
 import ctypes.util
 import logging
 import sys
-from functools import lru_cache
-from typing import Optional
+from functools import cache
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -79,7 +78,7 @@ def enabled() -> bool:
     """On M5 (NAX) GPUs, where the fused path is validated."""
     try:
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -111,7 +110,8 @@ _RMS_TAIL = r"""
   threadgroup_barrier(mem_flags::mem_threadgroup);
 """
 
-_ADD_RMS_SOURCE = r"""
+_ADD_RMS_SOURCE = (
+    r"""
   constexpr int N_READS = 4;
   threadgroup float local_inv_mean[1];
   threadgroup float local_sums[32];
@@ -135,7 +135,9 @@ _ADD_RMS_SOURCE = r"""
     }
     acc += thread_x[i] * thread_x[i];
   }
-""" + _RMS_TAIL + r"""
+"""
+    + _RMS_TAIL
+    + r"""
   for (int i = 0; i < N_READS; i++) {
     if (lid * N_READS + i < axis_size) {
       T nv = w[lid * N_READS + i] * static_cast<T>(thread_x[i] * local_inv_mean[0]);
@@ -144,13 +146,15 @@ _ADD_RMS_SOURCE = r"""
     }
   }
 """
+)
 
 # Expert combine + residual + RMSNorm.  The reference is
 #   y = (y * scores[..., None]).sum(axis=-2).astype(T); h = h + y
 # i.e. float32 products (each rounded) summed k = 0, 1, ... (MLX
 # col_reduce_small keeps one partial per expert row and folds them in row
 # order), rounded to T once, then a T add.
-_COMBINE_RMS_SOURCE = r"""
+_COMBINE_RMS_SOURCE = (
+    r"""
   constexpr int N_READS = 4;
   threadgroup float local_inv_mean[1];
   threadgroup float local_sums[32];
@@ -182,7 +186,9 @@ _COMBINE_RMS_SOURCE = r"""
     }
     acc += thread_x[i] * thread_x[i];
   }
-""" + _RMS_TAIL + r"""
+"""
+    + _RMS_TAIL
+    + r"""
   for (int i = 0; i < N_READS; i++) {
     if (lid * N_READS + i < axis_size) {
       n_out[base + i] =
@@ -190,6 +196,7 @@ _COMBINE_RMS_SOURCE = r"""
     }
   }
 """
+)
 
 # Router: sigmoid, + correction bias, top-k by biased score (descending,
 # lower expert id first on exact ties, like MLX's stable sort behind
@@ -368,7 +375,7 @@ _ROUTER_GEMV_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _router_gemv_kernel():
     return mx.fast.metal_kernel(
         name="omlx_mimo_router_gemv",
@@ -409,7 +416,7 @@ def router_logits(x, weight):
     return out
 
 
-@lru_cache(maxsize=None)
+@cache
 def _add_rms_kernel(want_f32: bool):
     return mx.fast.metal_kernel(
         name="omlx_mimo_add_rms" + ("_f32" if want_f32 else ""),
@@ -422,7 +429,7 @@ def _add_rms_kernel(want_f32: bool):
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _combine_rms_kernel():
     return mx.fast.metal_kernel(
         name="omlx_mimo_combine_rms",
@@ -432,7 +439,7 @@ def _combine_rms_kernel():
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _select_kernel():
     return mx.fast.metal_kernel(
         name="omlx_mimo_router_select",
@@ -442,7 +449,7 @@ def _select_kernel():
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _rope_split_kernel():
     return mx.fast.metal_kernel(
         name="omlx_mimo_qkv_rope_split",
@@ -457,7 +464,7 @@ def _rms_threads(axis: int) -> int:
     return 32 * ((needed + 31) // 32)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _eps_array(eps: float):
     return mx.array([eps], dtype=mx.float32)
 
@@ -505,7 +512,11 @@ def router_select(logits, bias, top_k: int, norm_topk_prob: bool, scale: float):
     rows = logits.size // NE
     inds, scores = _select_kernel()(
         inputs=[logits, bias, _eps_array(float(scale))],
-        template=[("NE", NE), ("TOPK", int(top_k)), ("NORM", int(bool(norm_topk_prob and top_k > 1)))],
+        template=[
+            ("NE", NE),
+            ("TOPK", int(top_k)),
+            ("NORM", int(bool(norm_topk_prob and top_k > 1))),
+        ],
         grid=(NE * rows, 1, 1),
         threadgroup=(NE, 1, 1),
         output_shapes=[(*logits.shape[:-1], top_k), (*logits.shape[:-1], top_k)],
@@ -514,7 +525,7 @@ def router_select(logits, bias, top_k: int, norm_topk_prob: bool, scale: float):
     return inds, scores
 
 
-@lru_cache(maxsize=None)
+@cache
 def _log2f(value: float) -> float:
     """``std::log2(float)`` as MLX's rope dispatch computes the base."""
     lib = ctypes.CDLL(ctypes.util.find_library("m") or None)
@@ -524,12 +535,12 @@ def _log2f(value: float) -> float:
     return float(fn(ctypes.c_float(value)))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _f32_scalar(value: float):
     return mx.array([value], dtype=mx.float32)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _typed_scalar(value: float, dtype):
     return mx.array([value], dtype=dtype)
 
@@ -554,7 +565,7 @@ def qkv_rope_split(
     rope_dims: int,
     rope_base: float,
     rope_scale: float = 1.0,
-    v_scale: Optional[float],
+    v_scale: float | None,
 ):
     """Split a fused ``(B, L, H*D + Hkv*D + Hkv*Dv)`` projection into roped
     ``q (B, H, L, D)``, roped ``k (B, Hkv, L, D)`` and scaled ``v``.
@@ -563,14 +574,16 @@ def qkv_rope_split(
     batch row), or an ``(array, stride)`` pair from ``offsets_array``.
     """
     B, L, NT = qkv.shape
-    offsets, off_stride = (
-        offset if isinstance(offset, tuple) else offsets_array(offset)
-    )
+    offsets, off_stride = offset if isinstance(offset, tuple) else offsets_array(offset)
     half = rope_dims // 2
     lanes = max(head_dim // 2, (v_head_dim + 1) // 2)
     heads = n_heads + 2 * n_kv_heads
     dtype = qkv.dtype
-    vs = _typed_scalar(float(v_scale), dtype) if v_scale is not None else _typed_scalar(1.0, dtype)
+    vs = (
+        _typed_scalar(float(v_scale), dtype)
+        if v_scale is not None
+        else _typed_scalar(1.0, dtype)
+    )
     return _rope_split_kernel()(
         inputs=[
             qkv,
@@ -651,7 +664,7 @@ def _gate_cache(gate) -> _GateCache:
     return gc
 
 
-def _fuse_qkv(attn) -> Optional[_FusedQKV]:
+def _fuse_qkv(attn) -> _FusedQKV | None:
     """Concatenate q/k/v weights once and rebind the projections to views.
 
     The fused buffer replaces the three separate ones (the projections keep
@@ -692,14 +705,23 @@ def _fuse_qkv(attn) -> Optional[_FusedQKV]:
         start += n
     mx.eval(views)
     return _FusedQKV(
-        weight, scales, biases, q.group_size, q.bits, mode, tuple(p.weight for p in projs)
+        weight,
+        scales,
+        biases,
+        q.group_size,
+        q.bits,
+        mode,
+        tuple(p.weight for p in projs),
     )
 
 
-_SWIGLU_MODULES = ("mlx_lm.models.switch_layers", "omlx.patches.glm_moe_dsa.switch_layers")
+_SWIGLU_MODULES = (
+    "mlx_lm.models.switch_layers",
+    "omlx.patches.glm_moe_dsa.switch_layers",
+)
 
 
-def _expert_kind(switch_mlp) -> Optional[str]:
+def _expert_kind(switch_mlp) -> str | None:
     """``"split"`` / ``"fused"`` when the decode expert kernels reproduce this
     ``SwitchGLU`` (MXFP4 gs32 experts, SwiGLU activation), else ``None``."""
     if (
@@ -719,7 +741,9 @@ def _expert_kind(switch_mlp) -> Optional[str]:
         return None
     if "gate_up_proj" in switch_mlp:
         gu = switch_mlp.gate_up_proj
-        if int(gu.weight.shape[1]) != 2 * inter or not moe_decode.supported(gu, hidden, inter):
+        if int(gu.weight.shape[1]) != 2 * inter or not moe_decode.supported(
+            gu, hidden, inter
+        ):
             return None
         return "fused"
     gate = getattr(switch_mlp, "gate_proj", None)
@@ -727,18 +751,26 @@ def _expert_kind(switch_mlp) -> Optional[str]:
     if gate is None or up is None:
         return None
     for p in (gate, up):
-        if int(p.weight.shape[1]) != inter or not moe_decode.supported(p, hidden, inter):
+        if int(p.weight.shape[1]) != inter or not moe_decode.supported(
+            p, hidden, inter
+        ):
             return None
     return "split"
 
 
-def _expert_layout(mlp) -> Optional[str]:
+def _expert_layout(mlp) -> str | None:
     """``_expert_kind`` of ``mlp.switch_mlp``, cached against the identity of
     the modules it was derived from (a later regroup re-derives it)."""
     sw = mlp["switch_mlp"]
     get = getattr(sw, "get", None)
     key = (
-        (id(sw), id(get("gate_up_proj")), id(get("gate_proj")), id(get("up_proj")), id(get("down_proj")))
+        (
+            id(sw),
+            id(get("gate_up_proj")),
+            id(get("gate_proj")),
+            id(get("up_proj")),
+            id(get("down_proj")),
+        )
         if get is not None
         else (id(sw),)
     )
@@ -761,7 +793,9 @@ def _experts(switch_mlp, kind, x, inds):
         gw, gs = switch_mlp.gate_proj.weight, switch_mlp.gate_proj.scales
         uw, us = switch_mlp.up_proj.weight, switch_mlp.up_proj.scales
         up_offset = 0
-    act = moe_decode.gate_up_swiglu(x, inds, gw, gs, uw, us, n_out=inter, up_offset=up_offset)
+    act = moe_decode.gate_up_swiglu(
+        x, inds, gw, gs, uw, us, n_out=inter, up_offset=up_offset
+    )
     return moe_decode.down_proj(act, inds, down.weight, down.scales)
 
 
@@ -797,12 +831,14 @@ def _prepare(model) -> bool:
                 break
             _expert_layout(mlp)
             _gate_cache(gate)
-    except Exception:  # noqa: BLE001 - never break the reference forward
+    except Exception:
         logger.warning("MiMo decode fast path disabled", exc_info=True)
         ok = False
     model.__dict__["_omlx_decode_fast_state"] = ok
     if ok:
-        logger.info("MiMo decode fast path armed (fused qkv, fused norms, router, experts)")
+        logger.info(
+            "MiMo decode fast path armed (fused qkv, fused norms, router, experts)"
+        )
     return ok
 
 
@@ -911,10 +947,16 @@ def _attention(attn, x, mask, cache, sdpa, offsets_memo, flash=False):
             v_scale=attn.v_scale,
         )
     else:
-        queries = attn.q_proj(x).reshape(B, L, attn.n_heads, attn.head_dim).swapaxes(1, 2)
-        keys = attn.k_proj(x).reshape(B, L, attn.n_kv_heads, attn.head_dim).swapaxes(1, 2)
+        queries = (
+            attn.q_proj(x).reshape(B, L, attn.n_heads, attn.head_dim).swapaxes(1, 2)
+        )
+        keys = (
+            attn.k_proj(x).reshape(B, L, attn.n_kv_heads, attn.head_dim).swapaxes(1, 2)
+        )
         values = (
-            attn.v_proj(x).reshape(B, L, attn.n_kv_heads, attn.v_head_dim).swapaxes(1, 2)
+            attn.v_proj(x)
+            .reshape(B, L, attn.n_kv_heads, attn.v_head_dim)
+            .swapaxes(1, 2)
         )
         if attn.v_scale is not None:
             values = values * attn.v_scale
@@ -981,7 +1023,7 @@ def run_layers(model, h, cache, full_mask, swa_mask):
     if not enabled() or h.ndim != 3:
         return None
     B, L, D = h.shape
-    if B * L > _max_rows(model) or h.dtype not in (mx.bfloat16, mx.float16):
+    if _max_rows(model) < B * L or h.dtype not in (mx.bfloat16, mx.float16):
         return None
     if D % 4 != 0 or D > _RMS_MAX_AXIS:
         return None
@@ -1031,7 +1073,11 @@ def run_layers(model, h, cache, full_mask, swa_mask):
         else:
             logits = xm.astype(mx.float32) @ gate.weight.astype(mx.float32).T
         inds, scores = router_select(
-            logits, gc.bias32, gate.top_k, gate.norm_topk_prob, gate.routed_scaling_factor
+            logits,
+            gc.bias32,
+            gate.top_k,
+            gate.norm_topk_prob,
+            gate.routed_scaling_factor,
         )
         kind = _expert_layout(mlp)
         if kind:

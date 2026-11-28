@@ -26,7 +26,6 @@ import gc
 import os
 import sys
 from pathlib import Path
-from typing import Iterator, List, Optional
 
 import pytest
 
@@ -35,12 +34,12 @@ pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(
         sys.platform != "darwin",
-        reason="Real model tests require macOS with Apple Silicon"
+        reason="Real model tests require macOS with Apple Silicon",
     ),
 ]
 
 
-def get_test_model_dir() -> Optional[Path]:
+def get_test_model_dir() -> Path | None:
     """Get the model directory for testing."""
     # Try environment variable first
     if model_dir := os.environ.get("OMLX_MODEL_DIR"):
@@ -60,7 +59,7 @@ def get_test_model_dir() -> Optional[Path]:
     return None
 
 
-def find_test_model(model_dir: Path) -> Optional[Path]:
+def find_test_model(model_dir: Path) -> Path | None:
     """Find a test model in the model directory.
 
     Priority:
@@ -192,7 +191,7 @@ class TestMLXLanguageModel:
         model = MLXLanguageModel(str(test_model_path))
         model.load()
 
-        chunks: List[str] = []
+        chunks: list[str] = []
         for output in model.stream_generate(
             prompt="Hello, my name is",
             max_tokens=20,
@@ -218,9 +217,7 @@ class TestMLXLanguageModel:
         model = MLXLanguageModel(str(test_model_path))
         model.load()
 
-        messages = [
-            {"role": "user", "content": "What is 2 + 2?"}
-        ]
+        messages = [{"role": "user", "content": "What is 2 + 2?"}]
 
         output = model.chat(
             messages=messages,
@@ -246,7 +243,7 @@ class TestMLXLanguageModel:
 
         # Use a prompt that should elicit CJK output
         # (Results depend on model, but tests UTF-8 handling)
-        chunks: List[str] = []
+        chunks: list[str] = []
         for output in model.stream_generate(
             prompt="Translate to Japanese: Hello",
             max_tokens=30,
@@ -255,7 +252,7 @@ class TestMLXLanguageModel:
             chunks.append(output.text)
             # Each chunk should be valid UTF-8
             try:
-                output.text.encode('utf-8')
+                output.text.encode("utf-8")
             except UnicodeEncodeError:
                 pytest.fail(f"Invalid UTF-8 in chunk: {output.text!r}")
 
@@ -493,10 +490,12 @@ class TestTokenizerIntegration:
         _, tokenizer = load(str(test_model_path))
 
         # Check EOS token exists
-        assert hasattr(tokenizer, 'eos_token_id') or hasattr(tokenizer, 'eos_token')
+        assert hasattr(tokenizer, "eos_token_id") or hasattr(tokenizer, "eos_token")
 
         # Check vocab size
-        vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else tokenizer.vocab_size
+        vocab_size = (
+            len(tokenizer) if hasattr(tokenizer, "__len__") else tokenizer.vocab_size
+        )
         assert vocab_size > 0
 
     def test_chat_template_application(self, test_model_path: Path):
@@ -511,7 +510,7 @@ class TestTokenizerIntegration:
             {"role": "user", "content": "How are you?"},
         ]
 
-        if hasattr(tokenizer, 'apply_chat_template'):
+        if hasattr(tokenizer, "apply_chat_template"):
             try:
                 formatted = tokenizer.apply_chat_template(
                     messages,

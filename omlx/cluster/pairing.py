@@ -795,8 +795,7 @@ def _pairing_caps(caps: dict[str, Any]) -> dict[str, Any]:
         ssh_user = pwd.getpwuid(os.geteuid()).pw_name
     except KeyError:
         logger.warning(
-            "No passwd entry for euid %d; pairing caps will not advertise "
-            "an ssh_user",
+            "No passwd entry for euid %d; pairing caps will not advertise an ssh_user",
             os.geteuid(),
         )
         return dict(caps)

@@ -51,14 +51,17 @@ def test_dflash_draft_filter_claims_muse_glimmer_assistant():
     # DFlash 2 checkpoints are versioned ("-DFlash2"), so the name heuristic
     # must accept an optional numeric suffix after the "dflash" token.
     assert "dflash[0-9]*($|[-_/\\s])" in body
-    assert "'muse_glimmer_assistant'" in js.split(
-        "DFLASH_DRAFTER_CONFIG_MODEL_TYPES = new Set([", 1
-    )[1].split("])", 1)[0]
+    assert (
+        "'muse_glimmer_assistant'"
+        in js.split("DFLASH_DRAFTER_CONFIG_MODEL_TYPES = new Set([", 1)[1].split(
+            "])", 1
+        )[0]
+    )
 
 
 def test_vlm_mtp_set_does_not_claim_muse_glimmer_assistant():
     js = _dashboard_js()
-    vlm_mtp_set = js.split(
-        "VLM_MTP_DRAFTER_CONFIG_MODEL_TYPES = new Set([", 1
-    )[1].split("])", 1)[0]
+    vlm_mtp_set = js.split("VLM_MTP_DRAFTER_CONFIG_MODEL_TYPES = new Set([", 1)[
+        1
+    ].split("])", 1)[0]
     assert "muse_glimmer_assistant" not in vlm_mtp_set

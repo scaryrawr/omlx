@@ -25,6 +25,7 @@ Patch 3 - mlx_lm.utils.infer_quant_config
 
 Apply once via apply_bonsai_t5_load_patch() before mlx_vlm / mlx_lm load().
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,10 +36,10 @@ import mlx_lm.utils as mlx_lm_utils
 from mlx.utils import tree_flatten, tree_unflatten
 
 from omlx.custom_kernels.lowbit.fast import (
+    has_native,
+    t5_qmm,
     t5_qmv,
     t5_qmv_wide,
-    t5_qmm,
-    has_native,
 )
 
 # M threshold below which qmv kernels are used; above this t5_qmm is used.

@@ -93,7 +93,7 @@ def _chunked_causal_sdpa(queries, keys, values, scale, limit: int):
     return mx.concatenate(outs, axis=-2)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _gpu_class() -> str:
     try:
         return str(mx.device_info().get("architecture", ""))[-1:]
@@ -107,7 +107,9 @@ def _vector_plan(key_len: int, gqa_factor: int, rows: int) -> tuple:
     key partitions. A row's arithmetic depends on the plan, not on the rows
     sharing the call."""
     devc = _gpu_class()
-    if not ((devc in ("d", "s") and key_len >= 1024) or (gqa_factor > 1 and key_len >= 4096)):
+    if not (
+        (devc in ("d", "s") and key_len >= 1024) or (gqa_factor > 1 and key_len >= 4096)
+    ):
         return (1,)
     n_simds = gqa_factor * rows
     if devc == "s":
@@ -1032,9 +1034,7 @@ def apply_qwen35_verify_sdpa_split_patch() -> bool:
                         "verify-split attention failed; falling back",
                         exc_info=True,
                     )
-        return original(
-            queries, keys, values, cache=cache, scale=scale, mask=mask
-        )
+        return original(queries, keys, values, cache=cache, scale=scale, mask=mask)
 
     q35_lang._qwen3_5_left_padded_attention = patched_target_verify_attention
     # Read the core count at load time; system_profiler takes ~0.2s.

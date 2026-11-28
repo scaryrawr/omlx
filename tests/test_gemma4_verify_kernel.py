@@ -12,9 +12,7 @@ import pytest
 
 from omlx.patches import gemma4_verify_kernel as gvk
 
-pytestmark = pytest.mark.skipif(
-    not mx.metal.is_available(), reason="requires Metal"
-)
+pytestmark = pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
 
 
 def _ref_attention(q, k_buf, v_buf, n_keys, scale):
@@ -26,9 +24,7 @@ def _ref_attention(q, k_buf, v_buf, n_keys, scale):
     scores = (q.astype(mx.float32) * scale) @ k.transpose(0, 1, 3, 2)
     rows = mx.arange(L).reshape(L, 1)
     cols = mx.arange(n_keys).reshape(1, n_keys)
-    scores = mx.where(
-        cols <= (n_keys - L + rows), scores, mx.array(-1e30)
-    )
+    scores = mx.where(cols <= (n_keys - L + rows), scores, mx.array(-1e30))
     return mx.softmax(scores, axis=-1) @ v
 
 

@@ -6,6 +6,7 @@ be append-only across new user turns so prefix caches stay valid: a turn's
 rendering never changes once it is historical. Default rendering
 (drop_thinking=True) must be byte-identical to the previous behavior.
 """
+
 import pytest
 
 from omlx.patches.deepseek_v4 import chat_template_v4 as tmpl

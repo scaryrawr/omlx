@@ -89,9 +89,9 @@ def _raw_hf_weights(glm, model):
     weights = {}
     for k, v in flat.items():
         if k.startswith("mtp.0."):
-            rest = k[len("mtp.0."):]
+            rest = k[len("mtp.0.") :]
             if rest.startswith("block."):
-                rk = "model.layers.2." + rest[len("block."):]
+                rk = "model.layers.2." + rest[len("block.") :]
             elif rest == "norm.weight":
                 rk = "model.layers.2.shared_head.norm.weight"
             else:
@@ -197,9 +197,7 @@ class TestQuantOverrideRemap:
             "bits": 4,
             "model.layers.1.mlp.gate": False,
         }
-        cfg = dict(
-            TINY_CFG, num_nextn_predict_layers=0, quantization=dict(quant)
-        )
+        cfg = dict(TINY_CFG, num_nextn_predict_layers=0, quantization=dict(quant))
         glm.ModelArgs.from_dict(cfg)
         assert cfg["quantization"] == quant
 
@@ -237,7 +235,11 @@ class TestQuantInference:
         # down_proj module weight is (experts, hidden, moe_int) = (4, 64, 32);
         # fabricate a 3-bit gs=32 triplet (differs from the global 4-bit).
         w, s, b = _fake_triplet((4, 64), 32, bits=3, gs=32)
-        weights = {f"{self.DP}.weight": w, f"{self.DP}.scales": s, f"{self.DP}.biases": b}
+        weights = {
+            f"{self.DP}.weight": w,
+            f"{self.DP}.scales": s,
+            f"{self.DP}.biases": b,
+        }
         _infer_mtp_quant_overrides(model, weights)
         assert quant[self.DP] == {"group_size": 32, "bits": 3, "mode": "affine"}
 
@@ -248,7 +250,11 @@ class TestQuantInference:
 
         model, quant = self._model_and_quant(glm)
         w, s, b = _fake_triplet((4, 64), 32, bits=4, gs=32)
-        weights = {f"{self.DP}.weight": w, f"{self.DP}.scales": s, f"{self.DP}.biases": b}
+        weights = {
+            f"{self.DP}.weight": w,
+            f"{self.DP}.scales": s,
+            f"{self.DP}.biases": b,
+        }
         _infer_mtp_quant_overrides(model, weights)
         assert self.DP not in quant
 
@@ -391,7 +397,6 @@ class TestIndexerFusion:
         model = glm.Model(args)
         assert model.mtp[0].block.self_attn.indexer.wk_weights_proj is not None
 
-        h = TINY_CFG["hidden_size"]
         hd = TINY_CFG["index_head_dim"]
         nh = TINY_CFG["index_n_heads"]
         weights = {}
@@ -512,9 +517,7 @@ class TestForward:
         base = cache[0][0].offset
 
         # verify window: num_drafts + 1 rows, accept 1 of 3 drafts
-        logits, _ = model(
-            mx.array([[4, 5, 6, 7]]), cache=cache, return_hidden=True
-        )
+        logits, _ = model(mx.array([[4, 5, 6, 7]]), cache=cache, return_hidden=True)
         mx.eval(logits, *(c[0].keys for c in cache))
         assert cache[0][0].offset == base + 4
 
@@ -533,13 +536,12 @@ class TestForward:
 
 
 class TestSmallLRouting:
-    def test_absorbed_matches_materialized(
-        self, glm, mtp_active, strict_math_device
-    ):
+    def test_absorbed_matches_materialized(self, glm, mtp_active, strict_math_device):
         """The widened L<=8 absorbed path equals the legacy materialize path."""
-        import omlx.patches.glm_moe_dsa.glm_moe_dsa_model as gm
         from mlx_lm.models.base import create_attention_mask
         from mlx_lm.models.cache import KVCache
+
+        import omlx.patches.glm_moe_dsa.glm_moe_dsa_model as gm
 
         mx.random.seed(3)
         args = glm.ModelArgs.from_dict(TINY_CFG)
@@ -575,9 +577,10 @@ class TestSmallLRouting:
     ):
         """With the DSA indexer active (K > index_topk), the decode-shape
         per-row gather path must equal the legacy masked full-K path."""
-        import omlx.patches.glm_moe_dsa.glm_moe_dsa_model as gm
         from mlx_lm.models.base import create_attention_mask
         from mlx_lm.models.cache import KVCache
+
+        import omlx.patches.glm_moe_dsa.glm_moe_dsa_model as gm
 
         mx.random.seed(5)
         args = glm.ModelArgs.from_dict(TINY_CFG)

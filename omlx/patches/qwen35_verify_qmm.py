@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: N803, N806, SIM300
+# ruff: noqa: N806, SIM300
 #
 # Adapted from MTPLX (mtplx/verify_kernels.py)
 #   Copyright 2026 Youssof Altoukhi
@@ -191,9 +191,7 @@ def _fma_block(m: int, bits: int, mode: str) -> str:
     shift = 4 if bits == 4 else 8
     lines = [f"for (int ki = 0; ki < {per}; ++ki) {{"]
     if mode == "affine":
-        weight_expr = (
-            f"float((p{{j}} >> (ki * {shift})) & {mask}) * s{{j}} + b{{j}}"
-        )
+        weight_expr = f"float((p{{j}} >> (ki * {shift})) & {mask}) * s{{j}} + b{{j}}"
     else:
         converter = "omlx_fp4_weight" if bits == 4 else "omlx_fp8_weight"
         weight_expr = (
@@ -211,9 +209,7 @@ def _fma_block(m: int, bits: int, mode: str) -> str:
     return "\n            ".join(lines)
 
 
-def _build_msg_kernel(
-    m: int, bits: int, group_size: int, mode: str, dtype, nsg: int
-):
+def _build_msg_kernel(m: int, bits: int, group_size: int, mode: str, dtype, nsg: int):
     import mlx.core as mx
 
     key = ("msg", m, bits, group_size, mode, dtype, nsg)
@@ -750,7 +746,8 @@ def _sg8_source(mats: int, half: bool = False) -> str:
         f"simdgroup_matrix<float, 8, 8>(0.0f);"
         for m in range(mats)
     )
-    mma = "\n".join(f"""                {{
+    mma = "\n".join(
+        f"""                {{
                     const device uchar* wg =
                         (const device uchar*){w} + long(n) * ROW_BYTES + long(g) * WB;
                     uint wds[2];
@@ -764,13 +761,18 @@ def _sg8_source(mats: int, half: bool = False) -> str:
                         b.thread_elements()[1] = xb[j];
                         simdgroup_multiply_accumulate(acc{m}[c], a, b, acc{m}[c]);
                     }}
-                }}""" for m, (w, _, _) in enumerate(names))
-    fold = "\n".join(f"""            {{
+                }}"""
+        for m, (w, _, _) in enumerate(names)
+    )
+    fold = "\n".join(
+        f"""            {{
                 float s = float({s}[n * GROUPS + g]);
                 float bias = float({b}[n * GROUPS + g]);
                 float2 a2 = float2(acc{m}[c].thread_elements()[0], acc{m}[c].thread_elements()[1]);
                 out{m}[c] += s * a2 + (bias - 128.0f * s) * xsum;
-            }}""" for m, (_, s, b) in enumerate(names))
+            }}"""
+        for m, (_, s, b) in enumerate(names)
+    )
     parts = "\n".join(
         f"    for (int c = 0; c < CT; ++c) part[(({m} * CT + c) * NSG + sg) * 32 + lane] = out{m}[c];"
         for m in range(mats)
@@ -1163,9 +1165,7 @@ def vk_qmm(
 
     if N >= 100000 and N % (4 * _MSG_NSG) == 0:
         xm, M0 = _pad_rows(mx, x2, m)
-        kernel = _build_msg_kernel(
-            m, bits, group_size, mode, x2.dtype, _MSG_NSG
-        )
+        kernel = _build_msg_kernel(m, bits, group_size, mode, x2.dtype, _MSG_NSG)
         cols = 4 * _MSG_NSG
         (y,) = kernel(
             inputs=[xm, w_q, scales, biases, K, N],
@@ -1181,9 +1181,7 @@ def vk_qmm(
     m = max(2, min(6, M))
     xm, M0 = _pad_rows(mx, x2, m)
     k_parts = 2 if N >= 4096 else 4
-    kernel = _build_ksplit_kernel(
-        m, bits, group_size, mode, x2.dtype, k_parts=k_parts
-    )
+    kernel = _build_ksplit_kernel(m, bits, group_size, mode, x2.dtype, k_parts=k_parts)
     (y,) = kernel(
         inputs=[xm, w_q, scales, biases, K, N],
         template=[("T", x2.dtype)],
@@ -1210,9 +1208,7 @@ def vk_eligible(
     # AND skipping it keeps depth-1 greedy output bit-identical to the
     # unrouted path. Depth >= 2 verifies at M >= 3 where the kernels pay.
     quantization_supported = (
-        mode == "affine"
-        and int(bits) in (4, 8)
-        and int(group_size) in (32, 64, 128)
+        mode == "affine" and int(bits) in (4, 8) and int(group_size) in (32, 64, 128)
     ) or (
         mode in ("mxfp4", "mxfp8")
         and int(bits) == (4 if mode == "mxfp4" else 8)
@@ -1845,19 +1841,13 @@ def apply_verify_qmm_patch() -> bool:
     def patched_call(self, x):
         if is_row_exact_armed() and x.ndim >= 2 and x.size // x.shape[-1] > 1:
             return row_exact_linear(self, x)
-        if (
-            not _is_armed()
-            or x.ndim != 3
-            or (x.shape[0] == 1 and x.shape[1] < 2)
-        ):
+        if not _is_armed() or x.ndim != 3 or (x.shape[0] == 1 and x.shape[1] < 2):
             return orig_call(self, x)
         batch, length, K = x.shape
         rows = batch * length
         N = self.scales.shape[0]
         mode = getattr(self, "mode", "affine")
-        route = _verify_route(
-            rows, K, N, self.bits, self.group_size, x.dtype, mode
-        )
+        route = _verify_route(rows, K, N, self.bits, self.group_size, x.dtype, mode)
         if route is None:
             return orig_call(self, x)
         try:

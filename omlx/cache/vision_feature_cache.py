@@ -15,6 +15,7 @@ Uses the same safetensors serialization infrastructure as PagedSSDCacheManager
 for consistency and bfloat16 support.
 """
 
+import contextlib
 import errno
 import hashlib
 import json
@@ -24,9 +25,9 @@ import queue
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mlx.core as mx
 
@@ -54,9 +55,7 @@ def _composite_hash(model_name: str, image_hash: str) -> str:
     Using a hash avoids filesystem issues with long model paths
     and ensures uniform directory distribution.
     """
-    return hashlib.sha256(
-        f"{model_name}:{image_hash}".encode()
-    ).hexdigest()
+    return hashlib.sha256(f"{model_name}:{image_hash}".encode()).hexdigest()
 
 
 @dataclass
@@ -70,7 +69,7 @@ class VisionFeatureSSDEntry:
     created_at: float
     last_access: float
     num_tensors: int = 1  # 1 for single image, N for multi-image list
-    grid: Optional[List[int]] = None  # Per-image patch grid [t, h, w].
+    grid: list[int] | None = None  # Per-image patch grid [t, h, w].
 
 
 class VisionFeatureSSDCache:
@@ -87,11 +86,11 @@ class VisionFeatureSSDCache:
 
     def __init__(
         self,
-        cache_dir: Optional[Path] = None,
+        cache_dir: Path | None = None,
         max_size_bytes: int = 10 * 1024**3,
         max_memory_entries: int = 20,
         max_memory_bytes: int = 1024**3,
-        numerics: Optional[str] = None,
+        numerics: str | None = None,
     ):
         self._cache_dir = cache_dir
         self._numerics = numerics
@@ -102,9 +101,9 @@ class VisionFeatureSSDCache:
         # In-memory LRU cache: composite_key -> mx.array (or list[mx.array])
         self._memory_cache: OrderedDict[str, Any] = OrderedDict()
         self._memory_bytes = 0
-        self._memory_entry_bytes: Dict[str, int] = {}
+        self._memory_entry_bytes: dict[str, int] = {}
         # Lets a cache hit rebuild placeholder tokens without the processor.
-        self._memory_grid: Dict[str, List[int]] = {}
+        self._memory_grid: dict[str, list[int]] = {}
         self._memory_lock = threading.Lock()
 
         # SSD index: composite_key -> VisionFeatureSSDEntry
@@ -119,7 +118,7 @@ class VisionFeatureSSDCache:
         self._pending_lock = threading.Lock()
 
         # Stats
-        self._stats: Dict[str, int] = {
+        self._stats: dict[str, int] = {
             "hits": 0,
             "misses": 0,
             "saves": 0,
@@ -138,7 +137,7 @@ class VisionFeatureSSDCache:
         )
         self._writer_thread.start()
 
-    def get(self, image_hash: str, model_name: str) -> Optional[Any]:
+    def get(self, image_hash: str, model_name: str) -> Any | None:
         """Look up cached vision features.
 
         Checks memory LRU first, then SSD. Returns None on miss.
@@ -184,7 +183,7 @@ class VisionFeatureSSDCache:
         image_hash: str,
         model_name: str,
         features: Any,
-        grid: Optional[List[int]] = None,
+        grid: list[int] | None = None,
     ) -> None:
         """Store vision features in the cache.
 
@@ -219,7 +218,7 @@ class VisionFeatureSSDCache:
 
         self._stats["saves"] += 1
 
-    def get_grid(self, image_hash: str, model_name: str) -> Optional[List[int]]:
+    def get_grid(self, image_hash: str, model_name: str) -> list[int] | None:
         """Return the cached patch grid ``[t, h, w]``, or None if not stored."""
         key = _composite_key(self._model_key(model_name), image_hash)
         with self._memory_lock:
@@ -247,10 +246,8 @@ class VisionFeatureSSDCache:
             self._memory_bytes = 0
         self._writer_shutdown.set()
         # Send sentinel to unblock the writer
-        try:
+        with contextlib.suppress(queue.Full):
             self._write_queue.put_nowait(None)
-        except queue.Full:
-            pass
         self._writer_thread.join(timeout=10.0)
         logger.debug(
             "Vision feature cache closed: %s",
@@ -258,7 +255,7 @@ class VisionFeatureSSDCache:
         )
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Return a copy of cache statistics."""
         return dict(self._stats)
 
@@ -316,7 +313,7 @@ class VisionFeatureSSDCache:
         image_hash: str,
         model_name: str,
         features: Any,
-        grid: Optional[List[int]] = None,
+        grid: list[int] | None = None,
     ) -> None:
         """Extract tensor bytes and enqueue background SSD write."""
         with self._pending_lock:
@@ -336,7 +333,7 @@ class VisionFeatureSSDCache:
 
         try:
             # Extract raw bytes on the Metal-safe thread
-            tensors_raw: Dict[str, Tuple[bytes, str, List[int]]] = {}
+            tensors_raw: dict[str, tuple[bytes, str, list[int]]] = {}
             num_tensors = 1
 
             if isinstance(features, list):
@@ -380,11 +377,11 @@ class VisionFeatureSSDCache:
 
             # Enqueue write
             try:
-                self._write_queue.put_nowait(
-                    (key, tensors_raw, metadata, file_path)
-                )
+                self._write_queue.put_nowait((key, tensors_raw, metadata, file_path))
             except queue.Full:
-                logger.debug("Vision cache write queue full, dropping write for %s", key[:32])
+                logger.debug(
+                    "Vision cache write queue full, dropping write for %s", key[:32]
+                )
                 with self._ssd_lock:
                     if key in self._ssd_index:
                         self._ssd_total_size -= self._ssd_index[key].file_size
@@ -416,7 +413,7 @@ class VisionFeatureSSDCache:
                     e,
                 )
 
-    def _load_from_ssd(self, key: str) -> Optional[Any]:
+    def _load_from_ssd(self, key: str) -> Any | None:
         """Load cached features from SSD.
 
         Args:
@@ -452,9 +449,7 @@ class VisionFeatureSSDCache:
                     if tensor_key in arrays:
                         features.append(arrays[tensor_key])
                     else:
-                        logger.warning(
-                            "Missing tensor %s in %s", tensor_key, file_path
-                        )
+                        logger.warning("Missing tensor %s in %s", tensor_key, file_path)
                         return None
 
             if not self._features_finite(features):
@@ -545,14 +540,19 @@ class VisionFeatureSSDCache:
                     indexed += 1
 
                 except Exception as e:
-                    logger.debug("Failed to read vision cache file %s: %s", file_path, e)
+                    logger.debug(
+                        "Failed to read vision cache file %s: %s", file_path, e
+                    )
                     errors += 1
 
         if scanned > 0:
             logger.info(
                 "Vision feature SSD cache scan: scanned=%d, indexed=%d, errors=%d, "
                 "total_size=%.1fMB",
-                scanned, indexed, errors, self._ssd_total_size / (1024 * 1024),
+                scanned,
+                indexed,
+                errors,
+                self._ssd_total_size / (1024 * 1024),
             )
 
     # ── Background writer ───────────────────────────────────────────

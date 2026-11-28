@@ -1476,6 +1476,7 @@ class TestBatchedEnginePreparedPrompt:
         assert engine._apply_chat_template.call_args.args[0] == messages[1:]
         engine._tokenizer.encode.assert_called_once_with("USER_ONLY")
 
+
 class TestBatchedEngineMoeOffloadWiring:
     """The text engine's offload call must carry the Lightning MTP residency flag.
 

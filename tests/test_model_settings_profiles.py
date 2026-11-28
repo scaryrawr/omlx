@@ -15,8 +15,6 @@ def mgr(tmp_path):
 
 
 class TestProfilesCRUD:
-
-
     @pytest.mark.parametrize("bits", [4, 8])
     def test_legacy_turboquant_profile_keeps_turboquant_over_affine_base(
         self, tmp_path, bits
@@ -1088,7 +1086,9 @@ def test_reference_repair_failure_retains_original_documents(
     assert repaired["models"]["m"]["active_profile_name"] is None
 
 
-def test_reference_repair_rollback_failure_reports_backup(tmp_path, monkeypatch, caplog):
+def test_reference_repair_rollback_failure_reports_backup(
+    tmp_path, monkeypatch, caplog
+):
     documents = _write_legacy_profile_storage(tmp_path)
     originals = {name: (tmp_path / name).read_bytes() for name in documents}
     write = ModelSettingsManager._write_profile_repair

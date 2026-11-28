@@ -135,7 +135,9 @@ def validate_minicpm_speculation(settings: dict, model_type: str | None) -> None
     if not settings.get("dflash_draft_model"):
         raise ValueError("MiniCPM DSpark requires an explicit local paired helper.")
     if settings.get("dflash_verify_mode") not in (None, "dflash"):
-        raise ValueError("MiniCPM DSpark supports fixed verification, not adaptive modes.")
+        raise ValueError(
+            "MiniCPM DSpark supports fixed verification, not adaptive modes."
+        )
     unsupported = [
         name
         for name, default in (
@@ -338,15 +340,12 @@ def _drop_ui_default_mtp_depth(settings: dict) -> bool:
     return True
 
 
-
 _LEGACY_TURBOQUANT_PROFILE_FIELDS = frozenset(
     {"turboquant_kv_enabled", "turboquant_kv_bits"}
 )
 
 
-def _validate_profile_kv_settings(
-    base: "ModelSettings | None", settings: dict
-) -> None:
+def _validate_profile_kv_settings(base: "ModelSettings | None", settings: dict) -> None:
     """Validate a profile's KV format when it sets one."""
     if not settings.keys() & {"turboquant_kv_scheme", "turboquant_kv_bits"}:
         return
@@ -517,9 +516,7 @@ class ModelSettings:
     model_type_override: str | None = (
         None  # "llm", "vlm", "embedding", "reranker", "decision", "audio_*", "image"
     )
-    model_alias: str | None = (
-        None  # API-visible name (alternative to directory name)
-    )
+    model_alias: str | None = None  # API-visible name (alternative to directory name)
     index_cache_freq: int | None = (
         None  # IndexCache: every Nth layer keeps indexer (DeepSeek DSA only)
     )
@@ -655,9 +652,7 @@ class ModelSettings:
     # processor-backed settings (guided grammar, thinking budget, penalties)
     # — see vlm_mtp_processor_conflicts().
     vlm_mtp_enabled: bool = False
-    vlm_mtp_draft_model: str | None = (
-        None  # Path / model id of the assistant drafter
-    )
+    vlm_mtp_draft_model: str | None = None  # Path / model id of the assistant drafter
     vlm_mtp_draft_block_size: int | None = (
         None  # Tokens per draft round (None = mlx-vlm default)
     )

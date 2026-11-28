@@ -58,7 +58,7 @@ def _checkpoint(path, kind="qwen4_exp", per_expert=False):
         for proj in ("gate_proj", "up_proj", "down_proj"):
             for expert in range(16) if per_expert else (None,):
                 key = (
-                    f'{prefix.rsplit(".", 1)[0]}.experts.{expert}.{proj}'
+                    f"{prefix.rsplit('.', 1)[0]}.experts.{expert}.{proj}"
                     if per_expert
                     else f"{prefix}.{proj}"
                 )
@@ -361,8 +361,9 @@ def test_glm_loader_paths_match_offload_admission(tmp_path, layout):
         model,
         group_size=32,
         bits=4,
-        class_predicate=lambda _, m: hasattr(m, "to_quantized")
-        and m.weight.shape[-1] % 32 == 0,
+        class_predicate=lambda _, m: (
+            hasattr(m, "to_quantized") and m.weight.shape[-1] % 32 == 0
+        ),
     )
     weights = dict(tree_flatten(model.parameters()))
     expert_bytes = sum(v.nbytes for k, v in weights.items() if ".switch_mlp." in k)

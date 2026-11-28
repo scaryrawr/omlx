@@ -10,13 +10,13 @@ machine. Mitigations: subprocess with timeout, memory limits via resource
 module, temp file cleanup. Users are warned in the UI before running.
 """
 
+import contextlib
 import json
 import logging
 import os
 import re
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from .base import BaseBenchmark
@@ -94,9 +94,7 @@ def _execute_code(code: str, stdin_input: str = "") -> tuple[str, bool, str]:
     Returns:
         (stdout, success, error_message)
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(code)
         tmp_path = f.name
 
@@ -124,10 +122,8 @@ def _execute_code(code: str, stdin_input: str = "") -> tuple[str, bool, str]:
     except Exception as e:
         return "", False, str(e)[:500]
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 class LiveCodeBenchBenchmark(BaseBenchmark):
@@ -164,16 +160,18 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
             if not inputs or not outputs:
                 continue
 
-            normalized.append({
-                "id": item.get("question_id", str(i)),
-                "title": item.get("question_title", f"Problem {i}"),
-                "description": item.get("question_content", ""),
-                "inputs": inputs,
-                "outputs": outputs,
-                "difficulty": item.get("difficulty", ""),
-                "starter_code": item.get("starter_code", ""),
-                "testtype": test_cases[0].get("testtype", "stdin"),
-            })
+            normalized.append(
+                {
+                    "id": item.get("question_id", str(i)),
+                    "title": item.get("question_title", f"Problem {i}"),
+                    "description": item.get("question_content", ""),
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "difficulty": item.get("difficulty", ""),
+                    "starter_code": item.get("starter_code", ""),
+                    "testtype": test_cases[0].get("testtype", "stdin"),
+                }
+            )
 
         logger.info(f"LiveCodeBench: loaded {len(normalized)} problems")
 
@@ -229,7 +227,11 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
 
         for inp, expected_out in zip(inputs, outputs):
             stdin_input = inp if isinstance(inp, str) else str(inp)
-            expected = expected_out.strip() if isinstance(expected_out, str) else str(expected_out).strip()
+            expected = (
+                expected_out.strip()
+                if isinstance(expected_out, str)
+                else str(expected_out).strip()
+            )
 
             stdout, success, error = _execute_code(predicted, stdin_input)
             if not success:

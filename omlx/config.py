@@ -38,6 +38,5 @@ def parse_size(size_str: str) -> int:
     # Try parsing as plain number (bytes)
     try:
         return int(size_str)
-    except ValueError:
-        raise ValueError(f"Invalid size string: {size_str}")
-
+    except ValueError as _cause:
+        raise ValueError(f"Invalid size string: {size_str}") from _cause

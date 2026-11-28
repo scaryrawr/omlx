@@ -76,8 +76,7 @@ def fused_qkv_shard_rows(n_h, n_kv, hd, vhd, tp):
 def fused_qkv_split_shapes(n_h, n_kv, hd, vhd, tp, n_cols):
     """Output shapes of :func:`split_fused_qkv`, as ``(q, k, v)``."""
     return tuple(
-        (tp * rows, n_cols)
-        for rows in fused_qkv_part_rows(n_h, n_kv, hd, vhd, tp)
+        (tp * rows, n_cols) for rows in fused_qkv_part_rows(n_h, n_kv, hd, vhd, tp)
     )
 
 
@@ -116,9 +115,7 @@ def detect_fused_qkv_tp(args, shape_of) -> int:
             continue
         n_h, n_kv, hd, vhd = layer_head_geometry(args, layer_idx)
         for tp in _TP_CANDIDATES:
-            if fused_qkv_layout_matches(
-                n_h, n_kv, hd, vhd, tp, qkv_shape, scale_shape
-            ):
+            if fused_qkv_layout_matches(n_h, n_kv, hd, vhd, tp, qkv_shape, scale_shape):
                 return tp
         raise ValueError(
             f"unable to determine fused-qkv TP layout from layer {layer_idx} "
@@ -156,14 +153,6 @@ def split_fused_qkv(qkv_fp8, scale_inv, *, tp, n_h, n_kv, hd, vhd):
     )[:, :actual_pr, :n]
 
     q = mx.contiguous(qkv[:, :q_pr, :]).reshape(tp * q_pr, n).astype(bf16)
-    k = (
-        mx.contiguous(qkv[:, q_pr : q_pr + k_pr, :])
-        .reshape(tp * k_pr, n)
-        .astype(bf16)
-    )
-    v = (
-        mx.contiguous(qkv[:, q_pr + k_pr :, :])
-        .reshape(tp * v_pr, n)
-        .astype(bf16)
-    )
+    k = mx.contiguous(qkv[:, q_pr : q_pr + k_pr, :]).reshape(tp * k_pr, n).astype(bf16)
+    v = mx.contiguous(qkv[:, q_pr + k_pr :, :]).reshape(tp * v_pr, n).astype(bf16)
     return q, k, v

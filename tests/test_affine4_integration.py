@@ -149,9 +149,7 @@ def test_batch_rejects_same_width_different_codecs():
         (Affine8KVCache, BatchAffine8KVCache),
     ],
 )
-def test_singleton_cache_converts_when_another_request_joins(
-    cache_class, batch_class
-):
+def test_singleton_cache_converts_when_another_request_joins(cache_class, batch_class):
     generate = importlib.import_module("mlx_lm.generate")
     caches = [cache_class(), cache_class()]
     for cache in caches:
@@ -229,9 +227,7 @@ def test_merge_of_several_requests_drops_donors_and_keeps_empty_rows_zero():
         ("affine8", 8, Affine8KVCache),
     ],
 )
-def test_specprefill_cache_lifecycle_stays_affine(
-    scheduler, scheme, bits, cache_class
-):
+def test_specprefill_cache_lifecycle_stays_affine(scheduler, scheme, bits, cache_class):
     scheduler._turboquant_kv_scheme = scheme
     scheduler._turboquant_kv_bits = bits
     cold = [KVCache(), KVCache()]
@@ -246,9 +242,7 @@ def test_specprefill_cache_lifecycle_stays_affine(
 
     assert type(restored[0]) is cache_class
     assert restored[0].offset == 8
-    restored[0].update_and_fetch(
-        mx.ones((1, 2, 3, 64)), mx.ones((1, 2, 3, 64))
-    )
+    restored[0].update_and_fetch(mx.ones((1, 2, 3, 64)), mx.ones((1, 2, 3, 64)))
     assert restored[0].offset == 11
     merged = importlib.import_module("mlx_lm.generate")._merge_caches([restored])
     assert type(merged[0]) is cache_class

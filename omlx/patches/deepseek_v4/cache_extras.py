@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E741, I001, N803, N806, SIM300, UP006, UP035
+# ruff: noqa: E741, I001, N806, SIM300, UP006, UP035
 """PoolingCache + BatchPoolingCache from mlx-lm PR 1192.
 
 These two cache classes are copied 1:1 from
@@ -11,6 +11,7 @@ by patches/deepseek_v4/__init__.py so DeepSeek V4 model code can do
 When mlx-lm merges PR 1192 upstream, this file should be deleted along
 with the rest of the deepseek_v4 patch directory.
 """
+
 from typing import List
 
 import mlx.core as mx
@@ -1013,7 +1014,9 @@ class BatchPoolingCache(_BaseCache):
         # exactly the pooled rows it would hold had it never been batched. Every path benefits: the stock path stops
         # masking dead columns, and the decode-consistent exact paths (which attend every column) stay correct.
         if self._pool_buf is not None:
-            self._pool_extent = min(self._pool_extent, max(self._pool_lengths, default=0))
+            self._pool_extent = min(
+                self._pool_extent, max(self._pool_lengths, default=0)
+            )
 
     def extend(self, other):
         # Merge the remainder buffers
@@ -1089,9 +1092,7 @@ class BatchPoolingCache(_BaseCache):
             B1 = len(self.remainder)
             B2 = len(other.remainder)
             ref_kv = (
-                self.prev_win_kv
-                if self.prev_win_kv is not None
-                else other.prev_win_kv
+                self.prev_win_kv if self.prev_win_kv is not None else other.prev_win_kv
             )
             ref_gate = (
                 self.prev_win_gate

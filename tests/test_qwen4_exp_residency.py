@@ -58,8 +58,7 @@ def test_estimate_subtracts_only_mmap_backed_ngram_tensors(tmp_path):
     model.mkdir()
     (model / "config.json").write_text(json.dumps({"model_type": "qwen4_exp"}))
     ple_key = (
-        "model.language_model.layers.1.ple.ple_embedding."
-        "ngram_embedding.shard_0.weight"
+        "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight"
     )
     compute_key = "model.language_model.layers.0.self_attn.q_proj.weight"
     _write_safetensors(model / "model.safetensors", {ple_key: 100, compute_key: 40})

@@ -9,6 +9,7 @@ SECURITY NOTE: This benchmark executes model-generated code on the local
 machine. Mitigations: subprocess with timeout, memory limits, temp file cleanup.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -56,7 +57,9 @@ def _extract_code(response: str) -> str:
     return "\n".join(code_lines) if code_lines else response.strip()
 
 
-def _execute_with_tests(code: str, test_list: list[str], setup_code: str = "") -> tuple[bool, str]:
+def _execute_with_tests(
+    code: str, test_list: list[str], setup_code: str = ""
+) -> tuple[bool, str]:
     """Execute generated code with assertion-based test cases."""
     test_code = "\n".join(test_list)
     script = f"{setup_code}\n{code}\n{test_code}\n"
@@ -88,10 +91,8 @@ def _execute_with_tests(code: str, test_list: list[str], setup_code: str = "") -
     except Exception as e:
         return False, str(e)[:500]
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 class MBPPBenchmark(BaseBenchmark):
@@ -113,13 +114,15 @@ class MBPPBenchmark(BaseBenchmark):
             test_list = item.get("test_list", [])
             if not test_list:
                 continue
-            normalized.append({
-                "id": str(item["task_id"]),
-                "prompt": item["prompt"],
-                "test_list": test_list,
-                "test_setup_code": item.get("test_setup_code", ""),
-                "question": item["prompt"],
-            })
+            normalized.append(
+                {
+                    "id": str(item["task_id"]),
+                    "prompt": item["prompt"],
+                    "test_list": test_list,
+                    "test_setup_code": item.get("test_setup_code", ""),
+                    "question": item["prompt"],
+                }
+            )
 
         logger.info(f"MBPP: loaded {len(normalized)} problems")
 

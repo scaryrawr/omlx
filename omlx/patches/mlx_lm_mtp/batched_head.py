@@ -145,9 +145,7 @@ def draft(batch, jobs):
         )
     for layer in cache:
         layer.finalize()
-    chain_cache = (
-        bg._clone_mtp_head_cache(cache) if head_clone and depth > 1 else cache
-    )
+    chain_cache = bg._clone_mtp_head_cache(cache) if head_clone and depth > 1 else cache
     samplers = [bg._resolve_draft_sampler(row, state) for row, state, *_ in jobs]
     greedy = all(bg._is_greedy(row) for row, *_ in jobs)
     drafted, probabilities, acceptance = [], [], []

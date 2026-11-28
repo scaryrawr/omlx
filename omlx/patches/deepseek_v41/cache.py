@@ -26,8 +26,8 @@ class DeepseekV41Cache(ArraysCache):
     def __init__(self, compress_ratio=0):
         self._rows = None
         self._dense = None
-        self._lp = None    # host mirror of left_padding (row-backed batches)
-        self._len = None   # host mirror of lengths (row-backed batches)
+        self._lp = None  # host mirror of left_padding (row-backed batches)
+        self._len = None  # host mirror of lengths (row-backed batches)
         super().__init__(7)
         self.compress_ratio = compress_ratio
 
@@ -66,14 +66,26 @@ class DeepseekV41Cache(ArraysCache):
                 states.append(None)
                 continue
             fill = -1 if slot == 6 else 0
-            width = max(v.shape[1] for v in values if v is not None) if template.ndim > 1 else None
+            width = (
+                max(v.shape[1] for v in values if v is not None)
+                if template.ndim > 1
+                else None
+            )
             parts = []
             for v in values:
                 if v is None:
-                    shape = (1, *template.shape[1:]) if width is None else (1, width, *template.shape[2:])
+                    shape = (
+                        (1, *template.shape[1:])
+                        if width is None
+                        else (1, width, *template.shape[2:])
+                    )
                     v = mx.full(shape, fill, template.dtype)
                 elif width is not None and v.shape[1] != width:
-                    v = mx.pad(v, [(0, 0), (0, width - v.shape[1])] + [(0, 0)] * (v.ndim - 2), constant_values=fill)
+                    v = mx.pad(
+                        v,
+                        [(0, 0), (0, width - v.shape[1])] + [(0, 0)] * (v.ndim - 2),
+                        constant_values=fill,
+                    )
                 parts.append(v)
             states.append(mx.concatenate(parts, 0))
         return states
@@ -185,7 +197,10 @@ class DeepseekV41Cache(ArraysCache):
 
     def prepare(self, lengths=None, **kwargs):
         if self._rows is not None:
-            self._lp, self._len = None, None if lengths is None else [int(v) for v in lengths]
+            self._lp, self._len = (
+                None,
+                None if lengths is None else [int(v) for v in lengths],
+            )
             self._sync_padding()
             return
         self.left_padding = None
@@ -221,7 +236,11 @@ class DeepseekV41Cache(ArraysCache):
     def filter(self, batch_indices):
         if self._rows is None:
             return super().filter(batch_indices)
-        keep = batch_indices.tolist() if hasattr(batch_indices, "tolist") else list(batch_indices)
+        keep = (
+            batch_indices.tolist()
+            if hasattr(batch_indices, "tolist")
+            else list(batch_indices)
+        )
         keep = [int(i) for i in keep]
         self._rows = [self._rows[i] for i in keep]
         self._dense = None
@@ -287,11 +306,27 @@ class DeepseekV41Cache(ArraysCache):
         if self.compress_ratio != other.compress_ratio:
             raise ValueError("Cannot batch different V4.1 compression ratios")
         a, b = self._as_rows(), other._as_rows()
-        lp_a = self._lp if self._rows is not None else (
-            None if self.left_padding is None else [int(v) for v in self.left_padding.tolist()])
-        lp_b = other._lp if other._rows is not None else (
-            None if other.left_padding is None else [int(v) for v in other.left_padding.tolist()])
-        self._set_rows(a + b, left_padding=(lp_a or [0] * len(a)) + (lp_b or [0] * len(b)))
+        lp_a = (
+            self._lp
+            if self._rows is not None
+            else (
+                None
+                if self.left_padding is None
+                else [int(v) for v in self.left_padding.tolist()]
+            )
+        )
+        lp_b = (
+            other._lp
+            if other._rows is not None
+            else (
+                None
+                if other.left_padding is None
+                else [int(v) for v in other.left_padding.tolist()]
+            )
+        )
+        self._set_rows(
+            a + b, left_padding=(lp_a or [0] * len(a)) + (lp_b or [0] * len(b))
+        )
 
 
 class DeepseekV41CacheHandler(ArraysCacheHandler):

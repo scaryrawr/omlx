@@ -140,9 +140,7 @@ def test_idle_window_settings_default_roundtrip():
     assert ServerSettings.from_dict({}).gpu_keep_warm_idle_window == 300.0
     s = ServerSettings.from_dict({"gpu_keep_warm_idle_window": 3600})
     assert s.gpu_keep_warm_idle_window == 3600.0
-    assert (
-        ServerSettings.from_dict(s.to_dict()).gpu_keep_warm_idle_window == 3600.0
-    )
+    assert ServerSettings.from_dict(s.to_dict()).gpu_keep_warm_idle_window == 3600.0
 
 
 @pytest.mark.asyncio
@@ -168,9 +166,7 @@ async def test_admin_update_applies_idle_window(monkeypatch, tmp_path):
         def configure_gpu_keep_warm(self, interval, window):
             calls.append(("configure", interval, window))
 
-    fake_server = SimpleNamespace(
-        _server_state=SimpleNamespace(engine_pool=Pool())
-    )
+    fake_server = SimpleNamespace(_server_state=SimpleNamespace(engine_pool=Pool()))
     monkeypatch.setitem(sys.modules, "omlx.server", fake_server)
     monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: settings)
 

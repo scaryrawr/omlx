@@ -556,6 +556,7 @@ class TestPagedSSDCacheManager:
         # Check subdirectories created
         for char in "0123456789abcdef":
             assert (cache_dir / char).exists()
+        manager.close()
 
     def test_has_block(self, tmp_path: Path):
         """Test checking if block exists."""
@@ -2155,9 +2156,9 @@ class TestAsyncWriteAndTimeoutLoad:
         # The old implementation used ThreadPoolExecutor(max_workers=1) which
         # caused deadlocks when mx.load() in a worker thread contested Metal
         # GPU resources with the main inference thread. Verify it's gone.
-        assert not hasattr(
-            ssd_cache, "_load_executor"
-        ), "_load_executor should not exist — it causes Metal GPU deadlocks"
+        assert not hasattr(ssd_cache, "_load_executor"), (
+            "_load_executor should not exist — it causes Metal GPU deadlocks"
+        )
 
     def test_sequential_loads_no_queue_blocking(self, ssd_cache, mx):
         """Regression test: consecutive loads must not block each other."""
@@ -2188,9 +2189,9 @@ class TestAsyncWriteAndTimeoutLoad:
 
         # 5 loads from SSD should complete in well under 5s
         # (each ~2ms read + reconstruction)
-        assert (
-            elapsed < 5.0
-        ), f"Sequential loads took {elapsed:.1f}s — possible queue blocking"
+        assert elapsed < 5.0, (
+            f"Sequential loads took {elapsed:.1f}s — possible queue blocking"
+        )
 
     def test_writer_error_handling(self, ssd_cache, mx):
         """Verify that background writer errors clean up the index."""
@@ -2852,9 +2853,7 @@ class TestEffectiveMaxSize:
         assert effective == 50 * 1024**3
         assert "Failed to check disk usage" in caplog.text
 
-    def test_hot_cache_only_missing_dir_no_warning(
-        self, tmp_path: Path, caplog
-    ):
+    def test_hot_cache_only_missing_dir_no_warning(self, tmp_path: Path, caplog):
         """Hot-cache-only mode skips directory init, so the SSD dir legitimately
         does not exist; disk-usage polling must not warn or even query it
         (regression: repeated "Failed to check disk usage" warnings for the
@@ -3067,8 +3066,7 @@ class TestPreloadMatchedBlocks:
                 manager, "_hot_cache_put", side_effect=RuntimeError("boom")
             ):
                 assert (
-                    manager._promote_pending_write_to_hot_cache(b"hash", entry)
-                    is False
+                    manager._promote_pending_write_to_hot_cache(b"hash", entry) is False
                 )
             assert manager.get_stats().hot_cache_promotion_failures == 1
         finally:
@@ -4499,9 +4497,9 @@ class TestLayerSignatureSweep:
         dropped = mgr.invalidate_stale_layer_signature()
 
         assert dropped == 1
-        assert (
-            mgr._index.get(b"bb" * 10) is not None
-        ), "model-B block must not be touched by model-A's sweep"
+        assert mgr._index.get(b"bb" * 10) is not None, (
+            "model-B block must not be touched by model-A's sweep"
+        )
         assert mgr._index.get(b"cc" * 10) is None
 
     def test_sweep_skips_legacy_unnamed_blocks(self, tmp_path: Path):

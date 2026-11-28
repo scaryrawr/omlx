@@ -26,7 +26,9 @@ def _model_key(model: str) -> str:
 
 def context_bucket(tokens: int) -> int:
     value = max(1, int(tokens))
-    return next((limit for limit in _CONTEXT_BUCKETS if value <= limit), _CONTEXT_BUCKETS[-1])
+    return next(
+        (limit for limit in _CONTEXT_BUCKETS if value <= limit), _CONTEXT_BUCKETS[-1]
+    )
 
 
 @dataclass(frozen=True)
@@ -99,9 +101,7 @@ class StrategyBenchmark:
                 backend=str(payload["backend"]),
                 tensor_parallel_size=int(payload["tensor_parallel_size"]),
                 context_tokens=int(payload["context_tokens"]),
-                prompt_tokens_per_second=float(
-                    payload["prompt_tokens_per_second"]
-                ),
+                prompt_tokens_per_second=float(payload["prompt_tokens_per_second"]),
                 decode_tokens_per_second=float(payload["decode_tokens_per_second"]),
                 time_to_first_token_seconds=float(
                     payload["time_to_first_token_seconds"]

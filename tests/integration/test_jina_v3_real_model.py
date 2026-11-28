@@ -61,9 +61,9 @@ def _model_path_from_environment() -> Path:
 
     config = json.loads(config_path.read_text())
     assert "JinaForRanking" in (config.get("architectures") or [])
-    assert (
-        "layer_types" not in config
-    ), f"{_ENV_VAR} must point to the original Jina v3 checkpoint."
+    assert "layer_types" not in config, (
+        f"{_ENV_VAR} must point to the original Jina v3 checkpoint."
+    )
     for required_file in ("rerank.py", "projector.safetensors"):
         if not (model_path / required_file).is_file():
             pytest.skip(f"Jina v3 reference file missing: {required_file}")

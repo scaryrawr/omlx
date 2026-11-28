@@ -32,9 +32,7 @@ def test_verify_qmm_matches_quantized_linear(mode, rows):
         inputs,
         quantized.weight,
         quantized.scales,
-        quantized.biases
-        if quantized.biases is not None
-        else quantized.scales,
+        quantized.biases if quantized.biases is not None else quantized.scales,
         bits=bits,
         group_size=group_size,
         mode=mode,
@@ -134,7 +132,9 @@ def test_verify_qmm_mode_eligibility(mode, bits, group_size, expected):
 def test_verify_route_prediction_respects_quantization_mode(mode, rows, expected_route):
     bits = 8 if mode == "mxfp8" else 4
     group_size = 64 if mode == "affine" else 32
-    linear = nn.QuantizedLinear(1024, 16384, group_size=group_size, bits=bits, mode=mode)
+    linear = nn.QuantizedLinear(
+        1024, 16384, group_size=group_size, bits=bits, mode=mode
+    )
     assert (
         _verify_route(rows, 1024, 16384, bits, group_size, mx.bfloat16, mode)
         == expected_route
@@ -156,7 +156,9 @@ def test_verify_route_prediction_respects_quantization_mode(mode, rows, expected
     ("mode", "bits", "group_size"),
     [("affine", 4, 64), ("mxfp4", 4, 32), ("mxfp8", 8, 32)],
 )
-def test_m1_verify_routes_are_affine_only(monkeypatch, m1_route, mode, bits, group_size):
+def test_m1_verify_routes_are_affine_only(
+    monkeypatch, m1_route, mode, bits, group_size
+):
     calls = []
 
     def route(*args):

@@ -119,13 +119,13 @@ def main() -> int:
                 mlx_generate.GenerationBatch._step(batch)
             mx.eval(batch._next_tokens, batch._next_logprobs)
             next_token = int(batch._next_tokens[0].item())
-            tokens = mx.distributed.all_gather(
-                mx.array([next_token], dtype=mx.uint32)
-            )
+            tokens = mx.distributed.all_gather(mx.array([next_token], dtype=mx.uint32))
             mx.eval(tokens)
             token_values = [int(token) for token in tokens.tolist()]
             if len(set(token_values)) != 1:
-                raise RuntimeError(f"pipeline ranks chose different tokens: {token_values}")
+                raise RuntimeError(
+                    f"pipeline ranks chose different tokens: {token_values}"
+                )
 
             rank = int(group.rank())
             expected_skip = rank != 0
@@ -150,8 +150,7 @@ def main() -> int:
         return 0
     except Exception as exc:
         print(
-            "oMLX MiniMax decode smoke failed: "
-            f"{type(exc).__name__}: {exc}",
+            f"oMLX MiniMax decode smoke failed: {type(exc).__name__}: {exc}",
             file=sys.stderr,
             flush=True,
         )

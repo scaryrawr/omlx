@@ -150,8 +150,7 @@ def test_split_store_restores_one_sidecar_and_walks_back(tmp_path):
             layer_cache_types=LAYER_TYPES,
         )
         assert all(
-            ssd.has_gdn_checkpoint(block_hash, signature)
-            for block_hash in hashes
+            ssd.has_gdn_checkpoint(block_hash, signature) for block_hash in hashes
         )
         # Main blocks contain only structural Arrays placeholders; recurrent
         # states never enter the hot cache or ordinary block payload.
@@ -226,9 +225,7 @@ def test_split_store_restores_one_sidecar_and_walks_back(tmp_path):
                 [MagicMock()],
                 lambda _snapshot: (_hybrid_extracted(12, 12.0), None),
             )
-            legacy_staged = legacy_boundary.take_staged_file(
-                "legacy-request", 12
-            )
+            legacy_staged = legacy_boundary.take_staged_file("legacy-request", 12)
             assert legacy_staged is not None
             legacy_signature = ssd.cache_signature_for(
                 model_name="hybrid-model",
@@ -248,9 +245,7 @@ def test_split_store_restores_one_sidecar_and_walks_back(tmp_path):
                 is not None
             )
 
-            hit_table, remaining = prefix.fetch_cache(
-                "restore-legacy-fallback", tokens
-            )
+            hit_table, remaining = prefix.fetch_cache("restore-legacy-fallback", tokens)
             assert hit_table is not None and remaining == []
             restored = prefix.reconstruct_cache(hit_table)
             assert restored is not None
@@ -689,9 +684,7 @@ def test_split_exact_prefix_commits_terminal_sidecar_and_restores(tmp_path):
         )
         assert restored is not None
         assert restored[0].keys_and_values()[0].shape[2] == len(tokens)
-        assert float(restored[1].cache[0][0, 0, 0]) == pytest.approx(
-            float(len(tokens))
-        )
+        assert float(restored[1].cache[0][0, 0, 0]) == pytest.approx(float(len(tokens)))
         stats = prefix.get_stats()
         assert stats.exact_prefix_stores == 1
         assert stats.exact_prefix_hits == 1

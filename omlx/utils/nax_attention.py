@@ -56,8 +56,7 @@ from __future__ import annotations
 
 import logging
 import struct
-from functools import lru_cache
-from typing import Optional
+from functools import cache, lru_cache
 
 import mlx.core as mx
 
@@ -92,7 +91,9 @@ _DSPLIT = 1
 
 _METAL_TYPES = {mx.bfloat16: "bfloat16_t", mx.float16: "half"}
 
-_HEADER = NAX_TILE_HEADER + r"""
+_HEADER = (
+    NAX_TILE_HEADER
+    + r"""
 namespace omlx_nax {
 
 // Scalar parameters of one attention call (MLX's AttnParams without the
@@ -760,6 +761,7 @@ METAL_FUNC void attention_nax_bdv(
 
 } // namespace omlx_nax
 """
+)
 
 # One generated kernel per variant; the MLX kernel's function constants are
 # baked in as template arguments of the call.
@@ -783,7 +785,7 @@ def _flag(value: bool) -> str:
     return "true" if value else "false"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _kernel(
     dtype: mx.Dtype,
     bd: int,
@@ -846,12 +848,12 @@ def _kernel(
 def _nax_available() -> bool:
     try:
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
 def _pass_edges(
-    n_groups: int, nk: int, pass_keys: int, min_groups: Optional[int] = None
+    n_groups: int, nk: int, pass_keys: int, min_groups: int | None = None
 ) -> list[int]:
     """Key-block boundaries of the dispatches for ``nk`` key blocks."""
     if min_groups is None:
@@ -1014,19 +1016,17 @@ def _self_check_passed() -> bool:
         ref = _reference(q, k, v, scale, "causal")
         err = mx.abs(out.astype(mx.float32) - ref).max().item()
         ok = err < 2e-2
-    except Exception as exc:  # noqa: BLE001 - any failure disables the route
+    except Exception as exc:
         logger.warning("NAX JIT attention disabled: self-check failed (%s)", exc)
         return False
     if not ok:
-        logger.warning(
-            "NAX JIT attention disabled: self-check error %.3g vs fp32", err
-        )
+        logger.warning("NAX JIT attention disabled: self-check error %.3g vs fp32", err)
         return False
     logger.info("NAX JIT attention (192/128 head dims) enabled")
     return True
 
 
-@lru_cache(maxsize=None)
+@cache
 def _passes_check_passed(wn: int) -> bool:
     """First use of key-range passes (per head-dim split): one small case.
 
@@ -1046,7 +1046,7 @@ def _passes_check_passed(wn: int) -> bool:
         ref = _reference(q, k, v, scale, "causal")
         err = mx.abs(many.astype(mx.float32) - ref).max().item()
         ok = err < 2e-2 and bool(mx.array_equal(many, one).item())
-    except Exception as exc:  # noqa: BLE001 - any failure keeps one dispatch
+    except Exception as exc:
         logger.warning("NAX JIT attention key-range passes disabled (%s)", exc)
         return False
     if not ok:
@@ -1068,9 +1068,7 @@ def _banded_reference(q, k, v, rel, sink, scale, left_padding=None):
     Hk, kL = k.shape[1], k.shape[2]
     g, r = H // Hk, rel.shape[-1]
     qf = q.astype(mx.float32).reshape(B, Hk, g, qL, -1) * scale
-    s = (qf @ k.astype(mx.float32)[:, :, None].swapaxes(-1, -2)).reshape(
-        B, H, qL, kL
-    )
+    s = (qf @ k.astype(mx.float32)[:, :, None].swapaxes(-1, -2)).reshape(B, H, qL, kL)
     dist = (mx.arange(qL)[:, None] + (kL - qL)) - mx.arange(kL)[None]
     idx = mx.broadcast_to(mx.clip(dist, 0, r - 1), (B, H, qL, kL))
     bias = mx.take_along_axis(
@@ -1111,7 +1109,7 @@ def _run_banded(
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def banded_check_passed(dtype: mx.Dtype = mx.bfloat16) -> bool:
     """Check one small banded case against fp32, once per dtype; its two
     runs also compile every banded kernel variant for that dtype."""
@@ -1132,7 +1130,7 @@ def banded_check_passed(dtype: mx.Dtype = mx.bfloat16) -> bool:
         ref = _banded_reference(q, k, v, rel, sink, scale, lp)
         err = mx.abs(many.astype(mx.float32) - ref).max().item()
         ok = err < 2e-2 and bool(mx.array_equal(many, one).item())
-    except Exception as exc:  # noqa: BLE001 - any failure disables the route
+    except Exception as exc:
         logger.warning("NAX banded attention disabled: self-check failed (%s)", exc)
         return False
     if not ok:
@@ -1150,9 +1148,9 @@ def nax_banded_sink_attention(
     sink: mx.array,
     *,
     scale: float,
-    left_padding: Optional[mx.array] = None,
+    left_padding: mx.array | None = None,
     window: int = 0,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """``kernels.banded_sink_attention`` for prefill blocks, full attention or
     a sliding window as wide as the bias band, or None when unsupported (the
     caller keeps its masked SDPA).
@@ -1210,8 +1208,8 @@ def nax_mixed_head_dim_attention(
     *,
     scale: float,
     mask=None,
-    sinks: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    sinks: mx.array | None = None,
+) -> mx.array | None:
     """Fused NAX attention for ``qk_dim > v_dim`` prefill; None if unsupported.
 
     ``queries`` [B, H, L, 192], ``keys`` [B, Hk, S, 192], ``values``

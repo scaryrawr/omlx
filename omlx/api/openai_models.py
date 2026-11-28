@@ -265,7 +265,9 @@ def _normalize_tool_namespace(value: Any) -> Any:
     function.pop("namespace", None)
     if description:
         function_description = function.get("description")
-        if function_description is not None and not isinstance(function_description, str):
+        if function_description is not None and not isinstance(
+            function_description, str
+        ):
             raise ValueError("Tool function description must be a string")
         function["description"] = description + "\n" + (function_description or "")
     return {**value, "function": function}

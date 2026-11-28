@@ -92,14 +92,18 @@ class DSparkMixin:
         self.dspark_append_context(main_hidden, cache)
         return proposal_forward(self, anchor_ids, cache, draft_length)
 
-    def dspark_hidden_rows(self, main_hiddens, anchor_ids, caches, *, draft_length=None):
+    def dspark_hidden_rows(
+        self, main_hiddens, anchor_ids, caches, *, draft_length=None
+    ):
         """The hidden dspark_forward returns, for several requests in one pass over the
         stages: [B, L, D]. Each request appends its own committed rows to its own context
         rings, which may differ in length."""
         from .dspark import proposal_hidden
 
         first = self.mtp[0]
-        projected = first.main_norm(first.main_proj(mx.concatenate(main_hiddens, axis=1)))
+        projected = first.main_norm(
+            first.main_proj(mx.concatenate(main_hiddens, axis=1))
+        )
         parts, at = [], 0
         for hidden in main_hiddens:
             parts.append(projected[:, at : at + hidden.shape[1]])
@@ -107,7 +111,9 @@ class DSparkMixin:
         by_stage = [[cache[s] for cache in caches] for s in range(len(self.mtp))]
         for stage, items in zip(self.mtp, by_stage):
             stage.attn.append_context_rows(parts, items)
-        return proposal_hidden(self, mx.concatenate(anchor_ids, axis=0), by_stage, draft_length)
+        return proposal_hidden(
+            self, mx.concatenate(anchor_ids, axis=0), by_stage, draft_length
+        )
 
     def dspark_logits(self, hidden):
         """The DSpark vocabulary head of dspark_hidden_rows outputs (any number of rows)."""
@@ -146,9 +152,14 @@ class DSparkMixin:
         """Whether mtp_verify_rows can verify these requests' blocks of `width` tokens."""
         if len(row_caches) < 2:
             return False
-        merged = [type(row_caches[0][i]).merge([rc[i] for rc in row_caches]) for i in range(len(row_caches[0]))]
+        merged = [
+            type(row_caches[0][i]).merge([rc[i] for rc in row_caches])
+            for i in range(len(row_caches[0]))
+        ]
         ids = mx.zeros((len(row_caches), width), mx.int32)
-        return self._batched_verify_ok(ids, merged, merged[0].make_mask(width), None, {})
+        return self._batched_verify_ok(
+            ids, merged, merged[0].make_mask(width), None, {}
+        )
 
     def mtp_verify_rows(self, inputs, row_caches):
         """Verify B requests' MTP blocks (inputs: [B, R]) in one forward.
@@ -158,7 +169,10 @@ class DSparkMixin:
         and rollback record are those of its own verify forward, so mtp_partial_rollback
         then runs on each request alone.
         """
-        merged = [type(row_caches[0][i]).merge([rc[i] for rc in row_caches]) for i in range(len(row_caches[0]))]
+        merged = [
+            type(row_caches[0][i]).merge([rc[i] for rc in row_caches])
+            for i in range(len(row_caches[0]))
+        ]
         logits, hidden = self(inputs, cache=merged, return_hidden=True, n_confirmed=1)
         stashes = merged[0]._mtp_row_stashes
         merged[0]._mtp_row_stashes = None

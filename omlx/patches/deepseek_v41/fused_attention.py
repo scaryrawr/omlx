@@ -149,7 +149,8 @@ _ATTENTION = r"""
 
 _ATTENTION_GATHERED = _ATTENTION.replace(
     "rowidx[tid] = ok ? (compressed ? NW + row : row) : -1;",
-    "rowidx[tid] = ok ? int(query) * count + j : -1;")
+    "rowidx[tid] = ok ? int(query) * count + j : -1;",
+)
 
 _DECODE_ROWS = r"""
     const uint e = thread_position_in_grid.x;               // one thread per (row, 8 dims)
@@ -177,12 +178,19 @@ _DECODE_GATHER = r"""
         out[(size_t(query) * count + slot) * D + d] = ok ? read_kv(window, pooled, row, d, D, compressed, 0.0f, 0, false) : 0.0f;
 """
 
+
 @cache
 def _kernel(name, source, inputs):
-    header = _READ + ("\n#include <metal_simdgroup_matrix>\n" if "simdgroup" in source else "")
+    header = _READ + (
+        "\n#include <metal_simdgroup_matrix>\n" if "simdgroup" in source else ""
+    )
     return mx.fast.metal_kernel(
-        name="deepseek_v41_" + name, input_names=list(inputs), output_names=["out"],
-        source=source, header=header)
+        name="deepseek_v41_" + name,
+        input_names=list(inputs),
+        output_names=["out"],
+        source=source,
+        header=header,
+    )
 
 
 def supported(q):
@@ -198,29 +206,55 @@ def fused_mma_attention(q, window, pooled, wi, ci, sink, scale):
     window = window if window.size else mx.zeros((1,), mx.uint8)
     pooled = pooled if pooled.size else mx.zeros((1,), mx.uint8)
     if length * (w + c) < nw + nc:
-        kv = _kernel("decode_gather_f32", _DECODE_GATHER, ("window", "pooled", "wi", "ci", "meta"))(
+        kv = _kernel(
+            "decode_gather_f32",
+            _DECODE_GATHER,
+            ("window", "pooled", "wi", "ci", "meta"),
+        )(
             inputs=[window, pooled, wi, ci, mx.array([w, c, nw, nc, length], mx.int32)],
-            template=[("D", dim)], grid=(max(1, length * (w + c) * (dim // 8)), 1, 1),
-            threadgroup=(256, 1, 1), output_shapes=[(max(1, length * (w + c)), dim)],
-            output_dtypes=[mx.float32])[0]
-        attention = _kernel("fused_attention_gathered", _ATTENTION_GATHERED,
-                            ("q", "kv", "wi", "ci", "sink", "meta", "scalep"))
+            template=[("D", dim)],
+            grid=(max(1, length * (w + c) * (dim // 8)), 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(max(1, length * (w + c)), dim)],
+            output_dtypes=[mx.float32],
+        )[0]
+        attention = _kernel(
+            "fused_attention_gathered",
+            _ATTENTION_GATHERED,
+            ("q", "kv", "wi", "ci", "sink", "meta", "scalep"),
+        )
     else:
         kv = _kernel("decode_rows_f32", _DECODE_ROWS, ("window", "pooled", "meta"))(
             inputs=[window, pooled, mx.array([nw, nc], mx.int32)],
-            template=[("D", dim)], grid=(max(1, (nw + nc) * (dim // 8)), 1, 1),
-            threadgroup=(256, 1, 1), output_shapes=[(max(1, nw + nc), dim)],
-            output_dtypes=[mx.float32])[0]
-        attention = _kernel("fused_attention", _ATTENTION,
-                            ("q", "kv", "wi", "ci", "sink", "meta", "scalep"))
+            template=[("D", dim)],
+            grid=(max(1, (nw + nc) * (dim // 8)), 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(max(1, nw + nc), dim)],
+            output_dtypes=[mx.float32],
+        )[0]
+        attention = _kernel(
+            "fused_attention",
+            _ATTENTION,
+            ("q", "kv", "wi", "ci", "sink", "meta", "scalep"),
+        )
     # 32 dimension slices of D / 32 (D = 512: two 8-wide MMA tiles per simdgroup); smaller
     # heads use fewer slices so every slice still owns a whole number of 8-wide tiles.
     heads_per_tg, slices = 8, 32
     while (dim // 8) % slices:
         slices //= 2
     return attention(
-        inputs=[q, kv, wi, ci, sink, mx.array([heads, w, c, nw, nc], mx.int32), mx.array([scale])],
+        inputs=[
+            q,
+            kv,
+            wi,
+            ci,
+            sink,
+            mx.array([heads, w, c, nw, nc], mx.int32),
+            mx.array([scale]),
+        ],
         template=[("D", dim), ("HT", heads_per_tg), ("SL", slices), ("T", q.dtype)],
         grid=(heads // heads_per_tg * slices * 32, length, 1),
         threadgroup=(heads_per_tg // 8 * slices * 32, 1, 1),
-        output_shapes=[q.shape], output_dtypes=[q.dtype])[0]
+        output_shapes=[q.shape],
+        output_dtypes=[q.dtype],
+    )[0]

@@ -71,4 +71,3 @@ class TestParseSize:
         """Non-finite unit values are rejected as invalid size strings."""
         with pytest.raises(ValueError, match="Invalid size string"):
             parse_size(value)
-

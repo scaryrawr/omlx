@@ -277,7 +277,7 @@ def get_graphics_footprint_compressed() -> int:
     return max(0, int(info.ledger_tag_graphics_footprint_compressed)) if info else 0
 
 
-def _read_task_vm_info() -> "_TaskVMInfo | None":
+def _read_task_vm_info() -> _TaskVMInfo | None:
     if _task_info is None or _mach_task_self is None:
         return None
     info = _TaskVMInfo()

@@ -675,5 +675,3 @@ def decode_worker_path_map(encoded: str) -> dict[str, str]:
 
     payload = _decode_worker_payload(encoded)
     return validate_model_path_map(payload.get("path_map"))
-
-

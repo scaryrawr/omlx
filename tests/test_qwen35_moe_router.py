@@ -124,6 +124,7 @@ def test_verifier_routes_short_moe_blocks_through_fused_router(
 
     from mlx_vlm.models.qwen3_5.speculative_verifier import Qwen3_5BatchInvariantForward
     from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
     from omlx.patches import qwen35_moe_router as router
 
     monkeypatch.setattr(
@@ -282,7 +283,9 @@ def test_fused_combine_declines_other_layouts():
             mx.zeros((1, rows, 1), dtype),
         )
 
-    assert router.fused_moe_combine(*operands(rows=2)) is None  # verify rows stay composed
+    assert (
+        router.fused_moe_combine(*operands(rows=2)) is None
+    )  # verify rows stay composed
     assert router.fused_moe_combine(*operands(top_k=7)) is None
     assert router.fused_moe_combine(*operands(dtype=mx.float32)) is None
 
@@ -294,6 +297,7 @@ def test_one_row_moe_block_matches_composed_combine(monkeypatch, seed):
     from types import SimpleNamespace
 
     from mlx_vlm.models.qwen3_5_moe.language import Qwen3_5MoeSparseMoeBlock
+
     from omlx.patches import qwen35_moe_router as router
 
     assert router.apply_qwen35_moe_router_patch()
@@ -314,8 +318,12 @@ def test_one_row_moe_block_matches_composed_combine(monkeypatch, seed):
         setattr(sm, name, getattr(sm, name).to_quantized(64, 5))
     for name in ("gate_proj", "up_proj", "down_proj"):
         linear = getattr(block.shared_expert, name)
-        setattr(block.shared_expert, name, nn.QuantizedLinear.from_linear(linear, 128, 8))
-    block.shared_expert_gate = nn.QuantizedLinear.from_linear(block.shared_expert_gate, 64, 8)
+        setattr(
+            block.shared_expert, name, nn.QuantizedLinear.from_linear(linear, 128, 8)
+        )
+    block.shared_expert_gate = nn.QuantizedLinear.from_linear(
+        block.shared_expert_gate, 64, 8
+    )
     mx.eval(block.parameters())
     calls = []
     real = router.fused_moe_combine
@@ -393,7 +401,9 @@ def test_softmax_row_matches_mlx_softmax_in_fp32(experts):
         """,
     )
     for seed, kind in enumerate(["random", "duplicates", "adjacent", "two_values"] * 4):
-        logits = _near_tie_logits(kind, experts, seed).astype(mx.float32).reshape(experts)
+        logits = (
+            _near_tie_logits(kind, experts, seed).astype(mx.float32).reshape(experts)
+        )
         out = probe(
             inputs=[logits],
             template=[("T", mx.float32), ("NE", experts)],
@@ -447,7 +457,9 @@ def test_router_gemv_matches_mlx_linear(experts, width, dtype):
         weight = (mx.random.normal((experts, width)) * scale).astype(dtype)
         x = (mx.random.normal((1, 1, width)) * (1 + seed % 3)).astype(dtype)
         out = router.router_logits_row(x, weight)
-        assert mx.array_equal(out.view(mx.uint16), (x @ weight.T).view(mx.uint16)).item()
+        assert mx.array_equal(
+            out.view(mx.uint16), (x @ weight.T).view(mx.uint16)
+        ).item()
         sums = probe(
             inputs=[x, weight],
             template=[("T", dtype), ("K", width)],

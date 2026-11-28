@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for models/vlm.py — VLMModelAdapter for BatchGenerator compatibility."""
 
-import pytest
-
 from unittest.mock import MagicMock
+
+import pytest
 
 
 # Create mock mlx modules
@@ -292,7 +292,6 @@ class TestVLMModelAdapter:
 
         vlm.get_input_embeddings.assert_called_once_with(input_ids, pixel_values)
         assert result is expected
-
 
     def test_forward_with_inputs_embeds_kwarg(self):
         """Test batched VLM path: inputs_embeds kwarg passed to language_model."""
@@ -774,7 +773,6 @@ class TestPerRequestMRoPEDecode:
         call_kwargs = vlm.language_model.call_args[1]
         assert "position_ids" not in call_kwargs
 
-
     def test_qwen4_text_request_steps_use_rank_two_positions(self, monkeypatch):
         """A scheduler-proven text request keeps (1, T) positions through decode and MTP verify steps."""
         import omlx.models.vlm as vlm_module
@@ -875,7 +873,9 @@ class TestPerRequestMRoPEDecode:
         adapter(mx.zeros((1, 4), dtype=mx.int32), cache=[cache_layer])
         assert vlm.language_model.call_args.kwargs["position_ids"].shape == (1, 4)
 
-    def test_qwen4_step_threshold_default_follows_fused_attention_rows(self, monkeypatch):
+    def test_qwen4_step_threshold_default_follows_fused_attention_rows(
+        self, monkeypatch
+    ):
         """The threshold keeps the masked path at every context while the fused
         attention rows run (faster there, and bit-identical to the MLX ops), and is
         the gathered crossover otherwise."""

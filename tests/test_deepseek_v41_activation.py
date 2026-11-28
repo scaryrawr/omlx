@@ -211,11 +211,19 @@ def test_rope_kernel_matches_reference_rotation(shape, inverse):
     sin = mx.array(rng.uniform(-1, 1, (shape[1], 32)).astype(np.float32))
     expected = _rope_apply(x, cos, sin, inverse).astype(mx.float32)
     actual = rope_activation(x, cos, sin, inverse).astype(mx.float32)
-    ulp = 2.0 ** (np.floor(np.log2(np.maximum(np.abs(np.asarray(expected)), 2.0**-126))) - 7)
+    ulp = 2.0 ** (
+        np.floor(np.log2(np.maximum(np.abs(np.asarray(expected)), 2.0**-126))) - 7
+    )
     assert np.all(np.abs(np.asarray(actual - expected)) <= ulp)
-    np.testing.assert_array_equal(np.asarray(actual[..., :-64]), np.asarray(x[..., :-64].astype(mx.float32)))
+    np.testing.assert_array_equal(
+        np.asarray(actual[..., :-64]), np.asarray(x[..., :-64].astype(mx.float32))
+    )
     fused = rope_activation(x, cos, sin, inverse, quantize=True)
-    assert mx.array_equal(fused, quantize_activation(rope_activation(x, cos, sin, inverse))).item()
+    assert mx.array_equal(
+        fused, quantize_activation(rope_activation(x, cos, sin, inverse))
+    ).item()
     if len(shape) == 4:
         heads = mx.contiguous(x.transpose(0, 2, 1, 3))
-        assert mx.array_equal(rope_activation(heads, cos, sin, inverse, True, heads_major=True), fused).item()
+        assert mx.array_equal(
+            rope_activation(heads, cos, sin, inverse, True, heads_major=True), fused
+        ).item()

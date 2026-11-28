@@ -216,19 +216,15 @@ def _rdma_devices(ssh_hostname: str) -> list[str]:
             f"RDMA device probe failed for {ssh_hostname}"
             + (f": {detail[-400:]}" if detail else "")
         )
-    return [
-        token
-        for token in result.stdout.split()
-        if token.startswith("rdma_")
-    ]
+    return [token for token in result.stdout.split() if token.startswith("rdma_")]
 
 
-def _rdma_available(hosts: list[str] | tuple[str, ...], *, ssh_prefix: str = "") -> bool:
+def _rdma_available(
+    hosts: list[str] | tuple[str, ...], *, ssh_prefix: str = ""
+) -> bool:
     """True when every host reports at least one RDMA device."""
 
-    return bool(hosts) and all(
-        _rdma_devices(f"{ssh_prefix}{host}") for host in hosts
-    )
+    return bool(hosts) and all(_rdma_devices(f"{ssh_prefix}{host}") for host in hosts)
 
 
 def detect_transports(
@@ -757,11 +753,7 @@ def _candidate_links(
 
     links = []
     for kind, source_address, peer_address in sorted(candidates, key=_preference):
-        label = (
-            kind
-            if link_speed_gbps is None
-            else f"{kind} at {link_speed_gbps} Gb/s"
-        )
+        label = kind if link_speed_gbps is None else f"{kind} at {link_speed_gbps} Gb/s"
         links.append(
             SharedLink(
                 source=LinkEndpoint(
@@ -905,9 +897,7 @@ def resolve_link_addresses(
     )
 
 
-LinkCommandRunner = Callable[
-    [str, Sequence[str]], subprocess.CompletedProcess[str]
-]
+LinkCommandRunner = Callable[[str, Sequence[str]], subprocess.CompletedProcess[str]]
 
 
 def _run_link_command(

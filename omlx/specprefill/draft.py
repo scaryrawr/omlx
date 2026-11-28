@@ -199,9 +199,7 @@ def run_specprefill_draft_scoring(
             "cached_tokens": request.cached_tokens,
         }
 
-        def report_score_progress(
-            processed: int, total: int, phase: str
-        ) -> None:
+        def report_score_progress(processed: int, total: int, phase: str) -> None:
             # Capture before lookahead advances the cache beyond the prompt.
             if phase == "scoring":
                 capture_boundary(processed)

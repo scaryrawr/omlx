@@ -22,8 +22,9 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import regex
 from jsonschema import Draft202012Validator, SchemaError, ValidationError, validate
@@ -153,7 +154,7 @@ def _serialize_tool_call_arguments(arguments: Any) -> str:
     return "{}"
 
 
-def _build_tool_call(name: str, arguments: Any) -> Optional[ToolCall]:
+def _build_tool_call(name: str, arguments: Any) -> ToolCall | None:
     """Build a ToolCall, dropping this one call if validation cannot finish.
 
     ``FunctionCall`` re-parses the arguments string while validating it, which
@@ -190,7 +191,7 @@ class ToolCallExtraction:
     """Parsed tool-call result plus sanitized reasoning text."""
 
     cleaned_text: str
-    tool_calls: Optional[List[ToolCall]]
+    tool_calls: list[ToolCall] | None
     cleaned_thinking: str
     tool_calls_from_thinking: bool = False
     parse_errors: tuple[str, ...] = ()
@@ -212,7 +213,7 @@ def _is_container_type(ptype: Any) -> bool:
     )
 
 
-def _tool_param_properties(func_name: str, tools: Optional[List]) -> dict:
+def _tool_param_properties(func_name: str, tools: list | None) -> dict:
     """Return the declared parameter properties for a tool, or {}."""
     if not tools:
         return {}
@@ -231,7 +232,7 @@ def _tool_param_properties(func_name: str, tools: Optional[List]) -> dict:
     return {}
 
 
-def _merge_json_fragments(val: str, spec: Any) -> Optional[list]:
+def _merge_json_fragments(val: str, spec: Any) -> list | None:
     """Merge whitespace-separated top-level JSON values into the declared array.
 
     Some models emit an array-typed parameter as one JSON value per line —
@@ -244,9 +245,13 @@ def _merge_json_fragments(val: str, spec: Any) -> Optional[list]:
     Anything else returns None and the existing fallbacks run.
     """
     spec_type = spec.get("type") if isinstance(spec, dict) else None
-    if not isinstance(spec_type, str) or spec_type.strip().lower() not in ("array", "arr", "list"):
+    if not isinstance(spec_type, str) or spec_type.strip().lower() not in (
+        "array",
+        "arr",
+        "list",
+    ):
         return None
-    fragments: List[Any] = []
+    fragments: list[Any] = []
     pos = 0
     end = len(val)
     while True:
@@ -263,15 +268,21 @@ def _merge_json_fragments(val: str, spec: Any) -> Optional[list]:
         return None
     items = spec.get("items") if isinstance(spec, dict) else None
     items_type = items.get("type") if isinstance(items, dict) else None
-    items_are_arrays = isinstance(items_type, str) and items_type.strip().lower() in ("array", "arr", "list")
+    items_are_arrays = isinstance(items_type, str) and items_type.strip().lower() in (
+        "array",
+        "arr",
+        "list",
+    )
     if all(isinstance(f, list) for f in fragments):
         return fragments if items_are_arrays else [x for f in fragments for x in f]
-    if all(not isinstance(f, (list, dict)) for f in fragments) or all(isinstance(f, dict) for f in fragments):
+    if all(not isinstance(f, (list, dict)) for f in fragments) or all(
+        isinstance(f, dict) for f in fragments
+    ):
         return fragments
     return None
 
 
-def _repair_json_value(val: str) -> Optional[Any]:
+def _repair_json_value(val: str) -> Any | None:
     """Best-effort repair of near-valid JSON with unbalanced brackets.
 
     Rewrites closing brackets that do not match the innermost open bracket
@@ -280,8 +291,8 @@ def _repair_json_value(val: str) -> Optional[Any]:
     appends missing closers.  Returns the parsed value, or None when the
     repaired text still fails to parse.
     """
-    out: List[str] = []
-    stack: List[str] = []
+    out: list[str] = []
+    stack: list[str] = []
     in_string = False
     escaped = False
     for ch in val:
@@ -489,7 +500,7 @@ _DEEP_NEST_ERRORS = (RecursionError, SyntaxError)
 _TOOL_CALL_MAX_BOUNDARY_SCAN = 262_144
 
 
-def _json_value_end(text: str, start: int) -> Optional[int]:
+def _json_value_end(text: str, start: int) -> int | None:
     """Index just past the complete JSON value beginning at/after ``start``.
 
     Returns ``None`` when the text does not begin a JSON object/array there, or
@@ -676,7 +687,7 @@ def _skip_ws(text: str, idx: int) -> int:
 
 def _xml_function_payload_end(
     text: str, payload_start: int, end_marker: str
-) -> Optional[int]:
+) -> int | None:
     """Index just past the ``</function>`` closing an XML function payload.
 
     The ``qwen3_coder`` parser (Qwen3.5/3.6 builds) wraps XML rather than JSON
@@ -718,7 +729,9 @@ def _xml_function_payload_end(
     return None
 
 
-def _xml_element_value_end(text: str, start: int, close_tag: str, next_open: str) -> int:
+def _xml_element_value_end(
+    text: str, start: int, close_tag: str, next_open: str
+) -> int:
     """End index of an XML value, tolerating ``close_tag`` inside the value.
 
     The value really ends at the ``close_tag`` whose next non-space token is
@@ -755,7 +768,7 @@ def repair_parameter_open_tags(text: str) -> str:
     return _PARAMETER_OPEN_LOST_GT_RE.sub(r"<parameter=\1>", text)
 
 
-def _iter_xml_parameters(params_text: str) -> Iterator[Tuple[str, str]]:
+def _iter_xml_parameters(params_text: str) -> Iterator[tuple[str, str]]:
     """Yield ``(key, value)`` for each ``<parameter=k>v</parameter>`` element.
 
     Scanning advances past each value rather than using ``finditer`` over the
@@ -788,7 +801,7 @@ _ATTR_PARAM_RE = re.compile(
 )
 
 
-def _iter_attr_xml_parameters(params_text: str) -> Iterator[Tuple[str, str]]:
+def _iter_attr_xml_parameters(params_text: str) -> Iterator[tuple[str, str]]:
     """Yield ``(key, value)`` for each ``<param name="k">v</param>`` element.
 
     MiniCPM5's chat template tells the model to wrap values containing
@@ -803,7 +816,7 @@ def _iter_attr_xml_parameters(params_text: str) -> Iterator[Tuple[str, str]]:
 def _find_attr_function_span(
     text: str,
     open_match: Any,
-) -> Optional[Tuple[int, int, str]]:
+) -> tuple[int, int, str] | None:
     """Locate the true end of a <function name="..."> element.
 
     Returns (span_start, span_end, payload) or None if unclosed or malformed.
@@ -858,7 +871,7 @@ def _find_attr_function_span(
 
 def _find_marker_span_end(
     text: str, payload_start: int, end_marker: str
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Locate the close marker that actually terminates a tool-call payload.
 
     Returns ``(payload_end, span_end)`` or ``None`` when no close marker
@@ -911,7 +924,7 @@ def _find_marker_span_end(
 
 def _iter_marker_spans(
     text: str, start_marker: str, end_marker: str
-) -> Iterator[Tuple[int, int, str]]:
+) -> Iterator[tuple[int, int, str]]:
     """Yield ``(span_start, span_end, payload)`` for each marker-delimited call.
 
     ``span_start`` indexes the start marker and ``span_end`` is just past the
@@ -933,9 +946,12 @@ def _iter_marker_spans(
         pos = span_end
 
 
-def _marker_payloads(text: str, start_marker: str, end_marker: str) -> List[str]:
+def _marker_payloads(text: str, start_marker: str, end_marker: str) -> list[str]:
     """Payloads of every complete marker-delimited tool call, in order."""
-    return [payload for _s, _e, payload in _iter_marker_spans(text, start_marker, end_marker)]
+    return [
+        payload
+        for _s, _e, payload in _iter_marker_spans(text, start_marker, end_marker)
+    ]
 
 
 def _strip_marker_spans(text: str, start_marker: str, end_marker: str) -> str:
@@ -945,7 +961,7 @@ def _strip_marker_spans(text: str, start_marker: str, end_marker: str) -> str:
     containing a literal close marker is removed whole instead of leaving its
     tail behind as visible content (#2507).
     """
-    out: List[str] = []
+    out: list[str] = []
     last = 0
     for span_start, span_end, _payload in _iter_marker_spans(
         text, start_marker, end_marker
@@ -957,8 +973,8 @@ def _strip_marker_spans(text: str, start_marker: str, end_marker: str) -> str:
 
 
 def _parse_xml_tool_calls(
-    text: str, tools: Optional[List] = None
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, tools: list | None = None
+) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for XML-based tool call formats.
 
@@ -1068,8 +1084,8 @@ def _parse_xml_tool_calls(
 
 
 def _parse_namespaced_tool_calls(
-    text: str, namespace: str, tools: Optional[List] = None
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, namespace: str, tools: list | None = None
+) -> tuple[str, list[ToolCall] | None]:
     """
     Parse namespaced tool call tags like <minimax:tool_call>...</minimax:tool_call>.
 
@@ -1116,8 +1132,8 @@ def _parse_namespaced_tool_calls(
 
 
 def _parse_attribute_function_tool_calls(
-    text: str, tools: Optional[List] = None, *, bare_invoke: bool = False
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, tools: list | None = None, *, bare_invoke: bool = False
+) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for bare attribute-style tool calls (#3429).
 
@@ -1151,7 +1167,7 @@ def _parse_attribute_function_tool_calls(
 
     open_re = _ATTR_ELEMENT_OPEN_RE if bare_invoke else _ATTR_FUNCTION_OPEN_RE
     tool_calls = []
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     pos = 0
     while pos < len(text):
         match = open_re.search(text, pos)
@@ -1183,7 +1199,7 @@ def _parse_attribute_function_tool_calls(
     if not tool_calls:
         return text, None
 
-    out: List[str] = []
+    out: list[str] = []
     last = 0
     for span_start, span_end in spans:
         out.append(text[last:span_start])
@@ -1192,7 +1208,7 @@ def _parse_attribute_function_tool_calls(
     return "".join(out).strip(), tool_calls
 
 
-def _parse_hermes_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
+def _parse_hermes_tool_calls(text: str) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for Hermes-style tool call formats.
 
@@ -1292,7 +1308,7 @@ def _parse_hermes_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
     return cleaned, tool_calls
 
 
-def _parse_bracket_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
+def _parse_bracket_tool_calls(text: str) -> tuple[str, list[ToolCall] | None]:
     """
     Fallback parser for bracket-style tool call formats.
 
@@ -1387,6 +1403,7 @@ class _Gemma4ArgsTooComplexError(ValueError):
     ValueError so the public parse chain still treats it as a clean drop.
     """
 
+
 # A tool-call head: the name plus its opening ``{``.  Only the head is matched
 # by regex; the argument span is found by _scan_gemma4_args_span, not by a
 # recursive pattern (see that function).  The name segment captures namespaced
@@ -1455,8 +1472,11 @@ def _squote_close_positions(s: str) -> list:
 
 
 def _scan_gemma4_args_span(
-    text: str, open_idx: int, squote_closes: list,
-    open_ch: str = "{", close_ch: str = "}",
+    text: str,
+    open_idx: int,
+    squote_closes: list,
+    open_ch: str = "{",
+    close_ch: str = "}",
 ) -> int:
     """Return the end index (exclusive) of the balanced ``open_ch...close_ch``
     span starting at ``open_idx``, or -1 if no balanced span exists within
@@ -1620,20 +1640,18 @@ def _gemma4_transcode_to_json(args_str: str) -> dict:
     def _read_marked_string(i: int):
         """Read a <|"|>- or single-quoted string at i, or return None."""
         if args_str.startswith(_GEMMA4_STR_DELIM, i):
-            close = args_str.find(
-                _GEMMA4_STR_DELIM, i + len(_GEMMA4_STR_DELIM)
-            )
+            close = args_str.find(_GEMMA4_STR_DELIM, i + len(_GEMMA4_STR_DELIM))
             if close == -1:
                 raise ValueError("unterminated Gemma 4 string")
             return (
-                args_str[i + len(_GEMMA4_STR_DELIM): close],
+                args_str[i + len(_GEMMA4_STR_DELIM) : close],
                 close + len(_GEMMA4_STR_DELIM),
             )
         if args_str[i] == "'":
             k = bisect.bisect_right(squote_closes, i)
             if k < len(squote_closes):
                 close = squote_closes[k]
-                return args_str[i + 1: close], close + 1
+                return args_str[i + 1 : close], close + 1
             # No anchored close ahead: not a string, treat as bare content.
         return None
 
@@ -1645,7 +1663,7 @@ def _gemma4_transcode_to_json(args_str: str) -> dict:
                 j += 2
                 continue
             if args_str[j] == '"':
-                return args_str[i: j + 1], j + 1
+                return args_str[i : j + 1], j + 1
             j += 1
         raise ValueError("unterminated double-quoted string")
 
@@ -1717,9 +1735,7 @@ def _gemma4_transcode_to_json(args_str: str) -> dict:
                 # clean parse failure on the existing drop path, never as a
                 # RecursionError (uncaught by the parse chain's excepts).
                 if len(stack) >= _GEMMA4_MAX_DEPTH:
-                    raise _Gemma4ArgsTooComplexError(
-                        "Gemma 4 args nested too deeply"
-                    )
+                    raise _Gemma4ArgsTooComplexError("Gemma 4 args nested too deeply")
                 out.append(ch)
                 stack.append(ch)
                 i += 1
@@ -1855,9 +1871,7 @@ def _gemma4_args_to_json_legacy(args_str: str) -> dict:
     # Keep the pre-step-5 text: if step 5 fails, its partial quoting has
     # corrupted multi-line bare values and step 6 must start clean.
     pre_quote_text = text
-    text = regex.sub(
-        r"(:\s*)([^\",\[\]{}\s][^,}]*?)(\s*[,}])", _quote_bare, text
-    )
+    text = regex.sub(r"(:\s*)([^\",\[\]{}\s][^,}]*?)(\s*[,}])", _quote_bare, text)
     try:
         return json.loads(text)
     except (json.JSONDecodeError, *_DEEP_NEST_ERRORS):
@@ -1894,7 +1908,7 @@ def _gemma4_args_to_json_legacy(args_str: str) -> dict:
     return result
 
 
-def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
+def _parse_gemma4_tool_call_fallback(text: str) -> dict | list:
     """Robust fallback parser for Gemma 4 ``call:name{args}`` format.
 
     Activated only for Gemma 4 models (guarded by the ``tool_call_start``
@@ -1929,10 +1943,7 @@ def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
     # already-consumed paren span (the inner ``{...}`` of ``call:f(a={...})``)
     # is string/structure content, not a sibling call, and must be skipped.
     heads = [(m.start(), m, "{", "}") for m in _GEMMA4_CALL_HEAD.finditer(text)]
-    heads += [
-        (m.start(), m, "(", ")")
-        for m in _GEMMA4_CALL_HEAD_PAREN.finditer(text)
-    ]
+    heads += [(m.start(), m, "(", ")") for m in _GEMMA4_CALL_HEAD_PAREN.finditer(text)]
     heads.sort(key=lambda h: h[0])
 
     results = []
@@ -1943,9 +1954,7 @@ def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
         if start < consumed_until:
             continue
         open_idx = m.end() - 1
-        end = _scan_gemma4_args_span(
-            text, open_idx, squote_closes, open_ch, close_ch
-        )
+        end = _scan_gemma4_args_span(text, open_idx, squote_closes, open_ch, close_ch)
         if end == -1:
             continue
         args_str = text[open_idx:end]
@@ -1963,9 +1972,7 @@ def _parse_gemma4_tool_call_fallback(text: str) -> Union[dict, list]:
     return results[0] if len(results) == 1 else results
 
 
-def _remap_tool_call_names(
-    tool_calls: List[ToolCall], tools: Optional[List]
-) -> None:
+def _remap_tool_call_names(tool_calls: list[ToolCall], tools: list | None) -> None:
     """Remap namespace-prefixed emitted tool names onto registered tools.
 
     Gemma 4 emits names like ``google:mcp:text_generation:create-pdf-file``
@@ -1998,8 +2005,7 @@ def _remap_tool_call_names(
         if len(candidates) == 1:
             target = next(iter(candidates))
             logger.info(
-                "Remapped namespaced tool call name %r to registered "
-                "tool %r",
+                "Remapped namespaced tool call name %r to registered tool %r",
                 name[:200],
                 target,
             )
@@ -2007,8 +2013,8 @@ def _remap_tool_call_names(
 
 
 def _parse_k2_tool_calls(
-    text: str, tools: Optional[List] = None
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    text: str, tools: list | None = None
+) -> tuple[str, list[ToolCall] | None]:
     """Keep malformed IFM output as text, like the shared XML fallback."""
     from ..patches.k2_horizon.tool_parser import parse_tool_groups
 
@@ -2030,9 +2036,9 @@ def _parse_k2_tool_calls(
 def parse_tool_calls(
     text: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-    parse_errors: Optional[List[str]] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+    parse_errors: list[str] | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """
     Parse tool calls from model output.
 
@@ -2076,9 +2082,9 @@ def parse_tool_calls(
 def _parse_tool_calls_impl(
     text: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-    parse_errors: Optional[List[str]] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+    parse_errors: list[str] | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """parse_tool_calls body, pre-remap. See the public wrapper's docstring."""
     cleaned_text = text
 
@@ -2156,14 +2162,10 @@ def _parse_tool_calls_impl(
                     for p in items:
                         name = p.get("name", "")
                         arguments = p.get("arguments", {})
-                        if (
-                            getattr(tool_parser, "__module__", None)
-                            in (
-                                "mlx_lm.tool_parsers.qwen3_coder",
-                                "mlx_vlm.tools.parsers.qwen3_coder",
-                            )
-                            and isinstance(arguments, dict)
-                        ):
+                        if getattr(tool_parser, "__module__", None) in (
+                            "mlx_lm.tool_parsers.qwen3_coder",
+                            "mlx_vlm.tools.parsers.qwen3_coder",
+                        ) and isinstance(arguments, dict):
                             props = _tool_param_properties(name, tools)
                             # Use XML values to avoid decoding parsed strings twice.
                             for key, val in _iter_xml_parameters(match):
@@ -2215,12 +2217,8 @@ def _parse_tool_calls_impl(
                     gemma4_handled = False
                     if tool_call_start == "<|tool_call>":
                         try:
-                            parsed = _parse_gemma4_tool_call_fallback(
-                                match.strip()
-                            )
-                            items = (
-                                parsed if isinstance(parsed, list) else [parsed]
-                            )
+                            parsed = _parse_gemma4_tool_call_fallback(match.strip())
+                            items = parsed if isinstance(parsed, list) else [parsed]
                             for p in items:
                                 name = p.get("name", "")
                                 arguments = p.get("arguments", {})
@@ -2353,7 +2351,7 @@ def _parse_tool_calls_impl(
 
 
 def sanitize_tool_call_markup(
-    text: str, tokenizer: Any, tools: Optional[List] = None
+    text: str, tokenizer: Any, tools: list | None = None
 ) -> str:
     """Remove tool-call control markup while preserving surrounding prose."""
     if not text:
@@ -2373,7 +2371,7 @@ def sanitize_tool_call_markup(
     return cleaned.strip()
 
 
-def _extract_tool_names(tools: List) -> set:
+def _extract_tool_names(tools: list) -> set:
     """Extract function names from OpenAI-format tool definitions."""
     names = set()
     for tool in tools:
@@ -2386,7 +2384,7 @@ def _extract_tool_names(tools: List) -> set:
     return names
 
 
-def _opens_call(payload: str, tools: Optional[List]) -> bool:
+def _opens_call(payload: str, tools: list | None) -> bool:
     return bool(re.match(r"\s*(?:[<{\[]|call:)", payload)) or any(
         re.match(rf"\s*{re.escape(name)}\s*[(\[{{<:]", payload)
         for name in _extract_tool_names(tools or [])
@@ -2517,7 +2515,7 @@ def extract_tool_calls_with_thinking(
     thinking_content: str,
     regular_content: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
+    tools: list | None = None,
     *,
     finish_reason: str | None = None,
 ) -> ToolCallExtraction:
@@ -2583,7 +2581,9 @@ def extract_tool_calls_with_thinking(
         parse_errors = tuple(errors)
         rejected = []
 
-    cleaned_thinking = sanitize_tool_call_markup(thinking_content, tokenizer, tools=tools)
+    cleaned_thinking = sanitize_tool_call_markup(
+        thinking_content, tokenizer, tools=tools
+    )
     tool_calls_from_thinking = False
 
     if (
@@ -2657,8 +2657,8 @@ def parse_tool_calls_with_thinking_fallback(
     thinking_content: str,
     regular_content: str,
     tokenizer: Any,
-    tools: Optional[List] = None,
-) -> Tuple[str, Optional[List[ToolCall]]]:
+    tools: list | None = None,
+) -> tuple[str, list[ToolCall] | None]:
     """Parse tool calls from content, falling back to thinking if none found.
 
     Small reasoning models sometimes generate tool call XML inside <think>
@@ -2727,7 +2727,7 @@ class ToolCallStreamFilter:
         self,
         tokenizer: Any,
         *,
-        tools: Optional[Any] = None,
+        tools: Any | None = None,
         consume_dsml_separator: bool = True,
         capture_ordered_segments: bool = False,
     ):
@@ -2741,17 +2741,20 @@ class ToolCallStreamFilter:
             marker = ""
         if marker_end is None:
             marker_end = ""
-        self._marker_pairs: List[Tuple[str, str]] = [
+        self._marker_pairs: list[tuple[str, str]] = [
             ("]<]minimax[>[<tool_call>", "]<]minimax[>[</tool_call>"),
             ("<|tool_call_start|>", "<|tool_call_end|>"),
             ("<tool_call>", "</tool_call>"),
             (_XML_FUNCTION_OPEN, _XML_FUNCTION_CLOSE),
         ]
-        self._suppress_after_markers: List[str] = []
+        self._suppress_after_markers: list[str] = []
         if tools:
-            if isinstance(tools, (set, frozenset)):
-                self._registered_tool_names = set(tools)
-            elif isinstance(tools, (list, tuple)) and tools and isinstance(tools[0], str):
+            if (
+                isinstance(tools, (set, frozenset))
+                or isinstance(tools, (list, tuple))
+                and tools
+                and isinstance(tools[0], str)
+            ):
                 self._registered_tool_names = set(tools)
             else:
                 self._registered_tool_names = _extract_tool_names(tools)
@@ -2784,10 +2787,10 @@ class ToolCallStreamFilter:
         is_gemma4_tool_marker = (
             marker == "<|tool_call>" and marker_end == "<tool_call|>"
         )
-        self._stray_close_markers: List[str] = (
+        self._stray_close_markers: list[str] = (
             [marker_end] if is_gemma4_tool_marker else []
         )
-        self._orphan_close_markers: List[str] = ["<|tool_call_end|>"]
+        self._orphan_close_markers: list[str] = ["<|tool_call_end|>"]
         if marker_end and not self._is_xml_close_marker(marker_end):
             self._orphan_close_markers.append(marker_end)
         self._orphan_close_markers = list(dict.fromkeys(self._orphan_close_markers))
@@ -2809,20 +2812,20 @@ class ToolCallStreamFilter:
             *(pair[0] for pair in self._marker_pairs),
         ]
         self._marker_trigger_chars = frozenset(m[0] for m in markers if m)
-        self._suppressing_until: Optional[str] = None
+        self._suppressing_until: str | None = None
         self._suppressing = False
-        self._pending_envelope_parts: List[str] = []
-        self._pending_start_marker: Optional[str] = None
+        self._pending_envelope_parts: list[str] = []
+        self._pending_start_marker: str | None = None
         self._recovery_candidate = ""
-        self._completed_envelopes: List[str] = []
+        self._completed_envelopes: list[str] = []
         self._completed_envelope_bytes = 0
         self._completed_envelope_overflowed = False
         self._capture_ordered_segments = bool(capture_ordered_segments)
-        self._ordered_segments: List[ToolCallStreamSegment] = []
+        self._ordered_segments: list[ToolCallStreamSegment] = []
         # IFM groups are parsed together at EOF. Hold from the first opener
         # so failed parsing can return the exact suffix in its original order,
         # including prose between groups, without repeating streamed content.
-        self._ifm_pending_parts: Optional[List[str]] = None
+        self._ifm_pending_parts: list[str] | None = None
         self._reset_json_scan()
 
     @staticmethod
@@ -2878,7 +2881,7 @@ class ToolCallStreamFilter:
             cursors[marker] = tail.find(marker, index + len(marker))
         return False
 
-    def take_completed_envelopes(self) -> List[str]:
+    def take_completed_envelopes(self) -> list[str]:
         """Return complete suppressed envelopes ready for exact parsing.
 
         Populated only when ``capture_ordered_segments=True``. Callers may emit
@@ -2892,7 +2895,7 @@ class ToolCallStreamFilter:
         self._completed_envelope_bytes = 0
         return completed
 
-    def take_ordered_segments(self) -> List[ToolCallStreamSegment]:
+    def take_ordered_segments(self) -> list[ToolCallStreamSegment]:
         """Return content/envelope events in their exact raw stream order."""
 
         segments = self._ordered_segments
@@ -2915,7 +2918,7 @@ class ToolCallStreamFilter:
             or self._ifm_pending_parts is not None
         )
 
-    def _record_content(self, out: List[str], text: str) -> None:
+    def _record_content(self, out: list[str], text: str) -> None:
         if not text:
             return
         out.append(text)
@@ -2947,9 +2950,7 @@ class ToolCallStreamFilter:
         self._completed_envelopes.append(completed)
         self._completed_envelope_bytes += len(completed)
         if self._capture_ordered_segments:
-            self._ordered_segments.append(
-                ToolCallStreamSegment("envelope", completed)
-            )
+            self._ordered_segments.append(ToolCallStreamSegment("envelope", completed))
 
     def _clear_pending_envelope(self) -> None:
         self._pending_envelope_parts = []
@@ -3007,7 +3008,7 @@ class ToolCallStreamFilter:
             # ten, and the buffer is drained into the pending envelope between
             # chunks, so those ten never coexist in it. Accumulate a small
             # persistent head to decide the dialect across drains.
-            head_chunk: Optional[str] = None
+            head_chunk: str | None = None
             if self._payload_head:
                 head_chunk = buffer[i:n]
             else:
@@ -3207,8 +3208,8 @@ class ToolCallStreamFilter:
         self,
         text: str,
         start: int = 0,
-        cache: Optional[Dict[Any, Any]] = None,
-    ) -> Optional[Tuple[int, int, Optional[str]]]:
+        cache: dict[Any, Any] | None = None,
+    ) -> tuple[int, int, str | None] | None:
         """Find earliest complete opening envelope at or after ``start``.
 
         Returns:
@@ -3224,7 +3225,7 @@ class ToolCallStreamFilter:
         """
         miss = object()
 
-        def lookup(key: Any, compute: Any) -> Optional[Tuple[int, int, Optional[str]]]:
+        def lookup(key: Any, compute: Any) -> tuple[int, int, str | None] | None:
             if cache is None:
                 return compute()
             hit = cache.get(key, miss)
@@ -3233,13 +3234,13 @@ class ToolCallStreamFilter:
                 cache[key] = hit
             return hit
 
-        starts: List[Tuple[int, int, Optional[str]]] = []
+        starts: list[tuple[int, int, str | None]] = []
 
         for marker, close in self._marker_pairs:
 
             def compute_pair(
                 marker: str = marker, close: str = close
-            ) -> Optional[Tuple[int, int, Optional[str]]]:
+            ) -> tuple[int, int, str | None] | None:
                 idx = text.find(marker, start)
                 return None if idx < 0 else (idx, len(marker), close)
 
@@ -3251,7 +3252,7 @@ class ToolCallStreamFilter:
 
             def compute_orphan(
                 close: str = close,
-            ) -> Optional[Tuple[int, int, Optional[str]]]:
+            ) -> tuple[int, int, str | None] | None:
                 close_idx = text.find(close, start)
                 return None if close_idx < 0 else (close_idx, len(close), None)
 
@@ -3259,7 +3260,7 @@ class ToolCallStreamFilter:
             if hit is not None:
                 starts.append(hit)
 
-        def compute_ns() -> Optional[Tuple[int, int, Optional[str]]]:
+        def compute_ns() -> tuple[int, int, str | None] | None:
             ns_match = self._namespaced_open_re.search(text, start)
             if not ns_match:
                 return None
@@ -3274,8 +3275,8 @@ class ToolCallStreamFilter:
         if hit is not None:
             starts.append(hit)
 
-        def compute_bracket() -> Optional[Tuple[int, int, Optional[str]]]:
-            best: Optional[Tuple[int, int, Optional[str]]] = None
+        def compute_bracket() -> tuple[int, int, str | None] | None:
+            best: tuple[int, int, str | None] | None = None
             for bp in self._bracket_prefixes:
                 bracket_idx = text.find(bp, start)
                 while bracket_idx >= 0:
@@ -3298,7 +3299,7 @@ class ToolCallStreamFilter:
 
             def compute_sa(
                 sa_marker: str = sa_marker,
-            ) -> Optional[Tuple[int, int, Optional[str]]]:
+            ) -> tuple[int, int, str | None] | None:
                 idx = text.find(sa_marker, start)
                 if idx < 0:
                     return None
@@ -3308,7 +3309,7 @@ class ToolCallStreamFilter:
             if hit is not None:
                 starts.append(hit)
 
-        def compute_attr_func() -> Optional[Tuple[int, int, Optional[str]]]:
+        def compute_attr_func() -> tuple[int, int, str | None] | None:
             if not self._registered_tool_names:
                 return None
             open_re = (
@@ -3385,7 +3386,7 @@ class ToolCallStreamFilter:
         rest = rest.lstrip()
         if not rest:
             return True
-        for prefix in ("n", "na", "nam", "name", 'name='):
+        for prefix in ("n", "na", "nam", "name", "name="):
             if rest == prefix:
                 return True
         if rest.startswith('name="'):
@@ -3510,7 +3511,7 @@ class ToolCallStreamFilter:
         if not any(bp in text for bp in self._bracket_prefixes):
             return text
 
-        out: List[str] = []
+        out: list[str] = []
         cursor = 0
         while cursor < len(text):
             bracket_idx = -1
@@ -3583,8 +3584,8 @@ class ToolCallStreamFilter:
         Trailing prose after the last envelope is staged in ``self._buffer``
         so the caller's end-of-stream tail rules still apply to it.
         """
-        out: List[str] = []
-        cache: Dict[Any, Any] = {}
+        out: list[str] = []
+        cache: dict[Any, Any] = {}
         # The close search must not match inside the opening marker itself.
         pos = min(len(start_marker), len(candidate))
         env_start = 0
@@ -3638,9 +3639,7 @@ class ToolCallStreamFilter:
                 idx, consume_len, close = nxt
                 if idx > pos:
                     out.append(
-                        self._sanitize_prefix_before_suppression(
-                            candidate[pos:idx]
-                        )
+                        self._sanitize_prefix_before_suppression(candidate[pos:idx])
                     )
                 env_start = idx
                 pos = idx + consume_len
@@ -3669,7 +3668,7 @@ class ToolCallStreamFilter:
         if not self.active:
             return text
 
-        out: List[str] = []
+        out: list[str] = []
         # Prose fast path: no marker can begin, so skip the scan below.
         if (
             not self._buffer
@@ -3713,9 +3712,7 @@ class ToolCallStreamFilter:
                                 self._partial_prefix_len(
                                     self._buffer, self._suppressing_until
                                 ),
-                                self._partial_prefix_len(
-                                    self._buffer, "<![CDATA["
-                                ),
+                                self._partial_prefix_len(self._buffer, "<![CDATA["),
                             )
                     else:
                         keep = self._partial_prefix_len(
@@ -3753,7 +3750,7 @@ class ToolCallStreamFilter:
                 if idx > 0:
                     self._record_content(
                         out,
-                        self._sanitize_prefix_before_suppression(self._buffer[:idx])
+                        self._sanitize_prefix_before_suppression(self._buffer[:idx]),
                     )
                 self._buffer = self._buffer[idx + consume_len :]
                 if close_marker == "</ifm|tool_calls>":
@@ -3851,7 +3848,7 @@ class ToolCallStreamFilter:
         return recovered + buf
 
 
-def convert_tools_for_template(tools: Optional[List]) -> Optional[List[dict]]:
+def convert_tools_for_template(tools: list | None) -> list[dict] | None:
     """
     Convert OpenAI tools format to format expected by tokenizer.apply_chat_template.
 
@@ -3971,7 +3968,7 @@ def restore_gemma4_param_names(arguments: dict) -> dict:
     restored = {}
     for k, v in arguments.items():
         if k.startswith(_GEMMA4_RENAME_PREFIX):
-            original = k[len(_GEMMA4_RENAME_PREFIX):]
+            original = k[len(_GEMMA4_RENAME_PREFIX) :]
             if original in _GEMMA4_COLLIDING_PARAMS:
                 restored[original] = v
                 continue
@@ -4004,9 +4001,7 @@ def format_tool_call_for_message(tool_call: ToolCall) -> dict:
 # =============================================================================
 
 
-def validate_json_schema(
-    data: Any, schema: Dict[str, Any]
-) -> Tuple[bool, Optional[str]]:
+def validate_json_schema(data: Any, schema: dict[str, Any]) -> tuple[bool, str | None]:
     """
     Validate JSON data against a JSON Schema.
 
@@ -4026,7 +4021,7 @@ def validate_json_schema(
         return False, str(e.message)
 
 
-def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+def extract_json_from_text(text: str) -> dict[str, Any] | None:
     """
     Extract JSON from model output text.
 
@@ -4040,7 +4035,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     return extracted[0] if extracted is not None else None
 
 
-def _extract_json_span(text: str) -> Optional[Tuple[Any, str]]:
+def _extract_json_span(text: str) -> tuple[Any, str] | None:
     """
     Extract JSON from model output text, with the exact text it was parsed from.
 
@@ -4086,8 +4081,8 @@ def _extract_json_span(text: str) -> Optional[Tuple[Any, str]]:
 
 
 def parse_json_output(
-    text: str, response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None
-) -> Tuple[str, Optional[Dict[str, Any]], bool, Optional[str]]:
+    text: str, response_format: ResponseFormat | dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any] | None, bool, str | None]:
     """
     Parse JSON from model output when response_format is set.
 
@@ -4157,8 +4152,8 @@ def parse_json_output(
 
 
 def build_json_system_prompt(
-    response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None,
-) -> Optional[str]:
+    response_format: ResponseFormat | dict[str, Any] | None = None,
+) -> str | None:
     """
     Build a system prompt instruction for JSON output.
 

@@ -32,7 +32,9 @@ class ContentBlockImage(BaseModel):
     """Image content block with source data."""
 
     type: Literal["image"] = "image"
-    source: dict[str, Any]  # {"type": "base64"|"url", "media_type": "...", "data"|"url": "..."}
+    source: dict[
+        str, Any
+    ]  # {"type": "base64"|"url", "media_type": "...", "data"|"url": "..."}
 
 
 class ContentBlockToolUse(BaseModel):
@@ -66,7 +68,9 @@ class ContentBlockDocument(BaseModel):
     """Document content block (PDF, plain text)."""
 
     type: Literal["document"] = "document"
-    source: dict[str, Any]  # {"type": "base64", "media_type": "application/pdf", "data": "..."}
+    source: dict[
+        str, Any
+    ]  # {"type": "base64", "media_type": "application/pdf", "data": "..."}
     title: str | None = None
     context: str | None = None
     citations: dict[str, Any] | None = None
@@ -295,7 +299,9 @@ class MessagesResponse(BaseModel):
     role: Literal["assistant"] = "assistant"
     model: str
     content: list[ContentBlockText | ContentBlockToolUse | ContentBlockThinking]
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None = None
+    stop_reason: (
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
+    ) = None
     stop_sequence: str | None = None
     usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
 

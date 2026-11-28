@@ -16,7 +16,8 @@ def test_chat_image_tools_javascript():
         pytest.skip("Node.js is required to exercise production chat JavaScript")
     result = subprocess.run(
         [
-            node, "--test",
+            node,
+            "--test",
             str(Path(__file__).with_name("chat_image_tools.test.cjs")),
             str(Path(__file__).with_name("chat_history.test.cjs")),
         ],

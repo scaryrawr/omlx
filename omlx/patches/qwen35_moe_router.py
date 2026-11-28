@@ -125,7 +125,9 @@ METAL_FUNC void omlx_router_softmax_row(
 # largest; the selected lane moves on and rescans its keys once its three
 # are used. Key 0 stands for the per-row launch's -inf / NE when nothing is
 # left.
-_TOPK_SELECT_HEADER = _SOFTMAX_ROW_HEADER + """
+_TOPK_SELECT_HEADER = (
+    _SOFTMAX_ROW_HEADER
+    + """
 template <typename T, int NE>
 struct omlx_router_topk {
   enum : uint { PER = uint(NE) / 32 };
@@ -266,6 +268,7 @@ struct omlx_router_topk<bfloat16_t, NE> {
   }
 };
 """
+)
 
 # Lane 0 renormalizes the selection over its own sum and stores it.
 _TOPK_STORE_HEADER = """
@@ -771,9 +774,7 @@ def apply_qwen35_moe_router_patch() -> bool:
             shared_y = mx.sigmoid(self.shared_expert_gate(x)) * shared_y
             return y + shared_y
         except Exception:
-            logger.warning(
-                "fused MoE router failed; composed fallback", exc_info=True
-            )
+            logger.warning("fused MoE router failed; composed fallback", exc_info=True)
             return orig_call(self, x)
 
     cls.__call__ = patched_call

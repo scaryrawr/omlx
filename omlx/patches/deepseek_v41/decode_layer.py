@@ -23,7 +23,9 @@ import mlx.core as mx
 from .decode_moe import _HEADER as _MOE_HEADER
 from .decode_moe import format_macros, format_tag
 
-_HEADER = _MOE_HEADER + r"""
+_HEADER = (
+    _MOE_HEADER
+    + r"""
 // E4M3FN code of a value already on the E4M3 grid (|v| <= 448).
 inline uchar e4m3_code(float q) {
     const uint b = as_type<uint>(q);
@@ -46,6 +48,7 @@ inline float rsqrt_mean_eps(float sumsq, float n, float eps) {
     return 1.0f / metal::precise::sqrt(sumsq / n + eps);
 }
 """
+)
 
 # K1: hyper-connection mixing GEMV partials and hc_pre. x = flatten(h) as fp32 (HC*DIM
 # values); a threadgroup of 64 threads takes dims [64 tg, 64 tg + 64) of all HC streams
@@ -355,7 +358,9 @@ _ATTN_COMMON = r"""
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 """
-_ATTN_SCORES = _ATTN_COMMON + r"""
+_ATTN_SCORES = (
+    _ATTN_COMMON
+    + r"""
     // S^T = K Q^T on 8x8 tiles. 32 simdgroups: key tile = sg % 8, D quarter = sg / 8. Thread (fm, fn)
     // holds key fm of the tile and the CH = D / 16 consecutive dims of chunk fn / 2 of the quarter
     // (one vector read of the row); MMA step s takes dims 2 s, 2 s + 1 of every chunk.
@@ -398,7 +403,10 @@ _ATTN_SCORES = _ATTN_COMMON + r"""
         if (lane == 0) BMAX[(hg * 8 + sg) * NB + b] = m;
     }
 """
-_ATTN_PV = _ATTN_COMMON + r"""
+)
+_ATTN_PV = (
+    _ATTN_COMMON
+    + r"""
     threadgroup float mb[8];
     threadgroup float prob[8 * 64];
     if (sg == 0 && lane < 8) {   // M_b: prefix max of block maxima from -1e30 (exact)
@@ -445,6 +453,7 @@ _ATTN_PV = _ATTN_COMMON + r"""
         PV[o + 1] = pv[v].thread_elements()[1];
     }
 """
+)
 # o epilogue with the attention merge: one simdgroup per 32 output dims of one head.
 _O_MERGE = r"""
     const uint lane = thread_index_in_simdgroup;
@@ -616,18 +625,27 @@ _ATTN_PRELUDE_B = r"""
     auto wi = wi_all + size_t(REQ) * size_t(WIS);
     auto ci = ci_all + size_t(REQ) * cmax;
 """
-_ATTN_SCORES_B = _ATTN_PRELUDE_B + r"""
+_ATTN_SCORES_B = (
+    _ATTN_PRELUDE_B
+    + r"""
     auto q = q_all + size_t(REQ) * size_t(H * D);
     auto S = S_all + size_t(REQ) * size_t(H) * nbmax * 64;
     auto BMAX = BMAX_all + size_t(REQ) * size_t(H) * nbmax;
-""" + _ATTN_SCORES
-_ATTN_PV_B = _ATTN_PRELUDE_B + r"""
+"""
+    + _ATTN_SCORES
+)
+_ATTN_PV_B = (
+    _ATTN_PRELUDE_B
+    + r"""
     auto S = S_all + size_t(REQ) * size_t(H) * nbmax * 64;
     auto BMAX = BMAX_all + size_t(REQ) * size_t(H) * nbmax;
     auto PV = PV_all + size_t(REQ) * size_t(H) * nbmax * size_t(D);
     auto DEN = DEN_all + size_t(REQ) * size_t(H) * nbmax;
-""" + _ATTN_PV
-_O_MERGE_B = r"""
+"""
+    + _ATTN_PV
+)
+_O_MERGE_B = (
+    r"""
     const uint REQ = threadgroup_position_in_grid.y;
     const device int* meta = meta_all + REQ * 8;
     const size_t nbmax = size_t(meta[7]);
@@ -637,17 +655,46 @@ _O_MERGE_B = r"""
     auto cosv = cosv_all + REQ * (RD / 2);
     auto sinv = sinv_all + REQ * (RD / 2);
     auto oq = oq_all + size_t(REQ) * size_t(NH * HD);
-""" + _O_MERGE
+"""
+    + _O_MERGE
+)
 
 # Per-request kernels in a batch: request b = threadgroup_position_in_grid.y reads and writes
 # its own slice (stride per buffer) and otherwise runs the single-request source unchanged.
 _BATCHED_STRIDES = {
-    "mix_partial": {"res": "HC * DIM", "sub": "(POST ? DIM : 0)", "post": "(POST ? HC : 0)", "comb": "(POST ? HC * HC : 0)",
-                    "pre_in": "HC", "partial": "NPART * (MIX + 2)", "hout": "(POST ? HC * DIM : 0)", "xpre": "DIM"},
-    "mix_final": {"partial": "NPART * (MIX + 2)", "y": "DIM", "mix_out": "MIX", "xn": "DIM", "xq": "DIM"},
-    "attn_mid": {"qa": "QR", "kv": "HD", "cosv": "RD / 2", "sinv": "RD / 2",
-                 "qr": "QR", "qrq": "QR", "packed": "HD + HD / 32"},
-    "hc_post": {"sub": "DIM", "res": "HC * DIM", "post": "HC", "comb": "HC * HC", "out": "HC * DIM"},
+    "mix_partial": {
+        "res": "HC * DIM",
+        "sub": "(POST ? DIM : 0)",
+        "post": "(POST ? HC : 0)",
+        "comb": "(POST ? HC * HC : 0)",
+        "pre_in": "HC",
+        "partial": "NPART * (MIX + 2)",
+        "hout": "(POST ? HC * DIM : 0)",
+        "xpre": "DIM",
+    },
+    "mix_final": {
+        "partial": "NPART * (MIX + 2)",
+        "y": "DIM",
+        "mix_out": "MIX",
+        "xn": "DIM",
+        "xq": "DIM",
+    },
+    "attn_mid": {
+        "qa": "QR",
+        "kv": "HD",
+        "cosv": "RD / 2",
+        "sinv": "RD / 2",
+        "qr": "QR",
+        "qrq": "QR",
+        "packed": "HD + HD / 32",
+    },
+    "hc_post": {
+        "sub": "DIM",
+        "res": "HC * DIM",
+        "post": "HC",
+        "comb": "HC * HC",
+        "out": "HC * DIM",
+    },
 }
 
 
@@ -656,28 +703,97 @@ def kernel(name, formats=()):
     """The decode kernel ``name``; kernels that read attention projections take their
     weight formats (decode_moe.weight_format) for the roles A, B (gemv pair) or W (wq_b)."""
     specs = {
-        "mix_partial": (["res", "fn", "sub", "post", "comb", "pre_in"], ["partial", "hout", "xpre"], _MIX_PARTIAL),
-        "mix_final": (["partial", "y", "norm_w", "scale", "base", "eps", "hc_eps"], ["mix_out", "xn", "xq"], _MIX_FINAL),
-        "gemv_fp8": (["x", "wa", "sa", "ba", "wb", "sb", "bb"], ["ya", "yb"], _GEMV_FP8),
-        "attn_mid": (["qa", "kv", "qnw", "kvnw", "cosv", "sinv", "eps"], ["qr", "qrq", "packed"], _ATTN_MID),
+        "mix_partial": (
+            ["res", "fn", "sub", "post", "comb", "pre_in"],
+            ["partial", "hout", "xpre"],
+            _MIX_PARTIAL,
+        ),
+        "mix_final": (
+            ["partial", "y", "norm_w", "scale", "base", "eps", "hc_eps"],
+            ["mix_out", "xn", "xq"],
+            _MIX_FINAL,
+        ),
+        "gemv_fp8": (
+            ["x", "wa", "sa", "ba", "wb", "sb", "bb"],
+            ["ya", "yb"],
+            _GEMV_FP8,
+        ),
+        "attn_mid": (
+            ["qa", "kv", "qnw", "kvnw", "cosv", "sinv", "eps"],
+            ["qr", "qrq", "packed"],
+            _ATTN_MID,
+        ),
         "wqb_rope": (["x", "w", "sc", "bi", "cosv", "sinv"], ["y"], _WQB_ROPE),
         "woa": (["x", "w", "sc"], ["yq"], _WOA),
         "hc_post": (["sub", "res", "post", "comb"], ["out"], _HC_POST),
-        "attn_scores": (["q", "window", "pooled", "wi", "ci", "meta", "scalep"], ["S", "BMAX"], _ATTN_SCORES),
-        "attn_pv": (["window", "pooled", "wi", "ci", "meta", "S", "BMAX"], ["PV", "DEN"], _ATTN_PV),
-        "o_merge": (["PV", "DEN", "BMAX", "sink", "meta", "cosv", "sinv"], ["oq"], _O_MERGE),
-        "gemv_fp8_nb": (["x", "wa", "sa", "ba", "wb", "sb", "bb"], ["ya", "yb"], _GEMV_FP8_NB),
+        "attn_scores": (
+            ["q", "window", "pooled", "wi", "ci", "meta", "scalep"],
+            ["S", "BMAX"],
+            _ATTN_SCORES,
+        ),
+        "attn_pv": (
+            ["window", "pooled", "wi", "ci", "meta", "S", "BMAX"],
+            ["PV", "DEN"],
+            _ATTN_PV,
+        ),
+        "o_merge": (
+            ["PV", "DEN", "BMAX", "sink", "meta", "cosv", "sinv"],
+            ["oq"],
+            _O_MERGE,
+        ),
+        "gemv_fp8_nb": (
+            ["x", "wa", "sa", "ba", "wb", "sb", "bb"],
+            ["ya", "yb"],
+            _GEMV_FP8_NB,
+        ),
         "wqb_rope_nb": (["x", "w", "sc", "bi", "cosv", "sinv"], ["y"], _WQB_ROPE_NB),
         "woa_nb": (["x", "w", "sc"], ["yq"], _WOA_NB),
-        "gemv_fp8_mma": (["x", "wa", "sa", "ba", "wb", "sb", "bb"], ["ya", "yb"], _GEMV_FP8_MMA),
+        "gemv_fp8_mma": (
+            ["x", "wa", "sa", "ba", "wb", "sb", "bb"],
+            ["ya", "yb"],
+            _GEMV_FP8_MMA,
+        ),
         "wqb_rope_mma": (["x", "w", "sc", "bi", "cosv", "sinv"], ["y"], _WQB_ROPE_MMA),
         "woa_mma": (["x", "w", "sc"], ["yq"], _WOA_MMA),
-        "attn_scores_bq": (["q_all", "window_all", "pooled_all", "wi_all", "ci_all", "meta_all", "scalep"],
-                           ["S_all", "BMAX_all"], _ATTN_SCORES_B),
-        "attn_pv_bq": (["window_all", "pooled_all", "wi_all", "ci_all", "meta_all", "S_all", "BMAX_all"],
-                       ["PV_all", "DEN_all"], _ATTN_PV_B),
-        "o_merge_bq": (["PV_all", "DEN_all", "BMAX_all", "sink", "meta_all", "cosv_all", "sinv_all"],
-                       ["oq_all"], _O_MERGE_B),
+        "attn_scores_bq": (
+            [
+                "q_all",
+                "window_all",
+                "pooled_all",
+                "wi_all",
+                "ci_all",
+                "meta_all",
+                "scalep",
+            ],
+            ["S_all", "BMAX_all"],
+            _ATTN_SCORES_B,
+        ),
+        "attn_pv_bq": (
+            [
+                "window_all",
+                "pooled_all",
+                "wi_all",
+                "ci_all",
+                "meta_all",
+                "S_all",
+                "BMAX_all",
+            ],
+            ["PV_all", "DEN_all"],
+            _ATTN_PV_B,
+        ),
+        "o_merge_bq": (
+            [
+                "PV_all",
+                "DEN_all",
+                "BMAX_all",
+                "sink",
+                "meta_all",
+                "cosv_all",
+                "sinv_all",
+            ],
+            ["oq_all"],
+            _O_MERGE_B,
+        ),
     }
     batched = name.endswith("_b") and name[:-2] in _BATCHED_STRIDES
     base = name[:-2] if batched else name
@@ -685,7 +801,10 @@ def kernel(name, formats=()):
     if batched:
         strides = _BATCHED_STRIDES[base]
         prelude = "    const uint BROW = threadgroup_position_in_grid.y;\n" + "".join(
-            f"    auto {n} = {n}_all + size_t(BROW) * size_t({strides[n]});\n" for n in inputs + outputs if n in strides)
+            f"    auto {n} = {n}_all + size_t(BROW) * size_t({strides[n]});\n"
+            for n in inputs + outputs
+            if n in strides
+        )
         inputs = [n + "_all" if n in strides else n for n in inputs]
         outputs = [n + "_all" if n in strides else n for n in outputs]
         source = prelude + source
@@ -699,5 +818,10 @@ def kernel(name, formats=()):
         roles = ("W",) if base.startswith("wqb") else ("A", "B")
         header = format_macros(zip(roles, formats)) + header
         full += "_" + format_tag(formats)
-    return mx.fast.metal_kernel(name=full, input_names=inputs,
-                                output_names=outputs, source=source, header=header)
+    return mx.fast.metal_kernel(
+        name=full,
+        input_names=inputs,
+        output_names=outputs,
+        source=source,
+        header=header,
+    )

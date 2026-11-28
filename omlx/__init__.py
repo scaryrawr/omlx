@@ -47,6 +47,7 @@ _LAZY = {
 
 def __getattr__(name: str):
     import importlib
+
     if name in _LAZY:
         mod = importlib.import_module(_LAZY[name])
         attr = "PagedCacheStats" if name == "CacheStats" else name
@@ -54,6 +55,7 @@ def __getattr__(name: str):
         globals()[name] = val
         return val
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Request management

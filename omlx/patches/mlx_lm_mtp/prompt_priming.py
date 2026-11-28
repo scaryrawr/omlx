@@ -42,11 +42,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, List, Optional
+from typing import Any
 
 from ...prefill.packed import PackedBatch, packed_batch_of
 
@@ -84,10 +84,10 @@ def _suppressed() -> bool:
 class _PrimeCtx:
     """Streaming priming state in the host model's single slot."""
 
-    mtp_cache: List[Any] = field(default_factory=list)
+    mtp_cache: list[Any] = field(default_factory=list)
     # Head-input hidden of the newest seen token, (1, 1, ..., H) — pairs
     # with the first token of the next chunk (or main_tok at activation).
-    pending_hidden: Optional[Any] = None
+    pending_hidden: Any | None = None
     # Folded (hidden, next_token) pairs == head-cache offset.
     folded: int = 0
     # Anchor cache offset observed after the last captured forward. The next
@@ -96,7 +96,7 @@ class _PrimeCtx:
     valid: bool = True
     # Committed pairs collected during ordinary decoding. None means
     # ordinary prompt priming; a list resumes an already active head.
-    deferred_pairs: Optional[List[Any]] = None
+    deferred_pairs: list[Any] | None = None
     # The pairs are deferred only to batch the prompt priming's decode folds
     # (``_defer_decode_history``): a broken timeline drops the history, as
     # an eager fold would, instead of failing a resumed head's handoff.
@@ -104,13 +104,13 @@ class _PrimeCtx:
     # Request/prefix-cache metadata used to publish and restore one exact
     # MTP boundary snapshot. The cache itself remains generic and
     # treats the snapshot as an opaque sidecar.
-    request_id: Optional[str] = None
-    prompt_tokens: Optional[tuple[int, ...]] = None
+    request_id: str | None = None
+    prompt_tokens: tuple[int, ...] | None = None
     block_size: int = 0
     prefix_cache: Any = None
-    extra_keys: Optional[tuple[Any, ...]] = None
-    extra_key_token_start: Optional[int] = None
-    extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None
+    extra_keys: tuple[Any, ...] | None = None
+    extra_key_token_start: int | None = None
+    extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None
     snapshot_candidate: Any = None
     native_prompt_tokens: list[Any] | None = None
     native_prompt_hidden: list[Any] | None = None
@@ -124,9 +124,9 @@ class _PrimePlan:
     prompt_tokens: tuple[int, ...]
     block_size: int
     prefix_cache: Any
-    extra_keys: Optional[tuple[Any, ...]] = None
-    extra_key_token_start: Optional[int] = None
-    extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None
+    extra_keys: tuple[Any, ...] | None = None
+    extra_key_token_start: int | None = None
+    extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None
 
 
 @dataclass
@@ -134,7 +134,7 @@ class _MtpPrefixSnapshot:
     """Detached MTP-head state at a backbone cache boundary."""
 
     boundary_tokens: int
-    mtp_cache: List[Any]
+    mtp_cache: list[Any]
     pending_hidden: Any
 
 
@@ -148,7 +148,7 @@ class _MtpBoundaryCandidate:
     mtp_cache: list[Any] | None = None
 
 
-def _read_offset(entry: Any) -> Optional[int]:
+def _read_offset(entry: Any) -> int | None:
     """``entry.offset`` as a plain int, unwrapping size-1 array offsets.
 
     Batch caches (``BatchKVCache`` / ``BatchRotatingKVCache``) hold their
@@ -197,11 +197,11 @@ class _IntOffsetAnchor:
         self._cache = cache
 
     @property
-    def offset(self) -> Optional[int]:
+    def offset(self) -> int | None:
         return _read_offset(self._cache)
 
 
-def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
+def _anchor(cache: list[Any] | None) -> Any | None:
     """First cache entry whose offset can be read as an int, as a view.
 
     Container layers (``CacheList``-style, exposing ``.caches`` — DeepSeek-V4
@@ -219,7 +219,7 @@ def _anchor(cache: Optional[List[Any]]) -> Optional[Any]:
     return None
 
 
-def _activation_offset(cache: Optional[List[Any]]) -> Optional[int]:
+def _activation_offset(cache: list[Any] | None) -> int | None:
     """Attention-layer offset at MTP activation, tolerant of batch caches.
 
     Between the last capture and activation, ``insert()`` runs mlx-lm's
@@ -253,7 +253,7 @@ def _host_candidates(model: Any):
             yield inner
 
 
-def _find_ctx(model: Any) -> Optional[_PrimeCtx]:
+def _find_ctx(model: Any) -> _PrimeCtx | None:
     for host in _host_candidates(model):
         ctx = getattr(host, _CTX_ATTR, None)
         if ctx is not None:
@@ -261,7 +261,7 @@ def _find_ctx(model: Any) -> Optional[_PrimeCtx]:
     return None
 
 
-def _find_plan(model: Any) -> Optional[_PrimePlan]:
+def _find_plan(model: Any) -> _PrimePlan | None:
     for host in _host_candidates(model):
         plan = getattr(host, _PLAN_ATTR, None)
         if isinstance(plan, _PrimePlan):
@@ -276,10 +276,8 @@ def drop_ctx(model: Any) -> None:
     for host in _host_candidates(model):
         for attr in (_CTX_ATTR, _PLAN_ATTR):
             if getattr(host, attr, None) is not None:
-                try:
+                with suppress(AttributeError):
                     delattr(host, attr)
-                except AttributeError:
-                    pass
 
 
 def _host_eligible(host: Any) -> bool:
@@ -301,7 +299,7 @@ def _eligible_host(model: Any) -> Any | None:
     return None
 
 
-def _clone_mtp_cache(cache: List[Any]) -> List[Any]:
+def _clone_mtp_cache(cache: list[Any]) -> list[Any]:
     """Detach an MTP cache so later decode writes cannot mutate a snapshot."""
     import copy
 
@@ -324,7 +322,7 @@ def _clone_mtp_cache(cache: List[Any]) -> List[Any]:
     return [clone_one(entry) for entry in cache]
 
 
-def _flat_cache_entries(cache: List[Any]):
+def _flat_cache_entries(cache: list[Any]):
     for entry in cache:
         subs = getattr(entry, "caches", None)
         if subs is None:
@@ -347,7 +345,7 @@ def _token_offset(entry: Any) -> int | None:
     return _read_offset(entry)
 
 
-def _cache_at_offset(cache: List[Any], target: int) -> Optional[List[Any]]:
+def _cache_at_offset(cache: list[Any], target: int) -> list[Any] | None:
     """Return a detached, exactly trimmed MTP cache or fail closed."""
     if target < 0 or not cache:
         return None
@@ -391,7 +389,7 @@ def _snapshot_arrays(snapshot: _MtpPrefixSnapshot) -> list[Any]:
     return arrays
 
 
-def capture_eligible(host: Any, cache: Optional[List[Any]]) -> bool:
+def capture_eligible(host: Any, cache: list[Any] | None) -> bool:
     """Cheap pre-check for capture sites that must decide the forward shape.
 
     The DeepSeek/GLM backbones only expose the head-input hidden when asked
@@ -408,7 +406,7 @@ class _OwnedPriming:
     requests: dict = field(default_factory=dict)
     uids: dict = field(default_factory=dict)
     # Request selected by the last ``activate_request`` (DSpark capture).
-    active: Optional[str] = None
+    active: str | None = None
 
 
 _OWNED_ATTR = "_omlx_mtp_owned_priming"
@@ -607,9 +605,9 @@ def _prepare_prefix_context(
     prompt_tokens: list[int],
     cached_tokens: int,
     prefix_cache: Any,
-    extra_keys: Optional[tuple[Any, ...]] = None,
-    extra_key_token_start: Optional[int] = None,
-    extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None,
+    extra_keys: tuple[Any, ...] | None = None,
+    extra_key_token_start: int | None = None,
+    extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None,
 ) -> bool:
     """Prepare exact MTP priming for one scheduler-owned prompt timeline.
 
@@ -747,7 +745,7 @@ def _capture_boundary_candidate(
     *,
     seq_start: int,
     seq_end: int,
-    boundary: Optional[int] = None,
+    boundary: int | None = None,
 ) -> None:
     """Detach a retained tail or the newest full-block boundary in this chunk."""
     block = int(ctx.block_size or 0)
@@ -800,7 +798,7 @@ def _capture_boundary_candidate(
 
 
 def _publish_boundary_candidate(
-    ctx: _PrimeCtx, candidate: Optional[_MtpBoundaryCandidate] = None
+    ctx: _PrimeCtx, candidate: _MtpBoundaryCandidate | None = None
 ) -> None:
     if candidate is None:
         candidate = ctx.snapshot_candidate
@@ -1102,7 +1100,7 @@ def _flush_deferred_history(model, ctx, chunk_size=512):
 
 
 def _capture_single(
-    host: Any, inputs: Any, normed: Any, cache: Optional[List[Any]]
+    host: Any, inputs: Any, normed: Any, cache: list[Any] | None
 ) -> None:
     """Fold this forward's (hidden, next_token) pairs into the priming cache.
 
@@ -1174,10 +1172,15 @@ def _capture_single(
             return
         setattr(host, _CTX_ATTR, ctx)
 
-    if getattr(host, "_omlx_native_mtp_full_prompt", False) and ctx.deferred_pairs is None:
+    if (
+        getattr(host, "_omlx_native_mtp_full_prompt", False)
+        and ctx.deferred_pairs is None
+    ):
         if ctx.native_prompt_hidden is None:
             if offset_after != seq_len:
-                raise RuntimeError("Native MTP requires complete uncached prompt history")
+                raise RuntimeError(
+                    "Native MTP requires complete uncached prompt history"
+                )
             ctx.native_prompt_tokens = []
             ctx.native_prompt_hidden = []
         ctx.native_prompt_tokens.append(inputs)
@@ -1255,11 +1258,11 @@ def take_primed(model, cache, main_tok, *, uid=None, cache_offset=None):
 
 def _take_primed(
     model: Any,
-    cache: Optional[List[Any]],
+    cache: list[Any] | None,
     main_tok: Any,
     *,
     cache_offset=None,
-) -> Optional[tuple]:
+) -> tuple | None:
     """Pop the priming context at MTP activation and finish the seam.
 
     Called from ``_post_init_mtp`` after its 1-token backbone forward at
@@ -1330,7 +1333,7 @@ def _take_primed(
     return ctx.mtp_cache, ctx.folded + 1
 
 
-def prime_ctx_stats(model: Any) -> Optional[int]:
+def prime_ctx_stats(model: Any) -> int | None:
     """Folded pair count of a live context (introspection / tests)."""
     ctx = _find_ctx(model)
     return ctx.folded if ctx is not None else None

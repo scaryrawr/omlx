@@ -53,7 +53,7 @@ def test_shim_reproduces_the_bundled_interpreter_environment(tmp_path):
     # A path with a space must survive the shell, so this one is quoted.
     assert "export OMLX_BASE_PATH='/tmp/custom omlx'" in script
     assert script.rstrip().endswith(
-        'exec /Applications/oMLX.app/Contents/Resources/Python/'
+        "exec /Applications/oMLX.app/Contents/Resources/Python/"
         'cpython-3.11/bin/python3.11 "$@"'
     )
 
@@ -138,7 +138,9 @@ def test_a_refused_executable_says_why(tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="omlx.cluster.worker_shim"):
         assert ensure_cluster_python_shim(home=tmp_path, executable="python3") is None
 
-    assert any("not absolute" in record.message for record in caplog.records), caplog.text
+    assert any("not absolute" in record.message for record in caplog.records), (
+        caplog.text
+    )
 
 
 def test_a_successful_publish_records_what_it_pointed_at(tmp_path, caplog):
@@ -159,7 +161,7 @@ def test_shim_survives_a_stale_file_at_the_target_path(tmp_path):
     bin_dir = tmp_path / ".omlx" / "bin"
     bin_dir.mkdir(parents=True)
     stale = bin_dir / "omlx-cluster-python"
-    stale.write_text("#!/bin/sh\nexec /gone/python \"$@\"\n", encoding="utf-8")
+    stale.write_text('#!/bin/sh\nexec /gone/python "$@"\n', encoding="utf-8")
     stale.chmod(0o644)
 
     written = ensure_cluster_python_shim(home=tmp_path, executable="/usr/bin/python3")
@@ -169,7 +171,9 @@ def test_shim_survives_a_stale_file_at_the_target_path(tmp_path):
     assert os.access(stale, os.X_OK)
 
 
-def test_default_home_and_environment_come_from_the_running_server(tmp_path, monkeypatch):
+def test_default_home_and_environment_come_from_the_running_server(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 

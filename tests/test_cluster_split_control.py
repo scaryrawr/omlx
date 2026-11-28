@@ -40,15 +40,21 @@ def _model(total_gib=225, layers=60, kv_per_layer=2048):
 
 def _mbp(cap_gib=0):
     return NodeBudget(
-        node_id="mbp", capacity_bytes=128 * GiB, reserve_bytes=12 * GiB,
-        rank=0, max_weight_bytes=int(cap_gib * GiB),
+        node_id="mbp",
+        capacity_bytes=128 * GiB,
+        reserve_bytes=12 * GiB,
+        rank=0,
+        max_weight_bytes=int(cap_gib * GiB),
     )
 
 
 def _studio(cap_gib=0):
     return NodeBudget(
-        node_id="studio", capacity_bytes=243 * GiB, reserve_bytes=16 * GiB,
-        rank=1, max_weight_bytes=int(cap_gib * GiB),
+        node_id="studio",
+        capacity_bytes=243 * GiB,
+        reserve_bytes=16 * GiB,
+        rank=1,
+        max_weight_bytes=int(cap_gib * GiB),
     )
 
 
@@ -66,8 +72,12 @@ def test_a_pinned_node_is_not_given_more_than_its_cap():
 
 
 def test_pinning_one_node_lower_moves_work_to_the_other():
-    loose = _by_node(plan_unequal_pipeline(_model(), [_mbp(), _studio()], context_tokens=8192))
-    tight = _by_node(plan_unequal_pipeline(_model(), [_mbp(48), _studio()], context_tokens=8192))
+    loose = _by_node(
+        plan_unequal_pipeline(_model(), [_mbp(), _studio()], context_tokens=8192)
+    )
+    tight = _by_node(
+        plan_unequal_pipeline(_model(), [_mbp(48), _studio()], context_tokens=8192)
+    )
     assert tight["mbp"].layer_count < loose["mbp"].layer_count
     assert tight["studio"].layer_count > loose["studio"].layer_count
 
@@ -84,7 +94,9 @@ def test_no_cap_means_the_planner_balances_as_before():
 
 def test_a_cap_above_the_machine_is_clamped_not_believed():
     node = NodeBudget(
-        node_id="mbp", capacity_bytes=128 * GiB, reserve_bytes=12 * GiB,
+        node_id="mbp",
+        capacity_bytes=128 * GiB,
+        reserve_bytes=12 * GiB,
         max_weight_bytes=900 * GiB,
     )
     assert node.weight_ceiling_bytes == node.usable_bytes
@@ -92,9 +104,7 @@ def test_a_cap_above_the_machine_is_clamped_not_believed():
 
 def test_pinning_everything_too_low_fails_with_the_shortfall():
     with pytest.raises(PlanningError, match="does not fit"):
-        plan_unequal_pipeline(
-            _model(), [_mbp(40), _studio(60)], context_tokens=8192
-        )
+        plan_unequal_pipeline(_model(), [_mbp(40), _studio(60)], context_tokens=8192)
 
 
 def test_a_negative_cap_is_rejected():
@@ -172,7 +182,5 @@ def test_the_studio_alone_cannot_hold_a_long_context_but_the_pair_can():
     with pytest.raises(PlanningError, match="KV cache"):
         plan_unequal_pipeline(_model(), [alone], context_tokens=131072)
 
-    paired = plan_unequal_pipeline(
-        _model(), [_mbp(), _studio()], context_tokens=131072
-    )
+    paired = plan_unequal_pipeline(_model(), [_mbp(), _studio()], context_tokens=131072)
     assert paired.max_context_tokens > 131072

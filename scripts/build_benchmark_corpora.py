@@ -22,8 +22,7 @@ OUTPUT_DIR = REPO_ROOT / "omlx" / "admin" / "bench_corpora"
 WEB_ROOT = REPO_ROOT / "apps" / "omlx-web" / "omlx_web"
 KNOTE_COMMIT = "add4f9dd99db7e322018d9993c86aadd8e8f4335"
 KNOTE_TREE_URL = (
-    "https://api.github.com/repos/AKS-DHLAB/KNoTE/git/trees/"
-    f"{KNOTE_COMMIT}?recursive=1"
+    f"https://api.github.com/repos/AKS-DHLAB/KNoTE/git/trees/{KNOTE_COMMIT}?recursive=1"
 )
 MOBY_DICK_URL = (
     "https://raw.githubusercontent.com/jundot/omlx/"
@@ -130,8 +129,7 @@ def _knote_corpus() -> tuple[str, list[str]]:
     for path in paths:
         quoted = urllib.parse.quote(path)
         url = (
-            "https://raw.githubusercontent.com/AKS-DHLAB/KNoTE/"
-            f"{KNOTE_COMMIT}/{quoted}"
+            f"https://raw.githubusercontent.com/AKS-DHLAB/KNoTE/{KNOTE_COMMIT}/{quoted}"
         )
         root = ET.fromstring(_read_url(url))
         body = root.find(".//{*}body")

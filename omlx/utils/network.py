@@ -134,9 +134,7 @@ def is_loopback_bind(value: str) -> bool:
     if not isinstance(value, str):
         return False
     bind_hosts = [part.strip() for part in value.split(",") if part.strip()]
-    return bool(bind_hosts) and all(
-        is_loopback_bind_host(part) for part in bind_hosts
-    )
+    return bool(bind_hosts) and all(is_loopback_bind_host(part) for part in bind_hosts)
 
 
 def network_auth_error(

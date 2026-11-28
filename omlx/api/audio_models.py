@@ -7,8 +7,6 @@ These models define the request and response schemas for:
 - Audio speech synthesis (text-to-speech)
 """
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -16,38 +14,38 @@ class AudioTranscriptionRequest(BaseModel):
     """OpenAI-compatible audio transcription request."""
 
     model: str
-    language: Optional[str] = None
-    prompt: Optional[str] = None
-    response_format: Optional[str] = "json"
-    temperature: Optional[float] = 0.0
+    language: str | None = None
+    prompt: str | None = None
+    response_format: str | None = "json"
+    temperature: float | None = 0.0
 
 
 class AudioTranscriptionResponse(BaseModel):
     text: str
-    language: Optional[str] = None
-    duration: Optional[float] = None
-    segments: Optional[List[dict]] = None
+    language: str | None = None
+    duration: float | None = None
+    segments: list[dict] | None = None
 
 
 class AudioSpeechRequest(BaseModel):
     model: str
     input: str
-    voice: Optional[str] = None
-    language: Optional[str] = None
-    instructions: Optional[str] = None
-    speed: Optional[float] = 1.0
-    response_format: Optional[str] = "wav"
-    ref_audio: Optional[str] = None
-    ref_text: Optional[str] = None
+    voice: str | None = None
+    language: str | None = None
+    instructions: str | None = None
+    speed: float | None = 1.0
+    response_format: str | None = "wav"
+    ref_audio: str | None = None
+    ref_text: str | None = None
     # Sampling params must be non-negative and max_tokens positive; negative
     # values otherwise flow silently into the TTS engine's sampler.
-    temperature: Optional[float] = Field(default=None, ge=0)
-    top_k: Optional[int] = Field(default=None, ge=0)
-    top_p: Optional[float] = Field(default=None, ge=0)
-    repetition_penalty: Optional[float] = Field(default=None, ge=0)
-    max_tokens: Optional[int] = Field(default=None, gt=0)
-    stream: Optional[bool] = False
-    streaming_interval: Optional[float] = None
+    temperature: float | None = Field(default=None, ge=0)
+    top_k: int | None = Field(default=None, ge=0)
+    top_p: float | None = Field(default=None, ge=0)
+    repetition_penalty: float | None = Field(default=None, ge=0)
+    max_tokens: int | None = Field(default=None, gt=0)
+    stream: bool | None = False
+    streaming_interval: float | None = None
 
 
 class AudioProcessRequest(BaseModel):

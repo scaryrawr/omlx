@@ -443,9 +443,7 @@ def _drive(sched, request, tokens):
     return finished["state"]
 
 
-@pytest.mark.parametrize(
-    "config", [tiny_ced(), tiny(**_ENGRAM)], ids=["ced", "engram"]
-)
+@pytest.mark.parametrize("config", [tiny_ced(), tiny(**_ENGRAM)], ids=["ced", "engram"])
 def test_scheduler_helper_prefill_matches_local(config):
     k, tokens = 2, [int(t) for t in np.random.default_rng(3).integers(3, 60, 23)]
     host = _model(config)
@@ -1320,7 +1318,9 @@ def test_adapter_controls_cannot_access_base_helper_preparation(monkeypatch):
         "tuned": SimpleNamespace(engine=None, model_path=path, adapter=object()),
     }
     monkeypatch.setattr(
-        helper_routes, "_get_engine_pool", lambda: SimpleNamespace(get_entry=entries.get)
+        helper_routes,
+        "_get_engine_pool",
+        lambda: SimpleNamespace(get_entry=entries.get),
     )
     monkeypatch.setattr(helper_routes, "file_prep", lambda _: prep)
     app = FastAPI()

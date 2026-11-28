@@ -20,7 +20,6 @@ the q/k/v projections (``o_proj`` unbiased), and derives
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -42,8 +41,8 @@ class ModelArgs(BaseModelArgs):
     num_hidden_layers: int = 28
     intermediate_size: int = 8960
     num_attention_heads: int = 12
-    num_key_value_heads: Optional[int] = None
-    head_dim: Optional[int] = None
+    num_key_value_heads: int | None = None
+    head_dim: int | None = None
     max_position_embeddings: int = 32768
     vocab_size: int = 151936
 
@@ -59,13 +58,11 @@ class ModelArgs(BaseModelArgs):
 
     tie_word_embeddings: bool = False
 
-    bos_token_id: Optional[int] = None
-    eos_token_id: Optional[int] = None
-    pad_token_id: Optional[int] = None
+    bos_token_id: int | None = None
+    eos_token_id: int | None = None
+    pad_token_id: int | None = None
 
-    architectures: List[str] = field(
-        default_factory=lambda: ["Qwen2ForCausalLM"]
-    )
+    architectures: list[str] = field(default_factory=lambda: ["Qwen2ForCausalLM"])
 
     def __post_init__(self):
         """Derive grouped-query and head dims that Qwen2 leaves implicit."""
@@ -138,7 +135,7 @@ class Qwen2Attention(nn.Module):
     def __call__(
         self,
         hidden_states: mx.array,
-        attention_mask: Optional[mx.array] = None,
+        attention_mask: mx.array | None = None,
     ) -> mx.array:
         bsz, q_len, _ = hidden_states.shape
 
@@ -146,9 +143,9 @@ class Qwen2Attention(nn.Module):
         keys = self.k_proj(hidden_states)
         values = self.v_proj(hidden_states)
 
-        queries = queries.reshape(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(0, 2, 1, 3)
+        queries = queries.reshape(bsz, q_len, self.num_heads, self.head_dim).transpose(
+            0, 2, 1, 3
+        )
         keys = keys.reshape(
             bsz, q_len, self.num_key_value_heads, self.head_dim
         ).transpose(0, 2, 1, 3)
@@ -176,9 +173,7 @@ class Qwen2DecoderLayer(nn.Module):
         super().__init__()
         self.self_attn = Qwen2Attention(config)
         self.mlp = Qwen2MLP(config)
-        self.input_layernorm = nn.RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = nn.RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
@@ -186,7 +181,7 @@ class Qwen2DecoderLayer(nn.Module):
     def __call__(
         self,
         hidden_states: mx.array,
-        attention_mask: Optional[mx.array] = None,
+        attention_mask: mx.array | None = None,
     ) -> mx.array:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -215,7 +210,7 @@ class Qwen2Model(nn.Module):
 
     def _build_attention_mask(
         self,
-        attention_mask: Optional[mx.array],
+        attention_mask: mx.array | None,
         seq_length: int,
         dtype: mx.Dtype,
     ) -> mx.array:
@@ -245,7 +240,7 @@ class Qwen2Model(nn.Module):
     def __call__(
         self,
         input_ids: mx.array,
-        attention_mask: Optional[mx.array] = None,
+        attention_mask: mx.array | None = None,
     ) -> mx.array:
         _, seq_length = input_ids.shape
         hidden_states = self.embed_tokens(input_ids)
@@ -276,7 +271,7 @@ class Model(nn.Module):
     def __call__(
         self,
         input_ids: mx.array,
-        attention_mask: Optional[mx.array] = None,
+        attention_mask: mx.array | None = None,
     ) -> BaseModelOutput:
         if input_ids.ndim != 2:
             raise ValueError(f"input_ids must be 2D, got shape {input_ids.shape}")

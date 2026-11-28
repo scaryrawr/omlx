@@ -173,11 +173,17 @@ def test_cycle_routing_uses_block_j(runtime):
     assert [cl[0].offset for cl in cache] == [1, 0, 0]
 
     model.mtp_forward(
-        cache.win_hid[:, -1:], mx.array([[7]], dtype=mx.uint32), cache, return_hidden=True
+        cache.win_hid[:, -1:],
+        mx.array([[7]], dtype=mx.uint32),
+        cache,
+        return_hidden=True,
     )
     assert [cl[0].offset for cl in cache] == [1, 1, 0], "chain 1 must run block 1"
     model.mtp_forward(
-        cache.win_hid[:, -1:], mx.array([[9]], dtype=mx.uint32), cache, return_hidden=True
+        cache.win_hid[:, -1:],
+        mx.array([[9]], dtype=mx.uint32),
+        cache,
+        return_hidden=True,
     )
     assert [cl[0].offset for cl in cache] == [1, 1, 1], "chain 2 must run block 2"
     assert cache.frontier == 1
@@ -373,8 +379,11 @@ def test_prompt_priming_capture_and_take(runtime):
     # The primed cache must drive a normal cycle.
     model.mtp_begin_cycle(head_cache, 3)
     logits, _ = model.mtp_forward(
-        _hidden_table(1), mx.array([[9]], dtype=mx.uint32), head_cache,
-        return_hidden=True, logits_keep=1,
+        _hidden_table(1),
+        mx.array([[9]], dtype=mx.uint32),
+        head_cache,
+        return_hidden=True,
+        logits_keep=1,
     )
     assert logits.shape == (1, 1, 128)
     assert head_cache.frontier == 13
@@ -442,12 +451,17 @@ def test_keepalive_refolds_lagging_blocks(runtime):
     # blocks aligned at the new frontier.
     model.mtp_begin_cycle(cache, 3)
     model.mtp_forward(
-        table[:, 40:41], mx.array([[9]], dtype=mx.uint32), cache,
-        return_hidden=True, logits_keep=1,
+        table[:, 40:41],
+        mx.array([[9]], dtype=mx.uint32),
+        cache,
+        return_hidden=True,
+        logits_keep=1,
     )
-    for j in range(1, 3):
+    for _j in range(1, 3):
         model.mtp_forward(
-            cache.win_hid[:, -1:], mx.array([[5]], dtype=mx.uint32), cache,
+            cache.win_hid[:, -1:],
+            mx.array([[5]], dtype=mx.uint32),
+            cache,
             return_hidden=True,
         )
     assert not cache.clamp_logged
@@ -476,8 +490,11 @@ def test_keepalive_resets_unreachable_block(runtime):
     cache.active_max = 3
     model.mtp_begin_cycle(cache, 1)
     model.mtp_forward(
-        table[:, 80:81], mx.array([[7]], dtype=mx.uint32), cache,
-        return_hidden=True, logits_keep=1,
+        table[:, 80:81],
+        mx.array([[7]], dtype=mx.uint32),
+        cache,
+        return_hidden=True,
+        logits_keep=1,
     )
     assert cache.fold_keepalive
     # Blocks 1 and 2 could not reach back past the ring: fresh base at the
@@ -563,7 +580,9 @@ def _inkling2_tiny(
     )
     text.update(dims)
     model = inkling2.Model(
-        inkling2.ModelArgs(model_type="inkling2", text_config=text, vision_config=vision)
+        inkling2.ModelArgs(
+            model_type="inkling2", text_config=text, vision_config=vision
+        )
     )
     mx.random.seed(0)
     weights = []
@@ -795,7 +814,9 @@ def test_inkling2_verify_rollback_matches_sequential_decode(dims, drafts):
     assert model.mtp_partial_rollback(cache, 3, drafts)
     got = model(ids[:, 24:25], cache=cache)
     full = next(c for c in cache if hasattr(c, "offset"))
-    assert full.offset == next(c for c in reference if hasattr(c, "offset")).offset == 25
+    assert (
+        full.offset == next(c for c in reference if hasattr(c, "offset")).offset == 25
+    )
     assert mx.abs(got[..., :300] - expected[..., :300]).max().item() < 1e-4
 
 
@@ -895,9 +916,7 @@ def test_inkling2_rows_with_different_windows_decode_together():
             joined.append(a)
     pads = joined[0][windows.PADDING].tolist()
     assert pads[0] == 0 and pads[1] > 0
-    tokens = mx.stack(
-        [ids[row, n : n + 4] for row, n in enumerate(lengths)], axis=0
-    )
+    tokens = mx.stack([ids[row, n : n + 4] for row, n in enumerate(lengths)], axis=0)
     steps = [model(tokens[:, t : t + 1], cache=joined)[:, -1] for t in range(4)]
     got = mx.stack(steps, axis=1)
     for row in range(2):
@@ -1009,7 +1028,12 @@ def test_inkling2_restored_state_decodes_and_joins_like_the_live_one():
         (_TINY_LOOPCD, 16, "dense"),
         (_TINY_LOOPCD, 8, "quantized"),
     ],
-    ids=["plain-8-dense", "plain-16-quantized", "loopcd-16-dense", "loopcd-8-quantized"],
+    ids=[
+        "plain-8-dense",
+        "plain-16-quantized",
+        "loopcd-16-dense",
+        "loopcd-8-quantized",
+    ],
 )
 def test_inkling2_row_exact_verify_rows_match_serial_decode(dims, width, proj):
     """With quantized projections, or BF16 dense ones as in the release, each
@@ -1633,7 +1657,9 @@ def test_inkling2_position_table_matches_bilinear_resize():
     row, col = _grid_coords(rows, cols, 2)
     h_taps, h_w = _bilinear_taps(row, rows, side)
     w_taps, w_w = _bilinear_taps(col, cols, side)
-    got = np.einsum("pa,pb,pab->p", h_w, w_w, table[h_taps[:, :, None], w_taps[:, None, :]])
+    got = np.einsum(
+        "pa,pb,pab->p", h_w, w_w, table[h_taps[:, :, None], w_taps[:, None, :]]
+    )
     for p, (r, c) in enumerate(zip(row, col)):
         r0, r1, fr = resize(rows, r)
         c0, c1, fc = resize(cols, c)
@@ -1781,7 +1807,9 @@ def test_inkling2_varloop_single_pass_and_dspark_visit_guard(tmp_path):
     # TML-d24-varloop-research supports num_passes=1..5 and text_config.loop_num_passes.
     model = _inkling2_tiny(
         formats=("mxfp8",) * 18,
-        loop_config=dict(core_start=6, core_end=12, num_passes=3, gate_rank=8, is_varloop=True),
+        loop_config=dict(
+            core_start=6, core_end=12, num_passes=3, gate_rank=8, is_varloop=True
+        ),
         loop_num_passes=1,
     )
     assert model.model.num_visits == 18
@@ -1799,18 +1827,32 @@ def test_inkling2_varloop_single_pass_and_dspark_visit_guard(tmp_path):
     base_text = {
         "num_hidden_layers": 24,
         "n_layers_per_attn_res_block": 6,
-        "loop_config": {"core_start": 6, "core_end": 18, "num_passes": 3, "gate_rank": 64, "is_varloop": True},
+        "loop_config": {
+            "core_start": 6,
+            "core_end": 18,
+            "num_passes": 3,
+            "gate_rank": 64,
+            "is_varloop": True,
+        },
     }
     mtp = {"markov_head_type": "rnn_hidden", "target_layer_ids": [5, 23, 41, 48]}
     (tmp_path / "config.json").write_text(
-        json.dumps({"model_type": "inkling2_loop", "text_config": base_text, "mtp_config": mtp})
+        json.dumps(
+            {"model_type": "inkling2_loop", "text_config": base_text, "mtp_config": mtp}
+        )
     )
     assert bundled_inkling2_dspark_path(tmp_path) is not None
 
     for passes in (1, 2, 5):
         override_text = {**base_text, "loop_num_passes": passes}
         (tmp_path / "config.json").write_text(
-            json.dumps({"model_type": "inkling2_loop", "text_config": override_text, "mtp_config": mtp})
+            json.dumps(
+                {
+                    "model_type": "inkling2_loop",
+                    "text_config": override_text,
+                    "mtp_config": mtp,
+                }
+            )
         )
         assert bundled_inkling2_dspark_path(tmp_path) is None
 
@@ -1923,7 +1965,6 @@ def test_inkling2_flash_decode_rows_have_the_bits_of_one_row_calls(
             assert mx.array_equal(block[row : row + 1, :, pos : pos + 1], step)
 
 
-
 @pytest.mark.parametrize("length", [1, 4])
 @pytest.mark.parametrize("window, pad", [(0, 0), (0, 7), (32, 0), (32, 280)])
 def test_inkling2_left_padded_row_takes_the_decode_kernel(
@@ -1956,6 +1997,7 @@ def test_inkling2_left_padded_row_takes_the_decode_kernel(
     )
     diff = mx.abs(got.astype(mx.float32) - expected.astype(mx.float32)).max()
     assert diff.item() < 1e-2
+
 
 def test_inkling2_flash_decode_guards_wide_heads_and_unaligned_keys():
     """A head too wide for the kernel's threadgroup memory falls back instead

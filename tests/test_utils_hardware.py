@@ -140,9 +140,10 @@ class TestGetMaxWorkingSetBytes:
     """Test cases for get_max_working_set_bytes function."""
 
     def test_uses_mlx_max_working_set_when_available(self):
-        with patch("omlx.utils.hardware.HAS_MLX", True), patch(
-            "omlx.utils.hardware.mx"
-        ) as mock_mx:
+        with (
+            patch("omlx.utils.hardware.HAS_MLX", True),
+            patch("omlx.utils.hardware.mx") as mock_mx,
+        ):
             mock_mx.metal.is_available.return_value = True
             mock_mx.device_info.return_value = {
                 "max_recommended_working_set_size": 36 * 1024**3
@@ -151,9 +152,12 @@ class TestGetMaxWorkingSetBytes:
             assert get_max_working_set_bytes() == 36 * 1024**3
 
     def test_falls_back_to_total_memory_without_psutil(self):
-        with patch("omlx.utils.hardware.HAS_MLX", False), patch(
-            "omlx.utils.hardware.get_total_memory_bytes",
-            return_value=64 * 1024**3,
+        with (
+            patch("omlx.utils.hardware.HAS_MLX", False),
+            patch(
+                "omlx.utils.hardware.get_total_memory_bytes",
+                return_value=64 * 1024**3,
+            ),
         ):
             assert get_max_working_set_bytes() == 48 * 1024**3
 
@@ -170,8 +174,9 @@ class TestIsAppleSilicon:
         ],
     )
     def test_is_apple_silicon(self, os_name, architecture, expected):
-        with patch.object(sys, "platform", os_name), patch.object(
-            platform, "machine", return_value=architecture
+        with (
+            patch.object(sys, "platform", os_name),
+            patch.object(platform, "machine", return_value=architecture),
         ):
             assert is_apple_silicon() is expected
 
@@ -185,8 +190,9 @@ class TestIsMlxAvailable:
             assert is_mlx_available() is False
 
     def test_is_mlx_available_without_mlx(self):
-        with patch("omlx.utils.hardware.is_apple_silicon", return_value=True), patch(
-            "omlx.utils.hardware.HAS_MLX", False
+        with (
+            patch("omlx.utils.hardware.is_apple_silicon", return_value=True),
+            patch("omlx.utils.hardware.HAS_MLX", False),
         ):
             assert is_mlx_available() is False
 
@@ -198,9 +204,11 @@ class TestIsMlxAvailable:
         ],
     )
     def test_is_mlx_available_checks_device(self, array_error, expected):
-        with patch("omlx.utils.hardware.is_apple_silicon", return_value=True), patch(
-            "omlx.utils.hardware.HAS_MLX", True
-        ), patch("omlx.utils.hardware.mx") as mock_mx:
+        with (
+            patch("omlx.utils.hardware.is_apple_silicon", return_value=True),
+            patch("omlx.utils.hardware.HAS_MLX", True),
+            patch("omlx.utils.hardware.mx") as mock_mx,
+        ):
             mock_mx.array.side_effect = array_error
             assert is_mlx_available() is expected
             mock_mx.array.assert_called_once_with([1.0, 2.0, 3.0])

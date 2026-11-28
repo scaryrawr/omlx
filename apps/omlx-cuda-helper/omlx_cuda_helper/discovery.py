@@ -69,13 +69,13 @@ class Discovery:
                 self.end_headers()
                 self.wfile.write(data)
 
-            def do_GET(self) -> None:  # noqa: N802 - http.server API
+            def do_GET(self) -> None:
                 if self.path == "/api/cluster/node_id":
                     self._reply(200, discovery.identity())
                 else:
                     self._reply(404, {"detail": "not found"})
 
-            def do_POST(self) -> None:  # noqa: N802 - http.server API
+            def do_POST(self) -> None:
                 if self.path != "/api/cluster/pair/invited":
                     self._reply(404, {"detail": "not found"})
                     return

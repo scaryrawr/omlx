@@ -6,7 +6,6 @@ Tests the request and response models for Anthropic Messages API,
 including content blocks, tools, and streaming events.
 """
 
-
 import pytest
 from pydantic import ValidationError
 

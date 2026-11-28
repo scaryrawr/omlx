@@ -61,8 +61,7 @@ class VisionRotaryEmbedding(nn.Module):
 
     def __call__(self, sequence_length: int) -> mx.array:
         inv_freq = 1.0 / (
-            self.theta
-            ** (mx.arange(0, self.dim, 2, dtype=mx.float32) / self.dim)
+            self.theta ** (mx.arange(0, self.dim, 2, dtype=mx.float32) / self.dim)
         )
         return mx.outer(mx.arange(sequence_length, dtype=mx.float32), inv_freq)
 
@@ -97,9 +96,15 @@ class PatchEmbed(nn.Module):
 class VisionMLP(nn.Module):
     def __init__(self, config: VisionConfig):
         super().__init__()
-        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=True)
-        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=True)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=True)
+        self.gate_proj = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=True
+        )
+        self.up_proj = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=True
+        )
+        self.down_proj = nn.Linear(
+            config.intermediate_size, config.hidden_size, bias=True
+        )
 
     def __call__(self, x: mx.array) -> mx.array:
         return self.down_proj(nn.silu(self.gate_proj(x)) * self.up_proj(x))
@@ -116,7 +121,9 @@ class VisionAttention(nn.Module):
         self.window_size = config.visual_token_window_size
         qkv_dim = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
         self.qkv = nn.Linear(config.hidden_size, qkv_dim, bias=True)
-        self.proj = nn.Linear(self.num_heads * self.head_dim, config.hidden_size, bias=True)
+        self.proj = nn.Linear(
+            self.num_heads * self.head_dim, config.hidden_size, bias=True
+        )
         self.sinks = mx.zeros((self.num_heads,)) if use_sink else None
 
     def _mask(self, length: int, dtype: mx.Dtype, full_attention: bool):

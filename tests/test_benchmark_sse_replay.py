@@ -17,25 +17,28 @@ yield, repeat.
 """
 
 import asyncio
-from typing import Optional
 
 import pytest
 
 from omlx.admin import accuracy_benchmark
 from omlx.admin import benchmark as bench_module
+from omlx.admin.accuracy_benchmark import (
+    AccuracyBenchmarkRequest,
+    AccuracyBenchmarkRun,
+)
+from omlx.admin.accuracy_benchmark import (
+    _send_event as acc_send_event,
+)
 from omlx.admin.benchmark import (
     BenchmarkRequest,
     BenchmarkRun,
     _benchmark_runs,
-    _send_event as bench_send_event,
     clear_queue,
     get_active_run,
     get_queue,
 )
-from omlx.admin.accuracy_benchmark import (
-    AccuracyBenchmarkRequest,
-    AccuracyBenchmarkRun,
-    _send_event as acc_send_event,
+from omlx.admin.benchmark import (
+    _send_event as bench_send_event,
 )
 
 # --- Test helpers -----------------------------------------------------------
@@ -44,7 +47,7 @@ from omlx.admin.accuracy_benchmark import (
 async def _drain(
     run,
     *,
-    max_events: Optional[int] = None,
+    max_events: int | None = None,
     timeout: float = 1.0,
 ) -> list[dict]:
     """Read the run's event log replay-then-attach style.
@@ -463,7 +466,10 @@ class TestConcurrentStartQueueing:
         bench_module.add_to_queue(
             BenchmarkRequest(model_id="model-x", prompt_lengths=[1024])
         )
-        for path in ("/admin/api/bench/context/start", "/admin/api/bench/ane-tune/start"):
+        for path in (
+            "/admin/api/bench/context/start",
+            "/admin/api/bench/ane-tune/start",
+        ):
             r = bench_client.post(path, json={"model_id": "model-x"})
             assert r.status_code == 409, r.text
 

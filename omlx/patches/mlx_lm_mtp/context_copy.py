@@ -24,7 +24,7 @@ whose details change every few lines).
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -64,10 +64,10 @@ class ContextCopy:
     def __init__(self, wide_window: bool = False) -> None:
         """``wide_window``: the target verifies 16-row windows (MAX_COPY + 1)."""
         self._wide_window = wide_window
-        self._ids: List[int] = []
+        self._ids: list[int] = []
         self._sorted_keys = np.zeros(0, dtype=np.int64)
         self._sorted_ends = np.zeros(0, dtype=np.int64)
-        self._recent: Dict[int, List[int]] = {}
+        self._recent: dict[int, list[int]] = {}
         self._misses = 0
         self._quiet = 0
         self._wide = False
@@ -116,7 +116,7 @@ class ContextCopy:
                     bucket.append(end)
         return bool(rebuilt)
 
-    def propose(self, limit: int, wide_limit: int | None = None) -> List[int]:
+    def propose(self, limit: int, wide_limit: int | None = None) -> list[int]:
         """Tokens that followed the longest earlier match of the tail.
 
         ``wide_limit`` (default ``limit``) caps a verbatim wide copy, so a

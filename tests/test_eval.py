@@ -16,10 +16,9 @@ from omlx.eval.hellaswag import HellaSwagBenchmark
 from omlx.eval.jmmlu import JMMLUBenchmark
 from omlx.eval.kmmlu import KMMLUBenchmark
 from omlx.eval.livecodebench import LiveCodeBenchBenchmark, _extract_code
-from omlx.eval.mmlu import MMLUBenchmark, _parse_choices
+from omlx.eval.mmlu import MMLUBenchmark
 from omlx.eval.sandbox import limited_python_command
 from omlx.eval.truthfulqa import TruthfulQABenchmark
-
 
 # --- MMLU Tests ---
 
@@ -39,7 +38,10 @@ class TestMMLU:
         assert self.bench.extract_answer("A. Abstract algebra", {}) == "A"
 
     def test_extract_answer_verbose(self):
-        assert self.bench.extract_answer("I think the correct answer is C because...", {}) == "C"
+        assert (
+            self.bench.extract_answer("I think the correct answer is C because...", {})
+            == "C"
+        )
 
     def test_extract_answer_empty(self):
         assert self.bench.extract_answer("", {}) == ""
@@ -53,8 +55,14 @@ class TestMMLU:
 
     def test_extract_answer_explanation_before_answer(self):
         """Model explains with wrong letters first, then gives correct answer."""
-        assert self.bench.extract_answer("B is wrong because... The answer is A", {}) == "A"
-        assert self.bench.extract_answer("I initially thought C but answer is D", {}) == "D"
+        assert (
+            self.bench.extract_answer("B is wrong because... The answer is A", {})
+            == "A"
+        )
+        assert (
+            self.bench.extract_answer("I initially thought C but answer is D", {})
+            == "D"
+        )
 
     def test_extract_answer_last_letter(self):
         """When no 'answer is' pattern, use last valid letter."""
@@ -62,8 +70,15 @@ class TestMMLU:
 
     def test_extract_answer_stated_answer_beats_later_letter(self):
         """An explicit 'answer is X' wins even when another letter comes after it."""
-        assert self.bench.extract_answer("The answer is B. Note that A is a distractor.", {}) == "B"
-        assert self.bench.extract_answer("Answer: C. Option D looks similar.", {}) == "C"
+        assert (
+            self.bench.extract_answer(
+                "The answer is B. Note that A is a distractor.", {}
+            )
+            == "B"
+        )
+        assert (
+            self.bench.extract_answer("Answer: C. Option D looks similar.", {}) == "C"
+        )
 
     def test_extract_answer_stated_answer_any_case(self):
         """The 'answer is' cue is matched whatever casing the model used."""
@@ -130,7 +145,12 @@ class TestHellaSwag:
     def test_format_prompt(self):
         item = {
             "context": "A man walks into a bar.",
-            "endings": ["He orders a drink.", "He flies away.", "He disappears.", "He sings."],
+            "endings": [
+                "He orders a drink.",
+                "He flies away.",
+                "He disappears.",
+                "He sings.",
+            ],
             "answer": 0,
         }
         messages = self.bench.format_prompt(item)
@@ -207,7 +227,10 @@ class TestGSM8K:
 
     def test_extract_numeric_answer_fallback(self):
         assert _extract_numeric_answer("The answer is 42.") == "42"
-        assert _extract_numeric_answer("She has 15 apples and 20 oranges, so 35 total.") == "35"
+        assert (
+            _extract_numeric_answer("She has 15 apples and 20 oranges, so 35 total.")
+            == "35"
+        )
 
     def test_extract_numeric_answer_trailing_comma_after_last_number(self):
         # A bare "," is not a number: punctuation after the final digit must
@@ -221,7 +244,9 @@ class TestGSM8K:
 
     def test_extract_numeric_answer_keeps_thousands_separator(self):
         assert _extract_numeric_answer("The final total is 1,234 dollars.") == "1234"
-        assert _extract_numeric_answer("That comes to 1,234.50, in the end.") == "1234.50"
+        assert (
+            _extract_numeric_answer("That comes to 1,234.50, in the end.") == "1234.50"
+        )
 
     def test_extract_numeric_answer_commas_only(self):
         assert _extract_numeric_answer("Well, hmm, no idea,") == ""
@@ -269,7 +294,9 @@ def lcb_items():
 
 class TestLiveCodeBench:
     def test_extract_code_python_block(self):
-        response = "Here's my solution:\n```python\ndef solve():\n    print(42)\n```\nDone."
+        response = (
+            "Here's my solution:\n```python\ndef solve():\n    print(42)\n```\nDone."
+        )
         code = _extract_code(response)
         assert "def solve():" in code
         assert "print(42)" in code
@@ -335,6 +362,7 @@ class TestLiveCodeBench:
 class TestHumanEval:
     def test_extract_code_with_block(self):
         from omlx.eval.humaneval import _extract_code
+
         prompt = "def add(a, b):\n    "
         response = "```python\ndef add(a, b):\n    return a + b\n```"
         code = _extract_code(response, prompt)
@@ -342,6 +370,7 @@ class TestHumanEval:
 
     def test_extract_code_body_only(self):
         from omlx.eval.humaneval import _extract_code
+
         prompt = "def add(a, b):\n    "
         response = "return a + b"
         code = _extract_code(response, prompt)
@@ -351,6 +380,7 @@ class TestHumanEval:
     def test_extract_code_preserves_imports(self):
         """Model returns def only — imports from prompt must be prepended."""
         from omlx.eval.humaneval import _extract_code
+
         prompt = "from typing import List\n\ndef foo(x: List[int]) -> int:\n    "
         response = "def foo(x: List[int]) -> int:\n    return sum(x)"
         code = _extract_code(response, prompt)
@@ -359,6 +389,7 @@ class TestHumanEval:
 
     def test_execute_with_tests(self):
         from omlx.eval.humaneval import _execute_with_tests
+
         code = "def add(a, b):\n    return a + b"
         test = "def check(candidate):\n    assert candidate(1, 2) == 3\n    assert candidate(0, 0) == 0"
         passed, error = _execute_with_tests(code, test, "add")
@@ -366,6 +397,7 @@ class TestHumanEval:
 
     def test_execute_with_tests_fail(self):
         from omlx.eval.humaneval import _execute_with_tests
+
         code = "def add(a, b):\n    return a - b"  # wrong
         test = "def check(candidate):\n    assert candidate(1, 2) == 3"
         passed, error = _execute_with_tests(code, test, "add")
@@ -426,11 +458,15 @@ class TestHumanEval:
 class TestStripThinkTags:
     def test_strip_think_block(self):
         from omlx.eval.base import BaseBenchmark
-        text = "<think>\nLet me think about this...\nThe answer should be A.\n</think>\nA"
+
+        text = (
+            "<think>\nLet me think about this...\nThe answer should be A.\n</think>\nA"
+        )
         assert BaseBenchmark._strip_think_tags(text) == "A"
 
     def test_strip_empty_think(self):
         from omlx.eval.base import BaseBenchmark
+
         assert BaseBenchmark._strip_think_tags("<think></think>B") == "B"
 
     def test_strip_think_block_with_open_tag_in_prompt(self):
@@ -441,12 +477,17 @@ class TestStripThinkTags:
 
     def test_no_think_tags(self):
         from omlx.eval.base import BaseBenchmark
+
         assert BaseBenchmark._strip_think_tags("A") == "A"
 
     def test_incomplete_think_tag(self):
         from omlx.eval.base import BaseBenchmark
+
         # Incomplete think tag (no closing) — should be left as-is
-        assert BaseBenchmark._strip_think_tags("<think>still thinking") == "<think>still thinking"
+        assert (
+            BaseBenchmark._strip_think_tags("<think>still thinking")
+            == "<think>still thinking"
+        )
 
     def test_strip_hy4_close_tag_with_open_tag_in_prompt(self):
         text = (
@@ -465,6 +506,7 @@ class TestStripThinkTags:
 class TestThinkingMode:
     def test_benchmark_result_thinking_used_default(self):
         from omlx.eval.base import BenchmarkResult
+
         result = BenchmarkResult(
             benchmark_name="test",
             accuracy=0.5,
@@ -476,6 +518,7 @@ class TestThinkingMode:
 
     def test_benchmark_result_thinking_used_true(self):
         from omlx.eval.base import BenchmarkResult
+
         result = BenchmarkResult(
             benchmark_name="test",
             accuracy=0.5,
@@ -487,7 +530,8 @@ class TestThinkingMode:
         assert result.thinking_used is True
 
     def test_thinking_token_constants(self):
-        from omlx.eval.base import THINKING_MIN_TOKENS, THINKING_MAX_TOKENS
+        from omlx.eval.base import THINKING_MAX_TOKENS, THINKING_MIN_TOKENS
+
         assert THINKING_MIN_TOKENS == 8192
         assert THINKING_MAX_TOKENS == 32768
         assert THINKING_MIN_TOKENS < THINKING_MAX_TOKENS
@@ -495,6 +539,7 @@ class TestThinkingMode:
     def test_strip_think_tags_with_answer(self):
         """Thinking content is stripped, leaving only the answer."""
         from omlx.eval.base import BaseBenchmark
+
         text = "<think>\nLet me analyze option A vs B.\nA seems correct.\n</think>\nThe answer is A"
         result = BaseBenchmark._strip_think_tags(text)
         assert "<think>" not in result
@@ -517,19 +562,25 @@ class TestLocalStopReason:
 
             if messages[0]["content"] == "cut":
                 return GenerationOutput(
-                    text="<think>still reasoning", prompt_tokens=40,
-                    completion_tokens=8192, finish_reason="length",
+                    text="<think>still reasoning",
+                    prompt_tokens=40,
+                    completion_tokens=8192,
+                    finish_reason="length",
                 )
             if messages[0]["content"] == "cut-after-answer":
                 return GenerationOutput(
-                    text="The answer is A. To explain, first", prompt_tokens=40,
-                    completion_tokens=128, finish_reason="length",
+                    text="The answer is A. To explain, first",
+                    prompt_tokens=40,
+                    completion_tokens=128,
+                    finish_reason="length",
                 )
             if messages[0]["content"] == "boom":
                 raise RuntimeError("engine failed")
             return GenerationOutput(
-                text="The answer is A", prompt_tokens=40,
-                completion_tokens=300, finish_reason="stop",
+                text="The answer is A",
+                prompt_tokens=40,
+                completion_tokens=300,
+                finish_reason="stop",
             )
 
     @pytest.mark.asyncio
@@ -570,7 +621,9 @@ class TestLocalStopReason:
     def test_output_without_stop_reason(self):
         diagnostics = BaseBenchmark._local_diagnostics(MagicMock(spec=["text"]))
         assert diagnostics == {
-            "finish_reason": None, "prompt_tokens": 0, "completion_tokens": 0,
+            "finish_reason": None,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
         }
 
 
@@ -638,17 +691,20 @@ class TestBenchmarkRegistry:
         """BENCHMARKS dict and VALID_BENCHMARKS list must be in sync."""
         from omlx.admin.accuracy_benchmark import VALID_BENCHMARKS
         from omlx.eval import BENCHMARKS
+
         assert set(BENCHMARKS.keys()) == set(VALID_BENCHMARKS)
 
     def test_instantiate_all(self):
         """Every registered class instantiates without error."""
         from omlx.eval import BENCHMARKS
+
         for cls in BENCHMARKS.values():
             cls()
 
 
 def _registered_benchmark_names():
     from omlx.eval import BENCHMARKS
+
     return sorted(BENCHMARKS.keys())
 
 
@@ -656,6 +712,7 @@ def _registered_benchmark_names():
 async def test_load_sample_per_benchmark(name):
     """Each registered benchmark loads a 10-row sample without crashing."""
     from omlx.eval import BENCHMARKS
+
     bench = BENCHMARKS[name]()
     items = await bench.load_dataset(sample_size=10)
     assert items, f"{name} returned empty list"

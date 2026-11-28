@@ -64,9 +64,7 @@ def test_route_is_identical_across_repeated_calls():
     including after other shapes have gone through the gate."""
     answers = []
     for _ in range(3):
-        answers.append(
-            sdpa256._should_route(*_qk(4096, 28672), None, "causal", None)
-        )
+        answers.append(sdpa256._should_route(*_qk(4096, 28672), None, "causal", None))
         sdpa256._should_route(*_qk(2048, 262144), None, "causal", None)
     assert answers == [True, True, True]
 

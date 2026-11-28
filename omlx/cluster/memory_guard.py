@@ -257,7 +257,9 @@ def admission_budget(
     """
 
     ceiling = max(0, int(ceiling_bytes))
-    return min(ceiling, load_peak_bytes(stage_budget(ceiling, role=role, safety=safety)))
+    return min(
+        ceiling, load_peak_bytes(stage_budget(ceiling, role=role, safety=safety))
+    )
 
 
 def load_peak_bytes(planned_weight_bytes: int, kv_cache_bytes: int = 0) -> int:
@@ -277,7 +279,11 @@ def load_peak_bytes(planned_weight_bytes: int, kv_cache_bytes: int = 0) -> int:
         return 0
     cache = min(resident, max(0, int(kv_cache_bytes)))
     weights = resident - cache
-    return weights + max(_LOAD_PEAK_FLOOR_BYTES, int(weights * _LOAD_PEAK_FRACTION)) + cache
+    return (
+        weights
+        + max(_LOAD_PEAK_FLOOR_BYTES, int(weights * _LOAD_PEAK_FRACTION))
+        + cache
+    )
 
 
 def current_usage_bytes() -> int:

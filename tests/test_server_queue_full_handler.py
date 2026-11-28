@@ -19,9 +19,7 @@ def _build_test_app():
     import omlx.server as srv
 
     app = FastAPI()
-    app.add_exception_handler(
-        SchedulerQueueFullError, srv.scheduler_queue_full_handler
-    )
+    app.add_exception_handler(SchedulerQueueFullError, srv.scheduler_queue_full_handler)
 
     @app.get("/v1/raise")
     def raise_queue_full():

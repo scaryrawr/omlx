@@ -9,12 +9,13 @@ Results survive browser close and persist until explicitly reset.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -36,8 +37,8 @@ _accumulated_results: list[dict] = []
 # Server-side queue
 _queue: list["AccuracyBenchmarkRequest"] = []
 _queue_running: bool = False
-_current_run_id: Optional[str] = None
-_current_model: Optional[str] = None
+_current_run_id: str | None = None
+_current_model: str | None = None
 _engine_pool_ref: Any = None
 # Chain-ownership token. A "chain" is one start_next_from_queue call plus
 # the _continue_queue tail it spawns. Each chain captures the token current
@@ -50,10 +51,22 @@ _engine_pool_ref: Any = None
 _chain_id: int = 0
 
 VALID_BENCHMARKS = [
-    "mmlu", "mmlu_pro", "kmmlu", "cmmlu", "jmmlu",
-    "hellaswag", "truthfulqa", "arc_challenge", "winogrande",
-    "gsm8k", "mathqa", "humaneval", "mbpp", "livecodebench",
-    "bbq", "safetybench",
+    "mmlu",
+    "mmlu_pro",
+    "kmmlu",
+    "cmmlu",
+    "jmmlu",
+    "hellaswag",
+    "truthfulqa",
+    "arc_challenge",
+    "winogrande",
+    "gsm8k",
+    "mathqa",
+    "humaneval",
+    "mbpp",
+    "livecodebench",
+    "bbq",
+    "safetybench",
 ]
 
 # Sampling profile for an accuracy run. "deterministic" (default) runs greedy
@@ -72,11 +85,11 @@ class AccuracyBenchmarkRequest(BaseModel):
     sampling_profile: SamplingProfile = "deterministic"
     # Floor for each question's max_tokens, applied after the thinking clamp.
     # External runs may also set it as external.max_tokens_override.
-    max_tokens_override: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    max_tokens_override: int | None = Field(default=None, ge=1, le=1_000_000)
     # When set, the benchmark runs against a remote OpenAI-compatible
     # endpoint instead of a local engine and model_id is the remote
     # model name (not validated against the local catalog).
-    external: Optional[ExternalEndpointConfig] = None
+    external: ExternalEndpointConfig | None = None
 
     @model_validator(mode="after")
     def _force_thinking_off_for_external(self) -> "AccuracyBenchmarkRequest":
@@ -129,10 +142,10 @@ class AccuracyBenchmarkRun:
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     terminal: bool = False
-    task: Optional[asyncio.Task] = None
+    task: asyncio.Task | None = None
     results: list[dict] = field(default_factory=list)
     error_message: str = ""
-    last_progress: Optional[dict] = None  # last progress event for reconnect
+    last_progress: dict | None = None  # last progress event for reconnect
     # Finer-grained lifecycle than `status` — surfaces the difference between
     # "still scoring questions" and "cleaning up after the last result was
     # emitted". The serialization gate (_queue_running) stays True across
@@ -145,7 +158,7 @@ class AccuracyBenchmarkRun:
     # Snapshot for the omlx.ai upload, captured at run start (local runs
     # only). None disables upload for the run — external endpoints, or a
     # capture failure that must not fail the benchmark itself.
-    upload_ctx: Optional[dict] = None
+    upload_ctx: dict | None = None
 
 
 # Accuracy stream closes on `done` (run finished) or `error`. Unlike the
@@ -157,7 +170,7 @@ _ACCURACY_TERMINAL_TYPES = frozenset({"done", "error"})
 # --- Run management ---
 
 
-def get_run(bench_id: str) -> Optional[AccuracyBenchmarkRun]:
+def get_run(bench_id: str) -> AccuracyBenchmarkRun | None:
     """Get an accuracy benchmark run by ID."""
     return _accuracy_runs.get(bench_id)
 
@@ -239,7 +252,7 @@ def remove_from_queue(idx: int) -> bool:
     return False
 
 
-def start_next_from_queue(engine_pool: Any) -> Optional[str]:
+def start_next_from_queue(engine_pool: Any) -> str | None:
     """Pop next item from queue, create run, start background task.
 
     Returns bench_id if a run was started, None if already running or queue empty.
@@ -371,9 +384,7 @@ async def _send_event(run: AccuracyBenchmarkRun, event: dict) -> None:
 # --- Benchmark execution ---
 
 
-async def run_accuracy_benchmark(
-    run: AccuracyBenchmarkRun, engine_pool: Any
-) -> None:
+async def run_accuracy_benchmark(run: AccuracyBenchmarkRun, engine_pool: Any) -> None:
     """Execute accuracy benchmark run.
 
     Phases:
@@ -391,8 +402,8 @@ async def run_accuracy_benchmark(
     if request.external is None:
         engine_pool._suppress_ttl = True
     start_time = time.time()
-    client: Optional[ExternalAPIClient] = None
-    leased_model_id: Optional[str] = None
+    client: ExternalAPIClient | None = None
+    leased_model_id: str | None = None
 
     try:
         run.phase = "loading"
@@ -400,15 +411,18 @@ async def run_accuracy_benchmark(
             # External endpoint: no local model lifecycle. The adapter owns
             # the sampling-profile mapping, so sampling_kwargs stays empty
             # (enable_thinking is already forced off by request validation).
-            await _send_event(run, {
-                "type": "progress",
-                "phase": "connect",
-                "model_id": request.model_id,
-                "benchmark": "",
-                "message": f"Connecting to {request.external.base_url}...",
-                "current": 0,
-                "total": len(request.benchmarks),
-            })
+            await _send_event(
+                run,
+                {
+                    "type": "progress",
+                    "phase": "connect",
+                    "model_id": request.model_id,
+                    "benchmark": "",
+                    "message": f"Connecting to {request.external.base_url}...",
+                    "current": 0,
+                    "total": len(request.benchmarks),
+                },
+            )
             client = ExternalAPIClient(request.external)
             engine = ExternalChatAdapter(client, request.sampling_profile)
             # Fail fast on auth/URL/model errors so a wrong API key cannot
@@ -425,15 +439,18 @@ async def run_accuracy_benchmark(
                 or engine_pool._force_lm_replaces_engine(model_id)
             ]
             if loaded_ids:
-                await _send_event(run, {
-                    "type": "progress",
-                    "phase": "unload",
-                    "model_id": request.model_id,
-                    "benchmark": "",
-                    "message": f"Unloading {len(loaded_ids)} model(s)...",
-                    "current": 0,
-                    "total": len(request.benchmarks),
-                })
+                await _send_event(
+                    run,
+                    {
+                        "type": "progress",
+                        "phase": "unload",
+                        "model_id": request.model_id,
+                        "benchmark": "",
+                        "message": f"Unloading {len(loaded_ids)} model(s)...",
+                        "current": 0,
+                        "total": len(request.benchmarks),
+                    },
+                )
                 for model_id in loaded_ids:
                     try:
                         await engine_pool._unload_engine(model_id)
@@ -441,15 +458,18 @@ async def run_accuracy_benchmark(
                         logger.warning(f"Failed to unload {model_id}: {e}")
 
             # Phase 2: Load target model
-            await _send_event(run, {
-                "type": "progress",
-                "phase": "load",
-                "model_id": request.model_id,
-                "benchmark": "",
-                "message": f"Loading {request.model_id}...",
-                "current": 0,
-                "total": len(request.benchmarks),
-            })
+            await _send_event(
+                run,
+                {
+                    "type": "progress",
+                    "phase": "load",
+                    "model_id": request.model_id,
+                    "benchmark": "",
+                    "message": f"Loading {request.model_id}...",
+                    "current": 0,
+                    "total": len(request.benchmarks),
+                },
+            )
 
             # Force LM engine for accuracy benchmarks — text-only tasks
             # don't need VLM and the VLM adapter can produce empty responses.
@@ -508,24 +528,30 @@ async def run_accuracy_benchmark(
             evaluator = bench_cls()
 
             # Load dataset
-            await _send_event(run, {
-                "type": "progress",
-                "phase": "download",
-                "model_id": request.model_id,
-                "benchmark": bench_name,
-                "message": f"Loading {bench_name} dataset...",
-                "current": completed,
-                "total": len(request.benchmarks),
-            })
+            await _send_event(
+                run,
+                {
+                    "type": "progress",
+                    "phase": "download",
+                    "model_id": request.model_id,
+                    "benchmark": bench_name,
+                    "message": f"Loading {bench_name} dataset...",
+                    "current": completed,
+                    "total": len(request.benchmarks),
+                },
+            )
 
             try:
                 items = await evaluator.load_dataset(sample_size=sample_size)
             except Exception as e:
                 logger.error(f"Failed to load {bench_name} dataset: {e}")
-                await _send_event(run, {
-                    "type": "error",
-                    "message": f"Failed to load {bench_name} dataset: {e}",
-                })
+                await _send_event(
+                    run,
+                    {
+                        "type": "error",
+                        "message": f"Failed to load {bench_name} dataset: {e}",
+                    },
+                )
                 run.status = "error"
                 run.error_message = str(e)
                 return
@@ -533,36 +559,46 @@ async def run_accuracy_benchmark(
             # Run evaluation with progress
             total_items = len(items)
 
-            async def on_progress(current: int, total: int) -> None:
+            async def on_progress(
+                current: int, total: int, bench_name=bench_name, completed=completed
+            ) -> None:
                 if run.status == "cancelled":
                     raise asyncio.CancelledError()
-                await _send_event(run, {
+                await _send_event(
+                    run,
+                    {
+                        "type": "progress",
+                        "phase": "eval",
+                        "model_id": request.model_id,
+                        "benchmark": bench_name,
+                        "message": f"Evaluating {bench_name} ({current}/{total})...",
+                        "current": completed,
+                        "total": len(request.benchmarks),
+                        "bench_current": current,
+                        "bench_total": total,
+                    },
+                )
+
+            await _send_event(
+                run,
+                {
                     "type": "progress",
                     "phase": "eval",
                     "model_id": request.model_id,
                     "benchmark": bench_name,
-                    "message": f"Evaluating {bench_name} ({current}/{total})...",
+                    "message": f"Evaluating {bench_name} (0/{total_items})...",
                     "current": completed,
                     "total": len(request.benchmarks),
-                    "bench_current": current,
-                    "bench_total": total,
-                })
-
-            await _send_event(run, {
-                "type": "progress",
-                "phase": "eval",
-                "model_id": request.model_id,
-                "benchmark": bench_name,
-                "message": f"Evaluating {bench_name} (0/{total_items})...",
-                "current": completed,
-                "total": len(request.benchmarks),
-                "bench_current": 0,
-                "bench_total": total_items,
-            })
+                    "bench_current": 0,
+                    "bench_total": total_items,
+                },
+            )
 
             try:
                 result = await evaluator.run(
-                    engine, items, on_progress,
+                    engine,
+                    items,
+                    on_progress,
                     batch_size=request.batch_size,
                     sampling_kwargs=sampling_kwargs,
                     enable_thinking=request.enable_thinking,
@@ -570,17 +606,23 @@ async def run_accuracy_benchmark(
                 )
             except asyncio.CancelledError:
                 run.status = "cancelled"
-                await _send_event(run, {
-                    "type": "error",
-                    "message": "Benchmark cancelled",
-                })
+                await _send_event(
+                    run,
+                    {
+                        "type": "error",
+                        "message": "Benchmark cancelled",
+                    },
+                )
                 return
             except Exception as e:
                 logger.error(f"Error running {bench_name}: {e}")
-                await _send_event(run, {
-                    "type": "error",
-                    "message": f"Error running {bench_name}: {e}",
-                })
+                await _send_event(
+                    run,
+                    {
+                        "type": "error",
+                        "message": f"Error running {bench_name}: {e}",
+                    },
+                )
                 run.status = "error"
                 run.error_message = str(e)
                 return
@@ -598,21 +640,25 @@ async def run_accuracy_benchmark(
                     "time_s": round(qr.time_seconds, 3),
                 }
                 if request.external is not None:
-                    question_data.update({
-                        "status": qr.status,
-                        "finish_reason": qr.finish_reason,
-                        "reasoning_fields_present": qr.reasoning_fields_present,
-                        "reasoning_fields_nonempty": qr.reasoning_fields_nonempty,
-                        "prompt_tokens": qr.prompt_tokens,
-                        "completion_tokens": qr.completion_tokens,
-                        "error_message": qr.error_message,
-                    })
+                    question_data.update(
+                        {
+                            "status": qr.status,
+                            "finish_reason": qr.finish_reason,
+                            "reasoning_fields_present": qr.reasoning_fields_present,
+                            "reasoning_fields_nonempty": qr.reasoning_fields_nonempty,
+                            "prompt_tokens": qr.prompt_tokens,
+                            "completion_tokens": qr.completion_tokens,
+                            "error_message": qr.error_message,
+                        }
+                    )
                 else:
-                    question_data.update({
-                        "finish_reason": qr.finish_reason,
-                        "prompt_tokens": qr.prompt_tokens,
-                        "completion_tokens": qr.completion_tokens,
-                    })
+                    question_data.update(
+                        {
+                            "finish_reason": qr.finish_reason,
+                            "prompt_tokens": qr.prompt_tokens,
+                            "completion_tokens": qr.completion_tokens,
+                        }
+                    )
                 question_results.append(question_data)
 
             result_data = {
@@ -635,39 +681,43 @@ async def run_accuracy_benchmark(
                 )
                 valid_responses = status_counts["correct"] + status_counts["wrong"]
                 total_questions = result.total_questions
-                result_data.update({
-                    "valid_response_count": valid_responses,
-                    "empty_content_count": status_counts["empty_content"],
-                    "truncated_count": status_counts["truncated"],
-                    "timeout_count": status_counts["timeout"],
-                    "http_error_count": status_counts["http_error"],
-                    "connection_error_count": status_counts["connection_error"],
-                    "invalid_response_count": status_counts["invalid_response"],
-                    "parse_error_count": status_counts["parse_error"],
-                    "wrong_count": status_counts["wrong"],
-                    "valid_response_rate": round(
-                        valid_responses / total_questions
-                        if total_questions > 0 else 0.0,
-                        4,
-                    ),
-                    "valid_answer_accuracy": round(
-                        result.correct_count / valid_responses
-                        if valid_responses > 0 else 0.0,
-                        4,
-                    ),
-                    "reliability_warning": any(
-                        status_counts[name] > 0
-                        for name in (
-                            "empty_content",
-                            "truncated",
-                            "timeout",
-                            "http_error",
-                            "connection_error",
-                            "invalid_response",
-                            "parse_error",
-                        )
-                    ),
-                })
+                result_data.update(
+                    {
+                        "valid_response_count": valid_responses,
+                        "empty_content_count": status_counts["empty_content"],
+                        "truncated_count": status_counts["truncated"],
+                        "timeout_count": status_counts["timeout"],
+                        "http_error_count": status_counts["http_error"],
+                        "connection_error_count": status_counts["connection_error"],
+                        "invalid_response_count": status_counts["invalid_response"],
+                        "parse_error_count": status_counts["parse_error"],
+                        "wrong_count": status_counts["wrong"],
+                        "valid_response_rate": round(
+                            valid_responses / total_questions
+                            if total_questions > 0
+                            else 0.0,
+                            4,
+                        ),
+                        "valid_answer_accuracy": round(
+                            result.correct_count / valid_responses
+                            if valid_responses > 0
+                            else 0.0,
+                            4,
+                        ),
+                        "reliability_warning": any(
+                            status_counts[name] > 0
+                            for name in (
+                                "empty_content",
+                                "truncated",
+                                "timeout",
+                                "http_error",
+                                "connection_error",
+                                "invalid_response",
+                                "parse_error",
+                            )
+                        ),
+                    }
+                )
             else:
                 # Answers that hit the token limit (max_tokens) are scored on
                 # incomplete output; count them so the headline is not read as
@@ -680,15 +730,18 @@ async def run_accuracy_benchmark(
                 finished = [
                     qr for qr in questions if qr.finish_reason in ("stop", "tool_calls")
                 ]
-                result_data.update({
-                    "truncated_count": len(truncated),
-                    "truncated_correct_count": sum(qr.correct for qr in truncated),
-                    "finished_count": len(finished),
-                    "finished_accuracy": (
-                        round(sum(qr.correct for qr in finished) / len(finished), 4)
-                        if finished else None
-                    ),
-                })
+                result_data.update(
+                    {
+                        "truncated_count": len(truncated),
+                        "truncated_correct_count": sum(qr.correct for qr in truncated),
+                        "finished_count": len(finished),
+                        "finished_accuracy": (
+                            round(sum(qr.correct for qr in finished) / len(finished), 4)
+                            if finished
+                            else None
+                        ),
+                    }
+                )
             if result.category_scores:
                 result_data["category_scores"] = {
                     k: round(v, 4) for k, v in result.category_scores.items()
@@ -700,10 +753,13 @@ async def run_accuracy_benchmark(
             run.results.append(result_data)
             completed += 1
 
-            await _send_event(run, {
-                "type": "result",
-                "data": result_data,
-            })
+            await _send_event(
+                run,
+                {
+                    "type": "result",
+                    "data": result_data,
+                },
+            )
 
             # Upload to omlx.ai community benchmarks, per suite, before the
             # done event so the SSE terminal contract stays unchanged.
@@ -715,14 +771,17 @@ async def run_accuracy_benchmark(
                     run, run.upload_ctx, result_data
                 )
                 result_data["upload"] = outcome
-                await _send_event(run, {
-                    "type": "upload",
-                    "data": {
-                        "model_id": request.model_id,
-                        "benchmark": result_data["benchmark"],
-                        **outcome,
+                await _send_event(
+                    run,
+                    {
+                        "type": "upload",
+                        "data": {
+                            "model_id": request.model_id,
+                            "benchmark": result_data["benchmark"],
+                            **outcome,
+                        },
                     },
-                })
+                )
 
         # Phase 4: Unload model. The result(s) are already emitted by now,
         # so flip phase so polling clients hide the running indicator
@@ -733,41 +792,48 @@ async def run_accuracy_benchmark(
             if leased_model_id is not None:
                 await engine_pool.release_engine(leased_model_id)
                 leased_model_id = None
-            try:
+            with contextlib.suppress(Exception):
                 await engine_pool._unload_engine(request.model_id)
-            except Exception:
-                pass
 
         # Phase 5: Done
         total_time = time.time() - start_time
         run.status = "completed"
         run.phase = "completed"
 
-        await _send_event(run, {
-            "type": "done",
-            "summary": {
-                "model_id": request.model_id,
-                "total_time": round(total_time, 1),
-                "benchmarks_completed": completed,
+        await _send_event(
+            run,
+            {
+                "type": "done",
+                "summary": {
+                    "model_id": request.model_id,
+                    "total_time": round(total_time, 1),
+                    "benchmarks_completed": completed,
+                },
             },
-        })
+        )
 
     except asyncio.CancelledError:
         run.status = "cancelled"
         run.phase = "cancelled"
-        await _send_event(run, {
-            "type": "error",
-            "message": "Benchmark cancelled",
-        })
+        await _send_event(
+            run,
+            {
+                "type": "error",
+                "message": "Benchmark cancelled",
+            },
+        )
     except Exception as e:
         logger.exception(f"Accuracy benchmark error: {e}")
         run.status = "error"
         run.phase = "error"
         run.error_message = str(e)
-        await _send_event(run, {
-            "type": "error",
-            "message": str(e),
-        })
+        await _send_event(
+            run,
+            {
+                "type": "error",
+                "message": str(e),
+            },
+        )
     finally:
         if leased_model_id is not None:
             await engine_pool.release_engine(leased_model_id)

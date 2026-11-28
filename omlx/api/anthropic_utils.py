@@ -6,6 +6,7 @@ Handles conversion between Anthropic API format and internal oMLX format.
 """
 
 import base64
+import contextlib
 import json
 import logging
 import uuid
@@ -268,10 +269,10 @@ def convert_anthropic_to_internal(
                         elif block_type == "tool_use":
                             tool_input = block_dict.get("input", {})
                             if isinstance(tool_input, str):
-                                try:
+                                with contextlib.suppress(
+                                    json.JSONDecodeError, ValueError
+                                ):
                                     tool_input = json.loads(tool_input)
-                                except (json.JSONDecodeError, ValueError):
-                                    pass
                             tool_calls.append(
                                 {
                                     "id": block_dict.get(
@@ -542,10 +543,8 @@ def convert_anthropic_to_internal_harmony(
                     tool_input = block_dict.get("input", {})
                     # input should be dict for chat_template |tojson
                     if isinstance(tool_input, str):
-                        try:
+                        with contextlib.suppress(json.JSONDecodeError, ValueError):
                             tool_input = json.loads(tool_input)
-                        except (json.JSONDecodeError, ValueError):
-                            pass
                     tool_calls.append(
                         {
                             "id": tool_id,
@@ -564,10 +563,8 @@ def convert_anthropic_to_internal_harmony(
                     if isinstance(result_content, str):
                         # Try JSON parse BEFORE truncation so we can pretty-print
                         parsed_json = None
-                        try:
+                        with contextlib.suppress(json.JSONDecodeError, ValueError):
                             parsed_json = json.loads(result_content)
-                        except (json.JSONDecodeError, ValueError):
-                            pass
 
                         if (
                             parsed_json is not None
@@ -825,8 +822,7 @@ def truncate_tool_result(
     )
 
     notice = (
-        f'\n\n<truncated total_tokens="{total_tokens}" '
-        f'shown_tokens="{shown_tokens}" />'
+        f'\n\n<truncated total_tokens="{total_tokens}" shown_tokens="{shown_tokens}" />'
     )
 
     return truncated_text + notice

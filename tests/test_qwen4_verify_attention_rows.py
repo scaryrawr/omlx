@@ -118,12 +118,22 @@ def _attention(seed: int):
     for _, module in attn.named_modules():
         if isinstance(module, nn.Linear):
             fan_in = module.weight.shape[1]
-            module.weight = (mx.random.normal(module.weight.shape) * fan_in**-0.5).astype(
-                mx.bfloat16
-            )
-    for norm in (attn.q_norm, attn.k_norm, attn.indexer.q_layernorm, attn.indexer.k_layernorm):
+            module.weight = (
+                mx.random.normal(module.weight.shape) * fan_in**-0.5
+            ).astype(mx.bfloat16)
+    for norm in (
+        attn.q_norm,
+        attn.k_norm,
+        attn.indexer.q_layernorm,
+        attn.indexer.k_layernorm,
+    ):
         norm.weight = mx.random.normal(norm.weight.shape) * 0.1
-    nn.quantize(attn, group_size=64, bits=6, class_predicate=lambda _, m: isinstance(m, nn.Linear))
+    nn.quantize(
+        attn,
+        group_size=64,
+        bits=6,
+        class_predicate=lambda _, m: isinstance(m, nn.Linear),
+    )
     for _, module in attn.named_modules():
         if isinstance(module, nn.QuantizedLinear):
             module.scales = module.scales.astype(mx.bfloat16)

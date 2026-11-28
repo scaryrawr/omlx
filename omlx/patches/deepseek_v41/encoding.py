@@ -68,17 +68,14 @@ assistant_msg_template: str = "{reasoning}{content}{tool_calls}" + eos_token
 assistant_msg_wo_eos_template: str = "{reasoning}{content}{tool_calls}"
 thinking_template: str = "{reasoning_content}"
 
-response_format_template: str = (
-    "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
-)
+response_format_template: str = "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
 
-tool_output_template: str = (
-    "<tool_result>{content}</tool_result>"
-)
+tool_output_template: str = "<tool_result>{content}</tool_result>"
 
 # ============================================================
 # Utility Functions
 # ============================================================
+
 
 def to_json(value: Any) -> str:
     """Serialize a value to JSON string."""
@@ -105,7 +102,9 @@ def tools_from_openai_format(tools):
     return functions
 
 
-def _split_tool_name(name: str, namespace: Optional[str] = None) -> Tuple[Optional[str], str]:
+def _split_tool_name(
+    name: str, namespace: Optional[str] = None
+) -> Tuple[Optional[str], str]:
     """Split a qualified name and validate any explicit namespace."""
     prefix, separator, bare_name = name.partition("::")
     if separator:
@@ -152,7 +151,7 @@ def tool_calls_to_openai_format(tool_calls):
             "function": {
                 "name": tool_call["name"],
                 "arguments": tool_call["arguments"],
-            }
+            },
         }
         if tool_call.get("namespace") is not None:
             call["namespace"] = tool_call["namespace"]
@@ -160,7 +159,9 @@ def tool_calls_to_openai_format(tool_calls):
     return calls
 
 
-def decode_dsml_to_arguments(tool_name: str, tool_args: Dict[str, Tuple[str, str]]) -> Dict[str, str]:
+def decode_dsml_to_arguments(
+    tool_name: str, tool_args: Dict[str, Tuple[str, str]]
+) -> Dict[str, str]:
     """
     Decode DSML parameters back to a tool call dict.
 
@@ -171,12 +172,19 @@ def decode_dsml_to_arguments(tool_name: str, tool_args: Dict[str, Tuple[str, str
     Returns:
         Dict with "name", "arguments" (JSON string), and optional "namespace".
     """
+
     def _decode_value(key: str, value: str, string: str):
         if string == "true":
             value = to_json(value)
         return f"{to_json(key)}: {value}"
 
-    tool_args_json = "{" + ", ".join([_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]) + "}"
+    tool_args_json = (
+        "{"
+        + ", ".join(
+            [_decode_value(k, v, string=is_str) for k, (v, is_str) in tool_args.items()]
+        )
+        + "}"
+    )
     namespace, name = _split_tool_name(tool_name)
     tool_call = dict(name=name, arguments=tool_args_json)
     if namespace is not None:
@@ -187,6 +195,7 @@ def decode_dsml_to_arguments(tool_name: str, tool_args: Dict[str, Tuple[str, str
 # ============================================================
 # Preprocessing
 # ============================================================
+
 
 def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -209,18 +218,29 @@ def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "content": msg.get("content", ""),
             }
             # Merge into previous message if it's already a user (merged tool)
-            if merged and merged[-1].get("role") == "user" and "content_blocks" in merged[-1]:
+            if (
+                merged
+                and merged[-1].get("role") == "user"
+                and "content_blocks" in merged[-1]
+            ):
                 merged[-1]["content_blocks"].append(tool_block)
             else:
-                merged.append({
-                    "role": "user",
-                    "content_blocks": [tool_block],
-                })
+                merged.append(
+                    {
+                        "role": "user",
+                        "content_blocks": [tool_block],
+                    }
+                )
         elif role == "user":
             content_blocks = msg.get("content_blocks")
             if content_blocks is None:
                 content_blocks = [{"type": "text", "text": msg.get("content", "")}]
-            if merged and merged[-1].get("role") == "user" and "content_blocks" in merged[-1] and merged[-1].get("task") is None:
+            if (
+                merged
+                and merged[-1].get("role") == "user"
+                and "content_blocks" in merged[-1]
+                and merged[-1].get("task") is None
+            ):
                 merged[-1]["content_blocks"].extend(content_blocks)
             else:
                 # Preserve structured content and all message-level metadata.
@@ -233,7 +253,9 @@ def merge_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return merged
 
 
-def sort_tool_results_by_call_order(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def sort_tool_results_by_call_order(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """
     Sort tool_result blocks within user messages by the order of tool_calls
     in the preceding assistant message.
@@ -250,11 +272,13 @@ def sort_tool_results_by_call_order(messages: List[Dict[str, Any]]) -> List[Dict
                     last_tool_call_order[tc_id] = idx
 
         elif role == "user" and msg.get("content_blocks"):
-            tool_blocks = [b for b in msg["content_blocks"] if b.get("type") == "tool_result"]
+            tool_blocks = [
+                b for b in msg["content_blocks"] if b.get("type") == "tool_result"
+            ]
             if len(tool_blocks) > 1 and last_tool_call_order:
                 sorted_blocks = sorted(
                     tool_blocks,
-                    key=lambda b: last_tool_call_order.get(b.get("tool_use_id", ""), 0)
+                    key=lambda b: last_tool_call_order.get(b.get("tool_use_id", ""), 0),
                 )
                 sorted_idx = 0
                 new_blocks = []
@@ -273,6 +297,7 @@ def sort_tool_results_by_call_order(messages: List[Dict[str, Any]]) -> List[Dict
 # Vision Message Preprocessing
 # ============================================================
 
+
 def parse_tagged_text(text: str) -> Union[str, List[Dict[str, Any]]]:
     """Convert ``<image>path</image>`` text into standard content blocks."""
     matches = list(IMAGE_TAG_PATTERN.finditer(text))
@@ -286,14 +311,16 @@ def parse_tagged_text(text: str) -> Union[str, List[Dict[str, Any]]]:
     cursor = 0
     for match in matches:
         if match.start() > cursor:
-            blocks.append({"type": "text", "text": text[cursor:match.start()]})
+            blocks.append({"type": "text", "text": text[cursor : match.start()]})
         path = match.group(1)
         if not path:
             raise ValueError("Image path must not be empty")
-        blocks.append({
-            "type": "image_url",
-            "image_url": {"url": path},
-        })
+        blocks.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": path},
+            }
+        )
         cursor = match.end()
     if cursor < len(text):
         blocks.append({"type": "text", "text": text[cursor:]})
@@ -336,10 +363,13 @@ def _process_image_blocks(
         if _is_image_block(block):
             new_blocks.append({"type": "text", "text": image_placeholder})
             images.append(_extract_image(block))
-        elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+        elif block.get("type") == "tool_result" and isinstance(
+            block.get("content"), list
+        ):
             block = copy.copy(block)
             block["content"], nested_images = _process_image_blocks(
-                block["content"], image_placeholder)
+                block["content"], image_placeholder
+            )
             new_blocks.append(block)
             images.extend(nested_images)
         elif block.get("type") == "text":
@@ -347,7 +377,8 @@ def _process_image_blocks(
             if IMAGE_PLACEHOLDER in text:
                 block = copy.copy(block)
                 block["text"] = text.replace(
-                    IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT)
+                    IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT
+                )
             new_blocks.append(block)
         else:
             new_blocks.append(block)
@@ -358,12 +389,12 @@ def _sanitize_image_sp_tokens(msg: Dict[str, Any]) -> None:
     """Sanitize user-supplied image placeholder tokens in textual fields."""
     content = msg.get("content")
     if isinstance(content, str) and IMAGE_PLACEHOLDER in content:
-        msg["content"] = content.replace(
-            IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT)
+        msg["content"] = content.replace(IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT)
     reasoning_content = msg.get("reasoning_content")
     if isinstance(reasoning_content, str) and IMAGE_PLACEHOLDER in reasoning_content:
         msg["reasoning_content"] = reasoning_content.replace(
-            IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT)
+            IMAGE_PLACEHOLDER, IMAGE_SANITIZE_REPLACEMENT
+        )
 
 
 def process_image_messages(
@@ -381,7 +412,8 @@ def process_image_messages(
 
         if msg.get("content_blocks"):
             msg["content_blocks"], message_images = _process_image_blocks(
-                msg["content_blocks"])
+                msg["content_blocks"]
+            )
             images.extend(message_images)
             if not isinstance(msg.get("content"), str):
                 texts = [
@@ -395,7 +427,9 @@ def process_image_messages(
     return processed, images
 
 
-def _read_until_stop(index: int, text: str, stop: List[str]) -> Tuple[int, str, Optional[str]]:
+def _read_until_stop(
+    index: int, text: str, stop: List[str]
+) -> Tuple[int, str, Optional[str]]:
     """
     Read text from index until one of the stop strings is found.
 
@@ -418,6 +452,7 @@ def _read_until_stop(index: int, text: str, stop: List[str]) -> Tuple[int, str, 
         content = text[index:]
         return len(text), content, None
 
+
 # ============================================================
 # V4.1 Special Tokens and DSML Tag Names
 # ============================================================
@@ -428,9 +463,7 @@ tool_calls_block_name: str = " calls"
 tool_call_tag_name: str = " invoke"
 tool_parameter_tag_name: str = " parameter"
 
-tool_call_template: str = (
-    "<{dsml_token}{tool_call_tag_name} name=\"{name}\">\n{arguments}\n</{dsml_token}{tool_call_tag_name}>"
-)
+tool_call_template: str = '<{dsml_token}{tool_call_tag_name} name="{name}">\n{arguments}\n</{dsml_token}{tool_call_tag_name}>'
 tool_calls_template = (
     "<{dsml_token}{tc_block_name}>\n{tool_calls}\n</{dsml_token}{tc_block_name}>"
 )
@@ -524,7 +557,7 @@ def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
     """Encode tool call arguments into V4.1 DSML parameter format."""
     p_dsml_template = (
         '<{dsml_token}{tool_parameter_tag_name} name="{key}" string="{is_str}">'
-        '{value}</{dsml_token}{tool_parameter_tag_name}>'
+        "{value}</{dsml_token}{tool_parameter_tag_name}>"
     )
     P_dsml_strs = []
 
@@ -543,13 +576,15 @@ def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
             arguments = {"arguments": tool_call["arguments"]}
 
     for k, v in arguments.items():
-        P_dsml_strs.append(p_dsml_template.format(
-            dsml_token=dsml_token,
-            tool_parameter_tag_name=tool_parameter_tag_name,
-            key=k,
-            is_str="true" if isinstance(v, str) else "false",
-            value=v if isinstance(v, str) else to_json(v),
-        ))
+        P_dsml_strs.append(
+            p_dsml_template.format(
+                dsml_token=dsml_token,
+                tool_parameter_tag_name=tool_parameter_tag_name,
+                key=k,
+                is_str="true" if isinstance(v, str) else "false",
+                value=v if isinstance(v, str) else to_json(v),
+            )
+        )
 
     return "\n".join(P_dsml_strs)
 
@@ -557,6 +592,7 @@ def encode_arguments_to_dsml(tool_call: Dict[str, Any]) -> str:
 # ============================================================
 # Message Rendering
 # ============================================================
+
 
 def find_last_user_index(messages: List[Dict[str, Any]]) -> int:
     """
@@ -585,7 +621,9 @@ def render_message(
     Render a single message at the given index into its V4.1 encoded string form.
     """
     assert 0 <= index < len(messages)
-    assert thinking_mode in ["chat", "thinking"], f"Invalid thinking_mode `{thinking_mode}`"
+    assert thinking_mode in ["chat", "thinking"], (
+        f"Invalid thinking_mode `{thinking_mode}`"
+    )
 
     msg = messages[index]
     last_user_idx = find_last_user_index(messages)
@@ -604,10 +642,16 @@ def render_message(
         tool_calls = tool_calls_from_openai_format(tool_calls)
 
     # Reasoning effort prefix (thinking mode, index 0 only)
-    reasoning_effort_prompt = render_reasoning_effort(index, thinking_mode, reasoning_effort)
+    reasoning_effort_prompt = render_reasoning_effort(
+        index, thinking_mode, reasoning_effort
+    )
     # System token leads the conversation when there is a reasoning effort prompt
     # or the first message is a system message.
-    prompt = SYSTEM_SP_TOKEN if index == 0 and (reasoning_effort_prompt or role == "system") else ""
+    prompt = (
+        SYSTEM_SP_TOKEN
+        if index == 0 and (reasoning_effort_prompt or role == "system")
+        else ""
+    )
     prompt += reasoning_effort_prompt
 
     if role == "system":
@@ -618,7 +662,9 @@ def render_message(
         if tools:
             prompt += "\n\n" + render_tools(tools)
         if response_format:
-            prompt += "\n\n" + response_format_template.format(schema=to_json(response_format))
+            prompt += "\n\n" + response_format_template.format(
+                schema=to_json(response_format)
+            )
 
     elif role == "user":
         prompt += USER_SP_TOKEN
@@ -649,10 +695,14 @@ def render_message(
             prompt += content or ""
 
     elif role == "latest_reminder":
-        prompt += LATEST_REMINDER_SP_TOKEN + latest_reminder_msg_template.format(content=content)
+        prompt += LATEST_REMINDER_SP_TOKEN + latest_reminder_msg_template.format(
+            content=content
+        )
 
     elif role == "tool":
-        raise NotImplementedError("deepseek_v41 merges tool messages into user; please preprocess with merge_tool_messages()")
+        raise NotImplementedError(
+            "deepseek_v41 merges tool messages into user; please preprocess with merge_tool_messages()"
+        )
 
     elif role == "assistant":
         thinking_part = ""
@@ -664,11 +714,11 @@ def render_message(
                     dsml_token=dsml_token,
                     tool_call_tag_name=tool_call_tag_name,
                     name=_tool_name_for_encoding(tc),
-                    arguments=encode_arguments_to_dsml(tc)
+                    arguments=encode_arguments_to_dsml(tc),
                 )
                 for tc in tool_calls
             ]
-            tc_content += '\n\n' + tool_calls_template.format(
+            tc_content += "\n\n" + tool_calls_template.format(
                 dsml_token=dsml_token,
                 tool_calls="\n".join(tc_list),
                 tc_block_name=tool_calls_block_name,
@@ -682,7 +732,9 @@ def render_message(
 
         if thinking_mode == "thinking" and not prev_has_task:
             if not drop_thinking or index > last_user_idx:
-                thinking_part = thinking_template.format(reasoning_content=rc) + thinking_end_token
+                thinking_part = (
+                    thinking_template.format(reasoning_content=rc) + thinking_end_token
+                )
             else:
                 thinking_part = ""
 
@@ -702,13 +754,18 @@ def render_message(
         raise NotImplementedError(f"Unknown role: {role}")
 
     # Append transition tokens based on what follows
-    if index + 1 < len(messages) and messages[index + 1].get("role") not in ["assistant", "latest_reminder"]:
+    if index + 1 < len(messages) and messages[index + 1].get("role") not in [
+        "assistant",
+        "latest_reminder",
+    ]:
         return prompt
 
     task = messages[index].get("task")
     if task is not None:
         # Task special token for internal classification tasks
-        assert task in VALID_TASKS, f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+        assert task in VALID_TASKS, (
+            f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+        )
         task_sp_token = DS_TASK_SP_TOKENS[task]
 
         if task != "action":
@@ -717,7 +774,11 @@ def render_message(
         else:
             # Action task: append Assistant + thinking token + action sp token
             prompt += ASSISTANT_SP_TOKEN
-            prompt += thinking_end_token if thinking_mode != "thinking" else thinking_start_token
+            prompt += (
+                thinking_end_token
+                if thinking_mode != "thinking"
+                else thinking_start_token
+            )
             prompt += task_sp_token
 
     elif role == "user" or (role == "system" and index > 0):
@@ -737,6 +798,7 @@ def render_message(
 # ============================================================
 # Main Encoding Function
 # ============================================================
+
 
 def _drop_thinking_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -772,7 +834,7 @@ def _encode_messages_text(
 
     # Preprocess: merge tool messages and sort tool results
     messages = merge_tool_messages(messages)
-    messages = sort_tool_results_by_call_order(context + messages)[len(context):]
+    messages = sort_tool_results_by_call_order(context + messages)[len(context) :]
     if context:
         context = merge_tool_messages(context)
         context = sort_tool_results_by_call_order(context)
@@ -852,12 +914,14 @@ def load_cases(input_file: str) -> List[Dict[str, Any]]:
             if not messages:
                 raise ValueError("A case with tools must contain at least one message")
             messages[0]["tools"] = case["tools"]
-        cases.append({
-            "messages": messages,
-            "context": case.get("context"),
-            "thinking_mode": case.get("thinking_mode"),
-            "reasoning_effort": case.get("reasoning_effort"),
-        })
+        cases.append(
+            {
+                "messages": messages,
+                "context": case.get("context"),
+                "thinking_mode": case.get("thinking_mode"),
+                "reasoning_effort": case.get("reasoning_effort"),
+            }
+        )
     return cases
 
 
@@ -879,7 +943,10 @@ def encode_case(
 # Parsing (Decoding model output)
 # ============================================================
 
-def parse_tool_calls(index: int, text: str) -> Tuple[int, Optional[str], List[Dict[str, str]]]:
+
+def parse_tool_calls(
+    index: int, text: str
+) -> Tuple[int, Optional[str], List[Dict[str, str]]]:
     """
     Parse V4.1 DSML tool calls from text starting at the given index.
 
@@ -895,7 +962,9 @@ def parse_tool_calls(index: int, text: str) -> Tuple[int, Optional[str], List[Di
     tool_parameter_end_token = f"/{dsml_token}{tool_parameter_tag_name}"
 
     while index < len(text):
-        index, _, stop_token = _read_until_stop(index, text, [tool_call_start_token, tool_calls_end_token])
+        index, _, stop_token = _read_until_stop(
+            index, text, [tool_call_start_token, tool_calls_end_token]
+        )
         if _ != ">\n":
             raise ValueError(f"Tool call format error: expected '>\\n' but got '{_}'")
 
@@ -905,18 +974,28 @@ def parse_tool_calls(index: int, text: str) -> Tuple[int, Optional[str], List[Di
         if stop_token is None:
             raise ValueError("Missing special token in tool calls")
 
-        index, tool_name_content, stop_token = _read_until_stop(index, text, [tool_parameter_start_token, tool_call_end_token])
+        index, tool_name_content, stop_token = _read_until_stop(
+            index, text, [tool_parameter_start_token, tool_call_end_token]
+        )
 
-        p_tool_name = re.findall(r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL)
+        p_tool_name = re.findall(
+            r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL
+        )
         if len(p_tool_name) != 1:
             raise ValueError(f"Tool name format error: '{tool_name_content}'")
         tool_name = p_tool_name[0]
 
         tool_args: Dict[str, Tuple[str, str]] = {}
         while stop_token == tool_parameter_start_token:
-            index, param_content, stop_token = _read_until_stop(index, text, [tool_parameter_end_token])
+            index, param_content, stop_token = _read_until_stop(
+                index, text, [tool_parameter_end_token]
+            )
 
-            param_kv = re.findall(r'^ name="(.*?)" string="(true|false)">(.*?)<$', param_content, flags=re.DOTALL)
+            param_kv = re.findall(
+                r'^ name="(.*?)" string="(true|false)">(.*?)<$',
+                param_content,
+                flags=re.DOTALL,
+            )
             if len(param_kv) != 1:
                 raise ValueError(f"Parameter format error: '{param_content}'")
             param_name, string, param_value = param_kv[0]
@@ -925,9 +1004,13 @@ def parse_tool_calls(index: int, text: str) -> Tuple[int, Optional[str], List[Di
                 raise ValueError(f"Duplicate parameter name: '{param_name}'")
             tool_args[param_name] = (param_value, string)
 
-            index, content, stop_token = _read_until_stop(index, text, [tool_parameter_start_token, tool_call_end_token])
+            index, content, stop_token = _read_until_stop(
+                index, text, [tool_parameter_start_token, tool_call_end_token]
+            )
             if content != ">\n":
-                raise ValueError(f"Parameter format error: expected '>\\n' but got '{content}'")
+                raise ValueError(
+                    f"Parameter format error: expected '>\\n' but got '{content}'"
+                )
 
         tool_call = decode_dsml_to_arguments(tool_name=tool_name, tool_args=tool_args)
         tool_calls.append(tool_call)
@@ -951,11 +1034,17 @@ def parse_message_from_completion_text(text: str, thinking_mode: str) -> Dict[st
     is_tool_calling = False
 
     if is_thinking:
-        index, content_delta, stop_token = _read_until_stop(index, text, [thinking_end_token, tool_calls_start_token])
+        index, content_delta, stop_token = _read_until_stop(
+            index, text, [thinking_end_token, tool_calls_start_token]
+        )
         reasoning_content = content_delta
-        assert stop_token == thinking_end_token, "Invalid thinking format: missing </think>"
+        assert stop_token == thinking_end_token, (
+            "Invalid thinking format: missing </think>"
+        )
 
-    index, content_delta, stop_token = _read_until_stop(index, text, [eos_token, tool_calls_start_token])
+    index, content_delta, stop_token = _read_until_stop(
+        index, text, [eos_token, tool_calls_start_token]
+    )
     summary_content = content_delta
     if stop_token == tool_calls_start_token:
         is_tool_calling = True
@@ -968,15 +1057,24 @@ def parse_message_from_completion_text(text: str, thinking_mode: str) -> Dict[st
         index, tool_ends_text, stop_token = _read_until_stop(index, text, [eos_token])
         assert not tool_ends_text, "Unexpected content after tool calls"
 
-    assert len(text) == index and stop_token in [eos_token, None], "Unexpected content at end"
+    assert len(text) == index and stop_token in [eos_token, None], (
+        "Unexpected content at end"
+    )
 
-    for sp_token in [bos_token, eos_token, thinking_start_token, thinking_end_token, dsml_token]:
-        assert sp_token not in summary_content and sp_token not in reasoning_content, \
+    for sp_token in [
+        bos_token,
+        eos_token,
+        thinking_start_token,
+        thinking_end_token,
+        dsml_token,
+    ]:
+        assert sp_token not in summary_content and sp_token not in reasoning_content, (
             f"Unexpected special token '{sp_token}' in content"
+        )
 
     return {
         "role": "assistant",
         "content": summary_content,
         "reasoning_content": reasoning_content,
-        "tool_calls": tool_calls_to_openai_format(tool_calls)
+        "tool_calls": tool_calls_to_openai_format(tool_calls),
     }

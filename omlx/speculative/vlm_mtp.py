@@ -37,12 +37,13 @@ generated tokens.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Generator, List, Optional, Set, Union
+from collections.abc import Callable, Generator
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx_vlm.speculative import common as _vlm_common  # noqa: E402, I001
-from mlx_vlm.speculative import load_drafter as _vlm_load_drafter  # noqa: E402
+from mlx_vlm.speculative import common as _vlm_common
+from mlx_vlm.speculative import load_drafter as _vlm_load_drafter
 from mlx_vlm.speculative.mtp import _buffer_mtp_target_cache
 
 # The round loops dispatch their target-verify and cache-rollback forwards
@@ -53,16 +54,16 @@ from mlx_vlm.speculative.mtp import _buffer_mtp_target_cache
 # PR #1169 (f96138e) moved the MTP round loop helpers from ``mlx_vlm.generate``
 # into ``mlx_vlm.speculative.utils``. Import directly from the new location —
 # the symbols are still ``_``-prefixed but this is now their canonical home.
-from mlx_vlm.speculative.utils import (  # noqa: E402, SLF001
+from mlx_vlm.speculative.utils import (
     _mtp_rounds,
     _mtp_rounds_batch,
 )
 
-from ..patches.mlx_lm_mtp.batch_generator import _head_input  # noqa: E402
-from ..patches.mlx_vlm_mtp import apply_external_mtp_runtime_patch  # noqa: E402
-from ..patches.qwen35_verify_qmm import set_verify_qmm_armed  # noqa: E402
-from ..utils.metal_sync import _sync_and_clear_cache  # noqa: E402
-from ..utils.model_loading import materialize_lazy_state  # noqa: E402
+from ..patches.mlx_lm_mtp.batch_generator import _head_input
+from ..patches.mlx_vlm_mtp import apply_external_mtp_runtime_patch
+from ..patches.qwen35_verify_qmm import set_verify_qmm_armed
+from ..utils.metal_sync import _sync_and_clear_cache
+from ..utils.model_loading import materialize_lazy_state
 
 _vlm_generation_stream = _vlm_common.generation_stream
 
@@ -113,9 +114,8 @@ class _VLMAdapterMTPProxy:
         try:
             return getattr(self._adapter, name)
         except AttributeError:
-            if (
-                not self._allow_language_model_fast_paths
-                and (name == "model" or name.startswith("speculative_"))
+            if not self._allow_language_model_fast_paths and (
+                name == "model" or name.startswith("speculative_")
             ):
                 raise
             return getattr(self._language_model, name)
@@ -223,7 +223,7 @@ def vlm_mtp_positioned_sampling_available(target_language_model: Any) -> bool:
     return hasattr(adapter_lm, "speculative_logits_from_hidden")
 
 
-def load_vlm_mtp_drafter(path: str) -> Optional[VLMMTPDrafter]:
+def load_vlm_mtp_drafter(path: str) -> VLMMTPDrafter | None:
     """Load an MTP drafter (gemma4_assistant or qwen3_5_mtp); return None
     and log if the artifact is the wrong kind. Soft-fails so a misconfigured
     toggle does not crash model loading."""
@@ -269,7 +269,7 @@ def load_vlm_mtp_drafter(path: str) -> Optional[VLMMTPDrafter]:
     return VLMMTPDrafter(drafter_model, resolved_kind, path)
 
 
-def _read_model_type(drafter: nn.Module) -> Optional[str]:
+def _read_model_type(drafter: nn.Module) -> str | None:
     """Best-effort lookup of the drafter's HF model_type."""
     config = getattr(drafter, "config", None)
     if config is None:
@@ -283,18 +283,18 @@ def run_vlm_mtp_decode(
     *,
     target_language_model: nn.Module,
     drafter: VLMMTPDrafter,
-    prompt_cache: List[Any],
+    prompt_cache: list[Any],
     hidden: mx.array,
     shared_kv_states: dict,
-    first_bonus: Union[int, mx.array],
+    first_bonus: int | mx.array,
     max_tokens: int,
     sampler: Callable[[mx.array], mx.array],
-    prompt_tokens: Optional[mx.array] = None,
-    draft_block_size: Optional[int] = None,
+    prompt_tokens: mx.array | None = None,
+    draft_block_size: int | None = None,
     token_dtype: mx.Dtype = mx.int32,
-    eos_token_ids: Optional[Set[int]] = None,
-    stop_check: Optional[Callable[[int, int], bool]] = None,
-) -> Generator[Union[int, List[Optional[int]]], None, None]:
+    eos_token_ids: set[int] | None = None,
+    stop_check: Callable[[int, int], bool] | None = None,
+) -> Generator[int | list[int | None], None, None]:
     """Stream decoded tokens via mlx-vlm's MTP rounds.
 
     Yields plain Python ints for single-request decode (``first_bonus`` is

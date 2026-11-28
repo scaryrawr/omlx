@@ -19,8 +19,8 @@ from .batched import BatchedEngine
 from .decision import DecisionEngine
 from .embedding import EmbeddingEngine
 from .reranker import RerankerEngine
-from .stt import STTEngine
 from .sts import STSEngine
+from .stt import STTEngine
 from .tts import TTSEngine
 from .vlm import VLMBatchedEngine
 

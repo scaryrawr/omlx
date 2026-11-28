@@ -7,6 +7,7 @@ between OpenAI API format and internal oMLX format.
 """
 
 import json
+
 import pytest
 
 from omlx.api.adapters.base import (
@@ -20,7 +21,6 @@ from omlx.api.adapters.openai import OpenAIAdapter
 from omlx.api.openai_models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ContentPart,
     Message,
     ToolDefinition,
 )

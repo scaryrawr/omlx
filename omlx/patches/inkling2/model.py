@@ -1402,7 +1402,9 @@ class Model(nn.Module):
         thinking = None
         if self.model._caches_thinking_flags:
             before = cache[-1][0] if cache is not None else None
-            thinking = loopcd.thinking_flags(inputs, False if before is None else before)
+            thinking = loopcd.thinking_flags(
+                inputs, False if before is None else before
+            )
             if cache is not None:
                 cache[-1][0] = thinking[:, -1:]
                 cache[-1]._omlx_verify_xp = thinking

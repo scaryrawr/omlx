@@ -658,9 +658,7 @@ def _restore_lm_sdpa(snap):
             mod.scaled_dot_product_attention = fn
 
 
-def test_vlm_submodule_rebind_covers_copied_reference(
-    _sdpa256_reset, monkeypatch
-):
+def test_vlm_submodule_rebind_covers_copied_reference(_sdpa256_reset, monkeypatch):
     """The patch must rebind mlx-vlm model modules that copied base's SDPA at
     import time — assigning to mlx_vlm.models.base alone never reaches them."""
     sdpa256 = _sdpa256_reset
@@ -682,18 +680,21 @@ def test_vlm_submodule_rebind_covers_copied_reference(
         assert sdpa256.apply_sdpa256_attention_patch(min_kv_len=512) is True
         assert language.scaled_dot_product_attention is not original
         assert (
-            base.scaled_dot_product_attention
-            is language.scaled_dot_product_attention
+            base.scaled_dot_product_attention is language.scaled_dot_product_attention
         )
 
         # Routed shape through the module the VLM model actually calls.
         q, k, v = _qkv(128, 512)
-        mx.eval(language.scaled_dot_product_attention(q, k, v, None, SCALE_256, "causal"))
+        mx.eval(
+            language.scaled_dot_product_attention(q, k, v, None, SCALE_256, "causal")
+        )
         assert flash_calls["n"] == 1
 
         # Decode shape passes through to the mlx-vlm original, not mlx-lm's.
         qd, kd, vd = _qkv(1, 512)
-        mx.eval(language.scaled_dot_product_attention(qd, kd, vd, None, SCALE_256, "causal"))
+        mx.eval(
+            language.scaled_dot_product_attention(qd, kd, vd, None, SCALE_256, "causal")
+        )
         assert calls["vlm_orig"] == 1
     finally:
         _restore_lm_sdpa(lm_snap)
@@ -702,9 +703,7 @@ def test_vlm_submodule_rebind_covers_copied_reference(
         mm._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
 
 
-def test_production_install_order_covers_vlm_language(
-    _sdpa256_reset, monkeypatch
-):
+def test_production_install_order_covers_vlm_language(_sdpa256_reset, monkeypatch):
     """Both engines install sdpa256 first and fa256 second. fa256 captures
     whatever mlx_vlm.models.base holds at that point as its "original", so
     sdpa256 must have already rebound the submodules — otherwise the identity
@@ -736,24 +735,19 @@ def test_production_install_order_covers_vlm_language(
         # qwen3_5.language must have been carried through both rebinds.
         assert language.scaled_dot_product_attention is not original
         assert (
-            language.scaled_dot_product_attention
-            is base.scaled_dot_product_attention
+            language.scaled_dot_product_attention is base.scaled_dot_product_attention
         )
 
         # Steel-eligible prefill through the VLM call site hits the kernel.
         q, k, v = _qkv(128, 2048, dtype=mx.bfloat16)
-        out = language.scaled_dot_product_attention(
-            q, k, v, None, SCALE_256, "causal"
-        )
+        out = language.scaled_dot_product_attention(q, k, v, None, SCALE_256, "causal")
         mx.eval(out)
         assert steel_calls["n"] == 1
 
         # Decode still reaches the true mlx-vlm original at the chain's end.
         qd, kd, vd = _qkv(1, 2048, dtype=mx.bfloat16)
         mx.eval(
-            language.scaled_dot_product_attention(
-                qd, kd, vd, None, SCALE_256, "causal"
-            )
+            language.scaled_dot_product_attention(qd, kd, vd, None, SCALE_256, "causal")
         )
         assert calls["vlm_orig"] == 1
     finally:

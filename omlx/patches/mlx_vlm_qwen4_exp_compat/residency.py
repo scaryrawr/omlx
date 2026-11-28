@@ -116,8 +116,6 @@ def qwen4_exp_residency_estimate(
     index_path = ple_path / "model.safetensors.index.json"
     index_stat = index_path.stat() if index_path.is_file() else None
     index_signature = (
-        (index_stat.st_size, index_stat.st_mtime_ns)
-        if index_stat is not None
-        else None
+        (index_stat.st_size, index_stat.st_mtime_ns) if index_stat is not None else None
     )
     return _cached_residency_estimate(str(ple_path), signature, index_signature)

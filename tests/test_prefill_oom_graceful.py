@@ -36,7 +36,7 @@ from omlx.scheduler import (
     PrefillEvictionRequest,
     Scheduler,
     SchedulerConfig,
-    _PrefillEvictionNeeded,
+    _PrefillEvictionNeededError,
     _PrefillState,
 )
 
@@ -241,7 +241,7 @@ def test_adaptive_throttle_requests_eviction_before_shrinking():
         Scheduler._raise_prefill_eviction_if_available.__get__(ns, Scheduler)
     )
 
-    with pytest.raises(_PrefillEvictionNeeded) as exc:
+    with pytest.raises(_PrefillEvictionNeededError) as exc:
         _call(ns, 2048)
 
     assert request.prefill_eviction_retries == 1
@@ -254,7 +254,7 @@ def test_adaptive_throttle_requests_eviction_before_shrinking():
     # marginal transient reclaim without ever reaching the durable rungs
     # (ANE bank release), so recurring pressure earns one more shot at the
     # ladder before the guard falls back to throttling for good.
-    with pytest.raises(_PrefillEvictionNeeded):
+    with pytest.raises(_PrefillEvictionNeededError):
         _call(ns, 2048)
     assert request.prefill_eviction_retries == 2
 
@@ -456,9 +456,11 @@ def test_guard_rejection_logs_admission_terms_breakdown(caplog):
     ns = _throttle_ctx(current=current, hard=hard, samples_bpt=bpt, reclaim_to=current)
     ns._fake_current = current
 
-    with caplog.at_level(logging.WARNING, logger="omlx.scheduler"):
-        with pytest.raises(PrefillMemoryExceededError):
-            _guard_call(ns, 256, kv_len=122_000)
+    with (
+        caplog.at_level(logging.WARNING, logger="omlx.scheduler"),
+        pytest.raises(PrefillMemoryExceededError),
+    ):
+        _guard_call(ns, 256, kv_len=122_000)
 
     terms_records = [r for r in caplog.records if "admission terms" in r.getMessage()]
     assert len(terms_records) == 1
@@ -482,19 +484,19 @@ def test_guard_requests_eviction_before_capacity_rejection():
         Scheduler._raise_prefill_eviction_if_available.__get__(ns, Scheduler)
     )
 
-    with pytest.raises(_PrefillEvictionNeeded) as exc:
-        with (
-            patch.object(sched_mod.mx, "get_active_memory", return_value=0),
-            patch.object(sched_mod, "get_phys_footprint", return_value=current),
-        ):
-            Scheduler._guard_prefill_chunk(
-                ns,
-                256,
-                kv_len=122_000,
-                progress=0,
-                loop_label="test",
-                request_id="r",
-            )
+    with (
+        pytest.raises(_PrefillEvictionNeededError) as exc,
+        patch.object(sched_mod.mx, "get_active_memory", return_value=0),
+        patch.object(sched_mod, "get_phys_footprint", return_value=current),
+    ):
+        Scheduler._guard_prefill_chunk(
+            ns,
+            256,
+            kv_len=122_000,
+            progress=0,
+            loop_label="test",
+            request_id="r",
+        )
 
     assert request.prefill_eviction_retries == 1
     assert exc.value.request.reason == "prefill_safety_cap"
@@ -571,8 +573,6 @@ def test_predicted_transient_static_uses_candidate_chunk_size():
 def test_predicted_transient_zero_without_signals():
     ns = _throttle_ctx(current=0, hard=40 * _GB, samples_bpt=None, monitor=None)
     assert ns._predicted_chunk_transient(4, 1000) == 0.0
-
-
 
 
 def test_predicted_transient_drops_dense_ewma_when_qsa_static_is_cheaper():
@@ -2032,7 +2032,7 @@ def test_resumed_prefill_pausing_before_progress_skips_readmission():
     )
 
     def pause(*args, **kwargs):
-        raise _PrefillEvictionNeeded(eviction)
+        raise _PrefillEvictionNeededError(eviction)
 
     ns._guard_prefill_chunk = pause
     prompt = [10] * 129
@@ -2041,7 +2041,7 @@ def test_resumed_prefill_pausing_before_progress_skips_readmission():
     req.num_prompt_tokens = len(prompt)
     req.prompt_cache = make_prompt_cache(model)
 
-    with pytest.raises(_PrefillEvictionNeeded):
+    with pytest.raises(_PrefillEvictionNeededError):
         ns._do_external_prefill(req, prompt, req.prompt_cache)
 
     assert req._prefill_resumed is True
@@ -2075,9 +2075,11 @@ def test_qwen4_reallocation_charge_enforces_abort_cap_until_repaid(route):
     assert tracker.flat_overhead_charge_for(route) == 0
     chosen = _guard_call(ns, 512, kv_len=180_000, gathered_core=route)
     assert 32 <= chosen <= 512
-    assert ns._fake_current + ns._predicted_chunk_transient(
-        chosen, 180_000, gathered_core=route
-    ) <= ns._prefill_abort_cap()
+    assert (
+        ns._fake_current
+        + ns._predicted_chunk_transient(chosen, 180_000, gathered_core=route)
+        <= ns._prefill_abort_cap()
+    )
 
 
 def test_adaptive_throttle_tail_below_floor_never_grows_chunk():
@@ -2159,9 +2161,7 @@ def _glm5_next_monitor():
 
 
 def test_glm5_next_prefill_profile_registered():
-    profile = make_prefill_memory_profile(
-        _glm5_next_config(), compute_dtype_size=2
-    )
+    profile = make_prefill_memory_profile(_glm5_next_config(), compute_dtype_size=2)
     assert profile is not None
     # Resident KV: 11 sparse layers x (512 latent + 128/4 pooled index key)
     # x fp16 per token; GDN state is fixed and probed separately.
@@ -2179,15 +2179,15 @@ def test_glm5_next_prefill_profile_registered():
 def test_glm5_next_profile_prices_exact_block_expansion_for_small_chunks():
     """Exact-block pricing must include K/V expansion even for small query chunks."""
     profile = make_prefill_memory_profile(_glm5_next_config(), compute_dtype_size=2)
-    MiB = 1 << 20
+    mi_b_cls = 1 << 20
 
     # Expanded K/V includes FP32 projection outputs and FP16 kernel inputs.
     expansion_3072 = 3072 * 64 * (256 + 256) * (2 + 4)
     est_32_3072 = profile.estimate_prefill_transient_bytes(32, 3072)
-    assert expansion_3072 == pytest.approx(576 * MiB, rel=0.01)
+    assert expansion_3072 == pytest.approx(576 * mi_b_cls, rel=0.01)
     assert est_32_3072 >= expansion_3072, (
         "exact-block regime must charge the full head-expanded K/V, not the "
-        f"gathered bound ({est_32_3072 / MiB:.1f} MiB < {expansion_3072 / MiB:.1f})"
+        f"gathered bound ({est_32_3072 / mi_b_cls:.1f} MiB < {expansion_3072 / mi_b_cls:.1f})"
     )
 
     # Expansion cost must grow with KV length within the exact-block route.
@@ -2228,9 +2228,7 @@ def test_glm5_next_flat_overhead_guard_admits_full_chunk_at_1948_numbers():
 def test_glm5_next_flat_overhead_charges_pool_once_and_releases_on_reclaim():
     """Charge measured pool overhead only after reclamation releases it."""
     monitor = _glm5_next_monitor()
-    ns = _throttle_ctx(
-        current=0, hard=int(123.5 * _GB), monitor=monitor, min_chunk=512
-    )
+    ns = _throttle_ctx(current=0, hard=int(123.5 * _GB), monitor=monitor, min_chunk=512)
     ns._fake_current = 0
     predicted = ns._predicted_chunk_transient(2047, 2048)
     # Static profile pricing only — no EWMA term feeds this route.
@@ -2399,9 +2397,7 @@ def test_v41_flat_overhead_charges_pool_once_and_releases_on_reclaim():
     the flat path must price it once from the measured residual and never
     re-charge it on top of a footprint that already contains it."""
     monitor = _v41_monitor()
-    ns = _throttle_ctx(
-        current=0, hard=int(123.5 * _GB), monitor=monitor, min_chunk=512
-    )
+    ns = _throttle_ctx(current=0, hard=int(123.5 * _GB), monitor=monitor, min_chunk=512)
     ns._fake_current = 0
     predicted = ns._predicted_chunk_transient(2047, 2048)
     static = monitor.estimate_chunk_transient_bytes(
@@ -2564,7 +2560,7 @@ def _long_offloaded_prefill(sized, chunks=10, growth=3 * _GB):
                         request_id="r",
                     )
                 break
-            except _PrefillEvictionNeeded as e:
+            except _PrefillEvictionNeededError as e:
                 pauses += 1
                 ev = e.request
                 short = (
@@ -2608,18 +2604,18 @@ def test_offload_slot_pauses_do_not_count_until_the_floor():
     releasable = [32 * _GB]
     ns, request = _pause_ctx(releasable)
     for n in range(1, Scheduler._MAX_OFFLOAD_SLOT_PAUSES + 1):
-        with pytest.raises(_PrefillEvictionNeeded):
+        with pytest.raises(_PrefillEvictionNeededError):
             _call(ns, 2048)
         assert (request.prefill_offload_pauses, request.prefill_eviction_retries) == (
             n,
             0,
         )
     # At most one free pause per release step, even if slots remain.
-    with pytest.raises(_PrefillEvictionNeeded):
+    with pytest.raises(_PrefillEvictionNeededError):
         _call(ns, 2048)
     assert request.prefill_eviction_retries == 1
     releasable[0] = 0  # at the floor
-    with pytest.raises(_PrefillEvictionNeeded):
+    with pytest.raises(_PrefillEvictionNeededError):
         _call(ns, 2048)
     assert (request.prefill_offload_pauses, request.prefill_eviction_retries) == (4, 2)
     assert _call(ns, 2048) < 2048  # pauses spent: throttle
@@ -2629,6 +2625,6 @@ def test_offload_slot_pauses_do_not_count_until_the_floor():
 def test_offload_slot_pause_counts_without_a_release(releasable, running):
     """The release is skipped while another request runs or at the floor."""
     ns, request = _pause_ctx([releasable], running=running)
-    with pytest.raises(_PrefillEvictionNeeded):
+    with pytest.raises(_PrefillEvictionNeededError):
         _call(ns, 2048)
     assert (request.prefill_offload_pauses, request.prefill_eviction_retries) == (0, 1)

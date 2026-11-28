@@ -192,9 +192,7 @@ def test_qwen4_exp_loader_detects_and_loads_standalone_mtp(tmp_path, monkeypatch
     monkeypatch.setattr(
         "omlx.utils.model_loading._checkpoint_weight_prefix",
         lambda path, prefixes: (
-            "fc_embedding."
-            if path == mtp_dir and "fc_embedding." in prefixes
-            else None
+            "fc_embedding." if path == mtp_dir and "fc_embedding." in prefixes else None
         ),
     )
     settings = SimpleNamespace(mtp_enabled=True, mtp_adaptive_max_depth=None)

@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Optional
 
 import mlx.core as mx
 
@@ -381,7 +380,7 @@ def nax_sparse_attention_available() -> bool:
         from omlx.custom_kernels.nax import is_nax_available
 
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -398,7 +397,7 @@ def sparse_topk_attention_nax(
     *,
     q_token_major: bool = False,
     p_lo: bool = True,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """``wsdpa_topk_prefill`` on the tensor units, or None.
 
     q: [1, H, L, 512] bf16 with H a multiple of 32 ([1, L, H, 512] with
@@ -473,7 +472,7 @@ def sparse_topk_attention_nax(
             # Compile and run once here so a kernel failure falls back.
             mx.eval(out)
             _READY.add(key)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _BROKEN.add(key)
         logger.warning(
             "DSV4 tensor-unit sparse attention kernel failed; using wsdpa topk",

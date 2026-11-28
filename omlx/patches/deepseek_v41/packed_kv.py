@@ -2,6 +2,7 @@
 """Fused reference-format FP8/FP4 KV packing; preserve rounding boundaries."""
 
 from functools import cache
+
 import mlx.core as mx
 
 _SOURCE = r"""

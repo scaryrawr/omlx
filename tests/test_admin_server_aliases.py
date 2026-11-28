@@ -13,7 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 import omlx.admin.routes as admin_routes
-import omlx.server  # noqa: F401 — ensure server module is imported first (triggers set_admin_getters)
+import omlx.server
 import omlx.utils.network as network
 from omlx.admin.routes import GlobalSettingsRequest
 from omlx.scheduler import SchedulerConfig
@@ -409,9 +409,11 @@ class TestServerInfoEndpoint:
         assert "127.0.0.1" in result["aliases"]
 
     def test_returns_503_when_settings_unavailable(self):
-        with _patched_global_settings(None):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(admin_routes.get_server_info(is_admin=True))
+        with (
+            _patched_global_settings(None),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(admin_routes.get_server_info(is_admin=True))
         assert exc_info.value.status_code == 503
 
 
@@ -456,11 +458,13 @@ class TestUpdateGlobalSettingsAliases:
             server_aliases=["valid.local", "not valid!!!"],
         )
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "not valid!!!" in exc_info.value.detail
@@ -471,11 +475,13 @@ class TestUpdateGlobalSettingsAliases:
         gs = _make_global_settings(server_aliases=[])
         request = GlobalSettingsRequest(server_aliases=["0.0.0.0"])
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "0.0.0.0" in exc_info.value.detail
@@ -485,11 +491,13 @@ class TestUpdateGlobalSettingsAliases:
         gs = _make_global_settings(server_aliases=[])
         request = GlobalSettingsRequest(server_aliases=["::"])
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
 
@@ -623,11 +631,13 @@ class TestUpdateGlobalSettingsHotCache:
         gs.cache.hot_cache_max_size = "0"
         request = GlobalSettingsRequest(cache_enabled=False, hot_cache_max_size="auto")
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "hot_cache_max_size" in exc_info.value.detail
@@ -666,11 +676,13 @@ class TestUpdateGlobalSettingsGdnSplit:
         gs.cache.gdn_ssd_split_enabled = False
         request = GlobalSettingsRequest(gdn_ssd_split_enabled=True)
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "hot_cache_only" in exc_info.value.detail
@@ -682,11 +694,13 @@ class TestUpdateGlobalSettingsGdnSplit:
         gs.cache.hot_cache_only = False
         request = GlobalSettingsRequest(gdn_ssd_pending_max_size="not-a-size")
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "gdn_ssd_pending_max_size" in exc_info.value.detail
@@ -740,11 +754,13 @@ class TestUpdateGlobalSettingsGdnSplit:
             gdn_ssd_split_enabled=True,
         )
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "cannot be combined" in exc_info.value.detail
@@ -777,7 +793,9 @@ class TestGetGlobalSettingsGdnSplit:
 
         with (
             _patched_global_settings(gs),
-            patch.object(admin_routes, "get_system_memory_info", return_value=memory_info),
+            patch.object(
+                admin_routes, "get_system_memory_info", return_value=memory_info
+            ),
             patch.object(admin_routes, "get_ssd_disk_info", return_value=disk_info),
         ):
             result = asyncio.run(admin_routes.get_global_settings(is_admin=True))
@@ -811,11 +829,13 @@ class TestUpdateGlobalSettingsAudioUpload:
         gs = _make_global_settings()
         request = GlobalSettingsRequest(max_audio_upload_size=value)
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "max_audio_upload_size" in exc_info.value.detail
@@ -987,11 +1007,13 @@ class TestUpdateGlobalSettingsEmbeddingBatchSize:
         gs.save.return_value = None
         request = GlobalSettingsRequest(embedding_batch_size=0)
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "embedding_batch_size" in exc_info.value.detail
@@ -1013,11 +1035,11 @@ class TestUpdateGlobalSettingsEmbeddingBatchSize:
                 "_server_state",
                 server_state,
             ),
+            pytest.raises(HTTPException) as exc_info,
         ):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         pool.apply_embedding_batch_size.assert_not_awaited()
@@ -1040,11 +1062,11 @@ class TestUpdateGlobalSettingsEmbeddingBatchSize:
                 "_server_state",
                 server_state,
             ),
+            pytest.raises(HTTPException) as exc_info,
         ):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         pool.apply_embedding_batch_size.assert_not_awaited()
@@ -1067,11 +1089,11 @@ class TestUpdateGlobalSettingsEmbeddingBatchSize:
                 "_server_state",
                 server_state,
             ),
+            pytest.raises(HTTPException) as exc_info,
         ):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 500
         pool.apply_embedding_batch_size.assert_not_awaited()
@@ -1143,9 +1165,7 @@ class TestUpdateGlobalSettingsGdnSidecarStateDtype:
     """
 
     def test_ignores_v060_request_field_name(self):
-        request = GlobalSettingsRequest(
-            **{"gdn_sidecar_state_dtype": "rht_int16"}
-        )
+        request = GlobalSettingsRequest(**{"gdn_sidecar_state_dtype": "rht_int16"})
 
         assert request.gdn_sidecar_precision is None
 
@@ -1224,11 +1244,13 @@ class TestUpdateGlobalSettingsGdnSidecarStateDtype:
         gs.cache.gdn_sidecar_state_dtype = "int8"
         request = GlobalSettingsRequest(gdn_sidecar_precision=value)
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with (
+            _patched_global_settings(gs),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert exc_info.value.status_code == 400
         assert "gdn_sidecar_precision" in exc_info.value.detail
@@ -1249,11 +1271,10 @@ class TestUpdateGlobalSettingsGdnSidecarStateDtype:
             gdn_sidecar_precision="fp8",
         )
 
-        with _patched_global_settings(gs):
-            with pytest.raises(HTTPException):
-                asyncio.run(
-                    admin_routes.update_global_settings(request=request, is_admin=True)
-                )
+        with _patched_global_settings(gs), pytest.raises(HTTPException):
+            asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
 
         assert gs.cache.enabled is True
         assert gs.cache.gdn_ssd_pending_max_size == "512MB"

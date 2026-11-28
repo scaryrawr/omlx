@@ -78,9 +78,20 @@ def test_registry_rolls_back_memory_if_atomic_save_fails(tmp_path, monkeypatch):
 
 
 _CREDENTIAL_KEYS = {
-    "token", "access_token", "auth_token", "api_token", "pairing_token",
-    "bearer", "private_key", "api_key", "secret", "secret_key",
-    "password", "passphrase", "credential", "credentials",
+    "token",
+    "access_token",
+    "auth_token",
+    "api_token",
+    "pairing_token",
+    "bearer",
+    "private_key",
+    "api_key",
+    "secret",
+    "secret_key",
+    "password",
+    "passphrase",
+    "credential",
+    "credentials",
 }
 
 

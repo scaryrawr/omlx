@@ -22,6 +22,7 @@ GiB = 1024**3
 def _sysctl(value, returncode=0):
     def run(command, **_):
         return SimpleNamespace(stdout=str(value), returncode=returncode)
+
     return run
 
 
@@ -52,7 +53,9 @@ def test_installed_ram_is_the_fallback_and_says_so():
 
 
 def test_an_unreadable_machine_reports_nothing_rather_than_guessing():
-    budget = suggest_budget(role="headless", ssh_target="peer", runner=_sysctl("", returncode=1))
+    budget = suggest_budget(
+        role="headless", ssh_target="peer", runner=_sysctl("", returncode=1)
+    )
     assert budget.capacity_bytes == 0
     assert budget.usable_bytes == 0
 
@@ -86,7 +89,9 @@ def test_localhost_is_not_reached_over_ssh():
 def test_a_workstation_keeps_enough_back_to_stay_usable():
     """Half the Mac, and never less than the 32 GiB a person needs to work."""
 
-    budget = suggest_budget(role="workstation", ssh_target="peer", runner=_sysctl(110080))
+    budget = suggest_budget(
+        role="workstation", ssh_target="peer", runner=_sysctl(110080)
+    )
     assert budget.reserve_bytes == budget.capacity_bytes // 2
     assert budget.reserve_bytes > 32 * GiB
     assert "for your work" in budget.describe()
@@ -108,8 +113,12 @@ def test_a_headless_node_gives_almost_everything():
 def test_a_workstation_contributes_less_than_the_same_mac_headless():
     """The trade must be real, or the setting is decoration."""
 
-    headless = suggest_budget(role="headless", ssh_target="peer", runner=_sysctl(110080))
-    workstation = suggest_budget(role="workstation", ssh_target="peer", runner=_sysctl(110080))
+    headless = suggest_budget(
+        role="headless", ssh_target="peer", runner=_sysctl(110080)
+    )
+    workstation = suggest_budget(
+        role="workstation", ssh_target="peer", runner=_sysctl(110080)
+    )
     assert workstation.usable_bytes < headless.usable_bytes
     # Roughly 20 GiB of reach, which is what the user is buying back.
     assert (headless.usable_bytes - workstation.usable_bytes) > 18 * GiB
@@ -142,7 +151,9 @@ def test_every_role_explains_itself_for_the_tooltip():
 
 
 def test_a_budget_serialises_for_the_interface():
-    payload = suggest_budget(role="workstation", ssh_target="peer", runner=_sysctl(110080)).to_dict()
+    payload = suggest_budget(
+        role="workstation", ssh_target="peer", runner=_sysctl(110080)
+    ).to_dict()
     assert payload["role"] == "workstation"
     assert payload["capacity_source"] == "metal_cap"
     assert payload["usable_bytes"] > 0
@@ -169,7 +180,9 @@ def test_a_peer_still_falls_back_to_its_gpu_cap(monkeypatch):
         "omlx.cluster.memory_guard.ceiling_breakdown",
         lambda *_a, **_k: {"hard_limit": 100 * GiB},
     )
-    budget = suggest_budget(role="headless", ssh_target="studio", runner=_sysctl(249037))
+    budget = suggest_budget(
+        role="headless", ssh_target="studio", runner=_sysctl(249037)
+    )
     assert budget.capacity_source == "metal_cap"
     assert budget.capacity_bytes == 249037 * 1024 * 1024
 
@@ -246,7 +259,10 @@ def test_the_refusal_names_the_way_out():
 
     with pytest.raises(InsufficientMemoryError) as excinfo:
         check_rank_fits(
-            100 * GiB, rank=0, node_id="mbp", role="workstation",
+            100 * GiB,
+            rank=0,
+            node_id="mbp",
+            role="workstation",
             ceiling_bytes=int(107.5 * GiB),
         )
     assert "Headless" in str(excinfo.value)

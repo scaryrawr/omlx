@@ -174,7 +174,11 @@ class MLP(nn.Module):
         swiglu_limit: Optional[float] = None,
     ):
         super().__init__()
-        dim = intermediate_size if intermediate_size is not None else args.intermediate_size
+        dim = (
+            intermediate_size
+            if intermediate_size is not None
+            else args.intermediate_size
+        )
         self.gate_proj = nn.Linear(args.hidden_size, dim, bias=args.use_bias)
         self.up_proj = nn.Linear(args.hidden_size, dim, bias=args.use_bias)
         self.down_proj = nn.Linear(dim, args.hidden_size, bias=args.use_bias)
@@ -408,9 +412,9 @@ def recurrent_kda(
 
     q, k = normalize_qk(q, k, inv_scale=head_dim**-0.5, eps=1e-6)
 
-    gate_input = g.astype(mx.float32) + dt_bias.reshape(
-        1, 1, heads, head_dim
-    ).astype(mx.float32)
+    gate_input = g.astype(mx.float32) + dt_bias.reshape(1, 1, heads, head_dim).astype(
+        mx.float32
+    )
     a_log = a_log.reshape(1, 1, heads, 1).astype(mx.float32)
     if safe_gate and lower_bound is not None:
         log_decay = lower_bound * mx.sigmoid(mx.exp(a_log) * gate_input)
@@ -419,11 +423,7 @@ def recurrent_kda(
     decay = mx.exp(log_decay)
     beta = mx.sigmoid(beta)
 
-    if (
-        head_dim % 32 == 0
-        and mx.default_device() == mx.gpu
-        and mx.metal.is_available()
-    ):
+    if head_dim % 32 == 0 and mx.default_device() == mx.gpu and mx.metal.is_available():
         output, state = gated_delta_kernel(q, k, v, decay, beta, state, mask)
     else:
         output, state = gated_delta_ops(q, k, v, decay, beta, state, mask)
@@ -444,15 +444,9 @@ class LinearAttention(nn.Module):
         self.q_proj = nn.Linear(args.hidden_size, projection_size, bias=False)
         self.k_proj = nn.Linear(args.hidden_size, projection_size, bias=False)
         self.v_proj = nn.Linear(args.hidden_size, projection_size, bias=False)
-        self.q_conv1d = DepthwiseConv1d(
-            projection_size, args.short_conv_kernel_size
-        )
-        self.k_conv1d = DepthwiseConv1d(
-            projection_size, args.short_conv_kernel_size
-        )
-        self.v_conv1d = DepthwiseConv1d(
-            projection_size, args.short_conv_kernel_size
-        )
+        self.q_conv1d = DepthwiseConv1d(projection_size, args.short_conv_kernel_size)
+        self.k_conv1d = DepthwiseConv1d(projection_size, args.short_conv_kernel_size)
+        self.v_conv1d = DepthwiseConv1d(projection_size, args.short_conv_kernel_size)
         self.A_log = mx.zeros((self.num_attention_heads,), dtype=mx.float32)
         self.dt_bias = mx.zeros((projection_size,), dtype=mx.float32)
         self.f_proj = nn.Linear(args.hidden_size, projection_size, bias=False)
@@ -563,9 +557,7 @@ class LinearAttention(nn.Module):
                 cache[slot] = value
             cache.advance(L)
 
-        gate = self.g_proj(x).reshape(
-            B, L, self.num_attention_heads, self.head_dim
-        )
+        gate = self.g_proj(x).reshape(B, L, self.num_attention_heads, self.head_dim)
         output = self.o_norm(output, gate)
         return self.o_proj(output.reshape(B, L, -1))
 
@@ -677,9 +669,9 @@ class DecoderLayer(nn.Module):
         super().__init__()
         n_layers = args.num_hidden_layers
         group = args.layer_group_size
-        self.is_global = (
-            (layer_idx + 1) % group == 0 or layer_idx >= (n_layers // group) * group
-        )
+        self.is_global = (layer_idx + 1) % group == 0 or layer_idx >= (
+            n_layers // group
+        ) * group
 
         if self.is_global:
             self.attention = MultiLatentAttention(args)
@@ -692,7 +684,9 @@ class DecoderLayer(nn.Module):
             self.mlp = MLP(args)
 
         self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
+        self.post_attention_layernorm = nn.RMSNorm(
+            args.hidden_size, eps=args.rms_norm_eps
+        )
 
     def __call__(
         self,
@@ -750,9 +744,7 @@ class LanguageModel(nn.Module):
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
         # Find a representative attention layer index for offset/mask sizing.
-        self._attn_idx = next(
-            (i for i, l in enumerate(self.layers) if l.is_global), 0
-        )
+        self._attn_idx = next((i for i, l in enumerate(self.layers) if l.is_global), 0)
         self._gla_idx = next(
             (i for i, l in enumerate(self.layers) if not l.is_global), 0
         )
@@ -955,9 +947,7 @@ class Model(nn.Module):
                 # The split halves carry no scale sidecar (Ling 3.1 FP8).
                 scale_key = f"{kv_b_key}_scale_inv"
                 if scale_key in weights and v.dtype == mx.uint8:
-                    v = self._dequantize_fp8_block(
-                        kv_b_key, v, weights.pop(scale_key)
-                    )
+                    v = self._dequantize_fp8_block(kv_b_key, v, weights.pop(scale_key))
                 head_dim = self.args.qk_nope_head_dim + self.args.v_head_dim
                 num_heads = self.args.num_attention_heads
                 v = v.reshape(num_heads, head_dim, -1)

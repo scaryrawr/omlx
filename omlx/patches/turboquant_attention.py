@@ -925,9 +925,7 @@ def _patch_vlm_target_verify_attention() -> None:
 
         sdpa = q35_lang.scaled_dot_product_attention
         if queries.shape[0] == 1 and not isinstance(mask, mx.array):
-            return sdpa(
-                queries, keys, values, cache=cache, scale=scale, mask="causal"
-            )
+            return sdpa(queries, keys, values, cache=cache, scale=scale, mask="causal")
         if queries.shape[0] > 1 and isinstance(real_cache, BatchTurboQuantKVCache):
             if not isinstance(mask, mx.array):
                 # left_padded_decode passes no mask; the padding must stay masked.
@@ -1101,13 +1099,9 @@ def apply_turboquant_attention_patch() -> bool:
                 old_query_block_size = getattr(
                     real_cache, "prefill_query_block_size", None
                 )
-                old_key_chunk_size = getattr(
-                    real_cache, "prefill_key_chunk_size", None
-                )
+                old_key_chunk_size = getattr(real_cache, "prefill_key_chunk_size", None)
                 try:
-                    real_cache.prefill_query_block_size = (
-                        _LONG_PREFILL_QUERY_BLOCK_SIZE
-                    )
+                    real_cache.prefill_query_block_size = _LONG_PREFILL_QUERY_BLOCK_SIZE
                     real_cache.prefill_key_chunk_size = _LONG_PREFILL_KEY_CHUNK_SIZE
                     return real_cache.quantized_attention(
                         queries,
@@ -1156,19 +1150,24 @@ def apply_turboquant_attention_patch() -> bool:
     # Also patch any model modules that already imported it locally
     # Covers both mlx_lm (LLM) and mlx_vlm (VLM) model modules
     import sys
+
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
-        if not (mod_name.startswith("mlx_lm.models.") or mod_name.startswith("mlx_vlm.models.")):
+        if not (
+            mod_name.startswith("mlx_lm.models.")
+            or mod_name.startswith("mlx_vlm.models.")
+        ):
             continue
         if hasattr(mod, "scaled_dot_product_attention"):
-            func = getattr(mod, "scaled_dot_product_attention")
+            func = mod.scaled_dot_product_attention
             if func is original_sdpa or func is not patched_sdpa:
-                setattr(mod, "scaled_dot_product_attention", patched_sdpa)
+                mod.scaled_dot_product_attention = patched_sdpa
 
     # Also patch mlx_vlm.models.base if loaded
     try:
         from mlx_vlm.models import base as vlm_base
+
         if hasattr(vlm_base, "scaled_dot_product_attention"):
             vlm_base.scaled_dot_product_attention = patched_sdpa
     except ImportError:

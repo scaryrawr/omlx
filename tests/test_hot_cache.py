@@ -5,7 +5,6 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import List
 from unittest.mock import patch
 
 import pytest
@@ -14,7 +13,6 @@ from omlx.cache.paged_ssd_cache import (
     PagedSSDBlockMetadata,
     PagedSSDCacheManager,
     SharedHotCacheBudget,
-    _extract_tensor_bytes,
 )
 
 try:
@@ -538,7 +536,7 @@ class TestHotCacheConcurrency:
             hot_cache_max_bytes=50 * 1024**2,
         )
 
-        errors: List[Exception] = []
+        errors: list[Exception] = []
         num_threads = 8
         ops_per_thread = 20
 
@@ -563,7 +561,7 @@ class TestHotCacheConcurrency:
                 # Read back
                 for i in range(ops_per_thread):
                     block_hash = f"conc_{thread_id}_{i}____".encode()
-                    result = mgr._hot_cache_get(block_hash)
+                    mgr._hot_cache_get(block_hash)
                     # May be None if evicted by another thread, that's OK
             except Exception as e:
                 errors.append(e)
@@ -970,8 +968,9 @@ class TestHotCacheWriteBack:
             )
 
             assert _wait_until(
-                lambda: len(list((tmp_path / "wb_evict_test").rglob("*.safetensors")))
-                >= 1
+                lambda: (
+                    len(list((tmp_path / "wb_evict_test").rglob("*.safetensors"))) >= 1
+                )
             ), "Evicted block should be written to SSD"
         finally:
             mgr.close()
@@ -1005,9 +1004,9 @@ class TestHotCacheWriteBack:
         mgr.close()
 
         ssd_files = list((tmp_path / "wb_flush_test").rglob("*.safetensors"))
-        assert (
-            len(ssd_files) == 3
-        ), f"Expected 3 SSD files after flush, got {len(ssd_files)}"
+        assert len(ssd_files) == 3, (
+            f"Expected 3 SSD files after flush, got {len(ssd_files)}"
+        )
 
     def test_close_flushes_all_blocks_with_small_queue(self, tmp_path):
         """close() must flush all hot cache blocks even when more blocks
@@ -1094,13 +1093,13 @@ class TestPendingWriteBuffer:
 
             # Block 0 should still be loadable (from pending buffer, not SSD)
             with mgr._hot_cache_lock:
-                assert (
-                    b"pending_buf_blk0" not in mgr._hot_cache
-                ), "Block 0 should have been evicted from hot cache"
+                assert b"pending_buf_blk0" not in mgr._hot_cache, (
+                    "Block 0 should have been evicted from hot cache"
+                )
             loaded = mgr.load_block(b"pending_buf_blk0")
-            assert (
-                loaded is not None
-            ), "Evicted block should be readable from pending write buffer"
+            assert loaded is not None, (
+                "Evicted block should be readable from pending write buffer"
+            )
             assert len(loaded) == 2
         finally:
             mgr.close()
@@ -1155,9 +1154,9 @@ class TestPendingWriteBuffer:
             with mgr._hot_cache_lock:
                 assert b"has_block_test_b0" not in mgr._hot_cache
 
-            assert (
-                mgr.has_block(b"has_block_test_b0") is True
-            ), "has_block should find blocks in the pending write buffer"
+            assert mgr.has_block(b"has_block_test_b0") is True, (
+                "has_block should find blocks in the pending write buffer"
+            )
         finally:
             mgr.close()
 
@@ -1186,9 +1185,9 @@ class TestPendingWriteBuffer:
 
             # Should no longer be loadable
             loaded = mgr.load_block(b"del_pending_blk_0")
-            assert (
-                loaded is None
-            ), "Deleted block should not be readable from pending buffer"
+            assert loaded is None, (
+                "Deleted block should not be readable from pending buffer"
+            )
         finally:
             mgr.close()
 
@@ -1215,12 +1214,12 @@ class TestPendingWriteBuffer:
 
             # Block 1 was written inline and no longer needs pending storage.
             with mgr._pending_write_hashes_lock:
-                assert (
-                    b"qf_test_block_01" not in mgr._pending_write_buffers
-                ), "Inline-written block should leave the pending buffer"
-                assert (
-                    b"qf_test_block_01" not in mgr._pending_write_hashes
-                ), "Inline-written block should leave pending hashes"
+                assert b"qf_test_block_01" not in mgr._pending_write_buffers, (
+                    "Inline-written block should leave the pending buffer"
+                )
+                assert b"qf_test_block_01" not in mgr._pending_write_hashes, (
+                    "Inline-written block should leave pending hashes"
+                )
             stats = mgr.get_stats()
             assert stats.ssd_write_drops == 0
             assert stats.ssd_inline_write_fallbacks == 1
@@ -1245,9 +1244,9 @@ class TestPendingWriteBuffer:
             self._save_block(mgr, b"meta_load_blk_02")
 
             cache_data, metadata = mgr.load_block_with_metadata(b"meta_load_blk_00")
-            assert (
-                cache_data is not None
-            ), "load_block_with_metadata should serve evicted block from pending buffer"
+            assert cache_data is not None, (
+                "load_block_with_metadata should serve evicted block from pending buffer"
+            )
             assert metadata is not None
             assert metadata["num_layers"] == 2
             assert metadata["token_count"] == 16

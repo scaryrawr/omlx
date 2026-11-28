@@ -90,7 +90,9 @@ def test_vendor_module_processor_and_prompt_registration(tmp_path):
     assert model_type == "bailing_moe_v3_vl"
     assert MODEL_CONFIG["bailing_moe_v3_vl"] is MessageFormat.LIST_WITH_IMAGE_FIRST
     sentinel = object()
-    (tmp_path / "config.json").write_text(json.dumps({"model_type": "bailing_moe_v3_vl"}))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "bailing_moe_v3_vl"})
+    )
     with patch.object(
         bailing_moe_v3_vl.BailingMoeV3VLProcessor,
         "from_pretrained",
@@ -99,9 +101,7 @@ def test_vendor_module_processor_and_prompt_registration(tmp_path):
         assert AutoProcessor.from_pretrained(tmp_path) is sentinel
         load.assert_called_once()
 
-    image = get_message_json(
-        "bailing_moe_v3_vl", "Describe this image.", num_images=1
-    )
+    image = get_message_json("bailing_moe_v3_vl", "Describe this image.", num_images=1)
     assert image["content"][0] == {"type": "image"}
     assert image["content"][1]["type"] == "text"
     assert image["content"][1]["text"] == "Describe this image."
@@ -124,9 +124,12 @@ def test_processor_normalizes_ling_image_and_video_wrappers():
     processor.image_token = "<|image_pad|>"
     processor.video_token = "<|video_pad|>"
 
-    assert processor._normalize_media_wrappers(
-        "<|vision_start|><|image_pad|><|vision_end|>Describe."
-    ) == "<|vision_start|><|image_pad|><|vision_end|>\nDescribe."
+    assert (
+        processor._normalize_media_wrappers(
+            "<|vision_start|><|image_pad|><|vision_end|>Describe."
+        )
+        == "<|vision_start|><|image_pad|><|vision_end|>\nDescribe."
+    )
     assert processor._normalize_media_wrappers(
         "<|video_start|><|video_pad|><|video_end|>Describe."
     ) == (
@@ -199,9 +202,7 @@ def test_mixed_fp4_fp8_quantization_metadata_is_preserved(tmp_path):
         == "mxfp4"
     )
     assert (
-        config["quantization"]["language_model.model.layers.2.attention.dense"][
-            "mode"
-        ]
+        config["quantization"]["language_model.model.layers.2.attention.dense"]["mode"]
         == "mxfp8"
     )
 
@@ -237,9 +238,11 @@ def test_legacy_ling_fp8_metadata_gets_only_explicit_expert_fp4_overrides(tmp_pa
     assert config["quantization"][
         "language_model.model.layers.2.mlp.switch_mlp.gate_proj"
     ] == {"group_size": 16, "bits": 4, "mode": "mxfp4"}
-    assert config["quantization"][
-        "language_model.model.layers.3.attention.dense"
-    ] == {"group_size": 32, "bits": 8, "mode": "mxfp8"}
+    assert config["quantization"]["language_model.model.layers.3.attention.dense"] == {
+        "group_size": 32,
+        "bits": 8,
+        "mode": "mxfp8",
+    }
 
 
 def test_ling_vlm_sanitize_converts_fp8_and_mxfp4_sidecars():
@@ -251,9 +254,7 @@ def test_ling_vlm_sanitize_converts_fp8_and_mxfp4_sidecars():
     expert_weight = "model.layers.2.mlp.experts"
     raw_weights = {
         f"language_model.{fp8_weight}": mx.full((128, 128), 0x38, dtype=mx.uint8),
-        f"language_model.{fp8_weight}_scale_inv": mx.ones(
-            (1, 1), dtype=mx.float32
-        ),
+        f"language_model.{fp8_weight}_scale_inv": mx.ones((1, 1), dtype=mx.float32),
     }
     for expert in range(config.text_config.num_experts):
         key = f"{expert_weight}.{expert}.gate_proj.weight"
@@ -268,10 +269,10 @@ def test_ling_vlm_sanitize_converts_fp8_and_mxfp4_sidecars():
     assert f"language_model.{fp8_weight}_scale_inv" not in converted
     assert f"language_model.{mxfp4_weight}_scale_inv" not in converted
     assert converted[f"language_model.{fp8_weight}"].dtype == mx.uint32
-    assert f"language_model.{fp8_weight[:-len('weight')]}scales" in converted
-    assert f"language_model.{fp8_weight[:-len('weight')]}biases" in converted
+    assert f"language_model.{fp8_weight[: -len('weight')]}scales" in converted
+    assert f"language_model.{fp8_weight[: -len('weight')]}biases" in converted
     assert converted[f"language_model.{mxfp4_weight}"].dtype == mx.uint32
-    assert f"language_model.{mxfp4_weight[:-len('weight')]}scales" in converted
+    assert f"language_model.{mxfp4_weight[: -len('weight')]}scales" in converted
 
 
 def test_ling_fp8_and_mxfp4_checkpoint_loads_strictly(tmp_path):
@@ -396,7 +397,5 @@ def test_ling_vl_discovery(model_type, architectures, tmp_path):
     }
     if model_type == "bailing_moe_v3_vl":
         config["vision_config"] = {"model_type": "qwen3_moe_vit"}
-    (tmp_path / "config.json").write_text(
-        json.dumps(config)
-    )
+    (tmp_path / "config.json").write_text(json.dumps(config))
     assert detect_model_type(tmp_path) == "vlm"

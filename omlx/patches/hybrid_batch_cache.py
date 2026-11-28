@@ -40,7 +40,7 @@ def apply_hybrid_batch_cache_fixes() -> bool:
     if not _arrays_mask_is_correct(ArraysCache, mx):
         original_make_mask = ArraysCache.make_mask
 
-        def make_mask(self, N: int):  # noqa: N803 - matches mlx-lm API
+        def make_mask(self, N: int):
             mask = None
             if self.left_padding is not None:
                 pos = mx.arange(N)

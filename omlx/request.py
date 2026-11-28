@@ -124,7 +124,7 @@ class SamplingParams:
     # Look-back window (tokens) for the repetition penalty. None = engine
     # default (mlx-lm uses 20). Loop units longer than the window never
     # overlap their own penalty context.
-    repetition_context_size: Optional[int] = None
+    repetition_context_size: int | None = None
     # Ban tokens that would repeat an n-gram of this size (0 = off), looking
     # only at the last ngram_window tokens when that is set (0 = all tokens).
     no_repeat_ngram_size: int = 0
@@ -305,7 +305,9 @@ class Request:
 
     # Reasoning model support (for models with <think> tags)
     needs_think_prefix: bool = False  # True if prompt ends with <think> token
-    preserve_reasoning: bool = False  # history keeps the <think> output, so output tokens are cacheable
+    preserve_reasoning: bool = (
+        False  # history keeps the <think> output, so output tokens are cacheable
+    )
     think_prefix_sent: bool = False  # Track if prefix already sent
     # Engine burst loop: set once a chunk with client-visible text is released.
     first_text_released: bool = False
@@ -322,7 +324,7 @@ class Request:
     specprefill_system_end: int = 0  # Token index where system prompt ends
 
     # Chat template suffix after the last message; the tail snapshot ends before it.
-    generation_prompt_text: Optional[str] = None
+    generation_prompt_text: str | None = None
     generation_prompt_start: int = 0  # Token index where the generation prompt starts
     generation_prompt_persists: bool = False  # History keeps the generation prompt
 

@@ -45,7 +45,7 @@ def apply_mlx_vlm_bailing_moe_v3_vl_compat_patch() -> bool:
         )
         _patch_load_config()
         _patch_video_prompt_format()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Ling 3.0 Flash VL mlx-vlm registration failed: %s", exc)
         return False
 
@@ -135,7 +135,9 @@ def _legacy_ling_quantization(
     for layer_index in range(first_sparse_layer, num_hidden_layers):
         base = f"language_model.model.layers.{layer_index}.mlp.switch_mlp"
         for projection in ("gate_proj", "up_proj", "down_proj"):
-            quantization.setdefault(f"{base}.{projection}", deepcopy(expert_quantization))
+            quantization.setdefault(
+                f"{base}.{projection}", deepcopy(expert_quantization)
+            )
     return quantization
 
 

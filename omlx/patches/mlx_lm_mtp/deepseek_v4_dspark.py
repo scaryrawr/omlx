@@ -13,9 +13,10 @@ exact rejection sampling, rollback, and output delivery.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -58,7 +59,7 @@ class DSparkContextCache:
     def __init__(self, max_size: int):
         self.max_size = int(max_size)
         self.offset = 0
-        self.keys: Optional[mx.array] = None
+        self.keys: mx.array | None = None
 
     def _chronological(self, value: mx.array) -> mx.array:
         """Temporarily expose a full physical ring from oldest to newest."""
@@ -89,7 +90,7 @@ class DSparkContextCache:
         self,
         keys: mx.array,
         *,
-        start_offset: Optional[int] = None,
+        start_offset: int | None = None,
     ) -> None:
         length = int(keys.shape[2])
         if start_offset is not None:
@@ -118,11 +119,11 @@ class _DSparkPrimeContext:
     expected_target_offset: int
 
 
-def _target_cache_offset(cache: Optional[list[Any]]) -> Optional[int]:
+def _target_cache_offset(cache: list[Any] | None) -> int | None:
     if not cache:
         return None
 
-    def read(entry: Any) -> Optional[int]:
+    def read(entry: Any) -> int | None:
         offset = getattr(entry, "offset", None)
         if type(offset) is int:
             return offset
@@ -145,17 +146,15 @@ def _target_cache_offset(cache: Optional[list[Any]]) -> Optional[int]:
 
 
 def drop_primed(host: Any) -> None:
-    try:
+    with contextlib.suppress(AttributeError):
         delattr(host, _PRIME_CTX_ATTR)
-    except AttributeError:
-        pass
 
 
 def capture_prompt(
     host: Any,
     inputs: mx.array,
     aux_hidden: mx.array,
-    target_cache: Optional[list[Any]],
+    target_cache: list[Any] | None,
 ) -> None:
     """Stream target-layer hidden states into the owning request's context."""
     if target_cache is None or inputs.ndim != 2 or inputs.shape[0] != 1:
@@ -202,9 +201,9 @@ def _capture_prompt(host, inputs, aux_hidden, target_cache):
 
 def take_primed(
     host: Any,
-    target_cache: Optional[list[Any]],
+    target_cache: list[Any] | None,
     _main_token: Any,
-) -> Optional[tuple[list[DSparkContextCache], int]]:
+) -> tuple[list[DSparkContextCache], int] | None:
     """Finish the prompt-to-decode seam for the native MTP batch loop."""
     ctx = getattr(host, _PRIME_CTX_ATTR, None)
     drop_primed(host)
@@ -223,10 +222,10 @@ def register(dsv4: Any) -> None:
     if hasattr(dsv4, "DSparkBlock"):
         return
 
-    HyperConnection = dsv4.HyperConnection
-    HyperHead = dsv4.HyperHead
-    DeepseekV4MoE = dsv4.DeepseekV4MoE
-    LimitedSwiGLU = dsv4.LimitedSwiGLU
+    hyper_connection_cls = dsv4.HyperConnection
+    hyper_head_cls = dsv4.HyperHead
+    deepseek_v4_mo_e_cls = dsv4.DeepseekV4MoE
+    limited_swi_g_l_u_cls = dsv4.LimitedSwiGLU
     hc_expand = dsv4.hc_expand
     scaled_dot_product_attention = dsv4.scaled_dot_product_attention
 
@@ -238,7 +237,7 @@ def register(dsv4: Any) -> None:
             main_x: mx.array,
             cache: DSparkContextCache,
             *,
-            start_offset: Optional[int] = None,
+            start_offset: int | None = None,
         ) -> None:
             offset = cache.offset if start_offset is None else int(start_offset)
             batch, length, _ = main_x.shape
@@ -250,7 +249,7 @@ def register(dsv4: Any) -> None:
             self,
             x: mx.array,
             cache: DSparkContextCache,
-            query_width: Optional[int] = None,
+            query_width: int | None = None,
         ) -> mx.array:
             batch, block_width, _ = x.shape
             query_width = min(int(query_width or block_width), block_width)
@@ -314,23 +313,23 @@ def register(dsv4: Any) -> None:
         def __init__(self, config: Any, layer_idx: int, stage_idx: int, stages: int):
             super().__init__()
             self.attn = DSparkAttention(config, layer_idx)
-            self.ffn = DeepseekV4MoE(config, layer_idx)
-            self.ffn.switch_mlp.activation = LimitedSwiGLU(
+            self.ffn = deepseek_v4_mo_e_cls(config, layer_idx)
+            self.ffn.switch_mlp.activation = limited_swi_g_l_u_cls(
                 config.swiglu_limit,
                 fp32=True,
             )
             self.ffn.shared_experts.fp32_swiglu = True
             self.attn_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.ffn_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-            self.attn_hc = HyperConnection(config)
-            self.ffn_hc = HyperConnection(config)
+            self.attn_hc = hyper_connection_cls(config)
+            self.ffn_hc = hyper_connection_cls(config)
             if stage_idx == 0:
                 fused_width = config.hidden_size * len(config.dspark_target_layer_ids)
                 self.main_proj = nn.Linear(fused_width, config.hidden_size, bias=False)
                 self.main_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             if stage_idx == stages - 1:
                 self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-                self.hc_head = HyperHead(config)
+                self.hc_head = hyper_head_cls(config)
                 self.markov_head = DSparkMarkovHead(config)
                 self.confidence_head = DSparkConfidenceHead(config)
 
@@ -339,7 +338,7 @@ def register(dsv4: Any) -> None:
             hidden: mx.array,
             input_ids: mx.array,
             cache: DSparkContextCache,
-            output_width: Optional[int] = None,
+            output_width: int | None = None,
         ) -> mx.array:
             residual = hidden
             x, post, comb = self.attn_hc(hidden)

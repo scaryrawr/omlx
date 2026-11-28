@@ -63,10 +63,7 @@ _MLX0322_VECTOR_HEAD_DIMS = frozenset({64, 96, 128, 256})
 
 def _mlx0322_default_fused(head_dim: int, query_len: int, gqa_factor: int) -> bool:
     if query_len <= 8:
-        return (
-            head_dim in _MLX0322_VECTOR_HEAD_DIMS
-            and query_len * gqa_factor <= 32
-        )
+        return head_dim in _MLX0322_VECTOR_HEAD_DIMS and query_len * gqa_factor <= 32
     return head_dim in _MLX0322_FULL_HEAD_DIMS
 
 
@@ -142,10 +139,7 @@ def apply() -> bool:
             # Device threadgroup budgets are pipeline-dependent (virtualized
             # GPUs cap below 32 * gqa threads); infeasible geometry falls
             # back before the batched cache update commits us to the route.
-            and gemma4_verify_kernel.kernel_max_rows(
-                gqa_factor, x.dtype
-            )
-            > 0
+            and gemma4_verify_kernel.kernel_max_rows(gqa_factor, x.dtype) > 0
         )
         if not use_kernel and L > _MAX_L:
             return original_call(

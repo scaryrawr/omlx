@@ -13,8 +13,13 @@ WEB = ROOT / "omlx_web"
 CARD_KEYS = ("models.detail.adapter_info", "models.detail.adapter_no_base")
 NOTICE_KEY = "models.manager.adapter_issues_heading"
 BASE_KEYS = (
-    "adapter_base", "adapter_base_hint", "adapter_base_auto", "adapter_base_apply",
-    "adapter_base_current", "adapter_base_unload", "adapter_base_saved",
+    "adapter_base",
+    "adapter_base_hint",
+    "adapter_base_auto",
+    "adapter_base_apply",
+    "adapter_base_current",
+    "adapter_base_unload",
+    "adapter_base_saved",
 )
 
 

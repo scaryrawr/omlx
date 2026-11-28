@@ -1106,7 +1106,7 @@ def stage_files_from_source(
                 **routes,
             )
             return name, None
-        except Exception as exc:  # noqa: BLE001 - reported per file
+        except Exception as exc:
             return name, str(exc)
 
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
@@ -1353,7 +1353,7 @@ def stage_remote_files(
                 filename=name,
             )
             return name, None
-        except Exception as exc:  # noqa: BLE001 - reported per file
+        except Exception as exc:
             return name, str(exc)
 
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:

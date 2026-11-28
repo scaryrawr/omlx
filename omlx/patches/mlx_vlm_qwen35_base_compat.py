@@ -63,7 +63,7 @@ def apply_mlx_vlm_qwen35_base_compat_patch() -> bool:
         from mlx_vlm.models.qwen3_5 import config as q35_config
         from mlx_vlm.models.qwen3_5 import language as q35_language
         from mlx_vlm.models.qwen3_5 import qwen3_5 as q35_model
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("mlx-vlm qwen3_5 not importable: %s", exc)
         return False
 

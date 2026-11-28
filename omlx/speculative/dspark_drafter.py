@@ -133,7 +133,9 @@ class DSparkDrafter:
             if captured:
                 row.pending.append(_concat_captured(captured))
             if not row.pending:
-                raise RuntimeError(f"DSpark has no target context for uid={state.uid!r}")
+                raise RuntimeError(
+                    f"DSpark has no target context for uid={state.uid!r}"
+                )
             hidden = (
                 row.pending[0]
                 if len(row.pending) == 1
@@ -145,9 +147,11 @@ class DSparkDrafter:
                 else lambda logits: mx.argmax(logits, axis=-1)
             )
             probabilities = (
-                (lambda logprobs, sampler=sampler: mx.exp(
-                    bg._accept_lp_for(sampler, logprobs)
-                ))
+                (
+                    lambda logprobs, sampler=sampler: mx.exp(
+                        bg._accept_lp_for(sampler, logprobs)
+                    )
+                )
                 if sampled
                 else None
             )
@@ -163,13 +167,18 @@ class DSparkDrafter:
                 1,
                 self.depth,
             ):
-                raise RuntimeError("Native DSpark returned an inconsistent block width.")
+                raise RuntimeError(
+                    "Native DSpark returned an inconsistent block width."
+                )
             if sampled and proposal.proposal_probs is None:
                 raise RuntimeError("Sampled DSpark did not return its proposal law.")
             state.drafts = proposal.tokens.reshape(-1).astype(mx.uint32)
             state.draft_lps = []
             state.draft_accept_lps = (
-                [mx.log(proposal.proposal_probs[0, index]) for index in range(self.depth)]
+                [
+                    mx.log(proposal.proposal_probs[0, index])
+                    for index in range(self.depth)
+                ]
                 if sampled
                 else []
             )

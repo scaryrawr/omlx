@@ -221,7 +221,9 @@ class _SlotCache:
         pool = _io_pool()
         window = 0
         if pool is not None:
-            window = max(1, min(_io_batch(), INFLIGHT_BYTES // max(1, self.expert_bytes)))
+            window = max(
+                1, min(_io_batch(), INFLIGHT_BYTES // max(1, self.expert_bytes))
+            )
         pending: dict[int, list] = {}
         submitted = 0
 

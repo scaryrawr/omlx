@@ -376,17 +376,13 @@ def test_mtp_resident_keeps_draft_head_unwrapped(tmp_path, reference):
     assert n == 1
     assert isinstance(model.model.layers[0].ffn.switch_mlp, dsv4.OffloadedSwitchGLU)
     assert isinstance(model.mtp[0].block.switch_mlp, SwitchGLU)
-    assert not isinstance(
-        model.mtp[0].block.switch_mlp, dsv4.OffloadedSwitchGLU
-    )
+    assert not isinstance(model.mtp[0].block.switch_mlp, dsv4.OffloadedSwitchGLU)
 
     off = _Model([_copy(reference)])
     off.mtp = [_MTPHead(_copy(head))]
     n = dsv4.apply_deepseek_v4_moe_expert_offload(off, tmp_path, 0.5)
     assert n == 2
-    assert isinstance(
-        off.mtp[0].block.switch_mlp, dsv4.OffloadedSwitchGLU
-    )
+    assert isinstance(off.mtp[0].block.switch_mlp, dsv4.OffloadedSwitchGLU)
 
 
 def test_admission_estimate_excludes_resident_draft_head(tmp_path):

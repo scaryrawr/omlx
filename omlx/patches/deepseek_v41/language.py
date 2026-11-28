@@ -80,7 +80,14 @@ def _rope_freqs(d, base, original_seq_len, factor, beta_fast, beta_slow):
     angle at position 200k. The exact value is the closest to the reference formula and the
     same on every platform; the table is built once per parameter set on the host.
     """
-    return _rope_freqs_cached(int(d), float(base), int(original_seq_len), float(factor), float(beta_fast), float(beta_slow))
+    return _rope_freqs_cached(
+        int(d),
+        float(base),
+        int(original_seq_len),
+        float(factor),
+        float(beta_fast),
+        float(beta_slow),
+    )
 
 
 @cache
@@ -98,18 +105,30 @@ def _rope_freqs_cached(d, base, original_seq_len, factor, beta_fast, beta_slow):
         powers = np.power(np.float64(base), exps.astype(np.float64))
     freqs = (np.float32(1.0) / powers.astype(np.float32)).astype(np.float32)
     if original_seq_len > 0:
+
         def corrected(rotations):
-            return d * math.log(original_seq_len / (rotations * 2 * math.pi)) / (2 * math.log(base))
+            return (
+                d
+                * math.log(original_seq_len / (rotations * 2 * math.pi))
+                / (2 * math.log(base))
+            )
 
         low = max(math.floor(corrected(beta_fast)), 0)
         high = min(math.ceil(corrected(beta_slow)), d - 1)
         ramp = np.clip(
-            ((np.arange(d // 2, dtype=np.float32) - np.float32(low)) / np.float32(max(high - low, 1e-3))).astype(np.float32),
-            0, 1,
+            (
+                (np.arange(d // 2, dtype=np.float32) - np.float32(low))
+                / np.float32(max(high - low, 1e-3))
+            ).astype(np.float32),
+            0,
+            1,
         ).astype(np.float32)
         smooth = (np.float32(1) - ramp).astype(np.float32)
         freqs = (
-            ((freqs / np.float32(factor)).astype(np.float32) * (np.float32(1) - smooth)).astype(np.float32)
+            (
+                (freqs / np.float32(factor)).astype(np.float32)
+                * (np.float32(1) - smooth)
+            ).astype(np.float32)
             + (freqs * smooth).astype(np.float32)
         ).astype(np.float32)
     return freqs
@@ -120,14 +139,16 @@ def _rope_positions(positions):
     nonzero step, else ("at", *positions) (e.g. batched decode rows, which may repeat)."""
     if isinstance(positions, range) and positions.step:
         return positions.start, positions.stop, positions.step
-    values = np.asarray(positions, np.int64).reshape(-1)  # host sync unless a list or range
+    values = np.asarray(positions, np.int64).reshape(
+        -1
+    )  # host sync unless a list or range
     step = int(values[1] - values[0]) if len(values) > 1 else 0
     if step and np.all(np.diff(values) == step):
         return int(values[0]), int(values[-1]) + step, step
     return ("at", *(int(v) for v in values))
 
 
-@lru_cache(maxsize=32)   # a decode step or verify block needs one range per RoPE variant
+@lru_cache(maxsize=32)  # a decode step or verify block needs one range per RoPE variant
 def _rope_table(params, key):
     """cos/sin of the reference's fp32 angles fl32(pos * freq) (torch.outer output is fp32),
     evaluated in float64 and rounded once to fp32: correctly rounded except when the exact
@@ -135,8 +156,14 @@ def _rope_table(params, key):
     and shared by every layer of the step."""
     freqs = _rope_freqs(*params)
     pos = np.array(key[1:]) if key[0] == "at" else np.arange(*key)
-    angles = (pos.astype(np.float32)[:, None] * freqs[None, :]).astype(np.float32).astype(np.float64)
-    return mx.array(np.cos(angles).astype(np.float32)), mx.array(np.sin(angles).astype(np.float32))
+    angles = (
+        (pos.astype(np.float32)[:, None] * freqs[None, :])
+        .astype(np.float32)
+        .astype(np.float64)
+    )
+    return mx.array(np.cos(angles).astype(np.float32)), mx.array(
+        np.sin(angles).astype(np.float32)
+    )
 
 
 @mx.compile
@@ -150,10 +177,14 @@ def _rope_apply(x, cos, sin, inverse):
     a, b = tail[..., 0], tail[..., 1]
     # Complex product in fp32 (fusion/FMA of a*c - b*s is unspecified in the reference).
     rotated = mx.stack([a * cos - b * sin, a * sin + b * cos], -1)
-    return mx.concatenate([x[..., :-d], rotated.reshape(*x.shape[:-1], d).astype(x.dtype)], -1)
+    return mx.concatenate(
+        [x[..., :-d], rotated.reshape(*x.shape[:-1], d).astype(x.dtype)], -1
+    )
 
 
-def rope(x, positions, config, compressed, inverse=False, quantize=False, heads_major=False):
+def rope(
+    x, positions, config, compressed, inverse=False, quantize=False, heads_major=False
+):
     """RoPE of x [B, L, ..., D] at positions; quantize: act_quant of the result; heads_major:
     x is [B, H, L, D] and the result [B, L, H, D]."""
     params = (
@@ -259,7 +290,9 @@ class Indexer(nn.Module):
             self.k_norm = RMSNorm(c.index_head_dim, c.norm_eps)
         self._config, self._layer = c, layer
 
-    def update_keys(self, latent, cache, shared, start, end, ratio, dtype, latent_start=None):
+    def update_keys(
+        self, latent, cache, shared, start, end, ratio, dtype, latent_start=None
+    ):
         """A kv-source layer's index keys of the rows start..end (cache[3], shared["index_k"]);
         latent: their compressed rows (None when none completes)."""
         c = self._config
@@ -331,14 +364,20 @@ class Indexer(nn.Module):
     def __call__(self, x, qr, latent, cache, shared, start, ratio, latent_start=None):
         c = self._config
         end = start + x.shape[1]
-        self.update_keys(latent, cache, shared, start, end, ratio, x.dtype, latent_start)
+        self.update_keys(
+            latent, cache, shared, start, end, ratio, x.dtype, latent_start
+        )
         q = self.wq_b(qr).reshape(1, x.shape[1], c.index_n_heads, c.index_head_dim)
         q = quantize_activation(rope(q, range(start, end), c, True), bits=4)
         # Reference: weights_proj(x) * scale is a tensor of the activation dtype (bf16).
         weights = (
-            self.weights_proj(x)
-            * mx.array(c.index_head_dim**-0.5 * c.index_n_heads**-0.5, mx.float32)
-        ).astype(x.dtype).astype(mx.float32)
+            (
+                self.weights_proj(x)
+                * mx.array(c.index_head_dim**-0.5 * c.index_n_heads**-0.5, mx.float32)
+            )
+            .astype(x.dtype)
+            .astype(mx.float32)
+        )
         return self.select(q, weights, shared, start, ratio)
 
 
@@ -389,7 +428,9 @@ class Attention(nn.Module):
             c,
             bool(ratio),
         )
-        new = pack_activation(rope(self.kv_norm(kv_input), rope_positions, c, bool(ratio)))
+        new = pack_activation(
+            rope(self.kv_norm(kv_input), rope_positions, c, bool(ratio))
+        )
         old = cache[1]
         # CED clears the stale window whenever bounded replay skips tokens.
         old_len = min(start, c.window_size, 0 if old is None else int(old.shape[1]))
@@ -426,12 +467,23 @@ class Attention(nn.Module):
                 shared["kv"] = cache[2][:, : kv_start // ratio]
             if layer in c.index_source_layers:
                 shared["idx"] = self.indexer(
-                    x, qr, latent, cache, shared, start, ratio, latent_start=ced_kv_start
+                    x,
+                    qr,
+                    latent,
+                    cache,
+                    shared,
+                    start,
+                    ratio,
+                    latent_start=ced_kv_start,
                 )
             if latent is not None:
                 compressed = rope(
                     latent,
-                    range(kv_start // ratio * ratio, (kv_start + kv_x.shape[1]) // ratio * ratio, ratio),
+                    range(
+                        kv_start // ratio * ratio,
+                        (kv_start + kv_x.shape[1]) // ratio * ratio,
+                        ratio,
+                    ),
                     c,
                     True,
                 )
@@ -484,7 +536,13 @@ class Attention(nn.Module):
         # each group's values. At df42c109 it fed bf16 o to wo_a directly, as upstream oMLX did.
         # The 32-groups of a head's o equal those of o.reshape(1, length, o_groups, -1).
         grouped = rope(
-            out, rope_positions, c, bool(ratio), inverse=True, quantize=True, heads_major=heads_major
+            out,
+            rope_positions,
+            c,
+            bool(ratio),
+            inverse=True,
+            quantize=True,
+            heads_major=heads_major,
         ).reshape(1, length, c.o_groups, -1)
         weight = self.wo_a.weight.reshape(c.o_groups, c.o_lora_rank, -1)
         return self.wo_b(mx.einsum("bsgd,grd->bsgr", grouped, weight).flatten(-2))
@@ -987,14 +1045,18 @@ class Block(nn.Module):
             and getattr(cache, "_mtp_verify_state", None) is None
             and decode_fused.supported(self, self._config)
         ):
-            return decode_fused.decode_block(self, h, pre, cache, shared, start, self._config)
+            return decode_fused.decode_block(
+                self, h, pre, cache, shared, start, self._config
+            )
         if (
             shared.get("_verify_rows")
             and ced_tail is None
             and image_mask is None
             and getattr(cache, "_mtp_verify_state", None) is not None
         ):
-            return decode_fused.decode_block_verify(self, h, pre, cache, shared, start, self._config)
+            return decode_fused.decode_block_verify(
+                self, h, pre, cache, shared, start, self._config
+            )
         ced_kv = ced_kv_start = None
         if ced_tail is not None:
             # CED bounded replay: queries, SWA KV and MoE run on the tail
@@ -1010,9 +1072,7 @@ class Block(nn.Module):
                     self.hc_attn_base,
                     self._config,
                 )
-                x = hc_pre_norm(
-                    h, pre, self.attn_norm.weight, self.attn_norm.eps
-                )
+                x = hc_pre_norm(h, pre, self.attn_norm.weight, self.attn_norm.eps)
                 ced_kv, ced_kv_start = x, start
                 ap, ao, ac = ap[:, -tail:], ao[:, -tail:], ac[:, -tail:]
             else:
@@ -1024,9 +1084,7 @@ class Block(nn.Module):
                     self.hc_attn_base,
                     self._config,
                 )
-                x = hc_pre_norm(
-                    h, pre, self.attn_norm.weight, self.attn_norm.eps
-                )
+                x = hc_pre_norm(h, pre, self.attn_norm.weight, self.attn_norm.eps)
             # Bounded replay skipped every position before the tail, so the
             # stored window is non-contiguous with these queries: drop it.
             cache[1] = None
@@ -1178,9 +1236,12 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             except (IndexError, TypeError, ValueError):
                 history = None
         batch = int(next_ids.shape[0])
-        if history is None or history.ndim != 2 or history.shape[0] != batch:
-            history = np.full((batch, depth), -1, dtype=np.int64)
-        elif history.shape[1] != depth:
+        if (
+            history is None
+            or history.ndim != 2
+            or history.shape[0] != batch
+            or history.shape[1] != depth
+        ):
             history = np.full((batch, depth), -1, dtype=np.int64)
         if not current_ids_are_empty:
             if current_ids.shape[0] != batch:
@@ -1205,7 +1266,9 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             x = _gather_stage(x)
         return x if skip_logits else project_logits(x, self.head.weight)
 
-    def _batched_decode_ok(self, input_ids, cache, masks, inputs_embeds, capture, kwargs):
+    def _batched_decode_ok(
+        self, input_ids, cache, masks, inputs_embeds, capture, kwargs
+    ):
         """One token per request at a valid position, through supported fused layers.
 
         Batches wider than the fused kernels are split into MAX_BATCH-row chunks.
@@ -1289,7 +1352,11 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
                     DeepseekV41Cache.merge([item.extract(r) for r in range(start, end)])
                     for item in cache
                 ]
-                results.append(self._forward_decode_batched(input_ids[start:end], chunk, skip_logits))
+                results.append(
+                    self._forward_decode_batched(
+                        input_ids[start:end], chunk, skip_logits
+                    )
+                )
                 for i, item in enumerate(chunk):
                     rows[i].extend(item.extract(r) for r in range(end - start))
             for item, updated in zip(cache, rows):
@@ -1305,12 +1372,17 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             starts.append(start)
         hashes, histories = None, None
         if self._hasher is not None:
-            per_row = [self._hasher(input_ids[r : r + 1], rcs[r][0][6], None) for r in range(b_n)]
+            per_row = [
+                self._hasher(input_ids[r : r + 1], rcs[r][0][6], None)
+                for r in range(b_n)
+            ]
             hashes = np.concatenate([p[0] for p in per_row], 0)
             histories = [p[1] for p in per_row]
         h = self.embed(input_ids)
         h = mx.repeat(h[..., None, :], c.hc_mult, -2)
-        pre = mx.broadcast_to((mx.arange(c.hc_mult) == 0).astype(mx.float32), h.shape[:-1])
+        pre = mx.broadcast_to(
+            (mx.arange(c.hc_mult) == 0).astype(mx.float32), h.shape[:-1]
+        )
         if self.pipeline_rank < self.pipeline_size - 1:
             h, pre = _receive_stage(h, pre, self.pipeline_rank + 1)
         shareds = [{} for _ in range(b_n)]
@@ -1323,7 +1395,8 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             first = self._next_engram(stage, -1)
             if prefetch is not None and first is not None:
                 prefetch.submit(
-                    self.layers[first].engram.embed, hashes[:, :, engram_ids.index(first)]
+                    self.layers[first].engram.embed,
+                    hashes[:, :, engram_ids.index(first)],
                 )
             for j, (i, layer) in enumerate(stage):
                 if "engram" in layer:
@@ -1338,7 +1411,14 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
                             hashes[:, :, engram_ids.index(following)],
                         )
                 h, pre = decode_fused.decode_block_nb(
-                    layer, h, pre, [rcs[r][j] for r in range(b_n)], shareds, starts, c, together
+                    layer,
+                    h,
+                    pre,
+                    [rcs[r][j] for r in range(b_n)],
+                    shareds,
+                    starts,
+                    c,
+                    together,
                 )
                 # Submit each layer: the GPU runs it while the next one is built.
                 mx.async_eval(h, pre)
@@ -1357,7 +1437,9 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
                                 empty = pack_activation(empty, 4, 16, True)
                             elif slot == 3:
                                 empty = pack_activation(empty, 4)
-                            rc[j][slot] = mx.zeros((1, 0), mx.int64) if slot == 6 else empty
+                            rc[j][slot] = (
+                                mx.zeros((1, 0), mx.int64) if slot == 6 else empty
+                            )
         logits = self._stage_output(h, pre, skip_logits)
         for i, item in enumerate(cache):
             item.adopt_rows([rcs[r][i] for r in range(b_n)])
@@ -1382,7 +1464,9 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             return False
         return all(not item.empty() for item in cache) and self._stages_decode_fused()
 
-    def _forward_verify_batched(self, input_ids, cache, verify_states, capture, skip_logits=False):
+    def _forward_verify_batched(
+        self, input_ids, cache, verify_states, capture, skip_logits=False
+    ):
         """_forward for B requests' verify blocks ([B, R] tokens): each request gets the
         result of its own verify forward (decode_fused.decode_block_verify_nb), with the
         weights read once for all B * R rows. verify_states[r] holds request r's per-layer
@@ -1400,12 +1484,17 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
                 item._mtp_verify_state = state
         hashes, histories = None, None
         if self._hasher is not None:
-            per_row = [self._hasher(input_ids[r : r + 1], rcs[r][0][6], None) for r in range(b_n)]
+            per_row = [
+                self._hasher(input_ids[r : r + 1], rcs[r][0][6], None)
+                for r in range(b_n)
+            ]
             hashes = np.concatenate([p[0] for p in per_row], 0)
             histories = [p[1] for p in per_row]
         h = self.embed(input_ids)
         h = mx.repeat(h[..., None, :], c.hc_mult, -2)
-        pre = mx.broadcast_to((mx.arange(c.hc_mult) == 0).astype(mx.float32), h.shape[:-1])
+        pre = mx.broadcast_to(
+            (mx.arange(c.hc_mult) == 0).astype(mx.float32), h.shape[:-1]
+        )
         if self.pipeline_rank < self.pipeline_size - 1:
             h, pre = _receive_stage(h, pre, self.pipeline_rank + 1)
         shareds = [{} for _ in range(b_n)]
@@ -1417,7 +1506,8 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             first = self._next_engram(stage, -1)
             if prefetch is not None and first is not None:
                 prefetch.submit(
-                    self.layers[first].engram.embed, hashes[:, :, engram_ids.index(first)]
+                    self.layers[first].engram.embed,
+                    hashes[:, :, engram_ids.index(first)],
                 )
             for j, (i, layer) in enumerate(stage):
                 if "engram" in layer:
@@ -1452,7 +1542,9 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
                                 empty = pack_activation(empty, 4, 16, True)
                             elif slot == 3:
                                 empty = pack_activation(empty, 4)
-                            rc[j][slot] = mx.zeros((1, 0), mx.int64) if slot == 6 else empty
+                            rc[j][slot] = (
+                                mx.zeros((1, 0), mx.int64) if slot == 6 else empty
+                            )
         logits = self._stage_output(h, pre, skip_logits)
         for rc in rcs:
             for item in rc:
@@ -1463,7 +1555,9 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
         if capture:
             if set(captured) != set(c.dspark_target_layer_ids):
                 raise ValueError("Incomplete DSpark target hidden capture")
-            return logits, mx.concatenate([captured[i] for i in c.dspark_target_layer_ids], axis=-1)
+            return logits, mx.concatenate(
+                [captured[i] for i in c.dspark_target_layer_ids], axis=-1
+            )
         return logits
 
     def _forward(
@@ -1487,13 +1581,19 @@ class LanguageModel(DSparkMixin, PipelineMixin, nn.Module):
             )
         masks = cache[0].make_mask(input_ids.shape[1])
         capture = bool(kwargs.get("return_dspark_hidden", False))
-        if self._batched_decode_ok(input_ids, cache, masks, inputs_embeds, capture, kwargs):
+        if self._batched_decode_ok(
+            input_ids, cache, masks, inputs_embeds, capture, kwargs
+        ):
             return self._forward_decode_batched(input_ids, cache, skip_logits)
         verify_rows = kwargs.get("mtp_verify_states")
         if verify_rows is not None and input_ids.shape[0] > 1:
-            if not self._batched_verify_ok(input_ids, cache, masks, inputs_embeds, kwargs):
+            if not self._batched_verify_ok(
+                input_ids, cache, masks, inputs_embeds, kwargs
+            ):
                 raise ValueError("DeepSeek V4.1 cannot verify these requests together")
-            return self._forward_verify_batched(input_ids, cache, verify_rows, capture, skip_logits)
+            return self._forward_verify_batched(
+                input_ids, cache, verify_rows, capture, skip_logits
+            )
         if capture and input_ids.shape[0] != 1:
             raise ValueError(
                 "DSpark target capture currently requires one unpadded row"

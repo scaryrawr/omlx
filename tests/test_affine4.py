@@ -267,9 +267,7 @@ def test_native_long_uniform_attention_stays_finite(
     output = affine4._native_attention(cache, queries, keys, values, dim**-0.5, None)
     assert output is not None
     assert mx.all(mx.isfinite(output)).item()
-    expected = cache.value_codec._rotate_inverse(
-        mx.full(queries.shape, decoded_code)
-    )
+    expected = cache.value_codec._rotate_inverse(mx.full(queries.shape, decoded_code))
     close(output, expected.astype(queries.dtype), atol=0.02)
 
 
@@ -523,9 +521,7 @@ def test_first_native_command_buffer_error_propagates(monkeypatch):
         (257, (2, 3, 9), mx.bfloat16, Affine8Codec),
     ],
 )
-def test_fused_rotated_dequantize_arbitrary_dimensions(
-    dim, shape, dtype, codec_class
-):
+def test_fused_rotated_dequantize_arbitrary_dimensions(dim, shape, dtype, codec_class):
     if not mx.metal.is_available():
         pytest.skip("Fused unpack requires Metal")
     codec = codec_class(dim)
@@ -631,9 +627,13 @@ def test_portable_attention_peak_is_bounded_across_layers(
         random((1, 4, 8192, 128), mx.bfloat16, seed=1),
     )
     mx.eval(source.state)
-    caches = [cache_class.from_state(source.state, source.meta_state) for _ in range(16)]
+    caches = [
+        cache_class.from_state(source.state, source.meta_state) for _ in range(16)
+    ]
     output = random((1, 16, rows, 128), mx.bfloat16, seed=2)
-    mx.eval(output, *[part for cache in caches for state in cache.state for part in state])
+    mx.eval(
+        output, *[part for cache in caches for state in cache.state for part in state]
+    )
     mx.synchronize()
     mx.clear_cache()
     baseline = mx.get_active_memory()

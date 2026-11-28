@@ -165,8 +165,7 @@ class MTPProcessingSampler:
         n_slots = int(logprobs.shape[0])
         if n_slots != len(positions):
             self._degrade(
-                f"row/position mismatch (rows={n_slots}, "
-                f"positions={len(positions)})"
+                f"row/position mismatch (rows={n_slots}, positions={len(positions)})"
             )
 
         base_pos = int(positions[0])

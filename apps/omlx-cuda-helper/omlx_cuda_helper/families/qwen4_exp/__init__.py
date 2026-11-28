@@ -53,8 +53,7 @@ def check_first_stage(text: dict[str, Any]) -> None:
     late = [i for i in ple_layers(text) if i >= FIRST_STAGE_MIN]
     if late:
         raise ValueError(
-            f"PLE layers {late} do not fit in a first stage of "
-            f"{FIRST_STAGE_MIN} layers"
+            f"PLE layers {late} do not fit in a first stage of {FIRST_STAGE_MIN} layers"
         )
 
 

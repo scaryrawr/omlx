@@ -71,7 +71,7 @@ def apply_mlx_vlm_glm5_next_compat_patch() -> bool:
         from mlx_vlm.prompt_utils import MODEL_CONFIG, MessageFormat
 
         MODEL_CONFIG.setdefault("glm5_next", MessageFormat.LIST_WITH_IMAGE_FIRST)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("GLM-5.3 mlx-vlm registration failed: %s", exc)
         return False
 

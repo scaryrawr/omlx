@@ -13,7 +13,7 @@ import gc
 import logging
 import re
 from collections.abc import AsyncIterator
-from typing import Any, Dict, Optional, get_args, get_type_hints
+from typing import Any, get_args, get_type_hints
 
 import mlx.core as mx
 import numpy as np
@@ -90,7 +90,7 @@ _BAILING_MOE_KEYS = (
 )
 
 
-def is_ming3_config(config: Dict[str, Any]) -> bool:
+def is_ming3_config(config: dict[str, Any]) -> bool:
     """Same test as mlx-audio's ``Model.ming3``, from config.json alone.
 
     Ming-3.0 has a dense LLM backbone and one-latent DiT patches; Ming Omni
@@ -110,7 +110,7 @@ def is_ming3_config(config: Dict[str, Any]) -> bool:
     return not moe and patch_size == 1 and history == 1
 
 
-def _infer_kokoro_lang_code(voice: Optional[str]) -> Optional[str]:
+def _infer_kokoro_lang_code(voice: str | None) -> str | None:
     """Infer Kokoro's G2P lang_code from its voice naming convention.
 
     Without a lang_code the Kokoro pipeline falls back to English G2P and
@@ -276,17 +276,17 @@ class TTSEngine(BaseNonStreamingEngine):
     async def synthesize(
         self,
         text: str,
-        voice: Optional[str] = None,
+        voice: str | None = None,
         speed: float = 1.0,
-        instructions: Optional[str] = None,
-        ref_audio: Optional[str] = None,
-        ref_text: Optional[str] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        language: Optional[str] = None,
+        instructions: str | None = None,
+        ref_audio: str | None = None,
+        ref_text: str | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repetition_penalty: float | None = None,
+        max_tokens: int | None = None,
+        language: str | None = None,
         **kwargs,
     ) -> bytes:
         """
@@ -328,8 +328,8 @@ class TTSEngine(BaseNonStreamingEngine):
         model = self._model
         t0 = time.monotonic()
 
-        def _build_generate_kwargs() -> Dict[str, Any]:
-            gen_kwargs: Dict[str, Any] = {
+        def _build_generate_kwargs() -> dict[str, Any]:
+            gen_kwargs: dict[str, Any] = {
                 "text": text,
                 "verbose": False,
             }
@@ -420,18 +420,18 @@ class TTSEngine(BaseNonStreamingEngine):
     async def stream_synthesize_pcm(
         self,
         text: str,
-        voice: Optional[str] = None,
+        voice: str | None = None,
         speed: float = 1.0,
-        instructions: Optional[str] = None,
-        ref_audio: Optional[str] = None,
-        ref_text: Optional[str] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        instructions: str | None = None,
+        ref_audio: str | None = None,
+        ref_text: str | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        repetition_penalty: float | None = None,
+        max_tokens: int | None = None,
         streaming_interval: float = 0.4,
-        language: Optional[str] = None,
+        language: str | None = None,
         **kwargs,
     ) -> AsyncIterator[tuple[int, int, int, bytes]]:
         """Stream synthesized PCM chunks from models that natively support it."""
@@ -457,8 +457,8 @@ class TTSEngine(BaseNonStreamingEngine):
         model = self._model
         t0 = time.monotonic()
 
-        def _build_generate_kwargs() -> Dict[str, Any]:
-            gen_kwargs: Dict[str, Any] = {
+        def _build_generate_kwargs() -> dict[str, Any]:
+            gen_kwargs: dict[str, Any] = {
                 "text": text,
                 "verbose": False,
                 "stream": True,
@@ -558,7 +558,7 @@ class TTSEngine(BaseNonStreamingEngine):
                 total_bytes,
             )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get engine statistics."""
         return {
             "model_name": self._model_name,

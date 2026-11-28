@@ -42,7 +42,7 @@ from __future__ import annotations
 import functools
 import re
 import subprocess
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple
 
 import mlx.core as mx
 
@@ -291,8 +291,16 @@ def _kernel(cfg: RecurrenceConfig):
                 f"{'_pf' if cfg.prefetch else ''}"
             ),
             input_names=[
-                "q", "k", "v", "a", "beta", "A_log", "dt_bias", "lower_bound",
-                "state_in", "T",
+                "q",
+                "k",
+                "v",
+                "a",
+                "beta",
+                "A_log",
+                "dt_bias",
+                "lower_bound",
+                "state_in",
+                "T",
             ],
             output_names=["y", "state_out"],
             source=_source(cfg),
@@ -341,12 +349,12 @@ _PC_MAX_ROWS = 128  # rows per threadgroup: 8 lanes each, and at most 2 heads
 class PerCoreConfig(NamedTuple):
     """Launch shape of the per-core recurrence (every variant is exact)."""
 
-    threadgroups: Optional[int] = None  # default: one per GPU core
+    threadgroups: int | None = None  # default: one per GPU core
     tb: int = _PC_TB
 
 
 @functools.lru_cache(maxsize=1)
-def gpu_core_count() -> Optional[int]:
+def gpu_core_count() -> int | None:
     """GPU core count from the IORegistry (AGXAccelerator gpu-core-count)."""
     try:
         out = subprocess.run(
@@ -361,7 +369,7 @@ def gpu_core_count() -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _percore_threadgroups(rows: int, cfg: PerCoreConfig) -> Optional[int]:
+def _percore_threadgroups(rows: int, cfg: PerCoreConfig) -> int | None:
     ntg = cfg.threadgroups
     if ntg is None:
         # One threadgroup per core: measured to land exactly one per core,
@@ -412,7 +420,7 @@ def _pc_reduce_y4(s0: int) -> str:
             }}"""
 
 
-def _pc_step(t, reduce4_prev: Optional[int], keep: Optional[int]) -> str:
+def _pc_step(t, reduce4_prev: int | None, keep: int | None) -> str:
     """One recurrence step at block-local index t (int, or "t" in the tail loop).
 
     reduce4_prev: reduce the four pending q.S partials of steps
@@ -622,8 +630,16 @@ def _percore_kernel(tb: int, max_rows: int):
         kernel = mx.fast.metal_kernel(
             name=f"omlx_glm53_kda_recurrence_percore_tb{tb}_r{max_rows}",
             input_names=[
-                "q", "k", "v", "a", "beta", "A_log", "dt_bias", "lower_bound",
-                "state_in", "T",
+                "q",
+                "k",
+                "v",
+                "a",
+                "beta",
+                "A_log",
+                "dt_bias",
+                "lower_bound",
+                "state_in",
+                "T",
             ],
             output_names=["y", "state_out"],
             source=_percore_source(tb, max_rows),
@@ -633,8 +649,10 @@ def _percore_kernel(tb: int, max_rows: int):
     return kernel
 
 
-@functools.lru_cache(maxsize=None)
-def _percore_launchable(tb: int, max_rows: int, dtype, Dk: int, Dv: int, H: int, ntg: int) -> bool:
+@functools.cache
+def _percore_launchable(
+    tb: int, max_rows: int, dtype, Dk: int, Dv: int, H: int, ntg: int
+) -> bool:
     """Whether this GPU runs the per-core kernel with ``max_rows * 8`` threads.
 
     A pipeline's thread limit depends on the GPU and the kernel's register
@@ -664,7 +682,7 @@ def _percore_launchable(tb: int, max_rows: int, dtype, Dk: int, Dv: int, H: int,
         )
         mx.eval(y, s)
         return True
-    except Exception:  # noqa: BLE001 - any launch failure keeps the blocked kernel
+    except Exception:
         return False
 
 
@@ -723,7 +741,7 @@ def kda_recurrence(
     lower_bound: float,
     state: mx.array,
     config=None,
-) -> Tuple[mx.array, mx.array]:
+) -> tuple[mx.array, mx.array]:
     """Vector-gated delta rule over a prompt chunk (safe-gate variant).
 
     q, k, a: [B, T, H, 128]; v: [B, T, H, 128]; beta: [B, T, H] (sigmoid
@@ -740,12 +758,16 @@ def kda_recurrence(
     if isinstance(config, RecurrenceConfig):
         return _blocked(q, k, v, a, beta, a_log, dt_bias, lower_bound, state, config)
     if config is None and not _PERCORE_DEFAULT:
-        return _blocked(q, k, v, a, beta, a_log, dt_bias, lower_bound, state, DEFAULT_CONFIG)
+        return _blocked(
+            q, k, v, a, beta, a_log, dt_bias, lower_bound, state, DEFAULT_CONFIG
+        )
     out = _percore(
         q, k, v, a, beta, a_log, dt_bias, lower_bound, state, config or PerCoreConfig()
     )
     if out is None:
-        out = _blocked(q, k, v, a, beta, a_log, dt_bias, lower_bound, state, DEFAULT_CONFIG)
+        out = _blocked(
+            q, k, v, a, beta, a_log, dt_bias, lower_bound, state, DEFAULT_CONFIG
+        )
     return out
 
 

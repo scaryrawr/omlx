@@ -505,7 +505,7 @@ class TestLaunchCommandFunction:
                     "model_alias": "served-alias",
                     "model_type": "llm",
                     "loaded": True,
-                }
+                },
             ]
         }
         settings = SimpleNamespace(
@@ -644,8 +644,8 @@ class TestLaunchCommandFunction:
             )
         elif load_failure == "timeout":
             mock_model_load.side_effect = requests.Timeout("warm-up timed out")
-        integration.launch.side_effect = (
-            lambda context: mock_model_load.assert_called_once()
+        integration.launch.side_effect = lambda context: (
+            mock_model_load.assert_called_once()
         )
         args = argparse.Namespace(
             tool=tool, host=None, port=None, api_key=None, model="coding-profile"
@@ -1080,9 +1080,7 @@ class TestLaunchCommandFunction:
     @pytest.mark.parametrize("tool", ["opencode", "codex", "copilot"])
     @pytest.mark.parametrize("model", ["flint-raw", "flint-alias"])
     @pytest.mark.parametrize("reported_type", ["vlm", "llm"])
-    def test_launch_flint_is_text_only(
-        self, tmp_path, tool, model, reported_type
-    ):
+    def test_launch_flint_is_text_only(self, tmp_path, tool, model, reported_type):
         from omlx.cli import launch_command
         from omlx.integrations.opencode import OpenCodeIntegration
 

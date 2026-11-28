@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import mlx.core as mx
-import pytest
 
 
 class _MaskBranchingModel:
@@ -22,10 +21,7 @@ class _MaskBranchingModel:
         if attention_mask is None:
             attention_mask = mx.ones(input_ids.shape, dtype=mx.int32)
         left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
-        if left_padding:
-            pooled = input_ids[:, -1:]
-        else:
-            pooled = input_ids[:, :1]
+        pooled = input_ids[:, -1:] if left_padding else input_ids[:, :1]
         return SimpleNamespace(text_embeds=pooled.astype(mx.float32))
 
 
@@ -111,11 +107,11 @@ class TestEmbeddingEngineStartStop:
 
         engine = EmbeddingEngine("test-model")
 
-        with patch("omlx.engine.embedding.MLXEmbeddingModel") as MockModel:
+        with patch("omlx.engine.embedding.MLXEmbeddingModel") as mock_model_cls:
             mock_model = MagicMock()
             mock_model._is_compiled = False
             mock_model.hidden_size = 384
-            MockModel.return_value = mock_model
+            mock_model_cls.return_value = mock_model
 
             asyncio.run(engine.start())
 
@@ -131,10 +127,10 @@ class TestRerankerEngineStartStop:
 
         engine = RerankerEngine("test-model")
 
-        with patch("omlx.engine.reranker.MLXRerankerModel") as MockModel:
+        with patch("omlx.engine.reranker.MLXRerankerModel") as mock_model_cls:
             mock_model = MagicMock()
             mock_model._is_compiled = False
-            MockModel.return_value = mock_model
+            mock_model_cls.return_value = mock_model
 
             asyncio.run(engine.start())
 

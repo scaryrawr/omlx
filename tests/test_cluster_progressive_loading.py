@@ -223,11 +223,13 @@ def test_native_tensor_strategy_materializes_and_shards_one_layer_at_a_time(
     model = Model()
     monkeypatch.setattr(
         "omlx.cluster.tensor_strategies.inspect.getsource",
-        lambda _shard: """
+        lambda _shard: (
+            """
 def shard(self, group):
     for layer in self.model.layers:
         layer.shard(group)
-""",
+"""
+        ),
     )
     strategy = apply_tensor_strategy(
         model,
@@ -274,11 +276,13 @@ def test_native_tensor_strategy_skips_read_only_forwarding_layer_property(monkey
     model = Model()
     monkeypatch.setattr(
         "omlx.cluster.tensor_strategies.inspect.getsource",
-        lambda _shard: """
+        lambda _shard: (
+            """
 def shard(self, group):
     for layer in self.layers:
         layer.shard(group)
-""",
+"""
+        ),
     )
     strategy = apply_tensor_strategy(
         model,
@@ -315,12 +319,14 @@ def test_native_tensor_strategy_refuses_fixed_weight_mutation_outside_layer_loop
     model = Model()
     monkeypatch.setattr(
         "omlx.cluster.tensor_strategies.inspect.getsource",
-        lambda _shard: """
+        lambda _shard: (
+            """
 def shard(self, group):
     self.output = "sharded"
     for layer in self.layers:
         layer.shard(group)
-""",
+"""
+        ),
     )
 
     try:
@@ -612,8 +618,8 @@ def test_a_model_with_its_own_stage_loader_bypasses_mlx_lm_loading(
             tmp_path, tensor_group=group, utils_module=utils, mx_module=_FakeMX()
         )
 
-    module.load_tensor_shard = (
-        lambda path, group, **options: calls.append((group, options)) or "shard"
+    module.load_tensor_shard = lambda path, group, **options: (
+        calls.append((group, options)) or "shard"
     )
     loaded = progressive_sharded_load(
         tmp_path,

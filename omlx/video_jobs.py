@@ -232,9 +232,10 @@ class VideoJobs:
                     async with self.pool.acquire(stored.video.model) as engine:
                         if not isinstance(engine, VideoEngine):
                             raise TypeError("Pool returned a non-video engine")
-                        if Path(engine.model_name).resolve() != Path(
-                            stored.plan.model_path
-                        ).resolve():
+                        if (
+                            Path(engine.model_name).resolve()
+                            != Path(stored.plan.model_path).resolve()
+                        ):
                             raise RuntimeError(
                                 "Video checkpoint changed after the job was queued"
                             )

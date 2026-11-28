@@ -133,15 +133,20 @@ def test_all_hit_skips_image_processor(cache, monkeypatch):
     ids = out["input_ids"][0].tolist()
     assert ids == [
         100 + ord("A"),
-        VS_ID, IT_ID, IT_ID, IT_ID, IT_ID, VE_ID,
+        VS_ID,
+        IT_ID,
+        IT_ID,
+        IT_ID,
+        IT_ID,
+        VE_ID,
         100 + ord("B"),
-        VS_ID, IT_ID, VE_ID,
+        VS_ID,
+        IT_ID,
+        VE_ID,
         100 + ord("C"),
     ]
     assert out["image_grid_thw"].tolist() == [[1, 4, 4], [1, 2, 2]]
-    assert out["mm_token_type_ids"][0].tolist() == [
-        1 if t == IT_ID else 0 for t in ids
-    ]
+    assert out["mm_token_type_ids"][0].tolist() == [1 if t == IT_ID else 0 for t in ids]
     assert out["attention_mask"].shape == (1, len(ids))
     # All cached: pixel_values is an empty non-None tensor (keeps the
     # model's multimodal branch without feeding the tower).
@@ -211,8 +216,7 @@ def test_guard_marker_count_mismatch(cache):
 def test_guard_nothing_cached(cache):
     eng = _make_engine(_FakeTower(), cache)
     assert (
-        eng._try_build_cached_vision_inputs(f"A{MARKER}B{MARKER}C", _images())
-        is None
+        eng._try_build_cached_vision_inputs(f"A{MARKER}B{MARKER}C", _images()) is None
     )
 
 
@@ -223,10 +227,7 @@ def test_guard_legacy_entry_without_grid(cache):
     cache.put(hashes[0], _MODEL, mx.full((4, 8), 7.0))
     cache.put(hashes[1], _MODEL, mx.full((1, 8), 9.0), grid=[1, 2, 2])
     eng = _make_engine(_FakeTower(), cache)
-    assert (
-        eng._try_build_cached_vision_inputs(f"A{MARKER}B{MARKER}C", imgs)
-        is None
-    )
+    assert eng._try_build_cached_vision_inputs(f"A{MARKER}B{MARKER}C", imgs) is None
 
 
 def test_guard_stale_grid_rejected(cache, monkeypatch):

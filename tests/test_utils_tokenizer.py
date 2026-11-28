@@ -32,7 +32,6 @@ def _spm_decoder(strip_space=True):
 
 
 class _ByteFallbackTokenizer:
-
     def __len__(self):
         return max(self.vocab.values()) + 1
 
@@ -64,7 +63,6 @@ class _ByteFallbackTokenizer:
 
 
 class _BpeTokenizer:
-
     def __len__(self):
         return max(self.vocab.values()) + 1
 
@@ -88,7 +86,6 @@ class BPEStreamingDetokenizer:
 
 
 class _MlxVlmBpeTokenizer:
-
     def __len__(self):
         return max(self.vocab.values()) + 1
 
@@ -234,7 +231,10 @@ class TestCreateStreamingDetokenizer:
         tokenizer = _MlxVlmBpeTokenizer({"A": 0, "B": 1})
         scans = []
         convert = tokenizer.convert_ids_to_tokens
-        tokenizer.convert_ids_to_tokens = lambda ids: (scans.append(len(ids)), convert(ids))[1]
+        tokenizer.convert_ids_to_tokens = lambda ids: (
+            scans.append(len(ids)),
+            convert(ids),
+        )[1]
 
         first = create_streaming_detokenizer(tokenizer, model_path=tmp_path)
         second = create_streaming_detokenizer(tokenizer, model_path=tmp_path)

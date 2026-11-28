@@ -512,9 +512,9 @@ def test_sanitize_dequantizes_fp8_block_weights():
     model = laguna.Model(args)
 
     out_dim, in_dim = 128, 256
-    w_true = (
-        (mx.arange(out_dim * in_dim).reshape(out_dim, in_dim) % 37) - 18
-    ).astype(mx.float32) / 5.0
+    w_true = ((mx.arange(out_dim * in_dim).reshape(out_dim, in_dim) % 37) - 18).astype(
+        mx.float32
+    ) / 5.0
     scale = mx.array([[0.5, 2.0]], dtype=mx.float32)  # blocks [1, 2]
     scale_expand = mx.repeat(mx.repeat(scale, out_dim, axis=0), 128, axis=1)
     codes = mx.to_fp8(w_true / scale_expand)
@@ -714,9 +714,9 @@ def test_sanitize_repacks_compressed_nvfp4_experts():
     weights = {}
     expected = {}
     for e in range(2):
-        w_true = (
-            (mx.arange(128 * 64).reshape(128, 64) % 23) - 11
-        ).astype(mx.float32) / (3.0 + e)
+        w_true = ((mx.arange(128 * 64).reshape(128, 64) % 23) - 11).astype(
+            mx.float32
+        ) / (3.0 + e)
         packed, scales = mx.quantize(w_true, group_size=16, bits=4, mode="nvfp4")
         expected[e] = (packed, scales)
         global_scale = 2.0
@@ -773,7 +773,10 @@ def test_normalize_laguna_compressed_quant_formats():
     assert int4["quantization"] == {"group_size": 32, "bits": 4}
 
     # Non-laguna and already-quantized configs are untouched
-    other = {"model_type": "llama", "quantization_config": {"quant_method": "compressed-tensors"}}
+    other = {
+        "model_type": "llama",
+        "quantization_config": {"quant_method": "compressed-tensors"},
+    }
     assert "quantization" not in normalize_laguna_compressed_quant(other)
     pre = cfg("pack-quantized", {})
     pre["quantization"] = {"group_size": 16, "bits": 4, "mode": "nvfp4"}

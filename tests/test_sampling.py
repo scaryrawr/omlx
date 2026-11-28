@@ -174,7 +174,9 @@ def test_apply_xtc_advances_rng_state():
     mx.eval(logits)
 
     pre = _capture_rng()
-    out = apply_xtc(logits, xtc_probability=0.5, xtc_threshold=0.1, xtc_special_tokens=[])
+    out = apply_xtc(
+        logits, xtc_probability=0.5, xtc_threshold=0.1, xtc_special_tokens=[]
+    )
     mx.eval(out)
     post = _capture_rng()
     assert pre != post, "apply_xtc did not advance RNG"
@@ -289,7 +291,9 @@ def test_shared_draft_filter_keeps_custom_and_greedy_sampler_contract():
     token, density = _sample_draft_with_logprobs(greedy, lp)
     assert token.item() == 1
     assert density is lp
-    assert not hasattr(make_sampler(temp=1, xtc_probability=0.5), "sample_with_logprobs")
+    assert not hasattr(
+        make_sampler(temp=1, xtc_probability=0.5), "sample_with_logprobs"
+    )
 
 
 @pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])

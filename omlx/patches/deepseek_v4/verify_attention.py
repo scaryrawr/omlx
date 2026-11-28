@@ -14,10 +14,9 @@ Multiple verify rows share one dispatch while retaining independent KV views.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import mlx.core as mx
-
 
 _ROWWISE_KERNEL_EXACT: bool | None = None
 
@@ -89,7 +88,10 @@ def ring_kernel_is_exact(fast) -> bool:
                 gathered = mx.take(source, indices, axis=0)
                 expected = rowwise_gemm(queries, gathered, True)
                 got = fast.ring_gemm(
-                    mx.contiguous(queries), mx.contiguous(source), mx.contiguous(indices), True
+                    mx.contiguous(queries),
+                    mx.contiguous(source),
+                    mx.contiguous(indices),
+                    True,
                 )
                 _RING_KERNEL_EXACT = bool(mx.array_equal(expected, got).item())
         except Exception:
@@ -97,7 +99,9 @@ def ring_kernel_is_exact(fast) -> bool:
     return _RING_KERNEL_EXACT
 
 
-def ring_gemm(lhs: mx.array, source: mx.array, indices: mx.array, transpose_rhs: bool) -> mx.array:
+def ring_gemm(
+    lhs: mx.array, source: mx.array, indices: mx.array, transpose_rhs: bool
+) -> mx.array:
     """Per-row GEMM against ring snapshots ``source[indices[row]]``, decode-exact.
 
     Uses the packed ring kernel only where it is bitwise equal to the exact
@@ -108,7 +112,10 @@ def ring_gemm(lhs: mx.array, source: mx.array, indices: mx.array, transpose_rhs:
 
         if ring_kernel_is_exact(fast):
             return fast.ring_gemm(
-                mx.contiguous(lhs), mx.contiguous(source), mx.contiguous(indices), transpose_rhs
+                mx.contiguous(lhs),
+                mx.contiguous(source),
+                mx.contiguous(indices),
+                transpose_rhs,
             )
     except Exception:
         pass
@@ -187,10 +194,7 @@ def exact_attention(
     while start < len(key_rows):
         stop = start + 1
         group_length = int(key_rows[start].shape[2])
-        while (
-            stop < len(key_rows)
-            and int(key_rows[stop].shape[2]) == group_length
-        ):
+        while stop < len(key_rows) and int(key_rows[stop].shape[2]) == group_length:
             stop += 1
 
         query_batch = scaled_rows[0, :, start:stop].transpose(1, 0, 2)
@@ -226,9 +230,7 @@ def exact_local_scores(
         raise ValueError("one DeepSeek KV view is required for each query row")
     if any(int(row.shape[2]) != int(key_rows[0].shape[2]) for row in key_rows):
         raise ValueError("sparse local KV views must have equal lengths")
-    query_batch = (
-        queries * mx.array(scale, dtype=queries.dtype)
-    )[0].transpose(1, 0, 2)
+    query_batch = (queries * mx.array(scale, dtype=queries.dtype))[0].transpose(1, 0, 2)
     keys = mx.concatenate(key_rows, axis=0)[:, 0]
     return rowwise_gemm(query_batch, keys, True).transpose(1, 0, 2)[None]
 

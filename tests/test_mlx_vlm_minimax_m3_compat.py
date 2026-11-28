@@ -83,7 +83,7 @@ def test_minimax_m3_compat_installs_vendor_modules():
 
     apply_mlx_vlm_minimax_m3_compat_patch()
 
-    import mlx_vlm.models.minimax_m3  # noqa: F401
+    import mlx_vlm.models.minimax_m3
     import mlx_vlm.models.minimax_m3_vl  # noqa: F401
     import mlx_vlm.models.minimax_m3_vl.language as language
     import mlx_vlm.models.minimax_m3_vl.msa as msa
@@ -202,9 +202,7 @@ def test_minimax_prompt_utils_restore_image_placeholders():
         return_messages=True,
         enable_thinking=False,
     )
-    assert rendered_messages == [
-        {"role": "user", "content": "]<]image[>[describe"}
-    ]
+    assert rendered_messages == [{"role": "user", "content": "]<]image[>[describe"}]
 
 
 def test_stopping_criteria_accepts_none_eos_ids():

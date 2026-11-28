@@ -137,8 +137,7 @@ def encode_record(
         )
     if not truncate and fixed + len(state) > max_length:
         raise DecisionContextLengthError(
-            f"the request needs {fixed + len(state)} tokens; the limit is "
-            f"{max_length}"
+            f"the request needs {fixed + len(state)} tokens; the limit is {max_length}"
         )
     state = state[: max_length - fixed]
     offset = len(prefix) + len(state)

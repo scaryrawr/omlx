@@ -323,8 +323,7 @@ def decode_video(url: str) -> D3Video:
                 raise DecisionRequestError("the video has no frame size")
             if width * height > MAX_VIDEO_SOURCE_PIXELS:
                 raise DecisionRequestError(
-                    f"video frames must have at most {MAX_VIDEO_SOURCE_PIXELS:,} "
-                    "pixels"
+                    f"video frames must have at most {MAX_VIDEO_SOURCE_PIXELS:,} pixels"
                 )
             fps = float(reader.get(cv2.CAP_PROP_FPS) or 0.0)
             if not (

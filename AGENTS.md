@@ -137,9 +137,9 @@ When bumping git-sourced dependencies, audit `[project].dependencies`, `[project
 - Default fast test run: `uv run pytest`
 - Explicit fast test selection: `uv run pytest -m "not slow and not integration"`
 - Narrow test run: `uv run pytest tests/test_config.py -v`
-- Lint: `uv run ruff check .` is the intended Python lint command, but the current tree may have pre-existing full-repo ruff diagnostics; when a task is not a lint cleanup, prefer `uv run ruff check <touched Python paths>` plus focused tests and call out any baseline failures separately. Do not include non-Python files such as `README.md` or `Formula/*.rb` in Ruff path lists; use `git diff --check` for whitespace on mixed-file changes. Ruff's SIM118 suggestion is unsafe for `safetensors.safe_open` handles in this environment; keep `f.keys()` there and add a targeted `# noqa: SIM118` if needed.
+- Lint and formatting: `make lint` runs `uv run ruff check .` and `uv run ruff format --check .`; both must pass, as in CI. Use `uv run ruff check --fix .` for safe lint fixes only. Do not use `--unsafe-fixes` indiscriminately. `SIM118` and `UP042` are disabled to preserve `.keys()` protocols and string-enum behavior. Vendored upstream Python is force-excluded. Do not include non-Python files in Ruff path lists; use `git diff --check` for whitespace on mixed-file changes.
 - Type check: `uv run mypy omlx`
-- Format when needed: `uv run black .`
+- Format when needed: `uv run ruff format .` (or `make format`). Do not run Black.
 - macOS app build checks live under `packaging/`; see `packaging/README.md` before running `python build.py`.
 
 `pytest.ini` defaults to verbose tests excluding `slow` and `integration`. Mark tests that require real model files with `@pytest.mark.slow`, and tests that require a live server with `@pytest.mark.integration`.

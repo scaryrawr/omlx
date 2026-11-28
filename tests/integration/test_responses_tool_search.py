@@ -969,8 +969,9 @@ class TestHostedSearchContinuation:
         assert engine.recorded[0]["kwargs"]["_prepared_prompt"] is initial
         assert engine.recorded[1]["kwargs"]["_prepared_prompt"] is continued
         assert engine.recorded[1]["kwargs"]["max_tokens"] == 11
-        assert engine.recorded[1]["kwargs"]["_request_id"] != (
-            engine.recorded[0]["kwargs"]["_request_id"]
+        assert (
+            engine.recorded[1]["kwargs"]["_request_id"]
+            != (engine.recorded[0]["kwargs"]["_request_id"])
         )
 
     @pytest.mark.parametrize("stream", [False, True])

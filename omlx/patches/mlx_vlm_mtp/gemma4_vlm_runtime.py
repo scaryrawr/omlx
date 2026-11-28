@@ -170,17 +170,19 @@ def _patch_vlm_language_model(g4_lang: Any) -> None:
     from mlx_vlm.models.base import LanguageModelOutput
     from mlx_vlm.speculative.drafters.gemma4_assistant import (
         Gemma4AssistantDraftModel,
+    )
+    from mlx_vlm.speculative.drafters.gemma4_assistant import (
         ModelConfig as Gemma4AssistantConfig,
     )
-    from mlx_vlm.speculative.mtp import _slice_shared_kv_after_reject  # noqa: SLF001
+    from mlx_vlm.speculative.mtp import _slice_shared_kv_after_reject
 
     original_init = cls.__init__
     original_call = cls.__call__
     original_rollback = cls.rollback_speculative_cache
 
     def __init__(self, config):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import get_mtp_depth, is_mtp_active, is_mtp_depth_fixed
+        from . import is_mtp_attach_enabled
 
         original_init(self, config)
         # A block drafter speculates for single rows only: a ragged accept
@@ -213,7 +215,9 @@ def _patch_vlm_language_model(g4_lang: Any) -> None:
         """
         drafter = getattr(self, "_omlx_drafter", None)
         if drafter is not None:
-            return _drafter_call(self, drafter, inputs, inputs_embeds, mask, cache, kwargs)
+            return _drafter_call(
+                self, drafter, inputs, inputs_embeds, mask, cache, kwargs
+            )
         return_hidden = bool(kwargs.get("return_hidden", False))
         if not (return_hidden and getattr(self, "_omlx_mtp_decode_enabled", False)):
             return original_call(self, inputs, inputs_embeds, mask, cache, **kwargs)
@@ -267,9 +271,7 @@ def _patch_vlm_language_model(g4_lang: Any) -> None:
             if observe:
                 requested = list(drafter.target_layer_ids)
             if not requested:
-                return original_call(
-                    self, inputs, inputs_embeds, mask, cache, **kwargs
-                )
+                return original_call(self, inputs, inputs_embeds, mask, cache, **kwargs)
             # The stock forward returns captures in layer order; the drafter
             # concatenates them in its own order.
             layer_ids = sorted(set(requested))

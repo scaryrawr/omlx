@@ -373,9 +373,9 @@ def test_sampling_rank_optimization_is_capability_gated_and_restored(monkeypatch
     ) as capabilities:
         assert capabilities["sampling_rank_only"]["active"] is True
         assert capabilities["rank_zero_logits"]["active"] is False
-        assert capabilities["pipeline_prefill_overlap"]["active"] is True, (
-            capabilities["pipeline_prefill_overlap"]["reason"]
-        )
+        assert capabilities["pipeline_prefill_overlap"]["active"] is True, capabilities[
+            "pipeline_prefill_overlap"
+        ]["reason"]
         assert mx.distributed.all_gather is not original_gather
         assert mx.distributed.send is not original_send
         assert _ValidatedPipeline.__call__ is not original_call
@@ -453,6 +453,7 @@ def test_worker_rank_skips_vocab_projection_when_adapter_declares_contract(
     monkeypatch,
 ):
     _make_pipeline_source_inspectable(monkeypatch)
+
     class Cache:
         state = mx.array([0])
 
@@ -584,8 +585,7 @@ def test_token_all_sum_is_scheduled_after_the_logprob_graph(monkeypatch, group):
 
 def test_pipeline_prefill_schedule_has_equal_fill_and_drain_timeline():
     schedules = [
-        pipeline_prefill_schedule(10, 4, rank=rank, world_size=3)
-        for rank in range(3)
+        pipeline_prefill_schedule(10, 4, rank=rank, world_size=3) for rank in range(3)
     ]
 
     assert {len(schedule) for schedule in schedules} == {5}
@@ -655,9 +655,9 @@ def test_staggered_prompt_queues_and_flushes_every_real_chunk(monkeypatch):
         settings,
         batchable=True,
     ) as capabilities:
-        assert capabilities["pipeline_prefill_overlap"]["active"] is True, (
-            capabilities["pipeline_prefill_overlap"]["reason"]
-        )
+        assert capabilities["pipeline_prefill_overlap"]["active"] is True, capabilities[
+            "pipeline_prefill_overlap"
+        ]["reason"]
         mlx_generate.PromptProcessingBatch.prompt(batch, [list(range(9))])
 
     # The scheduler honours the same eight-token step the memory guard approved,

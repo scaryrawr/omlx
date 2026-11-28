@@ -8,6 +8,7 @@ settings.json so a restart resumes interrupted downloads.
 """
 
 import asyncio
+import contextlib
 import enum
 import errno
 import fcntl
@@ -26,7 +27,6 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -201,7 +201,7 @@ def _resolve_endpoint(endpoint: str) -> str:
                     original_host = target.netloc
                 current_url = location
                 r = client.head(current_url)
-    except Exception as e:  # noqa: BLE001 — probe is best-effort
+    except Exception as e:
         logger.debug(f"HF endpoint probe failed for {endpoint}: {e}")
         return endpoint
 
@@ -214,7 +214,7 @@ def _resolve_endpoint(endpoint: str) -> str:
     return resolved
 
 
-class _DownloadCancelled(Exception):
+class _DownloadCancelledError(Exception):
     """Raised inside the download thread to interrupt a cancelled download."""
 
 
@@ -287,7 +287,7 @@ def _is_xet_transport_error(error: BaseException) -> bool:
     if isinstance(
         error,
         (
-            _DownloadCancelled,
+            _DownloadCancelledError,
             _DownloadStalledError,
             GatedRepoError,
             RepositoryNotFoundError,
@@ -375,10 +375,10 @@ def _make_cancellable_tqdm(
             if self._wire_bar and n:
                 try:
                     on_wire_bytes(int(n))
-                except Exception:  # noqa: BLE001 - metering must not break a transfer
+                except Exception:
                     logger.debug("wire-byte hook failed", exc_info=True)
             if should_cancel():
-                raise _DownloadCancelled()
+                raise _DownloadCancelledError()
             return super().update(n)
 
     return _CancellableTqdm
@@ -517,9 +517,18 @@ class DownloadTask:
 
 
 _DTYPE_BYTES = {
-    "F64": 8, "F32": 4, "F16": 2, "BF16": 2,
-    "I64": 8, "I32": 4, "I16": 2, "I8": 1,
-    "U64": 8, "U32": 4, "U16": 2, "U8": 1,
+    "F64": 8,
+    "F32": 4,
+    "F16": 2,
+    "BF16": 2,
+    "I64": 8,
+    "I32": 4,
+    "I16": 2,
+    "I8": 1,
+    "U64": 8,
+    "U32": 4,
+    "U16": 2,
+    "U8": 1,
     "BOOL": 1,
 }
 
@@ -689,9 +698,24 @@ _SAFETENSORS_REPO_IGNORE = ["*.bin", "original/**", "consolidated.*.pth"]
 
 # Files a safetensors checkpoint loads without: docs, media, other formats.
 _OPTIONAL_SUFFIXES = (
-    ".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf",
-    ".gguf", ".bin", ".pth", ".pt", ".onnx", ".onnx_data", ".h5",
-    ".msgpack", ".ckpt", ".tflite",
+    ".md",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".pdf",
+    ".gguf",
+    ".bin",
+    ".pth",
+    ".pt",
+    ".onnx",
+    ".onnx_data",
+    ".h5",
+    ".msgpack",
+    ".ckpt",
+    ".tflite",
 )
 _OPTIONAL_DIRS = frozenset({"original", "onnx", "openvino", "coreml"})
 
@@ -985,9 +1009,7 @@ def _gguf_architecture(model) -> str | None:
 def _fetch_safetensors_blob_bytes(api: HfApi, repo_id: str) -> int:
     """Look up *.safetensors blob bytes for one repo. 0 on failure."""
     try:
-        info = api.model_info(
-            repo_id, files_metadata=True, timeout=_HF_API_TIMEOUT
-        )
+        info = api.model_info(repo_id, files_metadata=True, timeout=_HF_API_TIMEOUT)
     except HfHubHTTPError as e:
         if e.response is None or e.response.status_code != 401:
             logger.debug("Could not fetch blob sizes for %s: %s", repo_id, e)
@@ -997,9 +1019,7 @@ def _fetch_safetensors_blob_bytes(api: HfApi, repo_id: str) -> int:
                 repo_id, files_metadata=True, token=False, timeout=_HF_API_TIMEOUT
             )
         except Exception as retry_error:
-            logger.debug(
-                "Could not fetch blob sizes for %s: %s", repo_id, retry_error
-            )
+            logger.debug("Could not fetch blob sizes for %s: %s", repo_id, retry_error)
             return 0
     except Exception as e:
         logger.debug("Could not fetch blob sizes for %s: %s", repo_id, e)
@@ -1131,8 +1151,7 @@ def _calc_safetensors_disk_size(safetensors: dict) -> int:
         return 0
     try:
         return sum(
-            int(count) * _DTYPE_BYTES.get(dtype, 1)
-            for dtype, count in params.items()
+            int(count) * _DTYPE_BYTES.get(dtype, 1) for dtype, count in params.items()
         )
     except (TypeError, ValueError):
         return 0
@@ -1193,8 +1212,7 @@ def _write_tasks_file(path: Path, tasks) -> None:
             # Only a row that can still resume keeps its token on disk.
             row["token"] = (
                 task.token
-                if task.status
-                in (DownloadStatus.PENDING, DownloadStatus.DOWNLOADING)
+                if task.status in (DownloadStatus.PENDING, DownloadStatus.DOWNLOADING)
                 else ""
             )
             payload.append(row)
@@ -1206,9 +1224,7 @@ def _write_tasks_file(path: Path, tasks) -> None:
             handle.write(json.dumps(payload))
         tmp_path.replace(path)
     except OSError as exc:
-        logger.warning(
-            "Could not persist download tasks to %s: %s", path, exc
-        )
+        logger.warning("Could not persist download tasks to %s: %s", path, exc)
 
 
 def _read_tasks_file(path: Path | None) -> list[dict]:
@@ -1218,9 +1234,7 @@ def _read_tasks_file(path: Path | None) -> list[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        logger.warning(
-            "Could not read persisted download tasks from %s: %s", path, exc
-        )
+        logger.warning("Could not read persisted download tasks from %s: %s", path, exc)
         return []
     return data if isinstance(data, list) else []
 
@@ -1322,9 +1336,7 @@ class _QueuePersistenceMixin:
                             entry.get("created_at", task.created_at)
                         )
                         task.retry_count = int(entry.get("retry_count", 0))
-                        logger.info(
-                            "Resumed interrupted download: %s", task.repo_id
-                        )
+                        logger.info("Resumed interrupted download: %s", task.repo_id)
                     elif status in (
                         DownloadStatus.FAILED,
                         DownloadStatus.CANCELLED,
@@ -1398,11 +1410,12 @@ class HFDownloader(_QueuePersistenceMixin):
                 timeout=_HF_API_TIMEOUT,
             )
 
-        (trending_models, trending_rejected), (popular_models, popular_rejected) = (
-            await asyncio.gather(
-                _list("trendingScore"),
-                _list("downloads"),
-            )
+        (
+            (trending_models, trending_rejected),
+            (popular_models, popular_rejected),
+        ) = await asyncio.gather(
+            _list("trendingScore"),
+            _list("downloads"),
         )
 
         def _eligible(model) -> bool:
@@ -1473,10 +1486,10 @@ class HFDownloader(_QueuePersistenceMixin):
         limit: int = 100,
         model_format: str = "mlx",
         # Filtering options
-        min_params: Optional[int] = None,
-        max_params: Optional[int] = None,
-        min_size: Optional[int] = None,
-        max_size: Optional[int] = None,
+        min_params: int | None = None,
+        max_params: int | None = None,
+        min_size: int | None = None,
+        max_size: int | None = None,
         # Sorting options
         sort_by_size: bool = False,
         sort_ascending: bool = False,
@@ -1727,7 +1740,7 @@ class HFDownloader(_QueuePersistenceMixin):
                 if card_text.startswith("---"):
                     end = card_text.find("---", 3)
                     if end != -1:
-                        card_text = card_text[end + 3:].strip()
+                        card_text = card_text[end + 3 :].strip()
                 model_card = card_text
         except Exception:
             pass  # README not available
@@ -1760,7 +1773,7 @@ class HFDownloader(_QueuePersistenceMixin):
     def __init__(
         self,
         model_dir: str,
-        on_complete: Optional[Callable] = None,
+        on_complete: Callable | None = None,
         tasks_file: str | Path | None = None,
     ):
         self._model_dir = Path(model_dir)
@@ -1879,9 +1892,7 @@ class HFDownloader(_QueuePersistenceMixin):
                 DownloadStatus.PENDING,
                 DownloadStatus.DOWNLOADING,
             ):
-                raise ValueError(
-                    f"Download for '{repo_id}' is already in progress"
-                )
+                raise ValueError(f"Download for '{repo_id}' is already in progress")
 
         task_id = str(uuid.uuid4())
         task = DownloadTask(task_id=task_id, repo_id=repo_id, files=files)
@@ -1950,9 +1961,10 @@ class HFDownloader(_QueuePersistenceMixin):
             task = self._tasks.get(task_id)
             if task is None or (self._model_dir / task.repo_id).resolve() != resolved:
                 continue
-            if files is not None and task.files is not None:
-                if not set(task.files) & set(files):
-                    continue
+            if (files is not None and task.files is not None) and (
+                not set(task.files) & set(files)
+            ):
+                continue
             await self.cancel_download(task_id)
             await asyncio.gather(active, return_exceptions=True)
 
@@ -1977,9 +1989,7 @@ class HFDownloader(_QueuePersistenceMixin):
         self._persist()
         return True
 
-    async def retry_download(
-        self, task_id: str, hf_token: str = ""
-    ) -> DownloadTask:
+    async def retry_download(self, task_id: str, hf_token: str = "") -> DownloadTask:
         """Retry a failed or cancelled download, resuming from existing files.
 
         Finalized shards are preserved on disk so snapshot_download will
@@ -2032,7 +2042,7 @@ class HFDownloader(_QueuePersistenceMixin):
         # resumes them.
         self._shutting_down = True
         # Cancel all progress polling tasks
-        for task_id, progress_task in list(self._progress_tasks.items()):
+        for _task_id, progress_task in list(self._progress_tasks.items()):
             if not progress_task.done():
                 progress_task.cancel()
         self._progress_tasks.clear()
@@ -2092,7 +2102,7 @@ class HFDownloader(_QueuePersistenceMixin):
                     await asyncio.to_thread(
                         self._cleanup_partial, task, orphans_only=True
                     )
-                except Exception as e:  # noqa: BLE001 - progress only
+                except Exception as e:
                     logger.warning(
                         f"Could not clean up partial files for {task.repo_id}: {e}"
                     )
@@ -2150,9 +2160,7 @@ class HFDownloader(_QueuePersistenceMixin):
                 except (_MissingFilesError, _UnsupportedRepoError):
                     raise
                 except Exception as e:
-                    logger.warning(
-                        f"Could not fetch repo info for {task.repo_id}: {e}"
-                    )
+                    logger.warning(f"Could not fetch repo info for {task.repo_id}: {e}")
 
                 dl_kwargs: dict = {
                     "repo_id": task.repo_id,
@@ -2187,7 +2195,7 @@ class HFDownloader(_QueuePersistenceMixin):
                         stale = await asyncio.to_thread(
                             _stale_local_files, target_dir, dry_result
                         )
-                    except Exception as e:  # noqa: BLE001 - progress only
+                    except Exception as e:
                         logger.debug(
                             "Could not find outdated files for %s: %s",
                             task.repo_id,
@@ -2200,9 +2208,7 @@ class HFDownloader(_QueuePersistenceMixin):
                         detail = "Estimated total size from Hub metadata."
                     else:
                         detail = "Progress estimation will be unavailable."
-                    logger.warning(
-                        f"Dry run failed for {task.repo_id}: {e}. {detail}"
-                    )
+                    logger.warning(f"Dry run failed for {task.repo_id}: {e}. {detail}")
 
                 wire_counter = _WireCounter()
                 self._progress_tasks[task_id] = asyncio.create_task(
@@ -2241,10 +2247,9 @@ class HFDownloader(_QueuePersistenceMixin):
 
                 if xet_error is not None:
                     if task_id in self._cancelled:
-                        raise _DownloadCancelled()
+                        raise _DownloadCancelledError()
                     logger.warning(
-                        "Xet download failed for %s: %s. "
-                        "Retrying once over HTTP.",
+                        "Xet download failed for %s: %s. Retrying once over HTTP.",
                         task.repo_id,
                         xet_error,
                     )
@@ -2282,7 +2287,7 @@ class HFDownloader(_QueuePersistenceMixin):
                                 f"Removed {len(removed)} file(s) no longer in "
                                 f"{task.repo_id}: {', '.join(removed)}"
                             )
-                    except Exception as e:  # noqa: BLE001 - the download succeeded
+                    except Exception as e:
                         logger.warning(
                             f"Could not remove old files for {task.repo_id}: {e}"
                         )
@@ -2309,11 +2314,9 @@ class HFDownloader(_QueuePersistenceMixin):
                     try:
                         await self._on_complete()
                     except Exception as e:
-                        logger.error(
-                            f"Error in download completion callback: {e}"
-                        )
+                        logger.error(f"Error in download completion callback: {e}")
 
-        except (_DownloadCancelled, asyncio.CancelledError):
+        except (_DownloadCancelledError, asyncio.CancelledError):
             if task.status not in (
                 DownloadStatus.CANCELLED,
                 DownloadStatus.FAILED,
@@ -2342,10 +2345,7 @@ class HFDownloader(_QueuePersistenceMixin):
             logger.error(f"Repository not found: {task.repo_id}")
         except Exception as e:
             # Do not clobber an earlier terminal error or a user cancellation.
-            if (
-                task_id not in self._cancelled
-                and task.status != DownloadStatus.FAILED
-            ):
+            if task_id not in self._cancelled and task.status != DownloadStatus.FAILED:
                 task.status = DownloadStatus.FAILED
                 task.error = str(e)
                 logger.error(f"Download failed for {task.repo_id}: {e}")
@@ -2542,9 +2542,7 @@ class HFDownloader(_QueuePersistenceMixin):
                     continue
 
                 timeout = (
-                    _STALL_TIMEOUT
-                    if observed_activity
-                    else _STARTUP_STALL_TIMEOUT
+                    _STALL_TIMEOUT if observed_activity else _STARTUP_STALL_TIMEOUT
                 )
                 if time.monotonic() - last_activity_at > timeout:
                     phase = "active" if observed_activity else "startup"
@@ -2585,10 +2583,8 @@ class HFDownloader(_QueuePersistenceMixin):
         try:
             for f in path.rglob("*"):
                 if f.is_file():
-                    try:
+                    with contextlib.suppress(OSError):
                         total += f.stat().st_size
-                    except OSError:
-                        pass
         except OSError:
             pass
         return total
@@ -2622,6 +2618,5 @@ class HFDownloader(_QueuePersistenceMixin):
                 logger.error(f"Failed to clean up {partial}: {e}")
         if partials:
             logger.info(
-                f"Cleaned up {len(partials)} in-progress file(s): "
-                f"{staging_dir}"
+                f"Cleaned up {len(partials)} in-progress file(s): {staging_dir}"
             )

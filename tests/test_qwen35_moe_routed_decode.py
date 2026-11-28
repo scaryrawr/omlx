@@ -86,9 +86,13 @@ def _block(
         shared_gs = 128 if hidden % 128 == 0 and inter % 128 == 0 else 64
         for name in ("gate_proj", "up_proj", "down_proj"):
             setattr(
-                shared, name, nn.QuantizedLinear.from_linear(getattr(shared, name), shared_gs, 8)
+                shared,
+                name,
+                nn.QuantizedLinear.from_linear(getattr(shared, name), shared_gs, 8),
             )
-        block.shared_expert_gate = nn.QuantizedLinear.from_linear(block.shared_expert_gate, 64, 8)
+        block.shared_expert_gate = nn.QuantizedLinear.from_linear(
+            block.shared_expert_gate, 64, 8
+        )
     block.eval()
     model = _FakeQwen4Model()
     model.named_modules = lambda: [("mlp.switch_mlp", sm)]
@@ -108,7 +112,10 @@ def _pair(block, x):
 
 
 def _same_bits(a, b):
-    return a.shape == b.shape and mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
+    return (
+        a.shape == b.shape
+        and mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
+    )
 
 
 @pytest.mark.parametrize(
@@ -166,11 +173,16 @@ def test_fp32_kernels_match_mlx_mat_vecs(bits):
         return mx.quantize(mx.random.normal(shape) * 0.05, group_size, b)
 
     def qmm(x, weights, group_size, b):
-        return mx.quantized_matmul(x, *weights, transpose=True, group_size=group_size, bits=b)
+        return mx.quantized_matmul(
+            x, *weights, transpose=True, group_size=group_size, bits=b
+        )
 
     experts_gate_up = quantized((EXPERTS, 2 * inter, hidden), gs, bits)
     experts_down = quantized((EXPERTS, hidden, inter), gs, bits)
-    shared_gate, shared_up = quantized((inter, hidden), 128, 8), quantized((inter, hidden), 128, 8)
+    shared_gate, shared_up = (
+        quantized((inter, hidden), 128, 8),
+        quantized((inter, hidden), 128, 8),
+    )
     shared_down = quantized((hidden, inter), 128, 8)
     gate_row = quantized((1, hidden), 64, 8)
     fmt = routed._Format
@@ -182,19 +194,33 @@ def test_fp32_kernels_match_mlx_mat_vecs(bits):
         x = mx.random.normal((1, 1, hidden)) * (0.5 + step)
         ids = mx.random.permutation(EXPERTS)[:top_k].astype(mx.uint32)
         routed_gate_up = mx.gather_qmm(
-            mx.expand_dims(x, (-2, -3)), *experts_gate_up, rhs_indices=ids.reshape(1, 1, top_k),
-            transpose=True, group_size=gs, bits=bits, sorted_indices=False,
+            mx.expand_dims(x, (-2, -3)),
+            *experts_gate_up,
+            rhs_indices=ids.reshape(1, 1, top_k),
+            transpose=True,
+            group_size=gs,
+            bits=bits,
+            sorted_indices=False,
         )
         gate, up = mx.split(routed_gate_up, 2, axis=-1)
-        ref_h = mx.concatenate([
-            swiglu(gate, up).reshape(-1),
-            swiglu(qmm(x, shared_gate, 128, 8), qmm(x, shared_up, 128, 8)).reshape(-1),
-            qmm(x, gate_row, 64, 8).reshape(-1),
-        ])
+        ref_h = mx.concatenate(
+            [
+                swiglu(gate, up).reshape(-1),
+                swiglu(qmm(x, shared_gate, 128, 8), qmm(x, shared_up, 128, 8)).reshape(
+                    -1
+                ),
+                qmm(x, gate_row, 64, 8).reshape(-1),
+            ]
+        )
         h = gate_up_kernel(
             inputs=[x, *experts_gate_up, ids, *shared_gate, *shared_up, *gate_row],
             template=[
-                ("T", f32), ("K", hidden), ("NI", inter), ("RPS", 2), ("NSG", 2), ("NS", inter),
+                ("T", f32),
+                ("K", hidden),
+                ("NI", inter),
+                ("RPS", 2),
+                ("NSG", 2),
+                ("NS", inter),
                 ("TOPK", top_k),
             ],
             grid=(32, 2 * (1 + inter // 4 + top_k * inter // 4), 1),
@@ -205,8 +231,13 @@ def test_fp32_kernels_match_mlx_mat_vecs(bits):
         assert mx.array_equal(h.view(mx.uint32), ref_h.view(mx.uint32)).item()
 
         ref_down = mx.gather_qmm(
-            mx.expand_dims(h[: top_k * inter].reshape(top_k, inter), -2), *experts_down,
-            rhs_indices=ids, transpose=True, group_size=gs, bits=bits, sorted_indices=False,
+            mx.expand_dims(h[: top_k * inter].reshape(top_k, inter), -2),
+            *experts_down,
+            rhs_indices=ids,
+            transpose=True,
+            group_size=gs,
+            bits=bits,
+            sorted_indices=False,
         ).reshape(top_k, hidden)
         ref_shared = qmm(h[top_k * inter : -1], shared_down, 128, 8)
         for j in range(top_k + 1):
@@ -214,12 +245,20 @@ def test_fp32_kernels_match_mlx_mat_vecs(bits):
             saturated_gate = mx.array([-1e30 if j < top_k else 1e30], f32)
             row = down_kernel(
                 inputs=[
-                    mx.concatenate([h[:-1], saturated_gate]), *experts_down, *shared_down, ids,
+                    mx.concatenate([h[:-1], saturated_gate]),
+                    *experts_down,
+                    *shared_down,
+                    ids,
                     scores,
                 ],
                 template=[
-                    ("T", f32), ("K", inter), ("N", hidden), ("RPS", routed._down_rows(1)),
-                    ("KS", inter), ("NPART", top_k + 1), ("TOPK", top_k),
+                    ("T", f32),
+                    ("K", inter),
+                    ("N", hidden),
+                    ("RPS", routed._down_rows(1)),
+                    ("KS", inter),
+                    ("NPART", top_k + 1),
+                    ("TOPK", top_k),
                 ],
                 grid=(32, (top_k + 1) * hidden // routed._down_rows(1), 1),
                 threadgroup=(32, top_k + 1, 1),
@@ -254,7 +293,12 @@ def test_fp32_folded_routing_matches_the_routing_launch(bits):
     logits = mx.random.normal((rows, experts // 2)) * 2
     logits = mx.concatenate([logits, logits[:, ::-1]], axis=-1)
     template = [
-        ("T", f32), ("K", hidden), ("NI", inter), ("RPS", 2), ("NSG", 2), ("NS", inter),
+        ("T", f32),
+        ("K", hidden),
+        ("NI", inter),
+        ("RPS", 2),
+        ("NSG", 2),
+        ("NS", inter),
         ("TOPK", top_k),
     ]
     width = top_k * inter + inter + 1
@@ -327,7 +371,6 @@ def test_tied_router_logits_route_like_the_served_block():
         assert softmax_topk_row(block.gate(x), 10) is not None
         ref, out = _pair(block, x)
         assert _same_bits(ref, out)
-
 
 
 @pytest.mark.parametrize(
@@ -423,9 +466,18 @@ def test_ineligible_shapes_keep_the_composed_body(kwargs):
 
 def test_prefill_verify_and_float_rows_keep_the_composed_body():
     block = _block(1024, 320)
-    assert routed.routed_decode_plan(block, mx.zeros((1, 4, 1024), dtype=mx.bfloat16)) is None
-    assert routed.routed_decode_plan(block, mx.zeros((2, 1, 1024), dtype=mx.bfloat16)) is None
-    assert routed.routed_decode_plan(block, mx.zeros((1, 1, 1024), dtype=mx.float16)) is None
+    assert (
+        routed.routed_decode_plan(block, mx.zeros((1, 4, 1024), dtype=mx.bfloat16))
+        is None
+    )
+    assert (
+        routed.routed_decode_plan(block, mx.zeros((2, 1, 1024), dtype=mx.bfloat16))
+        is None
+    )
+    assert (
+        routed.routed_decode_plan(block, mx.zeros((1, 1, 1024), dtype=mx.float16))
+        is None
+    )
     x = mx.random.normal((1, 5, 1024)).astype(mx.bfloat16)
     ref, out = _pair(block, x)
     assert _same_bits(ref, out)

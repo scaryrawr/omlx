@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field, model_validator
 VideoFamily = Literal["wan", "ltx2"]
 LtxPipeline = Literal["distilled", "dev"]
 VideoTask = Literal["text-to-video", "image-to-video"]
-_WEIGHT_SHARD_RE = re.compile(r"^(?P<prefix>.*)-(?P<index>\d+)-of-(?P<total>\d+)\.safetensors$")
+_WEIGHT_SHARD_RE = re.compile(
+    r"^(?P<prefix>.*)-(?P<index>\d+)-of-(?P<total>\d+)\.safetensors$"
+)
 
 
 class WanVideoConfig(BaseModel):
@@ -108,9 +110,7 @@ def _require_files(model_path: Path, required: list[str], hint: str) -> None:
 
 def _require_component_weights(model_path: Path, component: str) -> None:
     directory = model_path / component
-    files = sorted(
-        path for path in directory.rglob("*.safetensors") if path.is_file()
-    )
+    files = sorted(path for path in directory.rglob("*.safetensors") if path.is_file())
     if not files:
         raise ValueError(f"LTX-2 checkpoint is missing weights in {component}/")
 
@@ -176,8 +176,9 @@ def _load_ltx2(model_path: Path) -> VideoModelSpec:
     # Distilled and dev LTX-2 checkpoints share one transformer config; the
     # converted repositories identify the variant only in their names.
     name = model_path.name
-    if model_path.parent.name == "snapshots" and model_path.parent.parent.name.startswith(
-        "models--"
+    if (
+        model_path.parent.name == "snapshots"
+        and model_path.parent.parent.name.startswith("models--")
     ):
         name = model_path.parent.parent.name
     pipeline: LtxPipeline = "distilled" if "distilled" in name.lower() else "dev"
@@ -204,7 +205,9 @@ def _load_ltx2(model_path: Path) -> VideoModelSpec:
     if pipeline == "distilled" and not any(
         model_path.glob("*spatial-upscaler-x2*.safetensors")
     ):
-        raise ValueError("Distilled LTX-2 checkpoint is missing its x2 spatial upscaler")
+        raise ValueError(
+            "Distilled LTX-2 checkpoint is missing its x2 spatial upscaler"
+        )
     alignment = 64 if pipeline == "distilled" else 32
     return VideoModelSpec(
         family="ltx2",

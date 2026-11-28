@@ -50,9 +50,7 @@ def _guard_extract(cache_class) -> bool:
 
     def _extract_with_none_guard(self, idx):
         cache = type(self)(len(self.cache))
-        cache.cache = [
-            None if c is None else c[idx : idx + 1] for c in self.cache
-        ]
+        cache.cache = [None if c is None else c[idx : idx + 1] for c in self.cache]
         return cache
 
     _extract_with_none_guard._omlx_none_guard = True

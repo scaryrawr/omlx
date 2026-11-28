@@ -212,9 +212,7 @@ def register(index, config) -> int:
         # Refuse rather than guess: the declared geometry must reproduce the
         # on-disk shapes exactly, or we do not understand this checkpoint and
         # must not dequantize it.
-        if not fused_qkv_layout_matches(
-            n_h, n_kv, hd, vhd, tp, qkv_shape, scale_shape
-        ):
+        if not fused_qkv_layout_matches(n_h, n_kv, hd, vhd, tp, qkv_shape, scale_shape):
             raise ValueError(
                 f"fused-qkv geometry mismatch for {qkv_key}: weight rows="
                 f"{qkv_shape[0]}, scale rows={scale_shape[0]} "

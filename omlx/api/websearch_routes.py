@@ -56,9 +56,7 @@ async def web_search(request: WebSearchRequest) -> dict[str, Any]:
     """Run a web search and return an {"ok": bool, ...} payload."""
     settings = _get_global_settings() if _get_global_settings else None
     if settings is None:
-        return failure_payload(
-            "unexpected_failure", "Server settings are unavailable."
-        )
+        return failure_payload("unexpected_failure", "Server settings are unavailable.")
     return await run_web_search(request.query, settings.integrations)
 
 
@@ -71,8 +69,6 @@ async def web_fetch(request: WebFetchRequest) -> dict[str, Any]:
         return await run_fetch_url(
             request.url,
             max_chars=fetch_content_chars(integrations),
-            truncate=bool(
-                getattr(integrations, "web_search_content_truncate", True)
-            ),
+            truncate=bool(getattr(integrations, "web_search_content_truncate", True)),
         )
     return await run_fetch_url(request.url)

@@ -51,33 +51,44 @@ class TestDetectAudioModelType:
 
     def test_whisper_architecture_returns_audio_stt(self, tmp_path):
         """WhisperForConditionalGeneration architecture -> audio_stt."""
-        _write_config(tmp_path, {
-            "model_type": "whisper",
-            "architectures": ["WhisperForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "whisper",
+                "architectures": ["WhisperForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_qwen3_asr_architecture_returns_audio_stt(self, tmp_path):
         """Qwen3ASRForConditionalGeneration architecture -> audio_stt."""
-        _write_config(tmp_path, {
-            "model_type": "qwen3_asr",
-            "architectures": ["Qwen3ASRForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "qwen3_asr",
+                "architectures": ["Qwen3ASRForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_nemo_asr_config_without_model_type_returns_audio_stt(self, tmp_path):
         """Parakeet/NeMo ASR MLX exports omit HF model_type but are STT."""
-        _write_config(tmp_path, {
-            "sample_rate": 16000,
-            "preprocessor": {
-                "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
-                "features": 128,
+        _write_config(
+            tmp_path,
+            {
+                "sample_rate": 16000,
+                "preprocessor": {
+                    "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
+                    "features": 128,
+                },
+                "encoder": {
+                    "_target_": "nemo.collections.asr.modules.ConformerEncoder"
+                },
+                "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
+                "joint": {"_target_": "nemo.collections.asr.modules.RNNTJoint"},
+                "tokenizer": {"model_path": "nemo:tokenizer.model"},
             },
-            "encoder": {"_target_": "nemo.collections.asr.modules.ConformerEncoder"},
-            "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
-            "joint": {"_target_": "nemo.collections.asr.modules.RNNTJoint"},
-            "tokenizer": {"model_path": "nemo:tokenizer.model"},
-        })
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_kokoro_config_without_model_type_returns_audio_tts(self, tmp_path):
@@ -90,79 +101,108 @@ class TestDetectAudioModelType:
         only matches model*.safetensors and fails with "No safetensors
         found".
         """
-        _write_config(tmp_path, {
-            "istftnet": {"upsample_rates": [10, 6], "gen_istft_n_fft": 20},
-            "plbert": {"hidden_size": 768, "num_attention_heads": 12},
-            "vocab": {";": 1, ":": 2, ",": 3},
-            "n_token": 178,
-        })
+        _write_config(
+            tmp_path,
+            {
+                "istftnet": {"upsample_rates": [10, 6], "gen_istft_n_fft": 20},
+                "plbert": {"hidden_size": 768, "num_attention_heads": 12},
+                "vocab": {";": 1, ":": 2, ",": 3},
+                "n_token": 178,
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_partial_kokoro_config_defaults_to_llm(self, tmp_path):
         """A vocab table alone (tokenizer-style config) must not become TTS."""
-        _write_config(tmp_path, {
-            "vocab": {"a": 1, "b": 2},
-            "istftnet": {"upsample_rates": [10, 6]},
-        })
+        _write_config(
+            tmp_path,
+            {
+                "vocab": {"a": 1, "b": 2},
+                "istftnet": {"upsample_rates": [10, 6]},
+            },
+        )
         assert detect_model_type(tmp_path) == "llm"
 
     def test_nemo_asr_config_without_tokenizer_defaults_to_llm(self, tmp_path):
         """Partial NeMo-like configs should not be classified as STT."""
-        _write_config(tmp_path, {
-            "sample_rate": 16000,
-            "preprocessor": {
-                "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
-                "features": 128,
+        _write_config(
+            tmp_path,
+            {
+                "sample_rate": 16000,
+                "preprocessor": {
+                    "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
+                    "features": 128,
+                },
+                "encoder": {
+                    "_target_": "nemo.collections.asr.modules.ConformerEncoder"
+                },
+                "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
             },
-            "encoder": {"_target_": "nemo.collections.asr.modules.ConformerEncoder"},
-            "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
-        })
+        )
         assert detect_model_type(tmp_path) == "llm"
 
     def test_mimo_llm_model_type_returns_llm(self, tmp_path):
         """MiMo-7B LLMs share model_type "mimo" with an mlx-audio ASR remap key."""
-        _write_config(tmp_path, {
-            "model_type": "mimo",
-            "architectures": ["MiMoForCausalLM"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "mimo",
+                "architectures": ["MiMoForCausalLM"],
+            },
+        )
         assert detect_model_type(tmp_path) == "llm"
 
     def test_whisper_model_type_returns_audio_stt(self, tmp_path):
         """model_type="whisper" without known STT architecture -> audio_stt."""
-        _write_config(tmp_path, {
-            "model_type": "whisper",
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "whisper",
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_whisper_custom_architecture_returns_audio_stt(self, tmp_path):
         """Custom whisper architecture still detected by model_type."""
-        _write_config(tmp_path, {
-            "model_type": "whisper",
-            "architectures": ["SomeCustomWhisperArch"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "whisper",
+                "architectures": ["SomeCustomWhisperArch"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_qwen3_tts_model_type_returns_audio_tts(self, tmp_path):
         """model_type="qwen3_tts" -> audio_tts."""
-        _write_config(tmp_path, {
-            "model_type": "qwen3_tts",
-            "architectures": ["Qwen3TTSForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "qwen3_tts",
+                "architectures": ["Qwen3TTSForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_kokoro_architecture_returns_audio_tts(self, tmp_path):
         """KokoroForConditionalGeneration architecture -> audio_tts."""
-        _write_config(tmp_path, {
-            "model_type": "kokoro",
-            "architectures": ["KokoroForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "kokoro",
+                "architectures": ["KokoroForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_qwen3_tts_no_architectures_returns_audio_tts(self, tmp_path):
         """qwen3_tts model_type alone is sufficient for audio_tts detection."""
-        _write_config(tmp_path, {
-            "model_type": "qwen3_tts",
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "qwen3_tts",
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_vibevoice_model_type_returns_audio_tts(self, tmp_path):
@@ -172,10 +212,15 @@ class TestDetectAudioModelType:
 
     def test_vibevoice_streaming_architecture_returns_audio_tts(self, tmp_path):
         """VibeVoice streaming architecture -> audio_tts."""
-        _write_config(tmp_path, {
-            "model_type": "vibevoice_streaming",
-            "architectures": ["VibeVoiceStreamingForConditionalGenerationInference"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "vibevoice_streaming",
+                "architectures": [
+                    "VibeVoiceStreamingForConditionalGenerationInference"
+                ],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_qwen2_audio_model_type_returns_audio_stt(self, tmp_path):
@@ -185,10 +230,13 @@ class TestDetectAudioModelType:
 
     def test_qwen2_audio_architecture_returns_audio_stt(self, tmp_path):
         """Qwen2AudioForConditionalGeneration architecture -> audio_stt."""
-        _write_config(tmp_path, {
-            "model_type": "qwen2_audio",
-            "architectures": ["Qwen2AudioForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "qwen2_audio",
+                "architectures": ["Qwen2AudioForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_stt"
 
     def test_kugelaudio_model_type_returns_audio_tts(self, tmp_path):
@@ -198,10 +246,13 @@ class TestDetectAudioModelType:
 
     def test_kugelaudio_architecture_returns_audio_tts(self, tmp_path):
         """KugelAudioForConditionalGeneration architecture -> audio_tts."""
-        _write_config(tmp_path, {
-            "model_type": "kugelaudio",
-            "architectures": ["KugelAudioForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "kugelaudio",
+                "architectures": ["KugelAudioForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_audiodit_model_type_returns_audio_tts(self, tmp_path):
@@ -211,21 +262,27 @@ class TestDetectAudioModelType:
 
     def test_ming3_dense_architecture_returns_audio_tts(self, tmp_path):
         """Ming-3.0-tts uses model_type 'dense', an LLM collision name."""
-        _write_config(tmp_path, {
-            "model_type": "dense",
-            "architectures": ["BailingMMNativeForConditionalGeneration"],
-            "llm_config": {"model_type": "qwen2"},
-            "ditar_config": {"patch_size": 1},
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "dense",
+                "architectures": ["BailingMMNativeForConditionalGeneration"],
+                "llm_config": {"model_type": "qwen2"},
+                "ditar_config": {"patch_size": 1},
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_tts"
 
     def test_ming_omni_with_vision_config_stays_vlm(self, tmp_path):
         """Ming omni VLM checkpoints share the architecture name."""
-        _write_config(tmp_path, {
-            "model_type": "bailingmm",
-            "architectures": ["BailingMMNativeForConditionalGeneration"],
-            "vision_config": {"hidden_size": 1024},
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "bailingmm",
+                "architectures": ["BailingMMNativeForConditionalGeneration"],
+                "vision_config": {"hidden_size": 1024},
+            },
+        )
         assert detect_model_type(tmp_path) == "vlm"
 
 
@@ -239,18 +296,24 @@ class TestAudioNotUnsupported:
 
     def test_whisper_no_longer_unsupported(self, tmp_path):
         """After audio support, whisper should NOT be returned by _is_unsupported_model."""
-        _write_config(tmp_path, {
-            "model_type": "whisper",
-            "architectures": ["WhisperForConditionalGeneration"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "whisper",
+                "architectures": ["WhisperForConditionalGeneration"],
+            },
+        )
         # When audio is supported, _is_unsupported_model must return False
         assert _is_unsupported_model(tmp_path) is False
 
     def test_qwen3_tts_no_longer_unsupported(self, tmp_path):
         """After audio support, qwen3_tts should NOT be returned by _is_unsupported_model."""
-        _write_config(tmp_path, {
-            "model_type": "qwen3_tts",
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "qwen3_tts",
+            },
+        )
         assert _is_unsupported_model(tmp_path) is False
 
 
@@ -263,23 +326,30 @@ class TestNonAudioRegressions:
     """Non-audio model types must not be affected by the audio changes."""
 
     def test_qwen2_causal_lm_not_audio(self, tmp_path):
-        _write_config(tmp_path, {"model_type": "qwen2", "architectures": ["Qwen2ForCausalLM"]})
+        _write_config(
+            tmp_path, {"model_type": "qwen2", "architectures": ["Qwen2ForCausalLM"]}
+        )
         result = detect_model_type(tmp_path)
         assert result not in ("audio_stt", "audio_tts")
 
     def test_qwen2_causal_lm_not_sts(self, tmp_path):
-        _write_config(tmp_path, {"model_type": "qwen2", "architectures": ["Qwen2ForCausalLM"]})
+        _write_config(
+            tmp_path, {"model_type": "qwen2", "architectures": ["Qwen2ForCausalLM"]}
+        )
         result = detect_model_type(tmp_path)
         assert result != "audio_sts"
 
     def test_multimodal_with_nested_audio_config_not_audio(self, tmp_path):
         """MiniCPM-o has nested audio_config but is a VLM, not audio_stt/tts."""
-        _write_config(tmp_path, {
-            "model_type": "minicpmv",
-            "architectures": ["MiniCPMO"],
-            "vision_config": {"model_type": "siglip_vision_model"},
-            "audio_config": {"model_type": "whisper"},
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "minicpmv",
+                "architectures": ["MiniCPMO"],
+                "vision_config": {"model_type": "siglip_vision_model"},
+                "audio_config": {"model_type": "whisper"},
+            },
+        )
         result = detect_model_type(tmp_path)
         assert result not in ("audio_stt", "audio_tts")
 
@@ -295,10 +365,13 @@ class TestDiscoverModelsIncludesAudio:
     def test_discover_stt_model(self, tmp_path):
         """STT model included in discover_models results."""
         stt_dir = tmp_path / "whisper-large-v3"
-        _make_model(stt_dir, {
-            "model_type": "whisper",
-            "architectures": ["WhisperForConditionalGeneration"],
-        })
+        _make_model(
+            stt_dir,
+            {
+                "model_type": "whisper",
+                "architectures": ["WhisperForConditionalGeneration"],
+            },
+        )
 
         models = discover_models(tmp_path)
         assert "whisper-large-v3" in models
@@ -316,17 +389,22 @@ class TestDiscoverModelsIncludesAudio:
     def test_discover_nemo_asr_model_without_model_type(self, tmp_path):
         """Parakeet-style NeMo ASR config is discovered as audio_stt."""
         stt_dir = tmp_path / "parakeet-tdt-0.6b-v3"
-        _make_model(stt_dir, {
-            "sample_rate": 16000,
-            "preprocessor": {
-                "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
-                "features": 128,
+        _make_model(
+            stt_dir,
+            {
+                "sample_rate": 16000,
+                "preprocessor": {
+                    "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
+                    "features": 128,
+                },
+                "encoder": {
+                    "_target_": "nemo.collections.asr.modules.ConformerEncoder"
+                },
+                "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
+                "joint": {"_target_": "nemo.collections.asr.modules.RNNTJoint"},
+                "tokenizer": {"model_path": "nemo:tokenizer.model"},
             },
-            "encoder": {"_target_": "nemo.collections.asr.modules.ConformerEncoder"},
-            "decoder": {"_target_": "nemo.collections.asr.modules.RNNTDecoder"},
-            "joint": {"_target_": "nemo.collections.asr.modules.RNNTJoint"},
-            "tokenizer": {"model_path": "nemo:tokenizer.model"},
-        })
+        )
 
         models = discover_models(tmp_path)
         assert models["parakeet-tdt-0.6b-v3"].model_type == "audio_stt"
@@ -335,12 +413,15 @@ class TestDiscoverModelsIncludesAudio:
     def test_discover_kokoro_model_without_model_type(self, tmp_path):
         """Kokoro-style original config is discovered as audio_tts."""
         tts_dir = tmp_path / "Kokoro-82M-bf16"
-        _make_model(tts_dir, {
-            "istftnet": {"upsample_rates": [10, 6], "gen_istft_n_fft": 20},
-            "plbert": {"hidden_size": 768, "num_attention_heads": 12},
-            "vocab": {";": 1, ":": 2, ",": 3},
-            "n_token": 178,
-        })
+        _make_model(
+            tts_dir,
+            {
+                "istftnet": {"upsample_rates": [10, 6], "gen_istft_n_fft": 20},
+                "plbert": {"hidden_size": 768, "num_attention_heads": 12},
+                "vocab": {";": 1, ":": 2, ",": 3},
+                "n_token": 178,
+            },
+        )
 
         models = discover_models(tmp_path)
         assert models["Kokoro-82M-bf16"].model_type == "audio_tts"
@@ -358,10 +439,13 @@ class TestDiscoverModelsIncludesAudio:
     def test_discover_tts_engine_type(self, tmp_path):
         """TTS model has engine_type='tts' (or 'audio_tts')."""
         tts_dir = tmp_path / "kokoro-tts"
-        _make_model(tts_dir, {
-            "model_type": "kokoro",
-            "architectures": ["KokoroForConditionalGeneration"],
-        })
+        _make_model(
+            tts_dir,
+            {
+                "model_type": "kokoro",
+                "architectures": ["KokoroForConditionalGeneration"],
+            },
+        )
 
         models = discover_models(tmp_path)
         assert "kokoro-tts" in models
@@ -435,10 +519,13 @@ class TestDetectSTSModelType:
 
     def test_sam_audio_architecture_returns_audio_sts(self, tmp_path):
         """SAMAudio architecture -> audio_sts."""
-        _write_config(tmp_path, {
-            "model_type": "sam_audio",
-            "architectures": ["SAMAudio"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "sam_audio",
+                "architectures": ["SAMAudio"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_sts"
 
     def test_deepfilternet_model_type_returns_audio_sts(self, tmp_path):
@@ -448,10 +535,13 @@ class TestDetectSTSModelType:
 
     def test_deepfilternet_architecture_returns_audio_sts(self, tmp_path):
         """DeepFilterNetModel architecture -> audio_sts."""
-        _write_config(tmp_path, {
-            "model_type": "deepfilternet",
-            "architectures": ["DeepFilterNetModel"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "deepfilternet",
+                "architectures": ["DeepFilterNetModel"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_sts"
 
     def test_mossformer2_se_model_type_returns_audio_sts(self, tmp_path):
@@ -461,18 +551,24 @@ class TestDetectSTSModelType:
 
     def test_mossformer2_architecture_returns_audio_sts(self, tmp_path):
         """MossFormer2SEModel architecture -> audio_sts (regardless of model_type)."""
-        _write_config(tmp_path, {
-            "model_type": "mossformer2",
-            "architectures": ["MossFormer2SEModel"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "mossformer2",
+                "architectures": ["MossFormer2SEModel"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_sts"
 
     def test_lfm2_audio_architecture_returns_audio_sts(self, tmp_path):
         """LFM2AudioModel architecture -> audio_sts."""
-        _write_config(tmp_path, {
-            "model_type": "lfm2_audio",
-            "architectures": ["LFM2AudioModel"],
-        })
+        _write_config(
+            tmp_path,
+            {
+                "model_type": "lfm2_audio",
+                "architectures": ["LFM2AudioModel"],
+            },
+        )
         assert detect_model_type(tmp_path) == "audio_sts"
 
     def test_sts_model_types_set_contains_expected_entries(self):

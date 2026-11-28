@@ -73,6 +73,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from omlx._version import __version__
 
+from .admin.auth import _RedirectToLoginError, require_admin, set_web_ui_enabled
+from .admin.routes import (
+    configured_api_key,
+    configured_custom_theme,
+    configured_ui_language,
+    is_admin_request,
+    reasoning_levels,
+    set_admin_getters,
+)
+from .admin.routes import router as admin_router
 from .api.anthropic_models import (
     MessagesRequest as AnthropicMessagesRequest,
 )
@@ -129,6 +139,7 @@ from .api.embedding_utils import (
     normalize_input,
     truncate_embedding,
 )
+from .api.image_routes import router as image_router
 from .api.markitdown import (
     MARKITDOWN_MODEL_ID,
     MarkItDownRequestError,
@@ -139,6 +150,8 @@ from .api.markitdown import (
     request_has_file_parts,
     stream_messages_to_markdown_async,
 )
+from .api.mcp_routes import router as mcp_router
+from .api.mcp_routes import set_mcp_manager_getter
 from .api.media_inputs import (
     has_audio_video_parts,
     normalize_media_file_parts_in_messages,
@@ -243,6 +256,8 @@ from .api.utils import (
     uses_native_reasoning_content,
 )
 from .api.video_routes import router as video_router
+from .api.websearch_routes import router as websearch_router
+from .api.websearch_routes import set_global_settings_getter as _set_websearch_settings
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, VLMBatchedEngine
 from .engine.decision import DecisionEngine
 from .engine.distributed import DistributedInferenceError
@@ -418,9 +433,7 @@ async def verify_api_key(
     from .utils.network import is_loopback_bind
 
     global_settings = _server_state.global_settings
-    configured_host = getattr(
-        getattr(global_settings, "server", None), "host", None
-    )
+    configured_host = getattr(getattr(global_settings, "server", None), "host", None)
     if not isinstance(configured_host, str):
         configured_host = None
     bind_host = getattr(_server_state, "bind_host", None)
@@ -451,11 +464,7 @@ async def verify_api_key(
             raise HTTPException(status_code=401, detail="API key required")
 
     # Check main key and sub keys
-    sub_keys = (
-        global_settings.auth.sub_keys
-        if global_settings is not None
-        else []
-    )
+    sub_keys = global_settings.auth.sub_keys if global_settings is not None else []
     if not check_api_key(
         request,
         lambda: verify_any_api_key(api_key_value, _server_state.api_key, sub_keys),
@@ -469,8 +478,7 @@ async def verify_api_key(
 def allows_unauthenticated_inference() -> bool:
     settings = _server_state.global_settings
     return (
-        settings is not None
-        and settings.auth.allow_unauthenticated_inference is True
+        settings is not None and settings.auth.allow_unauthenticated_inference is True
     )
 
 
@@ -588,8 +596,7 @@ async def lifespan(app: FastAPI):
         orphan_report = await asyncio.to_thread(reap_orphaned_launches)
         if orphan_report["reaped"] or orphan_report["failures"]:
             logger.warning(
-                "Reaped orphaned distributed launches from a previous "
-                "coordinator: %s",
+                "Reaped orphaned distributed launches from a previous coordinator: %s",
                 orphan_report,
             )
     except Exception as exc:  # pragma: no cover - defensive
@@ -662,7 +669,7 @@ async def lifespan(app: FastAPI):
                         _server_state.global_settings.server.port
                         if _server_state.global_settings is not None
                         else 8000
-                    )
+                    ),
                 ),
             )
             bind_host = _server_state.bind_host
@@ -841,10 +848,8 @@ async def lifespan(app: FastAPI):
     get_server_metrics().close()
     if ttl_task is not None:
         ttl_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await ttl_task
-        except asyncio.CancelledError:
-            pass
     if _server_state.process_memory_enforcer is not None:
         await _server_state.process_memory_enforcer.stop()
         if _server_state.engine_pool is not None:
@@ -874,24 +879,16 @@ app = FastAPI(
 app.state.video_jobs = None
 
 # Include MCP routes
-from .api.mcp_routes import router as mcp_router
-from .api.mcp_routes import set_mcp_manager_getter
-
 set_mcp_manager_getter(get_mcp_manager)
 app.include_router(mcp_router, dependencies=[Depends(verify_inference_api_key)])
 
 # Keep image routes registered even when the mlx-vlm image runtime is unavailable;
 # handlers return a 503 install hint so OpenAI-compatible paths remain stable.
-from .api.image_routes import router as image_router
-
 app.include_router(image_router, dependencies=[Depends(verify_api_key)])
 
 app.include_router(video_router, dependencies=[Depends(verify_api_key)])
 
 # Include web search routes (chat UI built-in web_search / fetch_url tools)
-from .api.websearch_routes import router as websearch_router
-from .api.websearch_routes import set_global_settings_getter as _set_websearch_settings
-
 _set_websearch_settings(lambda: _server_state.global_settings)
 app.include_router(websearch_router, dependencies=[Depends(verify_inference_api_key)])
 
@@ -899,7 +896,7 @@ app.include_router(websearch_router, dependencies=[Depends(verify_inference_api_
 # audio_routes.py itself only imports fastapi/stdlib at module level, so it
 # would always import successfully — we need an explicit mlx-audio check.
 try:
-    import mlx_audio as _  # noqa: F401
+    import mlx_audio as _
 
     from .api.audio_routes import realtime_router as audio_realtime_router
     from .api.audio_routes import router as audio_router
@@ -914,17 +911,6 @@ except ImportError:
     pass
 
 # Include admin routes
-from .admin.auth import _RedirectToLogin, require_admin, set_web_ui_enabled
-from .admin.routes import (
-    configured_api_key,
-    configured_custom_theme,
-    configured_ui_language,
-    is_admin_request,
-    reasoning_levels,
-    set_admin_getters,
-)
-from .admin.routes import router as admin_router
-
 set_admin_getters(
     get_server_state,
     get_engine_pool,
@@ -1020,7 +1006,7 @@ def _register_cluster_routes() -> None:
     _cluster_routes_registered = True
 
 
-@app.exception_handler(_RedirectToLogin)
+@app.exception_handler(_RedirectToLoginError)
 async def redirect_to_login_handler(request, exc):
     """Redirect unauthenticated browser requests to the admin login page."""
     return RedirectResponse(url="/admin", status_code=302)
@@ -1657,19 +1643,19 @@ async def get_engine(
             f"Model '{model_id}' not found. "
             f"Available models: {', '.join(available) if available else '(none)'}"
         )
-        raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=404, detail=detail) from e
     except ModelTooLargeError as e:
-        raise HTTPException(status_code=507, detail=str(e))
+        raise HTTPException(status_code=507, detail=str(e)) from e
     except InsufficientMemoryError as e:
-        raise HTTPException(status_code=507, detail=str(e))
+        raise HTTPException(status_code=507, detail=str(e)) from e
     except ModelUnavailableError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ModelLoadingError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ModelBusyError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except EnginePoolError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     # Validate engine type. If a lease was taken above but validation fails,
     # release it before raising so a rejected request never leaks an in_use
@@ -1696,22 +1682,21 @@ async def get_engine(
                     detail=f"Model '{model_id}' is not a decision model. "
                     f"Use a decision model such as Clef, OpenJev or Decision 3.0.",
                 )
-        elif engine_type == EngineType.LLM:
+        elif (engine_type == EngineType.LLM) and (
+            not isinstance(engine, BaseEngine)
+            and not (_allow_embedding and isinstance(engine, EmbeddingEngine))
+        ):
             # #507: non-LLM engines (STT/TTS/STS/Embedding/Reranker) previously
             # fell through and crashed on `engine.model_type` with an unhandled
             # 500. Reject with a clear 400 pointing the caller at the right
             # endpoint.
-            if not isinstance(engine, BaseEngine) and not (
-                _allow_embedding and isinstance(engine, EmbeddingEngine)
-            ):
-                _endpoint_hint = _suggest_endpoint_for_engine(engine)
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Model '{model_id}' is not an LLM / chat model. "
-                        f"{_endpoint_hint}"
-                    ),
-                )
+            _endpoint_hint = _suggest_endpoint_for_engine(engine)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model_id}' is not an LLM / chat model. {_endpoint_hint}"
+                ),
+            )
     except BaseException:
         if _lease and _leased_out:
             await pool.release_engine(_leased_out.pop())
@@ -1725,15 +1710,21 @@ def _suggest_endpoint_for_engine(engine: object) -> str:
     # Import audio engine classes lazily so that oMLX without the [audio]
     # extra still imports this module.
     try:
-        from omlx.engine.stt import STTEngine as stt_engine_cls
+        from omlx.engine import stt
+
+        stt_engine_cls = stt.STTEngine
     except Exception:  # pragma: no cover - defensive
         stt_engine_cls = None
     try:
-        from omlx.engine.tts import TTSEngine as tts_engine_cls
+        from omlx.engine import tts
+
+        tts_engine_cls = tts.TTSEngine
     except Exception:  # pragma: no cover - defensive
         tts_engine_cls = None
     try:
-        from omlx.engine.sts import STSEngine as sts_engine_cls
+        from omlx.engine import sts
+
+        sts_engine_cls = sts.STSEngine
     except Exception:  # pragma: no cover - defensive
         sts_engine_cls = None
 
@@ -2177,8 +2168,7 @@ def _resolve_gpu_power_limit(request, model_id: str | None) -> int | None:
     limits = [
         watts
         for watts in limits
-        if type(watts) is int
-        and gpu_power.MIN_WATTS <= watts <= gpu_power.MAX_WATTS
+        if type(watts) is int and gpu_power.MIN_WATTS <= watts <= gpu_power.MAX_WATTS
     ]
     return min(limits) if limits else None
 
@@ -2349,6 +2339,7 @@ def _resolve_metric_durations(
     if generation_tps > 0:
         generation_duration = output.completion_tokens / generation_tps
     return prefill_duration, generation_duration
+
 
 def _active_model_aliases() -> dict[str, str]:
     """Return aliases that the current engine pool can resolve safely."""
@@ -2763,10 +2754,7 @@ def init_server(
         _server_state.sampling = SamplingDefaults()
 
     # Normalize model_dirs to list
-    if isinstance(model_dirs, str):
-        dir_list = [model_dirs]
-    else:
-        dir_list = list(model_dirs)
+    dir_list = [model_dirs] if isinstance(model_dirs, str) else list(model_dirs)
     if global_settings and hasattr(global_settings, "get_effective_model_dirs"):
         dir_list = [str(d) for d in global_settings.get_effective_model_dirs()]
 
@@ -3294,10 +3282,8 @@ async def _with_sse_keepalive(
                     next_disconnect_check = time.monotonic() + disconnect_poll
                     if await client_disconnected():
                         task.cancel()
-                        try:
+                        with suppress(asyncio.CancelledError, StopAsyncIteration):
                             await task
-                        except (asyncio.CancelledError, StopAsyncIteration):
-                            pass
                         return
                 # Send keepalive at the configured interval
                 keepalive_elapsed += wait_time
@@ -3335,10 +3321,8 @@ async def _with_sse_keepalive(
         with anyio.CancelScope(shield=True):
             if task is not None and not task.done():
                 task.cancel()
-                try:
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
                     await task
-                except (asyncio.CancelledError, StopAsyncIteration):
-                    pass
             if hasattr(ait, "aclose"):
                 await ait.aclose()
 
@@ -3364,10 +3348,8 @@ async def _run_with_disconnect_guard(
         if await http_request.is_disconnected():
             logger.info("Client disconnected, cancelling generation task")
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             return None
     return task.result()
 
@@ -3420,10 +3402,8 @@ async def _with_json_keepalive(
                             "Client disconnected during non-streaming response, cancelling"
                         )
                         task.cancel()
-                        try:
+                        with suppress(asyncio.CancelledError, StopAsyncIteration):
                             await task
-                        except (asyncio.CancelledError, StopAsyncIteration):
-                            pass
                         return
                 except Exception:
                     pass
@@ -3468,10 +3448,8 @@ async def _with_json_keepalive(
             task.cancel()
             # Same shielded drain as _with_sse_keepalive.
             with anyio.CancelScope(shield=True):
-                try:
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
                     await task
-                except (asyncio.CancelledError, StopAsyncIteration):
-                    pass
 
 
 async def _json_response_or_keepalive(
@@ -3498,9 +3476,7 @@ async def _json_response_or_keepalive(
     """
     task = asyncio.ensure_future(coro)
     try:
-        done, _pending = await asyncio.wait(
-            {task}, timeout=_JSON_KEEPALIVE_GRACE_S
-        )
+        done, _pending = await asyncio.wait({task}, timeout=_JSON_KEEPALIVE_GRACE_S)
     except BaseException:
         # The handler can unwind during the grace period (server shutdown,
         # middleware cancellation, or another request-level abort). The task
@@ -3564,7 +3540,7 @@ async def health(response: Response):
         if enforcer is not None:
             try:
                 ceiling = enforcer.get_final_ceiling()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Health memory ceiling unavailable: %s", exc)
         pool_status = {
             "model_count": _server_state.engine_pool.model_count,
@@ -3612,7 +3588,7 @@ async def server_status(_: bool = Depends(verify_api_key)):
         if enforcer is not None:
             try:
                 model_memory_max = enforcer.get_final_ceiling()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Status memory ceiling unavailable: %s", exc)
         for entry in pool._entries.values():
             if entry.is_loading:
@@ -3680,7 +3656,7 @@ def _ane_prefill_status(pool) -> dict:
         return result
     try:
         from .patches.qwen35_ane_prefill import qwen35_ane_prefill_status
-    except Exception:  # noqa: BLE001 - patch optional at runtime
+    except Exception:
         return result
     # "patch importable", not "ANE hardware present": eligibility is decided
     # per model at enable time and reported through the per-model entries.
@@ -3702,7 +3678,7 @@ def _ane_prefill_status(pool) -> dict:
             result["models"].append(st)
             if st["configured"]:
                 result["configured_models"] += 1
-    except Exception as exc:  # noqa: BLE001 - status must never fail the endpoint
+    except Exception as exc:
         logger.warning("ANE prefill status unavailable: %s", exc)
     return result
 
@@ -4487,9 +4463,9 @@ async def create_embeddings(
                     truncation=request.truncation,
                 )
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except TypeError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         elapsed = time.perf_counter() - start_time
         resolved_model = resolve_model_id(request.model) or request.model
@@ -4916,9 +4892,7 @@ async def _chat_model_decisions(
     return _decide
 
 
-async def _decisions_body(
-    request: DecisionRequest, run, lease: _LLMEngineLease
-) -> str:
+async def _decisions_body(request: DecisionRequest, run, lease: _LLMEngineLease) -> str:
     answers, input_tokens, cached_tokens, elapsed = await run
     resolved_model = _serving_model_id(lease, request.model)
     logger.info(
@@ -5012,7 +4986,9 @@ async def create_completion(
                                 resolved_model=resolved_model,
                                 response_id=response_id,
                                 inference_request_id=inference_request_id,
-                                skip_cache_store=bool(_cache_store_kwargs(http_request)),
+                                skip_cache_store=bool(
+                                    _cache_store_kwargs(http_request)
+                                ),
                             ),
                             http_request=http_request,
                             keepalive_chunk=keepalive,
@@ -5074,9 +5050,7 @@ async def create_completion(
                 gen_kwargs["_request_id"] = inference_request_id
             # Widen the repetition-penalty look-back window when the client
             # asks for it (mlx-lm default window is 20 tokens).
-            repetition_context_size = getattr(
-                request, "repetition_context_size", None
-            )
+            repetition_context_size = getattr(request, "repetition_context_size", None)
             if repetition_context_size is not None:
                 gen_kwargs["repetition_context_size"] = repetition_context_size
             gen_kwargs.update(_no_repeat_ngram_kwargs(request))
@@ -5129,13 +5103,11 @@ async def create_completion(
                 f"({tokens_per_sec:.1f} tok/s), prompt: {total_prompt_tokens}"
             )
 
-            ttft = (
-                (first_token_at - start_time)
-                if first_token_at is not None
-                else None
-            )
+            ttft = (first_token_at - start_time) if first_token_at is not None else None
             prefill_duration = ttft if ttft is not None else 0.0
-            gen_duration = elapsed - prefill_duration if prefill_duration > 0 else elapsed
+            gen_duration = (
+                elapsed - prefill_duration if prefill_duration > 0 else elapsed
+            )
             get_server_metrics().record_request_complete(
                 prompt_tokens=total_prompt_tokens,
                 completion_tokens=total_completion_tokens,
@@ -5536,7 +5508,9 @@ async def create_chat_completion(
             )
         except Exception as e:
             if _is_chat_template_error(e):
-                raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
+                raise HTTPException(
+                    status_code=400, detail=f"Chat template error: {e}"
+                ) from e
             raise
         validate_context_window(num_prompt_tokens, request.model)
 
@@ -5580,9 +5554,7 @@ async def create_chat_completion(
 
         # Widen the repetition-penalty look-back window when the client
         # asks for it (mlx-lm default window is 20 tokens).
-        repetition_context_size = getattr(
-            request, "repetition_context_size", None
-        )
+        repetition_context_size = getattr(request, "repetition_context_size", None)
         if repetition_context_size is not None:
             chat_kwargs["repetition_context_size"] = repetition_context_size
         chat_kwargs.update(_no_repeat_ngram_kwargs(request))
@@ -5731,15 +5703,9 @@ async def create_chat_completion(
                 f"request_max_tokens={request.max_tokens}"
             )
             first_token_at = getattr(output, "first_token_at", None)
-            ttft = (
-                (first_token_at - start_time)
-                if first_token_at is not None
-                else None
-            )
+            ttft = (first_token_at - start_time) if first_token_at is not None else None
             metric_prefill = ttft if ttft is not None else 0.0
-            gen_duration = (
-                elapsed - metric_prefill if metric_prefill > 0 else elapsed
-            )
+            gen_duration = elapsed - metric_prefill if metric_prefill > 0 else elapsed
             metric_prefill_duration, metric_gen_duration = _resolve_metric_durations(
                 output,
                 is_diffusion=is_diffusion,
@@ -6382,7 +6348,7 @@ def _compile_grammar_for_request(
             raise HTTPException(
                 status_code=400,
                 detail=f"Grammar compilation error: {e}",
-            )
+            ) from e
         _warn_response_format_not_enforced(response_format, error=e)
     return None
 
@@ -6502,9 +6468,7 @@ async def stream_completion(
         progress_request_id = gen_kwargs.setdefault("_request_id", str(uuid.uuid4()))
     # Widen the repetition-penalty look-back window when the client
     # asks for it (mlx-lm default window is 20 tokens).
-    repetition_context_size = getattr(
-        request, "repetition_context_size", None
-    )
+    repetition_context_size = getattr(request, "repetition_context_size", None)
     if repetition_context_size is not None:
         gen_kwargs["repetition_context_size"] = repetition_context_size
     gen_kwargs.update(_no_repeat_ngram_kwargs(request))
@@ -6967,8 +6931,7 @@ def _chat_can_stream_qwen_tool_envelopes(engine: BaseEngine) -> bool:
     return bool(
         parser is expected_parser
         and getattr(parser, "__name__", None) == "parse_tool_call"
-        and getattr(parser, "__module__", None)
-        == "mlx_lm.tool_parsers.qwen3_coder"
+        and getattr(parser, "__module__", None) == "mlx_lm.tool_parsers.qwen3_coder"
     )
 
 
@@ -7037,7 +7000,7 @@ async def stream_chat_completion(
     # whatever is left.
     pending_logprobs: list = []
 
-    def take_logprobs() -> Optional[ChoiceLogprobs]:
+    def take_logprobs() -> ChoiceLogprobs | None:
         if not pending_logprobs:
             return None
         choice_logprobs = _choice_logprobs(pending_logprobs)
@@ -7167,9 +7130,7 @@ async def stream_chat_completion(
                     if thinking_delta:
                         accumulated_reasoning += thinking_delta
                         chunk.choices[0].logprobs = take_logprobs()
-                        event = (
-                            f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
-                        )
+                        event = f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
                         mark_visible_delta()
                         yield event
 
@@ -7222,8 +7183,7 @@ async def stream_chat_completion(
                                 ],
                             )
                             event = (
-                                f"data: {chunk.model_dump_json(exclude_none=True)}"
-                                "\n\n"
+                                f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
                             )
                             mark_visible_delta()
                             yield event
@@ -7242,9 +7202,8 @@ async def stream_chat_completion(
                         completed_keys = [
                             _tool_call_semantic_key(tc) for tc in completed_calls
                         ]
-                        if (
-                            not completed_calls
-                            or any(key is None for key in completed_keys)
+                        if not completed_calls or any(
+                            key is None for key in completed_keys
                         ):
                             stream_tool_sequence_safe = False
                             continue
@@ -7608,18 +7567,12 @@ async def stream_chat_completion(
             gen_duration = max(
                 0.0,
                 end_time
-                - (
-                    first_token_time
-                    if first_token_time is not None
-                    else start_time
-                ),
+                - (first_token_time if first_token_time is not None else start_time),
             )
         metric_prefill_duration, metric_gen_duration = _resolve_metric_durations(
             last_output,
             is_diffusion=is_diffusion,
-            prefill_duration=(
-                model_ttft if model_ttft is not None else total_duration
-            ),
+            prefill_duration=(model_ttft if model_ttft is not None else total_duration),
             generation_duration=gen_duration,
         )
         get_server_metrics().record_request_complete(
@@ -7685,9 +7638,7 @@ async def stream_chat_completion(
                         else None
                     ),
                     time_to_first_visible_token=(
-                        round(visible_ttft, 2)
-                        if visible_ttft is not None
-                        else None
+                        round(visible_ttft, 2) if visible_ttft is not None else None
                     ),
                     total_time=round(total_time, 2),
                     **_usage_timing_fields(
@@ -7974,9 +7925,7 @@ async def stream_anthropic_messages(
         # held newlines here, and pure whitespace must not open a
         # phantom text block.
         if remaining and not (
-            not text_block_started
-            and kwargs.get("tools")
-            and not remaining.strip()
+            not text_block_started and kwargs.get("tools") and not remaining.strip()
         ):
             if not text_block_started:
                 if thinking_block_started:
@@ -8214,21 +8163,21 @@ async def _prepare_anthropic_prompt(
     _entry = get_engine_pool().get_entry(resolved_model)
 
     # Pass Anthropic thinking config to chat template (except forced keys)
-    if hasattr(request, "thinking") and request.thinking:
-        if "enable_thinking" not in forced_keys:
-            thinking_type = getattr(request.thinking, "type", None)
-            if thinking_type in ("enabled", "adaptive"):
-                merged_ct_kwargs["enable_thinking"] = True
-            elif thinking_type == "disabled":
-                merged_ct_kwargs["enable_thinking"] = False
-            # MiniMax M3 templates have a separate adaptive thinking_mode.
-            if (
-                thinking_type == "adaptive"
-                and "thinking_mode" not in forced_keys
-                and getattr(_entry, "config_model_type", None)
-                in MINIMAX_M3_MODEL_TYPES
-            ):
-                merged_ct_kwargs.setdefault("thinking_mode", "adaptive")
+    if (hasattr(request, "thinking") and request.thinking) and (
+        "enable_thinking" not in forced_keys
+    ):
+        thinking_type = getattr(request.thinking, "type", None)
+        if thinking_type in ("enabled", "adaptive"):
+            merged_ct_kwargs["enable_thinking"] = True
+        elif thinking_type == "disabled":
+            merged_ct_kwargs["enable_thinking"] = False
+        # MiniMax M3 templates have a separate adaptive thinking_mode.
+        if (
+            thinking_type == "adaptive"
+            and "thinking_mode" not in forced_keys
+            and getattr(_entry, "config_model_type", None) in MINIMAX_M3_MODEL_TYPES
+        ):
+            merged_ct_kwargs.setdefault("thinking_mode", "adaptive")
 
     logger.debug(
         f"Tool result truncation config: max_tokens={max_tool_result_tokens}, "
@@ -8369,7 +8318,9 @@ async def _count_anthropic_prompt(
         )
     except Exception as e:
         if _is_chat_template_error(e):
-            raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
+            raise HTTPException(
+                status_code=400, detail=f"Chat template error: {e}"
+            ) from e
         raise
 
 
@@ -8481,9 +8432,7 @@ async def create_anthropic_message(
 
         # Widen the repetition-penalty look-back window when the client
         # asks for it (mlx-lm default window is 20 tokens).
-        repetition_context_size = getattr(
-            request, "repetition_context_size", None
-        )
+        repetition_context_size = getattr(request, "repetition_context_size", None)
         if repetition_context_size is not None:
             chat_kwargs["repetition_context_size"] = repetition_context_size
 
@@ -8516,7 +8465,9 @@ async def create_anthropic_message(
         chat_kwargs.update(_specprefill_kwargs(engine, request.model, resolved_model))
 
         # Validate context window before sending to model
-        num_prompt_tokens, prepared_prompt = await _count_anthropic_prompt(engine, prompt)
+        num_prompt_tokens, prepared_prompt = await _count_anthropic_prompt(
+            engine, prompt
+        )
         validate_context_window(num_prompt_tokens, request.model)
 
         if prepared_prompt is not None:
@@ -8586,11 +8537,11 @@ async def create_anthropic_message(
 
             first_token_at = getattr(output, "first_token_at", None)
             prefill_duration = (
-                (first_token_at - start_time)
-                if first_token_at is not None
-                else 0.0
+                (first_token_at - start_time) if first_token_at is not None else 0.0
             )
-            gen_duration = elapsed - prefill_duration if prefill_duration > 0 else elapsed
+            gen_duration = (
+                elapsed - prefill_duration if prefill_duration > 0 else elapsed
+            )
             get_server_metrics().record_request_complete(
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
@@ -9430,15 +9381,11 @@ async def create_response(
         if tools_disabled and ts_state is not None:
             ts_state.enabled = False
         effective_tools = None if tools_disabled else openai_tools
-        if (
-            _server_state.mcp_manager
-            and not tools_disabled
-            and mcp_tools_exposed()
-        ):
+        if _server_state.mcp_manager and not tools_disabled and mcp_tools_exposed():
             effective_tools = _server_state.mcp_manager.get_merged_tools(openai_tools)
-            unloaded_names = {
-                tool.wire_name for tool in deferred_tools.tools()
-            } - {tool["function"]["name"] for tool in openai_tools or []}
+            unloaded_names = {tool.wire_name for tool in deferred_tools.tools()} - {
+                tool["function"]["name"] for tool in openai_tools or []
+            }
             effective_tools = [
                 tool
                 for tool in effective_tools
@@ -9499,7 +9446,9 @@ async def create_response(
                 or "template" in err_msg
                 or isinstance(e, (AssertionError, ValueError))
             ):
-                raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
+                raise HTTPException(
+                    status_code=400, detail=f"Chat template error: {e}"
+                ) from e
             raise
         validate_context_window(num_prompt_tokens, request.model)
 
@@ -9538,9 +9487,7 @@ async def create_response(
 
         # Widen the repetition-penalty look-back window when the client
         # asks for it (mlx-lm default window is 20 tokens).
-        repetition_context_size = getattr(
-            request, "repetition_context_size", None
-        )
+        repetition_context_size = getattr(request, "repetition_context_size", None)
         if repetition_context_size is not None:
             chat_kwargs["repetition_context_size"] = repetition_context_size
 
@@ -9907,7 +9854,9 @@ async def create_response(
                 top_p=top_p,
                 max_output_tokens=request.max_output_tokens,
                 previous_response_id=request.previous_response_id,
-                incomplete_details={"reason": "max_output_tokens"} if truncated else None,
+                incomplete_details={"reason": "max_output_tokens"}
+                if truncated
+                else None,
             )
 
             # Store response
@@ -9955,7 +9904,7 @@ async def stream_responses_api(
     model_load_duration: float = 0.0,
     resolved_model: str | None = None,
     response_format=None,
-    namespace_aliases: Optional[dict] = None,
+    namespace_aliases: dict | None = None,
     stream_state: _ResponsesStreamState | None = None,
     tool_search_state: ToolSearchState | None = None,
     _continuation: _ResponsesSearchContinuation | None = None,

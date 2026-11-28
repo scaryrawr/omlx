@@ -27,7 +27,6 @@ bf16-rounded head sum is returned as fp32 with -inf for masked keys.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Optional
 
 import mlx.core as mx
 
@@ -201,7 +200,7 @@ def nax_indexer_available() -> bool:
         from omlx.custom_kernels.nax import is_nax_available
 
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -219,7 +218,7 @@ def indexer_scores_nax(
     pool_len: int,
     ratio: int,
     rounded: bool = False,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """Masked head-summed indexer scores on the tensor units.
 
     q: [S, H, 128] (row-major), pool_keys: [P, 128], weights: [S, H] already

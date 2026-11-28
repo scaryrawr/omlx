@@ -27,9 +27,7 @@ def voices_client(tmp_path):
     model_dir.mkdir()
 
     pool = MagicMock()
-    pool.get_entry = MagicMock(
-        return_value=MagicMock(model_path=str(model_dir))
-    )
+    pool.get_entry = MagicMock(return_value=MagicMock(model_path=str(model_dir)))
 
     with (
         patch("omlx.api.audio_routes._get_engine_pool", return_value=pool),
@@ -76,12 +74,16 @@ class TestVoicesEndpoint:
     def test_customvoice_spk_id_from_config(self, voices_client):
         """Qwen3-TTS CustomVoice speakers come from talker_config.spk_id."""
         client, _, model_dir = voices_client
-        (model_dir / "config.json").write_text(json.dumps({
-            "model_type": "qwen3_tts",
-            "talker_config": {
-                "spk_id": {"vivian": 0, "aiden": 1, "serena": 2},
-            },
-        }))
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_tts",
+                    "talker_config": {
+                        "spk_id": {"vivian": 0, "aiden": 1, "serena": 2},
+                    },
+                }
+            )
+        )
 
         response = client.get(
             "/v1/audio/voices", params={"model": "qwen3-tts-customvoice"}
@@ -111,9 +113,13 @@ class TestVoicesEndpoint:
     def test_model_without_named_voices_returns_empty_list(self, voices_client):
         """Voice-cloning base models legitimately have no named speakers."""
         client, _, model_dir = voices_client
-        (model_dir / "config.json").write_text(json.dumps({
-            "model_type": "vibevoice",
-        }))
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "vibevoice",
+                }
+            )
+        )
 
         response = client.get("/v1/audio/voices", params={"model": "vibevoice"})
 
@@ -142,10 +148,14 @@ class TestVoicesEndpoint:
         assert realtime.json()["instructions"] == ""
         assert realtime.json()["capabilities"] == {"input_image": False, "tools": True}
 
-        config.write_text(json.dumps({
-            "model_type": "qwen3_omni_moe",
-            "talker_config": {"speaker_id": {"chelsie": 2301, "ethan": 2302}},
-        }))
+        config.write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_omni_moe",
+                    "talker_config": {"speaker_id": {"chelsie": 2301, "ethan": 2302}},
+                }
+            )
+        )
         realtime = client.get(
             "/v1/audio/voices", params={"model": "omni", "realtime": "true"}
         )

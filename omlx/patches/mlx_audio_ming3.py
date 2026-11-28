@@ -80,7 +80,7 @@ _SPEAKER_CACHE_SIZE = 8
 _LATIN = "A-Za-zÀ-ÖØ-öø-ɏḀ-ỿ"
 # One unit per CJK, kana or Hangul character and per Latin word.
 _SEMANTIC_UNIT_RE = re.compile(
-    "[一-鿿ぁ-ゖゝ-ゟァ-ヺー-ヿ" "가-힣]" f"|[{_LATIN}]+(?:['’][{_LATIN}]+)*"
+    f"[一-鿿ぁ-ゖゝ-ゟァ-ヺー-ヿ가-힣]|[{_LATIN}]+(?:['’][{_LATIN}]+)*"
 )
 
 # Folded CAM++ convolutions in ONNX graph order. Their initializers are the
@@ -335,8 +335,7 @@ class _TinyFlowState:
         times = tiny_flow.get_epss_timesteps(steps, mx.float32)
         times = times - (mx.cos(math.pi / 2 * times) - 1 + times)
         t_emb = [
-            dit.t_embedder(mx.full((1,), times[i]))[:, None, :]
-            for i in range(steps)
+            dit.t_embedder(mx.full((1,), times[i]))[:, None, :] for i in range(steps)
         ]
         dts = [times[i + 1] - times[i] for i in range(steps)]
         sqs = [mx.sqrt(mx.abs(dt)) for dt in dts]
@@ -561,8 +560,7 @@ def _load_speaker_encoder(model):
     except Exception as exc:
         reason = f"unreadable campplus weights ({exc})"
     logger.warning(
-        "Ming-3.0 checkpoint has %s; voice clones will run without a speaker "
-        "embedding",
+        "Ming-3.0 checkpoint has %s; voice clones will run without a speaker embedding",
         reason,
     )
     return None

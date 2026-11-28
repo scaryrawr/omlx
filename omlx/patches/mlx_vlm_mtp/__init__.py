@@ -136,9 +136,7 @@ def _patches_for(
         return None
     if model_type in table:
         return table[model_type]
-    family = max(
-        (k for k in table if model_type.startswith(k)), key=len, default=None
-    )
+    family = max((k for k in table if model_type.startswith(k)), key=len, default=None)
     if family is not None:
         return table[family]
     # _is_mtp_compatible admits model_type prefixes (qwen3_5*, qwen3_6*), so a
@@ -180,9 +178,7 @@ def apply_mlx_vlm_mtp_runtime_patch(model_type: str | None = None) -> bool:
     """
     scoped = _patches_for(model_type, _RUNTIME_PATCHES_BY_TYPE, "runtime")
     if scoped is not None:
-        logger.debug(
-            "mlx-vlm MTP runtime patch scoped to model_type=%s", model_type
-        )
+        logger.debug("mlx-vlm MTP runtime patch scoped to model_type=%s", model_type)
 
     applied = False
     for name in _RUNTIME_PATCHES if scoped is None else scoped:

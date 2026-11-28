@@ -108,6 +108,5 @@ def t5_qmm(
     if _ext is not None and has_symbol("t5_qmm"):
         return _ext.t5_qmm(x, w, scales, stream=stream)
     raise RuntimeError(
-        "t5_qmm: native extension unavailable. "
-        "Rebuild the bonsai extension."
+        "t5_qmm: native extension unavailable. Rebuild the bonsai extension."
     )

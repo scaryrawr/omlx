@@ -615,7 +615,7 @@ async def run_context_benchmark(run: ContextBenchmarkRun, engine_pool: Any) -> N
                 run,
                 "verify",
                 0.98,
-                f"Extension probe {ext_target:,} tokens " f"({_EXTENSION_FACTOR}x)...",
+                f"Extension probe {ext_target:,} tokens ({_EXTENSION_FACTOR}x)...",
             )
             progress_holder = {}
             relay = asyncio.create_task(

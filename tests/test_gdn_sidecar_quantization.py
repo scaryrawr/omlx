@@ -23,10 +23,10 @@ except ImportError:
     HAS_MLX = False
     mx = None
 
-pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
-
 from omlx.cache.boundary_snapshot_store import BoundarySnapshotSSDStore
 from omlx.cache.paged_ssd_cache import PagedSSDCacheManager
+
+pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
 
 
 def _extracted() -> list[dict]:
@@ -52,9 +52,7 @@ def _extracted() -> list[dict]:
 
 def _rht_extracted() -> list[dict]:
     """Use a power-of-two recurrent width for the RHT codec tests."""
-    base = mx.arange(1, 1 + 1 * 2 * 4 * 16, dtype=mx.float32).reshape(
-        1, 2, 4, 16
-    )
+    base = mx.arange(1, 1 + 1 * 2 * 4 * 16, dtype=mx.float32).reshape(1, 2, 4, 16)
     recurrent = (base - 64.5) * 0.125
     return [
         {
@@ -96,10 +94,7 @@ def test_storage_precision_roundtrip_and_scope(
         if mode == "int8":
             assert tensors["layer_0_state_1__scale"][1] == "F32"
             assert tensors["layer_0_state_1__scale"][2] == [1, 4, 4, 1]
-            assert (
-                layer_info[0]["state_1_storage_codec"]
-                == "int8_rowwise_last_axis_v1"
-            )
+            assert layer_info[0]["state_1_storage_codec"] == "int8_rowwise_last_axis_v1"
         elif mode == "bf16":
             assert layer_info[0]["state_1_storage_codec"] == "bf16_v1"
         else:
@@ -181,9 +176,7 @@ def test_rht_int8_roundtrip_rotates_last_axis_and_restores_fp32(tmp_path):
         assert quantized[2] == [1, 2, 4, 16]
         assert scale[1] == "F32"
         assert scale[2] == [1, 2, 4, 1]
-        assert info[0]["state_1_storage_codec"] == (
-            "rht_int8_rowwise_last_axis_v1"
-        )
+        assert info[0]["state_1_storage_codec"] == ("rht_int8_rowwise_last_axis_v1")
         assert info[0]["state_1_original_dtype"] == "float32"
         assert info[0]["state_1_rht_seed"] == "0"
         assert info[0]["state_1_rht_dim"] == "16"
@@ -220,9 +213,7 @@ def test_rht_int16_roundtrip_rotates_last_axis_and_restores_fp32(tmp_path):
         assert quantized[2] == [1, 2, 4, 16]
         assert scale[1] == "F32"
         assert scale[2] == [1, 2, 4, 1]
-        assert info[0]["state_1_storage_codec"] == (
-            "rht_int16_rowwise_last_axis_v1"
-        )
+        assert info[0]["state_1_storage_codec"] == ("rht_int16_rowwise_last_axis_v1")
         assert info[0]["state_1_original_dtype"] == "float32"
         assert info[0]["state_1_rht_seed"] == "0"
         assert info[0]["state_1_rht_dim"] == "16"
@@ -244,7 +235,9 @@ def test_rht_int16_roundtrip_rotates_last_axis_and_restores_fp32(tmp_path):
 def test_rht_int8_encoding_is_deterministic_and_codec_is_distinct(tmp_path):
     """Fixed RHT signs make repeated snapshots byte-identical."""
     extracted = _rht_extracted()
-    first = BoundarySnapshotSSDStore(tmp_path / "first", gdn_sidecar_state_dtype="rht_int8")
+    first = BoundarySnapshotSSDStore(
+        tmp_path / "first", gdn_sidecar_state_dtype="rht_int8"
+    )
     second = BoundarySnapshotSSDStore(
         tmp_path / "second", gdn_sidecar_state_dtype="rht_int8"
     )
@@ -254,16 +247,19 @@ def test_rht_int8_encoding_is_deterministic_and_codec_is_distinct(tmp_path):
         assert tensors_1 == tensors_2
         assert metadata_1 == metadata_2
 
-        plain = BoundarySnapshotSSDStore(tmp_path / "plain", gdn_sidecar_state_dtype="int8")
+        plain = BoundarySnapshotSSDStore(
+            tmp_path / "plain", gdn_sidecar_state_dtype="int8"
+        )
         try:
             plain_tensors, plain_metadata = plain._serialize_extracted(
                 extracted, "rht", 2048
             )
             plain_info = json.loads(plain_metadata["layer_info"])
             rht_info = json.loads(metadata_1["layer_info"])
-            assert rht_info[0]["state_1_storage_codec"] != plain_info[0][
-                "state_1_storage_codec"
-            ]
+            assert (
+                rht_info[0]["state_1_storage_codec"]
+                != plain_info[0]["state_1_storage_codec"]
+            )
             assert tensors_1["layer_0_state_1"][1] == "I8"
             assert plain_tensors["layer_0_state_1"][1] == "I8"
         finally:
@@ -293,9 +289,7 @@ def test_rht_int8_async_staging_file_roundtrip(tmp_path):
         assert arrays["layer_0_state_1"].dtype == mx.int8
         assert arrays["layer_0_state_1__scale"].dtype == mx.float32
         info = json.loads(metadata["layer_info"])
-        assert info[0]["state_1_storage_codec"] == (
-            "rht_int8_rowwise_last_axis_v1"
-        )
+        assert info[0]["state_1_storage_codec"] == ("rht_int8_rowwise_last_axis_v1")
 
         restored = store.load_file(staged)
         assert restored is not None
@@ -309,7 +303,9 @@ def test_rht_int8_async_staging_file_roundtrip(tmp_path):
 def test_rht_int8_corrupt_metadata_fails_closed(tmp_path):
     store = BoundarySnapshotSSDStore(tmp_path, gdn_sidecar_state_dtype="rht_int8")
     try:
-        tensors, metadata = store._serialize_extracted(_rht_extracted(), "bad-rht", 2048)
+        tensors, metadata = store._serialize_extracted(
+            _rht_extracted(), "bad-rht", 2048
+        )
         info = json.loads(metadata["layer_info"])
         info[0]["state_1_storage_codec"] = "rht_int8_unknown_v1"
         unknown = dict(metadata)
@@ -400,9 +396,7 @@ def test_reduced_precision_uses_distinct_sidecar_signature(tmp_path):
     )
     fp32 = PagedSSDCacheManager(**common, gdn_sidecar_state_dtype="fp32")
     int8 = PagedSSDCacheManager(**common, gdn_sidecar_state_dtype="int8")
-    rht_int8 = PagedSSDCacheManager(
-        **common, gdn_sidecar_state_dtype="rht_int8"
-    )
+    rht_int8 = PagedSSDCacheManager(**common, gdn_sidecar_state_dtype="rht_int8")
     try:
         kwargs = dict(
             model_name="model",
@@ -467,10 +461,7 @@ def test_reduced_precision_uses_distinct_sidecar_signature(tmp_path):
         )
         assert current_lookup is not None
         assert current_lookup.requested_state_dtype == "int8"
-        assert (
-            current_lookup.effective_state_codec
-            == "int8_rowwise_last_axis_v1"
-        )
+        assert current_lookup.effective_state_codec == "int8_rowwise_last_axis_v1"
         assert current_lookup.used_legacy_fp32_fallback is False
         assert int8.gdn_legacy_fp32_fallbacks == 1
 
@@ -490,9 +481,7 @@ def test_reduced_precision_uses_distinct_sidecar_signature(tmp_path):
         )
         # The plain INT8 lookup candidates are INT8 then FP32, never RHT.
         assert (
-            int8.get_gdn_checkpoint_file_with_diagnostic(
-                rht_block_hash, int8_signature
-            )
+            int8.get_gdn_checkpoint_file_with_diagnostic(rht_block_hash, int8_signature)
             is None
         )
         rht_lookup = int8.get_gdn_checkpoint_file_with_diagnostic(
@@ -500,10 +489,7 @@ def test_reduced_precision_uses_distinct_sidecar_signature(tmp_path):
         )
         assert rht_lookup is not None
         assert rht_lookup.requested_state_dtype == "rht_int8"
-        assert (
-            rht_lookup.effective_state_codec
-            == "rht_int8_rowwise_last_axis_v1"
-        )
+        assert rht_lookup.effective_state_codec == "rht_int8_rowwise_last_axis_v1"
         assert rht_lookup.used_legacy_fp32_fallback is False
     finally:
         fp32.close()
@@ -540,9 +526,7 @@ def test_rht_int16_uses_distinct_sidecar_signature_namespace(tmp_path):
         assert sig8 != sig16
         assert json.loads(sig8)["gdn_sidecar_state_dtype"] == "rht_int8"
         assert json.loads(sig16)["gdn_sidecar_state_dtype"] == "rht_int16"
-        assert rht8.cache_signature_for(**kwargs) == rht16.cache_signature_for(
-            **kwargs
-        )
+        assert rht8.cache_signature_for(**kwargs) == rht16.cache_signature_for(**kwargs)
     finally:
         rht8.close()
         rht16.close()
@@ -585,17 +569,20 @@ def test_non_finite_source_is_refused_before_encoding(tmp_path, mode, bad):
             axis=2,
         )
         with pytest.raises(ValueError, match="non-finite GDN recurrent state"):
-            store._serialize_extracted(
-                _recurrent_extracted(poisoned), "poison", 2048
-            )
+            store._serialize_extracted(_recurrent_extracted(poisoned), "poison", 2048)
         assert store.gdn_encode_failures == 1
 
         # save() degrades the same failure to a safe miss, leaving no file.
         assert (
-            store.save("poison", 2048, [object()], lambda _s: (
-                _recurrent_extracted(poisoned),
-                None,
-            ))
+            store.save(
+                "poison",
+                2048,
+                [object()],
+                lambda _s: (
+                    _recurrent_extracted(poisoned),
+                    None,
+                ),
+            )
             is False
         )
         assert store.gdn_encode_failures == 2
@@ -645,9 +632,7 @@ def test_rht_overflow_on_near_max_fp32_row_is_refused_at_encode(tmp_path):
         rows = mx.full((1, 1, 2, 8), 3.4e38, dtype=mx.float32)
         assert bool(mx.all(mx.isfinite(rows)))
         with pytest.raises(ValueError, match="non-finite GDN row scale"):
-            store._serialize_extracted(
-                _recurrent_extracted(rows), "overflow", 2048
-            )
+            store._serialize_extracted(_recurrent_extracted(rows), "overflow", 2048)
         assert store.gdn_encode_failures == 1
     finally:
         store.shutdown()
@@ -699,11 +684,7 @@ def test_scale_dtype_must_be_exactly_fp32(tmp_path, np_dtype, dtype_str):
 @pytest.mark.parametrize("mode", ["int8", "rht_int8", "rht_int16", "bf16"])
 @pytest.mark.parametrize("original", [None, "bfloat16", "float16", ""])
 def test_reduced_codec_requires_float32_source_dtype(tmp_path, mode, original):
-    extracted = (
-        _rht_extracted()
-        if mode in {"rht_int8", "rht_int16"}
-        else _extracted()
-    )
+    extracted = _rht_extracted() if mode in {"rht_int8", "rht_int16"} else _extracted()
     store = BoundarySnapshotSSDStore(tmp_path, gdn_sidecar_state_dtype=mode)
     try:
         tensors, metadata = store._serialize_extracted(extracted, "dtype", 2048)
@@ -752,9 +733,7 @@ def test_rht_metadata_rejected_under_plain_int8_codec(tmp_path):
         ("2", "16", "unsupported GDN RHT seed"),
     ],
 )
-def test_rht_metadata_literals_and_dimension_fail_closed(
-    tmp_path, seed, dim, match
-):
+def test_rht_metadata_literals_and_dimension_fail_closed(tmp_path, seed, dim, match):
     store = BoundarySnapshotSSDStore(tmp_path, gdn_sidecar_state_dtype="rht_int8")
     try:
         tensors, metadata = store._serialize_extracted(_rht_extracted(), "meta", 2048)
@@ -772,7 +751,9 @@ def test_rht_metadata_literals_and_dimension_fail_closed(
 def test_non_int8_payload_under_int8_codec_fails_closed(tmp_path):
     store = BoundarySnapshotSSDStore(tmp_path, gdn_sidecar_state_dtype="rht_int8")
     try:
-        tensors, metadata = store._serialize_extracted(_rht_extracted(), "payload", 2048)
+        tensors, metadata = store._serialize_extracted(
+            _rht_extracted(), "payload", 2048
+        )
         key = "layer_0_state_1"
         _raw, _dtype, shape = tensors[key]
         count = int(np.prod(shape))
@@ -839,6 +820,7 @@ def test_rejected_sidecar_degrades_to_a_cache_miss(tmp_path):
     """
     store = BoundarySnapshotSSDStore(tmp_path, gdn_sidecar_state_dtype="rht_int8")
     try:
+
         def extract(_snapshot):
             return _rht_extracted(), None
 
@@ -988,9 +970,7 @@ def _codec_extracted(mode: str) -> list[dict]:
     )
 
 
-@pytest.mark.parametrize(
-    "mode", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"]
-)
+@pytest.mark.parametrize("mode", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"])
 def test_pending_raw_and_durable_file_restore_identically(tmp_path, mode):
     """The in-memory buffer and the committed file must agree bit for bit.
 
@@ -1009,7 +989,9 @@ def test_pending_raw_and_durable_file_restore_identically(tmp_path, mode):
         # otherwise drained by the background thread at an arbitrary moment.
         with store._writer_busy:
             assert store.save(
-                "parity", 2048, [object()],
+                "parity",
+                2048,
+                [object()],
                 lambda _s: (extracted, None),
             )
             pending = store.load("parity", 2048)
@@ -1043,7 +1025,9 @@ def test_pending_decode_counts_dequantizations_once_per_state(tmp_path):
     try:
         with store._writer_busy:
             assert store.save(
-                "count", 2048, [object()],
+                "count",
+                2048,
+                [object()],
                 lambda _s: (_rht_extracted(), None),
             )
             assert store.gdn_state_dequantizations == 0
@@ -1063,7 +1047,9 @@ def test_cancelled_pending_write_leaves_no_sidecar_or_dequantization(tmp_path):
     )
     try:
         assert store.save(
-            "cancel", 2048, [object()],
+            "cancel",
+            2048,
+            [object()],
             lambda _s: (_rht_extracted(), None),
         )
         store.cleanup_request("cancel")
@@ -1243,14 +1229,13 @@ def test_restart_restores_real_rht_payload_end_to_end(tmp_path):
     block_hash = b"real-rht-block"
 
     store = BoundarySnapshotSSDStore(
-        cache_dir, pending_max_bytes=64 * 1024**2,
+        cache_dir,
+        pending_max_bytes=64 * 1024**2,
         gdn_sidecar_state_dtype="rht_int8",
     )
     manager = PagedSSDCacheManager(**common, gdn_sidecar_state_dtype="rht_int8")
     try:
-        assert store.save(
-            "real", 2048, [object()], lambda _s: (extracted, None)
-        )
+        assert store.save("real", 2048, [object()], lambda _s: (extracted, None))
         staged = store.take_staged_file("real", 2048, timeout_s=5.0)
         assert staged is not None
         signature = manager.gdn_cache_signature_for(**sig_kwargs)
@@ -1284,9 +1269,7 @@ def test_restart_restores_real_rht_payload_end_to_end(tmp_path):
         got = restored[0]["state"][1]
         assert got.dtype == mx.float32
         assert got.shape == source.shape
-        rel = float(
-            mx.sqrt(mx.sum((got - source) ** 2)) / mx.sqrt(mx.sum(source**2))
-        )
+        rel = float(mx.sqrt(mx.sum((got - source) ** 2)) / mx.sqrt(mx.sum(source**2)))
         assert rel <= 0.02
         assert restarted_store.gdn_state_dequantizations == 1
         assert restarted_store.gdn_decode_failures == 0
@@ -1318,7 +1301,22 @@ def test_golden_sign_diagonal_for_the_production_width():
     assert len(signs) == 128
     assert set(signs) == {1.0, -1.0}
     assert [int(s) for s in signs[:16]] == [
-        -1, 1, 1, -1, 1, -1, 1, -1, 1, 1, 1, -1, -1, -1, 1, -1
+        -1,
+        1,
+        1,
+        -1,
+        1,
+        -1,
+        1,
+        -1,
+        1,
+        1,
+        1,
+        -1,
+        -1,
+        -1,
+        1,
+        -1,
     ]
     assert _sign_digest(128, 0) == _GOLDEN_SIGN_DIGEST_DIM128_SEED0
     # A different width must not reuse the same diagonal prefix.
@@ -1347,12 +1345,8 @@ def test_rht_does_not_advance_the_generation_rng():
     mx.eval(baseline)
 
     mx.random.seed(42)
-    BoundarySnapshotSSDStore._gdn_rht_forward(
-        mx.ones((1, 128), dtype=mx.float32), 0
-    )
-    BoundarySnapshotSSDStore._gdn_rht_inverse(
-        mx.ones((1, 128), dtype=mx.float32), 0
-    )
+    BoundarySnapshotSSDStore._gdn_rht_forward(mx.ones((1, 128), dtype=mx.float32), 0)
+    BoundarySnapshotSSDStore._gdn_rht_inverse(mx.ones((1, 128), dtype=mx.float32), 0)
     after = mx.random.uniform(shape=(4,))
     mx.eval(after)
     assert bool(mx.all(baseline == after))
@@ -1423,9 +1417,7 @@ def test_production_shape_error_and_payload_layout(tmp_path):
 
     errors = {}
     for mode in ("int8", "rht_int8"):
-        store = BoundarySnapshotSSDStore(
-            tmp_path / mode, gdn_sidecar_state_dtype=mode
-        )
+        store = BoundarySnapshotSSDStore(tmp_path / mode, gdn_sidecar_state_dtype=mode)
         try:
             tensors, metadata = store._serialize_extracted(
                 _recurrent_extracted(recurrent), "prod", 2048
@@ -1443,8 +1435,7 @@ def test_production_shape_error_and_payload_layout(tmp_path):
 
             restored = store._deserialize(tensors, metadata)[0]["state"][1]
             errors[mode] = float(
-                mx.mean(mx.abs(restored - recurrent))
-                / mx.mean(mx.abs(recurrent))
+                mx.mean(mx.abs(restored - recurrent)) / mx.mean(mx.abs(recurrent))
             )
         finally:
             store.shutdown()
@@ -1480,8 +1471,7 @@ def test_rht_int16_production_shape_payload_layout(tmp_path):
         assert source_bytes / (len(payload[0]) + len(scale[0])) > 1.96
         restored = store._deserialize(tensors, metadata)[0]["state"][1]
         relative = float(
-            mx.sqrt(mx.sum((restored - recurrent) ** 2))
-            / mx.sqrt(mx.sum(recurrent**2))
+            mx.sqrt(mx.sum((restored - recurrent) ** 2)) / mx.sqrt(mx.sum(recurrent**2))
         )
         assert relative < 0.0001
     finally:
@@ -1514,9 +1504,7 @@ def test_manager_constructor_does_not_enforce_the_split_invariant(tmp_path, mode
         manager.close()
 
 
-@pytest.mark.parametrize(
-    "mode", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"]
-)
+@pytest.mark.parametrize("mode", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"])
 def test_constructors_normalize_dtype_case(tmp_path, mode):
     store = BoundarySnapshotSSDStore(
         tmp_path / f"store-{mode}", gdn_sidecar_state_dtype=mode.upper()

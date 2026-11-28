@@ -311,9 +311,7 @@ def test_native_fa256_chunked_matches_single_dispatch(q_len, kv_len):
     single = fast.fa256_attention(q, k, v, scale, causal=True, dispatch_budget=0)
     # Budget forcing ~8 chunks for these shapes.
     budget = (24 * q_len * kv_len) // 8
-    chunked = fast.fa256_attention(
-        q, k, v, scale, causal=True, dispatch_budget=budget
-    )
+    chunked = fast.fa256_attention(q, k, v, scale, causal=True, dispatch_budget=budget)
     mx.eval(single, chunked)
 
     diff = mx.max(mx.abs(single.astype(mx.float32) - chunked.astype(mx.float32))).item()
@@ -427,7 +425,12 @@ def test_chunked_sdpa_blocks_share_one_scratch_size(monkeypatch):
     real = mx.fast.scaled_dot_product_attention
 
     def spy(q, k, v, **kwargs):
-        seen.append((k.shape, kwargs["mask"].shape if hasattr(kwargs["mask"], "shape") else None))
+        seen.append(
+            (
+                k.shape,
+                kwargs["mask"].shape if hasattr(kwargs["mask"], "shape") else None,
+            )
+        )
         return real(q, k, v, **kwargs)
 
     monkeypatch.setattr(mx.fast, "scaled_dot_product_attention", spy)

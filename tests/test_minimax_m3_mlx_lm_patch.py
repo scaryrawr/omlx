@@ -189,7 +189,8 @@ def test_a_failed_registration_leaves_no_broken_module_behind(monkeypatch):
 
     importlib_spec = __import__("importlib.util", fromlist=["util"])
     monkeypatch.setattr(
-        importlib_spec, "module_from_spec",
+        importlib_spec,
+        "module_from_spec",
         lambda spec: type(sys)(patch._QUALNAME),
     )
     monkeypatch.setattr(patch, "_register_module", patch._register_module)

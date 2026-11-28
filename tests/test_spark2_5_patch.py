@@ -1,6 +1,6 @@
+import mlx.core as mx
 from mlx_lm.models import spark2_5
 from mlx_lm.models.cache import KVCache, RotatingKVCache
-import mlx.core as mx
 
 
 def test_upstream_spark2_5_cached_decode_matches_full_prompt():

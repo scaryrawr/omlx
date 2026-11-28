@@ -303,8 +303,7 @@ def _merge_spec(target: str, old: dict | None, new: dict) -> dict:
     ):
         return max(old, new, key=lambda spec: spec["bits"])
     raise ValueError(
-        f"Inkling 2 {target} fuses modules with different quantization: "
-        f"{old} and {new}"
+        f"Inkling 2 {target} fuses modules with different quantization: {old} and {new}"
     )
 
 

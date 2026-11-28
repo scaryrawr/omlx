@@ -469,9 +469,10 @@ def _reference(kv, indices):
     rows = kv.transpose(0, 2, 1, 3)
     batch, tokens = rows.shape[:2]
     trailing = rows.shape[2:]
-    offsets = mx.arange(batch, dtype=mx.int32).reshape(
-        (batch,) + (1,) * (indices.ndim - 1)
-    ) * tokens
+    offsets = (
+        mx.arange(batch, dtype=mx.int32).reshape((batch,) + (1,) * (indices.ndim - 1))
+        * tokens
+    )
     flat = (indices.astype(mx.int32) + offsets).reshape(-1)
     gathered = rows.reshape(batch * tokens, *trailing)[flat].reshape(
         *indices.shape, *trailing
@@ -506,9 +507,7 @@ def test_gather_kv_rows_matches_token_major_gather(batch, form):
 
     mx.random.seed(3)
     kv = mx.random.normal((batch, 2, 300, 16)).astype(mx.bfloat16)
-    indices = mx.sort(
-        mx.random.randint(0, 300, (batch, 37)).astype(mx.int32), axis=-1
-    )
+    indices = mx.sort(mx.random.randint(0, 300, (batch, 37)).astype(mx.int32), axis=-1)
     out = getattr(qsa_fast, form)(kv, indices)
     mx.eval(out)
     assert out.shape == (batch, 2, 37, 16)
@@ -537,9 +536,7 @@ def test_gather_kv_rows_prefill_width_copies_token_major_below_threshold(
 
 
 def test_gather_kv_rows_prefill_width_uses_stored_layout_at_long_context(monkeypatch):
-    assert _dispatch_row_gather(monkeypatch, 64, 131072) == [
-        "_gather_kv_rows_stored"
-    ]
+    assert _dispatch_row_gather(monkeypatch, 64, 131072) == ["_gather_kv_rows_stored"]
 
 
 def test_gather_kv_rows_rank_three_forms_agree():
@@ -547,16 +544,12 @@ def test_gather_kv_rows_rank_three_forms_agree():
 
     mx.random.seed(5)
     kv = mx.random.normal((2, 2, 500, 16)).astype(mx.bfloat16)
-    indices = mx.sort(
-        mx.random.randint(0, 500, (2, 8, 21)).astype(mx.int32), axis=-1
-    )
+    indices = mx.sort(mx.random.randint(0, 500, (2, 8, 21)).astype(mx.int32), axis=-1)
     stored = qsa_fast._gather_kv_rows_stored(kv, indices)
     token_major = qsa_fast._gather_kv_rows_token_major(kv, indices)
     mx.eval(stored, token_major)
     assert stored.shape == token_major.shape == (2, 8, 2, 21, 16)
-    assert mx.array_equal(
-        stored.view(mx.uint16), token_major.view(mx.uint16)
-    ).item()
+    assert mx.array_equal(stored.view(mx.uint16), token_major.view(mx.uint16)).item()
     assert mx.array_equal(
         stored.view(mx.uint16), _reference(kv, indices).view(mx.uint16)
     ).item()
@@ -580,9 +573,7 @@ def _layer_and_prefix(seed: int = 19, prefix_tokens: int = 10):
 
 
 @pytest.mark.parametrize("rows", [2, 4])
-def test_qwen4_verify_rows_gather_selected_blocks_and_match_official(
-    monkeypatch, rows
-):
+def test_qwen4_verify_rows_gather_selected_blocks_and_match_official(monkeypatch, rows):
     import mlx_vlm.models.qwen4_exp.language as language
 
     config, attention, fast_cache, reference_cache = _layer_and_prefix()
@@ -631,9 +622,7 @@ def test_qwen4_verify_rows_survive_rollback_like_official(monkeypatch):
         lambda *a, **k: False,
         raising=False,
     )
-    mx.eval(
-        attention(first, mask="causal", cache=reference_cache, target_verify=True)
-    )
+    mx.eval(attention(first, mask="causal", cache=reference_cache, target_verify=True))
     monkeypatch.undo()
     for cache in (fast_cache, reference_cache):
         cache.trim(3)
@@ -887,7 +876,9 @@ def _official_mask(head_scores: mx.array, key_len: int) -> mx.array:
     )
     causal = token_indices[None, None, :] < query_ends[None, :, None]
     use_sparse = complete_counts > TOPK
-    selected_tokens = mx.where(use_sparse[None, :, None], selected_tokens | tail, causal)
+    selected_tokens = mx.where(
+        use_sparse[None, :, None], selected_tokens | tail, causal
+    )
     return selected_tokens[:, None]
 
 
@@ -898,7 +889,8 @@ def _head_scores(blocks: int, kind: str, seed: int) -> np.ndarray:
     if kind == "magnitudes":
         # Sums whose value depends on the order the four heads are added.
         return (
-            rng.standard_normal((4, blocks)) * np.exp2(rng.integers(-30, 30, (4, blocks)))
+            rng.standard_normal((4, blocks))
+            * np.exp2(rng.integers(-30, 30, (4, blocks)))
         ).astype(np.float32)
     if kind == "cutoff_ties":
         # 160 strict winners, then a tie that straddles the top-512 cutoff.
@@ -920,7 +912,8 @@ def _require_selection(result):
     """The selection kernel's result; skip where the GPU caps the pipeline
     below its 1024-thread threadgroup (larger PER on some GPUs)."""
     if result is None and any(
-        "threads per threadgroup" in error for error in qsa_fast._DECODE_SELECT_FAILED.values()
+        "threads per threadgroup" in error
+        for error in qsa_fast._DECODE_SELECT_FAILED.values()
     ):
         pytest.skip("decode selection threadgroup exceeds this GPU's pipeline limit")
     assert result is not None
@@ -985,8 +978,12 @@ def test_pipeline_limit_keeps_the_kernel_for_smaller_banks(monkeypatch):
 
     def select(key_len):
         blocks = key_len // RATIO
-        scores = mx.array(_head_scores(blocks, "normal", key_len).reshape(1, 4, 1, blocks))
-        kwargs = dict(head_dim=HEAD_DIM, key_tokens=key_len, compress_ratio=RATIO, block_topk=TOPK)
+        scores = mx.array(
+            _head_scores(blocks, "normal", key_len).reshape(1, 4, 1, blocks)
+        )
+        kwargs = dict(
+            head_dim=HEAD_DIM, key_tokens=key_len, compress_ratio=RATIO, block_topk=TOPK
+        )
         return qsa_fast.decode_block_selection_mask(scores, **kwargs), scores
 
     _require_selection(select(2052)[0])
@@ -1125,7 +1122,9 @@ def test_decode_steps_match_the_ops_path_bit_for_bit(monkeypatch, key_len):
     for step in range(6):
         x = mx.random.normal((1, 1, config.hidden_size)).astype(mx.bfloat16)
         offset = fast_cache.offset
-        positions = mx.broadcast_to(mx.array([[offset]], dtype=mx.int32)[None], (3, 1, 1))
+        positions = mx.broadcast_to(
+            mx.array([[offset]], dtype=mx.int32)[None], (3, 1, 1)
+        )
         _set_kernels(monkeypatch, True)
         fast = attention(x, mask=None, cache=fast_cache, position_ids=positions)
         _set_kernels(monkeypatch, False)
@@ -1139,7 +1138,8 @@ def test_decode_steps_match_the_ops_path_bit_for_bit(monkeypatch, key_len):
     pooled = fast_cache._pooled_index_offset
     assert pooled == ops_cache._pooled_index_offset == (key_len + 6) // RATIO
     assert mx.array_equal(
-        fast_cache._pooled_index_keys[:, :pooled], ops_cache._pooled_index_keys[:, :pooled]
+        fast_cache._pooled_index_keys[:, :pooled],
+        ops_cache._pooled_index_keys[:, :pooled],
     ).item()
 
 
@@ -1167,10 +1167,16 @@ def test_masked_decode_sdpa_matches_mlx_bit_for_bit(key_len, kind):
     rng = np.random.default_rng(key_len)
     capacity = key_len + 777
     # Cache-shaped views: a prefix of a larger buffer, as update_and_fetch returns.
-    keys = mx.random.normal((1, 2, capacity, 256), key=mx.random.key(1)).astype(mx.bfloat16)
-    values = mx.random.normal((1, 2, capacity, 256), key=mx.random.key(2)).astype(mx.bfloat16)
+    keys = mx.random.normal((1, 2, capacity, 256), key=mx.random.key(1)).astype(
+        mx.bfloat16
+    )
+    values = mx.random.normal((1, 2, capacity, 256), key=mx.random.key(2)).astype(
+        mx.bfloat16
+    )
     keys, values = keys[:, :, :key_len], values[:, :, :key_len]
-    queries = (4 * mx.random.normal((1, 24, 1, 256), key=mx.random.key(3))).astype(mx.bfloat16)
+    queries = (4 * mx.random.normal((1, 24, 1, 256), key=mx.random.key(3))).astype(
+        mx.bfloat16
+    )
     selected = np.zeros(key_len, dtype=bool)
     if kind == "qsa":
         blocks = key_len // RATIO

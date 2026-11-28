@@ -264,10 +264,10 @@ class TestMemoryMonitor:
 
     def test_format_bytes(self):
         """Test format_bytes utility function."""
-        assert "1.00 KB" == format_bytes(1024)
-        assert "1.00 MB" == format_bytes(1024 * 1024)
-        assert "1.00 GB" == format_bytes(1024 * 1024 * 1024)
-        assert "512 B" == format_bytes(512)
+        assert format_bytes(1024) == "1.00 KB"
+        assert format_bytes(1024 * 1024) == "1.00 MB"
+        assert format_bytes(1024 * 1024 * 1024) == "1.00 GB"
+        assert format_bytes(512) == "512 B"
 
     def test_repr(self):
         """Test string representation."""
@@ -381,13 +381,19 @@ class TestEstimatePrefillPeakBytes:
         n_q, chunk, kv, hd = 8, 2048, 32768, 256
         m_bf16 = MemoryMonitor(max_kv_cache_memory=10 * 1024**3)
         m_bf16.set_model_info(
-            num_layers=48, num_kv_heads=4, head_dim=hd,
-            num_attention_heads=n_q, compute_dtype_size=2,
+            num_layers=48,
+            num_kv_heads=4,
+            head_dim=hd,
+            num_attention_heads=n_q,
+            compute_dtype_size=2,
         )
         m_fp32 = MemoryMonitor(max_kv_cache_memory=10 * 1024**3)
         m_fp32.set_model_info(
-            num_layers=48, num_kv_heads=4, head_dim=hd,
-            num_attention_heads=n_q, compute_dtype_size=4,
+            num_layers=48,
+            num_kv_heads=4,
+            head_dim=hd,
+            num_attention_heads=n_q,
+            compute_dtype_size=4,
         )
         assert _scores(m_bf16, n_q, chunk, kv, hd) == n_q * chunk * kv * 2
         assert _scores(m_fp32, n_q, chunk, kv, hd) == n_q * chunk * kv * 4
@@ -398,8 +404,12 @@ class TestEstimatePrefillPeakBytes:
         n_q, chunk, kv, hd = 8, 2048, 32768, 256
         m = MemoryMonitor(max_kv_cache_memory=10 * 1024**3)
         m.set_model_info(
-            num_layers=48, num_kv_heads=4, head_dim=hd, dtype_size=0.5,
-            num_attention_heads=n_q, compute_dtype_size=2,
+            num_layers=48,
+            num_kv_heads=4,
+            head_dim=hd,
+            dtype_size=0.5,
+            num_attention_heads=n_q,
+            compute_dtype_size=2,
         )
         out = n_q * chunk * hd * 4
         scores = m._estimate_sdpa_activation_bytes(chunk, kv) - out
@@ -419,9 +429,9 @@ class TestEstimatePrefillPeakBytes:
         expected_heavy_sdpa = self._expected_fallback_sdpa(8, 1024, 100 * 1024, 256)
         expected_heavy = expected_heavy_sdpa + m.estimate_prompt_kv_bytes(1024)
         assert heavy_cache == expected_heavy
-        assert (
-            heavy_cache > 900 * 1024**2
-        ), f"heavy-cache peak under-counted: {heavy_cache / 1024**2:.0f} MB"
+        assert heavy_cache > 900 * 1024**2, (
+            f"heavy-cache peak under-counted: {heavy_cache / 1024**2:.0f} MB"
+        )
         # And the all-new case (larger eff_chunk = 2048 but same kv_len)
         # should be larger overall because both KV growth and scores
         # widen with new_tokens.
@@ -459,8 +469,7 @@ class TestEstimatePrefillPeakBytes:
         peak = m.estimate_prefill_peak_bytes(100, 2048)
         # KV: 48*4*256*2*2*100 ≈ 19 MB. SDPA is small here. Total < 25 MB.
         assert peak < 25 * 1024**2, (
-            f"short-prompt peak suggests chunk wasn't clamped: "
-            f"{peak / 1024**2:.0f} MB"
+            f"short-prompt peak suggests chunk wasn't clamped: {peak / 1024**2:.0f} MB"
         )
 
     def test_no_python_overhead_constant(self):
@@ -560,23 +569,23 @@ class TestCollectKvLayerSpecs:
         from importlib import import_module
 
         cache_module = import_module(module)
-        ArraysCache = cache_module.ArraysCache
-        CacheList = cache_module.CacheList
-        KVCache = cache_module.KVCache
-        RotatingKVCache = cache_module.RotatingKVCache
+        arrays_cache_cls = cache_module.ArraysCache
+        cache_list_cls = cache_module.CacheList
+        k_v_cache_cls = cache_module.KVCache
+        rotating_k_v_cache_cls = cache_module.RotatingKVCache
 
         from omlx.memory_monitor import collect_kv_layer_specs
 
         cache_list = [
-            KVCache(),
-            KVCache(),
-            RotatingKVCache(max_size=1024),
-            RotatingKVCache(max_size=1024),
-            RotatingKVCache(max_size=1024),
-            RotatingKVCache(max_size=512),
-            ArraysCache(size=2),
-            ArraysCache(size=2),
-            CacheList(KVCache(), RotatingKVCache(max_size=1024)),
+            k_v_cache_cls(),
+            k_v_cache_cls(),
+            rotating_k_v_cache_cls(max_size=1024),
+            rotating_k_v_cache_cls(max_size=1024),
+            rotating_k_v_cache_cls(max_size=1024),
+            rotating_k_v_cache_cls(max_size=512),
+            arrays_cache_cls(size=2),
+            arrays_cache_cls(size=2),
+            cache_list_cls(k_v_cache_cls(), rotating_k_v_cache_cls(max_size=1024)),
         ]
         full, specs, arrays = collect_kv_layer_specs(cache_list)
         assert full == 3, "CacheList-wrapped KVCache must be counted"
@@ -668,8 +677,7 @@ class TestEstimateResidentKvBytes:
         per_layer_token = 8 * 128 * 2 * 2
         for chunk in (1, 32, 256):
             expected = (
-                n * 5 * per_layer_token
-                + 25 * (1024 + chunk - 1) * per_layer_token
+                n * 5 * per_layer_token + 25 * (1024 + chunk - 1) * per_layer_token
             )
             assert m.estimate_resident_kv_bytes(n, chunk_tokens=chunk) == expected
 
@@ -693,8 +701,7 @@ class TestEstimateResidentKvBytes:
         n = 10_000
         rotating_term = 2 * (64 + 31) * 8 * 128 * 2 * 2
         assert (
-            m.estimate_resident_kv_bytes(n, chunk_tokens=32)
-            == n * 1000 + rotating_term
+            m.estimate_resident_kv_bytes(n, chunk_tokens=32) == n * 1000 + rotating_term
         )
 
     def test_fixed_state_added_and_reset_by_set_model_info(self):
@@ -1086,9 +1093,7 @@ class TestDeepSeekV4PrefillMemoryProfile:
         fallback = monitor.estimate_chunk_transient_bytes(query_tokens, kv_len)
 
         native_indexer = profile._indexer_native_bytes(query_tokens, pooled_tokens)
-        fallback_indexer = profile._indexer_fallback_bytes(
-            query_tokens, pooled_tokens
-        )
+        fallback_indexer = profile._indexer_fallback_bytes(query_tokens, pooled_tokens)
         assert native < fallback
         assert native < 3 * 1024**3
         assert fallback > 40 * 1024**3
@@ -1181,9 +1186,7 @@ class TestQwen4ExpPrefillMemoryProfile:
         try:
             profile = self._profile()
             query_tokens, kv_len = 2048, 160_000
-            estimate = profile.estimate_prefill_transient_bytes(
-                query_tokens, kv_len
-            )
+            estimate = profile.estimate_prefill_transient_bytes(query_tokens, kv_len)
             # Dense unfused core is priced at the measured fp32 width, not
             # the bf16 model compute dtype (issue #2204 follow-up).
             assert estimate == self._indexer_bytes(query_tokens, kv_len) + (
@@ -1205,9 +1208,10 @@ class TestQwen4ExpPrefillMemoryProfile:
             expected = self._indexer_bytes(query_tokens, kv_len) + (
                 24 * query_tokens * kv_len * 4 + 24 * query_tokens * 256 * 4
             )
-            assert profile.estimate_prefill_transient_bytes(
-                query_tokens, kv_len
-            ) == expected
+            assert (
+                profile.estimate_prefill_transient_bytes(query_tokens, kv_len)
+                == expected
+            )
         finally:
             memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
 
@@ -1216,14 +1220,16 @@ class TestQwen4ExpPrefillMemoryProfile:
 
         memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=16, min_kv_len=8192, kv_tile=1024, supports_array_mask=True
+            256,
+            min_query_len=16,
+            min_kv_len=8192,
+            kv_tile=1024,
+            supports_array_mask=True,
         )
         try:
             profile = self._profile()
             query_tokens, kv_len = 2048, 160_000
-            estimate = profile.estimate_prefill_transient_bytes(
-                query_tokens, kv_len
-            )
+            estimate = profile.estimate_prefill_transient_bytes(query_tokens, kv_len)
             # Indexer charge is retained; the core is fp32 output plus one
             # 1024-wide fp32 score tile — no Q x kv_len matrix.
             expected = self._indexer_bytes(query_tokens, kv_len) + (
@@ -1242,7 +1248,11 @@ class TestQwen4ExpPrefillMemoryProfile:
 
         memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=16, min_kv_len=8192, kv_tile=1024, supports_array_mask=True
+            256,
+            min_query_len=16,
+            min_kv_len=8192,
+            kv_tile=1024,
+            supports_array_mask=True,
         )
         try:
             profile = self._profile()
@@ -1251,17 +1261,13 @@ class TestQwen4ExpPrefillMemoryProfile:
             )
             # kv below the route floor -> dense.
             assert (
-                profile.estimate_prefill_transient_bytes(2048, 4096)
-                == dense_small_kv
+                profile.estimate_prefill_transient_bytes(2048, 4096) == dense_small_kv
             )
             # query below the route floor -> dense.
             dense_short_q = self._indexer_bytes(8, 160_000) + (
                 24 * 8 * 160_000 * 4 + 24 * 8 * 256 * 4
             )
-            assert (
-                profile.estimate_prefill_transient_bytes(8, 160_000)
-                == dense_short_q
-            )
+            assert profile.estimate_prefill_transient_bytes(8, 160_000) == dense_short_q
         finally:
             memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
 
@@ -1273,10 +1279,18 @@ class TestQwen4ExpPrefillMemoryProfile:
 
         memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=16, min_kv_len=8192, kv_tile=1024, supports_array_mask=True
+            256,
+            min_query_len=16,
+            min_kv_len=8192,
+            kv_tile=1024,
+            supports_array_mask=True,
         )
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=64, min_kv_len=2048, kv_tile=512, supports_array_mask=True
+            256,
+            min_query_len=64,
+            min_kv_len=2048,
+            kv_tile=512,
+            supports_array_mask=True,
         )
         try:
             profile = self._profile()
@@ -1302,7 +1316,11 @@ class TestQwen4ExpPrefillMemoryProfile:
 
         memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=16, min_kv_len=8192, kv_tile=1024, supports_array_mask=True
+            256,
+            min_query_len=16,
+            min_kv_len=8192,
+            kv_tile=1024,
+            supports_array_mask=True,
         )
         try:
             profile = self._profile()
@@ -1325,7 +1343,11 @@ class TestQwen4ExpPrefillMemoryProfile:
 
         memory_monitor._SDPA_TILED_PREFILL_HEAD_DIMS.pop(256, None)
         memory_monitor.register_tiled_prefill_head_dim(
-            256, min_query_len=16, min_kv_len=8192, kv_tile=1024, supports_array_mask=True
+            256,
+            min_query_len=16,
+            min_kv_len=8192,
+            kv_tile=1024,
+            supports_array_mask=True,
         )
         try:
             profile = self._profile()
@@ -1411,9 +1433,7 @@ class TestAnePrefillTransientReserve:
         base_peak = monitor.estimate_prefill_peak_bytes(32768, 2048)
         monitor.set_ane_prefill_transient_bytes(reserve)
         assert monitor._ane_prefill_transient_bytes == reserve
-        assert (
-            monitor.estimate_prefill_peak_bytes(32768, 2048) == base_peak + reserve
-        )
+        assert monitor.estimate_prefill_peak_bytes(32768, 2048) == base_peak + reserve
         monitor.clear_ane_prefill_transient()
         assert monitor._ane_prefill_transient_bytes == 0
         # Negative input clamps to zero instead of widening headroom.

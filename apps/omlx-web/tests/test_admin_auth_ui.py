@@ -41,9 +41,7 @@ async def test_login_page_uses_request_first_template_signature(page_host):
     result = await webui.login_page(request=request)
 
     assert result is render.return_value
-    render.assert_called_once_with(
-        request, "login.html", {"api_key_configured": True}
-    )
+    render.assert_called_once_with(request, "login.html", {"api_key_configured": True})
 
 
 async def test_dashboard_page_uses_request_first_template_signature(page_host):

@@ -49,9 +49,7 @@ def plan_specprefill_target(
         generation_kickoff_index=generation_kickoff_index,
         remove_kickoff_index=remove_kickoff_index,
         sparse_selected_token_count=sparse_selected_token_count,
-        total_tracker_prefill_count=(
-            system_token_count + sparse_selected_token_count
-        ),
+        total_tracker_prefill_count=(system_token_count + sparse_selected_token_count),
         position_offset=position_offset,
         sparse_selected_indices=sparse_selected_indices,
     )

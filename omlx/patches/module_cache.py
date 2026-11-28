@@ -23,9 +23,10 @@ tensors), so the entry creates no reference cycle through the module.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from itertools import chain
 from operator import is_
-from typing import Any, Callable
+from typing import Any
 
 import mlx.nn as nn
 

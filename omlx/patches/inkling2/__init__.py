@@ -18,7 +18,7 @@ def apply_inkling2_patch() -> bool:
     """Make ``mlx_lm.models.inkling2`` resolve to oMLX's model."""
     try:
         from . import model
-    except Exception as exc:  # noqa: BLE001 - a missing dependency must not abort
+    except Exception as exc:
         logger.warning("Could not register %s: %s", _QUALNAME, exc)
         return False
     sys.modules[_QUALNAME] = model

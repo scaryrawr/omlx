@@ -37,8 +37,13 @@ class TestTrimQuestionResults:
         rec = trimmed[0]
         assert "question" not in rec
         assert set(rec) == {
-            "id", "correct", "expected", "predicted",
-            "raw_response", "category", "time_s",
+            "id",
+            "correct",
+            "expected",
+            "predicted",
+            "raw_response",
+            "category",
+            "time_s",
         }
         assert rec["raw_response"] == "B"
         assert rec["time_s"] == 1.234
@@ -123,9 +128,7 @@ class TestBuildUploadContext:
             patch.object(
                 accuracy_upload, "compute_owner_hash", return_value="h" * 64 + "a"
             ),
-            patch.object(
-                accuracy_upload, "_detect_quantization", return_value="4bit"
-            ),
+            patch.object(accuracy_upload, "_detect_quantization", return_value="4bit"),
         ):
             ctx = build_upload_context(request, pool)
 
@@ -167,9 +170,7 @@ class TestBuildUploadContext:
             patch.object(accuracy_upload, "get_gpu_core_count", return_value=20),
             patch.object(accuracy_upload, "get_os_version", return_value="macOS 15.5"),
             patch.object(accuracy_upload, "get_io_platform_uuid", return_value=None),
-            patch.object(
-                accuracy_upload, "_detect_quantization", return_value="4bit"
-            ),
+            patch.object(accuracy_upload, "_detect_quantization", return_value="4bit"),
         ):
             ctx = build_upload_context(request, pool)
 
@@ -190,7 +191,9 @@ def _ctx(**overrides) -> dict:
         "quantization": "4bit",
         "sampling_profile": "deterministic",
         "batch_size": 8,
-        "feature_flags": [{"key": "turboquant_kv_4bit", "label": "TurboQuant KV 4-bit"}],
+        "feature_flags": [
+            {"key": "turboquant_kv_4bit", "label": "TurboQuant KV 4-bit"}
+        ],
         "model_settings": {"max_context_window": 32768},
         "submission_group": "group-1",
         "owner_hash_full": "h" * 64 + "a",
@@ -228,7 +231,13 @@ def _response(status_code: int, body: dict) -> MagicMock:
 class TestUploadIntelligenceResult:
     @pytest.mark.asyncio
     async def test_success_uploads_summary_then_raw(self):
-        post_resp = _response(201, {"id": "abc12345", "url": "https://omlx.ai/benchmarks/intelligence/abc12345"})
+        post_resp = _response(
+            201,
+            {
+                "id": "abc12345",
+                "url": "https://omlx.ai/benchmarks/intelligence/abc12345",
+            },
+        )
         put_resp = _response(200, {"id": "abc12345"})
         mock_to_thread = AsyncMock(side_effect=[post_resp, put_resp])
 
@@ -277,10 +286,13 @@ class TestUploadIntelligenceResult:
 
     @pytest.mark.asyncio
     async def test_duplicate_409_is_success_and_skips_raw(self):
-        post_resp = _response(409, {
-            "existing_id": "dup00001",
-            "existing_url": "https://omlx.ai/benchmarks/intelligence/dup00001",
-        })
+        post_resp = _response(
+            409,
+            {
+                "existing_id": "dup00001",
+                "existing_url": "https://omlx.ai/benchmarks/intelligence/dup00001",
+            },
+        )
         mock_to_thread = AsyncMock(return_value=post_resp)
 
         with patch("asyncio.to_thread", mock_to_thread):

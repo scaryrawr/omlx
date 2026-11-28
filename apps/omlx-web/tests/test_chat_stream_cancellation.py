@@ -3,9 +3,7 @@
 
 from pathlib import Path
 
-CHAT_TEMPLATE = (
-    Path(__file__).parents[1] / "omlx_web" / "templates" / "chat.html"
-)
+CHAT_TEMPLATE = Path(__file__).parents[1] / "omlx_web" / "templates" / "chat.html"
 
 
 def test_stop_cancels_the_open_response_reader_before_aborting_fetch():
@@ -25,9 +23,7 @@ def test_stream_exposes_its_response_reader_to_every_stop_path():
 
     assert "stream.responseReader = reader;" in source
     assert "this.cancelStreamTransport(stream);" in source
-    assert (
-        "this.cancelStreamTransport(this.getStreamSession(chatId, false));" in source
-    )
+    assert "this.cancelStreamTransport(this.getStreamSession(chatId, false));" in source
 
 
 def _stream_error_branch():

@@ -43,7 +43,7 @@ def export_sidecars(source: Path, output: Path, config: dict) -> None:
             with safetensors.safe_open(str(shard), framework="np") as handle:
                 keys = [
                     key
-                    for key in handle.keys()  # noqa: SIM118
+                    for key in handle.keys()
                     if key.startswith(
                         ("visual.", "audio_encoder.", "speech_embeddings.")
                     )

@@ -145,6 +145,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 # ── formatting helpers ────────────────────────────────────────────────────────
 
+
 def _fmt_mem(peak_bytes: int) -> str:
     if peak_bytes <= 0:
         return "—"
@@ -231,9 +232,7 @@ def _allocate_labels(
         if include_variant:
             if case.variant.ple_storage is None:
                 parts.append(
-                    "native-mtp"
-                    if case.variant.native_mtp_enabled
-                    else "baseline"
+                    "native-mtp" if case.variant.native_mtp_enabled else "baseline"
                 )
             else:
                 native_mtp = "on" if case.variant.native_mtp_enabled else "off"
@@ -276,7 +275,7 @@ def _label_with_ordinal(label: str, width: int, ordinal: int) -> str:
     prefix_width = width - len(suffix)
     if len(label) <= prefix_width:
         return f"{label}{suffix}"
-    return f"{label[:prefix_width - 1]}…{suffix}"
+    return f"{label[: prefix_width - 1]}…{suffix}"
 
 
 def _display_labels(labels: Sequence[str], width: int) -> list[str]:
@@ -308,6 +307,7 @@ def _display_labels(labels: Sequence[str], width: int) -> list[str]:
 
 
 # ── per-model benchmark runner ────────────────────────────────────────────────
+
 
 async def _bench_model(
     case: BenchmarkCase,
@@ -343,7 +343,9 @@ async def _bench_model(
             warmup_pp = min(pp_lengths)
             print(f"Warming up ({warmup}× pp={warmup_pp}) …")
             for _ in range(warmup):
-                await _run_single_test(engine, prompts[warmup_pp], gen_tokens, warmup_pp)
+                await _run_single_test(
+                    engine, prompts[warmup_pp], gen_tokens, warmup_pp
+                )
 
         single_results: list[dict[str, object]] = []
         for pp in sorted(pp_lengths):
@@ -373,6 +375,7 @@ async def _bench_model(
 
 # ── table printers ────────────────────────────────────────────────────────────
 
+
 def _print_single_comparison(
     results: Sequence[BenchmarkResult],
     pp_lengths: list[int],
@@ -398,7 +401,9 @@ def _print_single_comparison(
     # Sub-header: metric names per model
     sub_row = f"  {'':>6}  "
     for _ in labels:
-        sub_row += f"{'ttft':>{col}} {'gen_tps':>{col}} {'pp_tps':>{col}} {'mem':>{col}}  "
+        sub_row += (
+            f"{'ttft':>{col}} {'gen_tps':>{col}} {'pp_tps':>{col}} {'mem':>{col}}  "
+        )
     print(sub_row.rstrip())
 
     sep = "─" * (8 + (block_w + 2) * n)
@@ -469,6 +474,7 @@ def _print_batch_comparison(
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
+
 
 async def _run(args: argparse.Namespace) -> None:
     model_paths = [str(Path(m).expanduser().resolve()) for m in args.models]

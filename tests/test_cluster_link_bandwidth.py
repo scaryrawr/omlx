@@ -131,7 +131,7 @@ def test_a_group_runs_at_its_slowest_link():
 
 
 def test_a_missing_link_is_not_reported_as_a_slow_one():
-    """"Not connected" and "connected slowly" are different answers."""
+    """ "Not connected" and "connected slowly" are different answers."""
 
     graph = bandwidth_graph([_link("A", "B")])
     assert slowest_link_in(graph, ["A", "B", "C"]) is None

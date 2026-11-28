@@ -148,9 +148,8 @@ def _build_patched_load_model() -> Callable:
             config.update(model_config)
 
         if (
-            (model_file := config.get("model_file")) is not None
-            and not trust_remote_code
-        ):
+            model_file := config.get("model_file")
+        ) is not None and not trust_remote_code:
             raise ValueError(
                 f"The model at {model_path} requires executing custom model "
                 f"code ({model_file!r}). Pass trust_remote_code=True if you "

@@ -483,7 +483,9 @@ def test_complete_tiny_quantization_strict_native_reload(
     vocab = {f"t{i}": i for i in range(config["llm_config"]["vocab_size"])}
     tokenizer = Tokenizer(WordLevel(vocab, unk_token="t0"))
     PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer, unk_token="t0", eos_token=f"t{config['eos_token_id']}"
+        tokenizer_object=tokenizer,
+        unk_token="t0",
+        eos_token=f"t{config['eos_token_id']}",
     ).save_pretrained(source)
     weights = dict(tree_flatten(model.parameters()))
     source_references = {}
@@ -548,7 +550,9 @@ def test_complete_tiny_quantization_strict_native_reload(
                 )
                 weights[name + ".weight"] = packed.view(mx.uint8)
                 weights[name + ".weight_scale"] = scales
-                weights[name + ".weight_scale_2"] = mx.array([1.0, 2.0], dtype=mx.bfloat16)
+                weights[name + ".weight_scale_2"] = mx.array(
+                    [1.0, 2.0], dtype=mx.bfloat16
+                )
     mx.save_safetensors(str(source / "model.safetensors"), weights)
     if modelopt:
         index = oq._LazyTensorIndex([source / "model.safetensors"], config=config)
@@ -676,7 +680,9 @@ def test_native_streamed_calibration_selected_only_when_needed(family):
 
 
 @pytest.mark.parametrize("null_overrides", [False, True])
-def test_streamed_bolt_calibration_matches_resident(tmp_path, monkeypatch, null_overrides):
+def test_streamed_bolt_calibration_matches_resident(
+    tmp_path, monkeypatch, null_overrides
+):
     from mlx.utils import tree_flatten
     from mlx_vlm.models.nemotron_h_nano_omni import Model, ModelConfig
 
@@ -1511,7 +1517,9 @@ async def test_native_head_load_runs_on_mlx_executor(
         lambda *_a: expected_path if sidecar else None,
     )
     monkeypatch.setattr(utils, "load_model", load_head)
-    monkeypatch.setattr(NemotronHMTPSplitter, "load", lambda _self, path: load_head(path))
+    monkeypatch.setattr(
+        NemotronHMTPSplitter, "load", lambda _self, path: load_head(path)
+    )
     monkeypatch.setattr(VLMModelAdapter, "enable_nemotron_mtp", enable_head)
     engine = VLMBatchedEngine(
         str(tmp_path),
