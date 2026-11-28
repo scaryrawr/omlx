@@ -139,25 +139,37 @@
             saving: false,
             error: '',
             status: '',
-            async init() {
+            loadSeq: 0,
+            async init(preserveSelection = false) {
+                const selection = preserveSelection && this.baseId !== this.savedBaseId
+                    ? this.baseId : null;
+                const seq = ++this.loadSeq;
+
+                this.loading = true;
+
                 try {
                     const response = await fetch(`/admin/api/adapters/${encodeURIComponent(this.adapterId)}/base`);
                     const data = await response.json();
+
+                    if (seq !== this.loadSeq) return;
 
                     if (!response.ok) {
                         throw new Error(this.formatApiError(data.detail) || window.t('js.error.save_failed'));
                     }
 
                     this.candidates = data.candidates;
-                    this.baseId = data.base_model_id || '';
-                    this.savedBaseId = this.baseId;
+                    this.savedBaseId = data.base_model_id || '';
+                    this.baseId = selection ?? this.savedBaseId;
                     this.resolvedBaseId = data.resolved_base_model_id;
                     this.canChange = data.can_change;
+                    this.error = '';
                 } catch (error) {
+                    if (seq !== this.loadSeq) return;
+
                     console.error('Failed to load adapter bases:', error);
                     this.error = error.message;
                 } finally {
-                    this.loading = false;
+                    if (seq === this.loadSeq) this.loading = false;
                 }
             },
             async saveBase() {
@@ -1754,6 +1766,7 @@
                     const response = await fetch('/admin/api/reload', { method: 'POST' });
                     if (response.ok) {
                         await Promise.all([this.loadModels(), this.loadHFModels()]);
+                        window.dispatchEvent(new CustomEvent('models-reloaded'));
                     } else if (response.status === 401) {
                         window.location.href = '/admin';
                     } else {

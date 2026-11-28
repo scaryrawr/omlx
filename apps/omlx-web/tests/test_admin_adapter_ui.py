@@ -113,6 +113,80 @@ picker.loadModels = async () => {
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_reload_refreshes_adapter_base_choices_without_losing_edits():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for dashboard behavior tests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('omlx_web/static/js/dashboard.js', 'utf8');
+const template = fs.readFileSync('omlx_web/templates/dashboard/_adapter_base_picker.html', 'utf8');
+const handler = template.match(/@models-reloaded\.window="([^"]+)"/)?.[1];
+assert.ok(handler, 'the mounted picker must handle model rediscovery');
+const issues = [{
+    id: 'tuned', kind: 'base_missing', reason: 'Download the base.',
+    candidates: [], path: '/models/tuned',
+}];
+let candidates = ['old-local-checkpoint'];
+let refreshed;
+let picker;
+const context = vm.createContext({
+    localStorage: {getItem: () => null},
+    window: {
+        t: key => key,
+        dispatchEvent: event => {
+            assert.equal(event.type, 'models-reloaded');
+            refreshed = vm.runInNewContext(handler, {
+                init: picker.init.bind(picker),
+            });
+        },
+    },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    console,
+    fetch: async (url, options) => {
+        if (url === '/admin/api/reload') {
+            assert.equal(options.method, 'POST');
+            candidates = [...candidates, 'new-local-checkpoint'];
+            return {ok: true};
+        }
+        if (url === '/admin/api/models') {
+            return {ok: true, json: async () => ({models: [], adapter_issues: issues})};
+        }
+        assert.equal(url, '/admin/api/adapters/tuned/base');
+        return {ok: true, json: async () => ({
+            candidates: [...candidates], base_model_id: null,
+            resolved_base_model_id: null, can_change: true,
+        })};
+    },
+});
+vm.runInContext(source, context);
+const state = context.dashboard();
+state.loadHFModels = async () => {};
+picker = context.adapterBasePicker('tuned');
+picker.formatApiError = state.formatApiError;
+(async () => {
+    await state.loadModels();
+    await picker.init();
+    picker.baseId = 'old-local-checkpoint';
+    const mountedIssues = state.adapterIssues;
+    await state.reloadModels();
+    await refreshed;
+    assert.equal(state.adapterIssues, mountedIssues, 'the unchanged notice stays mounted');
+    assert.deepEqual(Array.from(picker.candidates), [
+        'old-local-checkpoint', 'new-local-checkpoint',
+    ]);
+    assert.equal(picker.baseId, 'old-local-checkpoint', 'the unapplied choice survives');
+    assert.equal(picker.savedBaseId, '', 'refresh does not save the choice');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_adapters_can_show_updates_and_report_unavailable_entries():
     node = shutil.which("node")
     if node is None:
