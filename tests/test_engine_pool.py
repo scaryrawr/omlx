@@ -113,6 +113,20 @@ def test_adapter_discovery_adds_a_separate_model(lora_pool, small_mock_model_dir
     }
 
 
+def test_adapter_base_candidates_exclude_cluster_only_entries(
+    lora_pool, small_mock_model_dir
+):
+    pool, _ = lora_pool
+    staged = small_mock_model_dir / "cluster-only"
+    staged.mkdir()
+    (staged / "config.json").write_text('{"model_type":"llama"}')
+    pool.register_cluster_model(str(staged), estimated_size=1024)
+
+    assert sorted(
+        candidate.model_id for candidate in pool.adapter_base_candidates()
+    ) == ["model-a", "model-b"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mtp_flag, engine_type",

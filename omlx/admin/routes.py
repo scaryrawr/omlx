@@ -2886,6 +2886,43 @@ def _adapter_issue_row(issue) -> dict:
     }
 
 
+@router.get("/api/adapters/{adapter_id}/base")
+async def get_adapter_base(
+    adapter_id: str,
+    is_admin: bool = Depends(require_admin),
+):
+    """List local base choices and the saved override for an adapter."""
+    engine_pool = _get_engine_pool()
+    if engine_pool is None:
+        raise HTTPException(status_code=503, detail="Engine pool not initialized")
+    settings_manager = _require_settings_manager()
+    entry = engine_pool.get_entry(adapter_id)
+    adapter = entry.adapter if entry is not None else None
+    issues = [
+        issue for issue in engine_pool.adapter_issues if issue.public_id == adapter_id
+    ]
+    if adapter is None and not issues:
+        raise HTTPException(status_code=404, detail=f"Adapter not found: {adapter_id}")
+
+    can_change = (
+        len(issues) <= 1
+        and not (entry is not None and issues)
+        and all(
+            issue.kind.value in {"base_missing", "base_ambiguous", "override_invalid"}
+            for issue in issues
+        )
+        and not (entry is not None and (entry.engine is not None or entry.is_loading))
+    )
+    return {
+        "base_model_id": settings_manager.get_adapter_bases().get(adapter_id),
+        "resolved_base_model_id": adapter.base.model_id if adapter is not None else None,
+        "candidates": sorted(
+            candidate.model_id for candidate in engine_pool.adapter_base_candidates()
+        ),
+        "can_change": can_change,
+    }
+
+
 @router.put("/api/adapters/{adapter_id}/base")
 async def set_adapter_base(
     adapter_id: str,

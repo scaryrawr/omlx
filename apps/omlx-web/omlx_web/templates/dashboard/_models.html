@@ -37,6 +37,12 @@
                                             <li class="break-words">
                                                 <span class="font-medium" x-text="issue.id"></span>:
                                                 <span lang="en" x-text="issue.reason"></span>
+                                                <template x-if="['base_missing', 'base_ambiguous', 'override_invalid'].includes(issue.kind) && adapterIssues.filter(item => item.id === issue.id).length === 1">
+                                                    <div class="mt-2 mb-3">
+                                                        {% set adapter_picker_id = 'issue.id' %}
+                                                        {% include 'dashboard/_adapter_base_picker.html' %}
+                                                    </div>
+                                                </template>
                                             </li>
                                         </template>
                                     </ul>

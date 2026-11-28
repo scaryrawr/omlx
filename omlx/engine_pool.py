@@ -1810,7 +1810,9 @@ class EnginePool:
     def adapter_base_candidates(self) -> tuple[BaseCandidate, ...]:
         from .lora_adapter import base_candidates
 
-        return base_candidates(self._entries.values())
+        return base_candidates(
+            entry for entry in self._entries.values() if entry.source_type != "cluster"
+        )
 
     _MODEL_TYPE_TO_ENGINE: dict[ModelType, EngineType] = {
         "llm": "batched",

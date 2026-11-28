@@ -54,6 +54,7 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 | Endpoint | Description |
 |---|---|
 | `GET /admin/api/models` | Discovered models with load state, size, and settings |
+| `GET /admin/api/adapters/{adapter_id}/base` | Read the saved override, resolved base, local base candidates, and whether the base can be changed |
 | `PUT /admin/api/adapters/{adapter_id}/base` | Set a base override with `{"base_model_id": "<model id>"}` or clear it with `{"base_model_id": null}` |
 | `POST /admin/api/models/{model_id}/load`, `.../unload` | Load or unload a model |
 | `POST /admin/api/models/{model_id}/requests/{request_id}/abort` | Stop one waiting, prefilling, or generating request and keep the model loaded |
@@ -71,6 +72,8 @@ Each row in `GET /admin/api/models` has `adapter: null` for a regular model, or 
 The same API serves routed-expert LoRA adapters. The supported PEFT `target_parameters` layouts are described in [LoRA adapters](../README.md#lora-adapters). Loading a routed adapter with MoE expert offload or DFlash returns a model-loading error.
 
 The top-level `adapter_issues` array describes adapter folders that could not become model entries. Each issue has `id`, `kind`, `reason`, and `path` strings, and a `candidates` array of model IDs. The issue kinds are `unsupported`, `malformed`, `base_missing`, `base_ambiguous`, `override_invalid`, and `id_collision`.
+
+Reading the base preference returns `{"base_model_id": string or null, "resolved_base_model_id": string or null, "candidates": [string], "can_change": boolean}`. `base_model_id: null` means automatic matching; `resolved_base_model_id` identifies the weights currently selected by discovery. Candidates include all usable local chat bases, not only the automatic matching tier, so an explicit override can select another quantization. Remote-only cluster registrations are excluded. An unresolved adapter can also be queried; it has no resolved base.
 
 The base override returns `{"success": true, "id": string, "base_model_id": string or null, "adapter": object or null, "issue": object or null}`. The `adapter` and `issue` objects use the same fields as the list response. The endpoint returns `404` for an unknown adapter, `400` when the requested base is not a candidate, and `409` while the adapter is loaded or loading.
 
