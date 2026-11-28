@@ -143,7 +143,7 @@ def _prompt_with_ple_lookahead(self, tokens):
         sti += ti
     lengths = [len(p) for p in tokens]
     max_length = max(lengths)
-    padding = [max_length - layer_index for layer_index in lengths]
+    padding = [max_length - prompt_length for prompt_length in lengths]
     max_padding = max(padding)
     if max_padding > 0:
         tokens = _right_pad_prompts(tokens, max_length=max_length)
