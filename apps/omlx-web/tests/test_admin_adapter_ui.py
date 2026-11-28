@@ -266,7 +266,8 @@ picker.loadModels = async () => { picker.models = []; };
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_adapter_base_picker_refreshes_after_settings_auto_unload():
+@pytest.mark.parametrize("unload_action", ["reset", "external"])
+def test_adapter_base_picker_refreshes_after_unload(unload_action):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required for dashboard behavior tests")
@@ -276,12 +277,14 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('omlx_web/static/js/dashboard.js', 'utf8');
 const template = fs.readFileSync('omlx_web/templates/dashboard/_adapter_base_picker.html', 'utf8');
+const unloadAction = process.argv[1];
 const wiring = template.match(/x-init="([^"]+)"/)?.[1];
 assert.ok(wiring, 'the picker must observe adapter activity');
 const model = {
     id: 'tuned', loaded: false, is_loading: false, is_pinned: false,
     adapter: {base_model_id: 'base'},
 };
+let baseReads = 0;
 const context = vm.createContext({
     localStorage: {getItem: () => null},
     window: {t: key => key}, console, alert: () => {},
@@ -297,6 +300,7 @@ const context = vm.createContext({
             return {ok: true, json: async () => ({models: [{...model}]})};
         }
         assert.equal(url, '/admin/api/adapters/tuned/base');
+        baseReads += 1;
         return {ok: true, json: async () => ({
             base_model_id: 'base', resolved_base_model_id: 'base',
             candidates: ['base', 'draft'], can_change: !model.loaded && !model.is_loading,
@@ -314,42 +318,62 @@ let notify;
 let refreshed;
 const component = vm.createContext({
     get selectedModel() { return state.selectedModel; },
+    get models() { return state.models; },
     adapterId: picker.adapterId,
     $watch: (watched, callback) => { expression = watched; notify = callback; },
     init: preserveSelection => { refreshed = picker.init(preserveSelection); },
 });
 vm.runInContext(wiring, component);
 (async () => {
+    await state.loadModels();
     await picker.init();
     picker.baseId = 'draft';
     assert.equal(vm.runInContext(expression, component), false);
     model.is_loading = true;
+    await state.loadModels();
     state.selectedModel = {...model};
     assert.equal(vm.runInContext(expression, component), true);
-    notify(true);
+    notify(true, false);
     await refreshed;
     assert.equal(picker.canChange, false);
     assert.equal(picker.baseId, 'draft');
     model.is_loading = false;
     model.loaded = true;
+    await state.loadModels();
     state.selectedModel = {...model};
     assert.equal(vm.runInContext(expression, component), true, 'loading to loaded stays active');
-    state.settingsApply.mode = 'reset';
-    await state.runSettingsApply();
-    assert.equal(state.selectedModel.loaded, false);
+    if (unloadAction === 'reset') {
+        state.settingsApply.mode = 'reset';
+        await state.runSettingsApply();
+        assert.equal(state.selectedModel.loaded, false);
+    } else {
+        model.loaded = false;
+        await state.loadModels();
+        assert.equal(state.selectedModel.loaded, true, 'polling leaves dialog metadata unchanged');
+    }
+    assert.equal(state.models[0].loaded, false);
     assert.equal(state.selectedModel.id, 'tuned', 'the keyed picker stays mounted');
     assert.equal(state.showModelSettingsModal, true);
-    assert.equal(vm.runInContext(expression, component), false);
-    notify(false);
+    assert.equal(vm.runInContext(expression, component), false, 'the watch follows live model activity');
+    notify(false, true);
     await refreshed;
     assert.equal(picker.canChange, true, 'the unloaded adapter can be rebound');
     assert.equal(picker.baseId, 'draft', 'the unapplied base choice survives');
     assert.equal(picker.savedBaseId, 'base');
     assert.equal(picker.error, '');
+    const reads = baseReads;
+    await state.loadModels();
+    notify(false, false);
+    await refreshed;
+    assert.equal(baseReads, reads, 'unchanged polling must not refetch bases');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(
-        [node, "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=30
+        [node, "-e", script, unload_action],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
