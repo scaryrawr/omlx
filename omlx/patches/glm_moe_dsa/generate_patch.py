@@ -82,22 +82,21 @@ def apply_glm_moe_dsa_generate_patch() -> bool:
         logger.debug("mlx_lm.generate not importable - GLM prefill patch skipped")
         return False
 
-    PromptProcessingBatch = gen.PromptProcessingBatch
-    BatchGenerator = gen.BatchGenerator
+    prompt_processing_batch_cls = gen.PromptProcessingBatch
+    batch_generator_cls = gen.BatchGenerator
 
-    if (
-        getattr(PromptProcessingBatch, "_omlx_glm_dsa_adaptive_patched", False)
-        and getattr(gen.generate_step, "_omlx_glm_dsa_adaptive_patched", False)
-    ):
+    if getattr(
+        prompt_processing_batch_cls, "_omlx_glm_dsa_adaptive_patched", False
+    ) and getattr(gen.generate_step, "_omlx_glm_dsa_adaptive_patched", False):
         _APPLIED = True
         return False
 
-    original_ppb_init = PromptProcessingBatch.__init__
-    original_ppb_copy = PromptProcessingBatch._copy
-    original_ppb_split = PromptProcessingBatch.split
-    original_ppb_prompt = PromptProcessingBatch.prompt
-    original_bg_init = BatchGenerator.__init__
-    original_bg_next = BatchGenerator._next
+    original_ppb_init = prompt_processing_batch_cls.__init__
+    original_ppb_copy = prompt_processing_batch_cls._copy
+    original_ppb_split = prompt_processing_batch_cls.split
+    original_ppb_prompt = prompt_processing_batch_cls.prompt
+    original_bg_init = batch_generator_cls.__init__
+    original_bg_next = batch_generator_cls._next
     original_generate_step = gen.generate_step
 
     def patched_ppb_init(self, *args, **kwargs):
@@ -273,9 +272,7 @@ def apply_glm_moe_dsa_generate_patch() -> bool:
 
     def patched_generate_step(prompt, model, *args, **kwargs):
         prefill_step_size = kwargs.get("prefill_step_size", 2048)
-        adaptive_prefill = _glm_dsa_adaptive_prefill_config(
-            model, prefill_step_size
-        )
+        adaptive_prefill = _glm_dsa_adaptive_prefill_config(model, prefill_step_size)
         if (
             adaptive_prefill is not None
             and adaptive_prefill.after == 0
@@ -284,17 +281,17 @@ def apply_glm_moe_dsa_generate_patch() -> bool:
             kwargs["prefill_step_size"] = adaptive_prefill.step_size
         return original_generate_step(prompt, model, *args, **kwargs)
 
-    PromptProcessingBatch.__init__ = patched_ppb_init
-    PromptProcessingBatch._copy = patched_ppb_copy
-    PromptProcessingBatch.split = patched_ppb_split
-    PromptProcessingBatch.prompt = patched_ppb_prompt
-    BatchGenerator.__init__ = patched_bg_init
-    BatchGenerator._next = patched_bg_next
+    prompt_processing_batch_cls.__init__ = patched_ppb_init
+    prompt_processing_batch_cls._copy = patched_ppb_copy
+    prompt_processing_batch_cls.split = patched_ppb_split
+    prompt_processing_batch_cls.prompt = patched_ppb_prompt
+    batch_generator_cls.__init__ = patched_bg_init
+    batch_generator_cls._next = patched_bg_next
     patched_generate_step._omlx_glm_dsa_adaptive_patched = True
     gen.generate_step = patched_generate_step
 
-    PromptProcessingBatch._omlx_glm_dsa_adaptive_patched = True
-    BatchGenerator._omlx_glm_dsa_adaptive_patched = True
+    prompt_processing_batch_cls._omlx_glm_dsa_adaptive_patched = True
+    batch_generator_cls._omlx_glm_dsa_adaptive_patched = True
     _APPLIED = True
     logger.info("GLM MoE DSA adaptive prefill patch applied to mlx_lm.generate")
     return True

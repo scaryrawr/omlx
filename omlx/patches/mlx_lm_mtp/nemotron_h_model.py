@@ -19,6 +19,7 @@ Patches (all idempotent, self-healing via a marker attr):
 This module is import-installed by patches/mlx_lm_mtp/__init__.py and gated by
 utils/model_loading.py `_is_mtp_compatible` (model_type.startswith("nemotron_h")).
 """
+
 import contextlib
 import logging
 
@@ -41,6 +42,7 @@ def set_mtp_active(value: bool) -> None:
 def _is_active() -> bool:
     try:
         from . import is_mtp_active  # type: ignore
+
         return is_mtp_active()
     except Exception:
         return _MTP_ACTIVE_STANDALONE
@@ -79,7 +81,9 @@ def _patch_args(nh):
 
     def patched_from_dict(cls, params):
         inst = orig(cls, params)
-        inst.num_nextn_predict_layers = int(params.get("num_nextn_predict_layers", 0) or 0)
+        inst.num_nextn_predict_layers = int(
+            params.get("num_nextn_predict_layers", 0) or 0
+        )
         return inst
 
     A.from_dict = classmethod(patched_from_dict)
@@ -92,8 +96,8 @@ def _patch_args(nh):
 def _register_mtp_module(nh):
     if hasattr(nh, "MTPModule") and getattr(nh.MTPModule, _MARKER, False):
         return
-    NemotronHAttention = nh.NemotronHAttention
-    NemotronHMoE = nh.NemotronHMoE
+    nemotron_h_attention_cls = nh.NemotronHAttention
+    nemotron_h_mo_e_cls = nh.NemotronHMoE
     create_attention_mask = nh.create_attention_mask
 
     class _MTPLayer0(nn.Module):
@@ -107,7 +111,7 @@ def _register_mtp_module(nh):
             self.enorm = nn.RMSNorm(H, eps=eps)
             self.hnorm = nn.RMSNorm(H, eps=eps)
             self.norm = nn.RMSNorm(H, eps=eps)
-            self.mixer = NemotronHAttention(args)
+            self.mixer = nemotron_h_attention_cls(args)
 
     class _MTPLayer1(nn.Module):
         """MoE sublayer + final norm. Param paths mirror disk `mtp.layers.1.*`."""
@@ -117,7 +121,7 @@ def _register_mtp_module(nh):
             H = args.hidden_size
             eps = args.layer_norm_epsilon
             self.norm = nn.RMSNorm(H, eps=eps)
-            self.mixer = NemotronHMoE(args)
+            self.mixer = nemotron_h_mo_e_cls(args)
             self.final_layernorm = nn.RMSNorm(H, eps=eps)
 
     class MTPModule(nn.Module):
@@ -149,10 +153,12 @@ def _register_mtp_module(nh):
 # Mamba2 mixer: n_confirmed split + rollback snapshot
 # --------------------------------------------------------------------------- #
 def _patch_mamba_mixer(nh):
-    Mixer = nh.NemotronHMamba2Mixer
-    if _is_ours(Mixer, "__call__"):
+    mixer_cls = nh.NemotronHMamba2Mixer
+    if _is_ours(mixer_cls, "__call__"):
         return
-    orig = Mixer.__call__  # processes a full chunk, chaining state via cache[0]/cache[1]
+    orig = (
+        mixer_cls.__call__
+    )  # processes a full chunk, chaining state via cache[0]/cache[1]
 
     def __call__(self, hidden_states, mask, cache=None, n_confirmed=0):
         S = hidden_states.shape[1]
@@ -167,12 +173,12 @@ def _patch_mamba_mixer(nh):
         return orig(self, hidden_states, mask, cache)
 
     __call__._omlx_nh_mtp = True
-    Mixer.__call__ = __call__
+    mixer_cls.__call__ = __call__
 
 
 def _patch_block(nh):
-    Block = nh.NemotronHBlock
-    if _is_ours(Block, "__call__"):
+    block_cls = nh.NemotronHBlock
+    if _is_ours(block_cls, "__call__"):
         return
 
     def __call__(self, x, mask=None, cache=None, n_confirmed=0):
@@ -186,12 +192,12 @@ def _patch_block(nh):
         return x + h
 
     __call__._omlx_nh_mtp = True
-    Block.__call__ = __call__
+    block_cls.__call__ = __call__
 
 
 def _patch_backbone(nh):
-    NemotronHModel = nh.NemotronHModel
-    if _is_ours(NemotronHModel, "__call__"):
+    nemotron_h_model_cls = nh.NemotronHModel
+    if _is_ours(nemotron_h_model_cls, "__call__"):
         return
     create_attention_mask = nh.create_attention_mask
     create_ssm_mask = nh.create_ssm_mask
@@ -217,19 +223,19 @@ def _patch_backbone(nh):
         return self.norm_f(h)
 
     __call__._omlx_nh_mtp = True
-    NemotronHModel.__call__ = __call__
+    nemotron_h_model_cls.__call__ = __call__
 
 
 # --------------------------------------------------------------------------- #
 # Model: __call__(return_hidden, n_confirmed) + mtp_forward + make_mtp_cache + sanitize
 # --------------------------------------------------------------------------- #
 def _patch_model(nh):
-    Model = nh.Model
-    KVCache = nh.KVCache
+    model_cls = nh.Model
+    k_v_cache_cls = nh.KVCache
 
     # --- __init__ wrap: attach .mtp when active ---
-    if not getattr(Model, "_omlx_nh_mtp_init", False):
-        orig_init = Model.__init__
+    if not getattr(model_cls, "_omlx_nh_mtp_init", False):
+        orig_init = model_cls.__init__
 
         def __init__(self, args):
             orig_init(self, args)
@@ -242,20 +248,23 @@ def _patch_model(nh):
             if active:
                 self.mtp = nh.MTPModule(args)
 
-        Model.__init__ = __init__
-        Model._omlx_nh_mtp_init = True
+        model_cls.__init__ = __init__
+        model_cls._omlx_nh_mtp_init = True
 
     # --- __call__: return_hidden + n_confirmed ---
-    if not _is_ours(Model, "__call__"):
+    if not _is_ours(model_cls, "__call__"):
+
         def __call__(self, inputs, cache=None, return_hidden=False, n_confirmed=0):
-            hidden = self.backbone(inputs, cache=cache, n_confirmed=n_confirmed)  # post-norm_f
+            hidden = self.backbone(
+                inputs, cache=cache, n_confirmed=n_confirmed
+            )  # post-norm_f
             logits = self.lm_head(hidden)
             if return_hidden:
                 return logits, hidden
             return logits
 
         __call__._omlx_nh_mtp = True
-        Model.__call__ = __call__
+        model_cls.__call__ = __call__
 
     # --- mtp_forward / make_mtp_cache ---
     def mtp_forward(self, hidden, next_ids, mtp_cache):
@@ -263,15 +272,15 @@ def _patch_model(nh):
         return self.lm_head(out)
 
     def make_mtp_cache(self):
-        return [KVCache()] if hasattr(self, "mtp") else []
+        return [k_v_cache_cls()] if hasattr(self, "mtp") else []
 
     mtp_forward._omlx_nh_mtp = True
-    Model.mtp_forward = mtp_forward
-    Model.make_mtp_cache = make_mtp_cache
+    model_cls.mtp_forward = mtp_forward
+    model_cls.make_mtp_cache = make_mtp_cache
 
     # --- sanitize: keep + remap + stack mtp.* when .mtp present ---
-    if not _is_ours(Model, "sanitize"):
-        orig_sanitize = Model.sanitize
+    if not _is_ours(model_cls, "sanitize"):
+        orig_sanitize = model_cls.sanitize
 
         def sanitize(self, weights):
             has_mtp = hasattr(self, "mtp")
@@ -284,7 +293,9 @@ def _patch_model(nh):
 
             mtp_w = {k: v for k, v in weights.items() if k.startswith("mtp.")}
             base = {k: v for k, v in weights.items() if not k.startswith("mtp.")}
-            out = orig_sanitize(self, base)   # stacks main experts, strips its own mtp (none here)
+            out = orig_sanitize(
+                self, base
+            )  # stacks main experts, strips its own mtp (none here)
 
             if has_mtp and mtp_w:
                 E = self.args.n_routed_experts
@@ -303,4 +314,4 @@ def _patch_model(nh):
             return out
 
         sanitize._omlx_nh_mtp = True
-        Model.sanitize = sanitize
+        model_cls.sanitize = sanitize

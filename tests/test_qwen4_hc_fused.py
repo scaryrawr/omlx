@@ -183,9 +183,7 @@ def test_fused_norm_is_bit_identical_to_rms_norm(hidden):
         threadgroup=(256, 1, 1),
         output_shapes=[(4, width)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
     expected = module.hc_norm(x).reshape(4, width)
     mx.eval(normed, expected)
     assert mx.array_equal(normed.view(mx.uint16), expected.view(mx.uint16)).item()
@@ -521,7 +519,9 @@ def test_prefill_tail_inject_keeps_reference_bits(bits, group_size):
     )
     mx.eval(expected, actual)
     for observed, reference in zip(actual, expected):
-        assert mx.array_equal(observed.view(mx.uint16), reference.view(mx.uint16)).item()
+        assert mx.array_equal(
+            observed.view(mx.uint16), reference.view(mx.uint16)
+        ).item()
 
 
 def test_prefill_activation_rounds_like_eager_ops():
@@ -529,12 +529,24 @@ def test_prefill_activation_rounds_like_eager_ops():
 
     mx.random.seed(5)
     special = mx.array(
-        [0.0, -0.0, 1e-40, -1e-40, 3e38, -3e38, float("inf"), -float("inf"), float("nan")]
+        [
+            0.0,
+            -0.0,
+            1e-40,
+            -1e-40,
+            3e38,
+            -3e38,
+            float("inf"),
+            -float("inf"),
+            float("nan"),
+        ]
     )
     for scale in (1e-38, 1e-3, 1.0, 40.0, 1e5):
-        y = mx.concatenate([mx.random.normal((4096,)) * scale, special]).astype(
-            mx.bfloat16
-        ).reshape(1, -1, 1)
+        y = (
+            mx.concatenate([mx.random.normal((4096,)) * scale, special])
+            .astype(mx.bfloat16)
+            .reshape(1, -1, 1)
+        )
         expected = nn.silu(y / HC)
         actual = hc_fused._act(HC)(y)
         mx.eval(expected, actual)
@@ -624,7 +636,9 @@ def test_module_routes_prefill_rows_through_the_prefill_path(monkeypatch):
     module = _module(4)
     x = mx.zeros((1, 64, WIDTH), dtype=mx.bfloat16)
     calls = []
-    monkeypatch.setattr(hc_fused, "prefill_forward", lambda m, h: calls.append(h.shape) or "prefill")
+    monkeypatch.setattr(
+        hc_fused, "prefill_forward", lambda m, h: calls.append(h.shape) or "prefill"
+    )
     assert module(x) == "prefill"
     assert calls == [(1, 64, WIDTH)]
     assert module(x, target_verify=True) != "prefill"
@@ -690,6 +704,7 @@ def test_fused_rows_match_independent_singletons(bits, batch, length, group_size
     assert mx.array_equal(actual, expected).item()
     assert mx.array_equal(actual_injection, expected_injection).item()
 
+
 needs_metal = pytest.mark.skipif(not mx.metal.is_available(), reason="requires Metal")
 needs_nax = pytest.mark.skipif(
     not (mx.metal.is_available() and is_nax_available()),
@@ -723,8 +738,9 @@ def _deferred_model():
         model,
         group_size=64,
         bits=4,
-        class_predicate=lambda path, module: isinstance(module, nn.Linear)
-        and "hyper_connection" in path,
+        class_predicate=lambda path, module: (
+            isinstance(module, nn.Linear) and "hyper_connection" in path
+        ),
     )
     # Checkpoint-like quantization statistics.
     for _, module in model.named_modules():
@@ -819,7 +835,9 @@ def _spies(monkeypatch):
 
 
 @needs_nax
-@pytest.mark.parametrize("bits", [(4, 4, 4), (5, 5, 5), (6, 6, 6), (8, 8, 8), (4, 6, 5)])
+@pytest.mark.parametrize(
+    "bits", [(4, 4, 4), (5, 5, 5), (6, 6, 6), (8, 8, 8), (4, 6, 5)]
+)
 @pytest.mark.parametrize("rows", [65, 3265, 4133])
 @pytest.mark.parametrize("write", [False, True])
 def test_prefill_is_bit_identical_to_mlx_path(monkeypatch, bits, rows, write):
@@ -995,6 +1013,7 @@ def test_model_prefill_logits_are_bit_identical(monkeypatch):
     view = mx.uint32 if observed.dtype == mx.float32 else mx.uint16
     assert mx.array_equal(observed.view(view), reference.view(view)).item()
 
+
 def _decode_both_ways(hc_fused, monkeypatch, module, hyper, write):
     """fused_forward outputs from the three-launch and the two-launch decode kernels.
 
@@ -1058,7 +1077,9 @@ def test_two_launch_decode_keeps_three_launch_bits(
         branch = mx.random.normal((1, rows, HIDDEN)).astype(mx.bfloat16)
         gate = (2 * mx.sigmoid(mx.random.normal((1, rows, HC)))).astype(mx.bfloat16)
         for write in (None, (branch, gate)):
-            _assert_same_bits(_decode_both_ways(hc_fused, monkeypatch, module, hyper, write))
+            _assert_same_bits(
+                _decode_both_ways(hc_fused, monkeypatch, module, hyper, write)
+            )
 
 
 # 64: every down block is a partial tail; 768/1152/1344: partial final down, inject
@@ -1089,7 +1110,9 @@ def test_two_launch_decode_keeps_bits_with_partial_blocks(
         branch = mx.random.normal((1, rows, hidden)).astype(mx.bfloat16)
         gate = (2 * mx.sigmoid(mx.random.normal((1, rows, HC)))).astype(mx.bfloat16)
         for write in (None, (branch, gate)):
-            _assert_same_bits(_decode_both_ways(hc_fused, monkeypatch, module, hyper, write))
+            _assert_same_bits(
+                _decode_both_ways(hc_fused, monkeypatch, module, hyper, write)
+            )
 
 
 # Norm/down threadgroup (g, ks) stores strip g of stream ks, so a stream needs no
@@ -1175,7 +1198,17 @@ def test_two_launch_decode_keeps_three_launch_fp32_sums(
     rps = hc_fused._down_rps(rows)
     new_tots = mx.fast.metal_kernel(
         name="test_hc_norm_down_sums",
-        input_names=["x", "w", "eps", "down_w", "down_s", "down_b", "inject_w", "inject_s", "inject_b"],
+        input_names=[
+            "x",
+            "w",
+            "eps",
+            "down_w",
+            "down_s",
+            "down_b",
+            "inject_w",
+            "inject_s",
+            "inject_b",
+        ],
         output_names=["xn", "parts", "tots"],
         header=hc_fused._V2_HEADER,
         source=_probe(
@@ -1184,7 +1217,15 @@ def test_two_launch_decode_keeps_three_launch_fp32_sums(
             _NDN_INV + "    if (t == 0 && g == 0) tots[(size_t)row * HC + s] = tot;\n",
         ),
     )(
-        inputs=[*norm_inputs, down.weight, down.scales, down.biases, inject.weight, inject.scales, inject.biases],
+        inputs=[
+            *norm_inputs,
+            down.weight,
+            down.scales,
+            down.biases,
+            inject.weight,
+            inject.scales,
+            inject.biases,
+        ],
         template=[
             ("T", mx.bfloat16),
             ("BITS_D", bits),
@@ -1232,7 +1273,15 @@ def test_two_launch_decode_keeps_three_launch_fp32_sums(
         inject.scales,
         inject.biases,
     ]
-    down_names = ["xn", "down_w", "down_s", "down_b", "inject_w", "inject_s", "inject_b"]
+    down_names = [
+        "xn",
+        "down_w",
+        "down_s",
+        "down_b",
+        "inject_w",
+        "inject_s",
+        "inject_b",
+    ]
     down_launch = dict(
         template=[
             ("T", mx.bfloat16),
@@ -1451,9 +1500,11 @@ def _stack(seed: int):
                 module,
                 group_size=64,
                 bits=bits,
-                class_predicate=lambda path, m, prefix=prefix: isinstance(m, nn.Linear)
-                and path.startswith(prefix)
-                and "hyper_connection" in path,
+                class_predicate=lambda path, m, prefix=prefix: (
+                    isinstance(m, nn.Linear)
+                    and path.startswith(prefix)
+                    and "hyper_connection" in path
+                ),
             )
         mx.eval(module.parameters())
     return model, head

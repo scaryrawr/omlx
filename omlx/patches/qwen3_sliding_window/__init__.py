@@ -53,9 +53,7 @@ def apply_qwen3_sliding_window_patch() -> bool:
         _patch_qwen3_module()
     except ModuleNotFoundError as error:
         if error.name and error.name.startswith("mlx_lm"):
-            logger.debug(
-                "mlx_lm not importable - qwen3 sliding-window patch skipped"
-            )
+            logger.debug("mlx_lm not importable - qwen3 sliding-window patch skipped")
             return False
         raise
 

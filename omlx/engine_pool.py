@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 import mlx.core as mx
 
 from . import gguf
+from .custom_kernels.quant_matmul import fast as quant_fast
 from .engine import BaseEngine, BatchedEngine
 from .engine.decision import DecisionEngine
 from .engine.embedding import EmbeddingEngine
@@ -82,13 +83,12 @@ from .model_discovery import (
     is_realtime_stt_model,
     model_unavailable_reason,
 )
-from .custom_kernels.quant_matmul import fast as quant_fast
 from .model_settings import (
     ModelSettings,
     a8_prefill_on,
-    ced_prefill_on,
     ane_prefill_backend,
     ane_prefill_fraction,
+    ced_prefill_on,
     specprefill_draft,
     validate_ane_prefill,
 )
@@ -482,7 +482,9 @@ class EnginePool:
         # LoRA adapter folders found in the model roots, by adapter id.
         self._lora_adapters: dict[str, str] = {}
         self._scheduler_config = scheduler_config or SchedulerConfig()
-        self._process_memory_enforcer: ProcessMemoryEnforcerLike | None = None  # Set by server
+        self._process_memory_enforcer: ProcessMemoryEnforcerLike | None = (
+            None  # Set by server
+        )
         self._get_final_ceiling: object | None = None  # Set by server
         self._settings_manager: ModelSettingsManager | None = None  # Set by server
         self._get_admission_ceiling: object | None = None  # Set by server
@@ -642,7 +644,9 @@ class EnginePool:
         recording forced offload decisions.
         """
 
-        runtime_settings = self._effective_adapter_model_settings(entry, runtime_settings)
+        runtime_settings = self._effective_adapter_model_settings(
+            entry, runtime_settings
+        )
         base = self._entry_resident_size(entry) if base_size is None else base_size
         if self._distributed_deployment_for_entry(entry) is not None:
             return base
@@ -670,9 +674,7 @@ class EnginePool:
         )
         if v41_estimate is not None:
             base = (
-                v41_estimate.mmap_bytes
-                if v41_offload
-                else v41_estimate.resident_bytes
+                v41_estimate.mmap_bytes if v41_offload else v41_estimate.resident_bytes
             )
         if (
             entry.engine_type == "vlm"
@@ -746,9 +748,7 @@ class EnginePool:
                     entry.model_path,
                     base,
                     fraction,
-                    mtp_resident=bool(
-                        getattr(runtime_settings, "mtp_enabled", False)
-                    ),
+                    mtp_resident=bool(getattr(runtime_settings, "mtp_enabled", False)),
                 )
         drafter_id = dflash_draft_for(runtime_settings, entry.model_path)
         if drafter_id and dflash_batched_supported(
@@ -789,7 +789,9 @@ class EnginePool:
         except OSError:
             weights = 0
         if getattr(runtime_settings, "dflash_draft_quant_enabled", False):
-            bits = int(getattr(runtime_settings, "dflash_draft_quant_weight_bits", 0) or 4)
+            bits = int(
+                getattr(runtime_settings, "dflash_draft_quant_weight_bits", 0) or 4
+            )
             # bf16 checkpoints shrink by bits/16 plus scales; the selector
             # codebooks stay unquantized, so keep a third as headroom.
             weights = int(weights * max(bits / 16 + 0.05, 0.34))
@@ -1042,7 +1044,7 @@ class EnginePool:
         if not enabled or not forced or settings is None:
             return settings
         effective = copy.copy(settings)
-        setattr(effective, "qwen4_ple_ssd_offload", True)
+        effective.qwen4_ple_ssd_offload = True
         return effective
 
     def _deepseek_v41_engram_offload_status(
@@ -1199,7 +1201,7 @@ class EnginePool:
             return 0
         try:
             return int(cb())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     def _fallback_admission_ceiling(self) -> int:
@@ -1216,7 +1218,7 @@ class EnginePool:
             return 0
         try:
             return int(cb())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     def _residency_ceiling(self) -> int:
@@ -1232,7 +1234,7 @@ class EnginePool:
             return 0
         try:
             return int(cb())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     def _admission_soft_target(self) -> int:
@@ -1249,7 +1251,7 @@ class EnginePool:
             return 0
         try:
             return int(cb())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     def _dynamic_ceiling_binds(self) -> bool:
@@ -1266,7 +1268,7 @@ class EnginePool:
             others = [
                 int(breakdown[k]) for k in ("static", "metal_cap") if breakdown[k] > 0
             ]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
         return 0 < dynamic < min(others, default=dynamic + 1)
 
@@ -1301,7 +1303,7 @@ class EnginePool:
             metal_cap = int(breakdown["metal_cap"])
             raw_getter = getattr(enforcer, "_get_effective_metal_cap_bytes", None)
             metal_cap_raw = int(raw_getter()) if callable(raw_getter) else 0
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None, None
         if max(static, dynamic, metal_cap) <= 0:
             return None, None
@@ -1481,8 +1483,14 @@ class EnginePool:
                 "qwen35_ane_prefill_fused_down",
                 data.get("qwen35_ane_prefill_fused_down", False),
             )
-            add("qwen35_ane_prefill_max_layers", data.get("qwen35_ane_prefill_max_layers", 64))
-            add("qwen35_ane_prefill_dual_ane", data.get("qwen35_ane_prefill_dual_ane", True))
+            add(
+                "qwen35_ane_prefill_max_layers",
+                data.get("qwen35_ane_prefill_max_layers", 64),
+            )
+            add(
+                "qwen35_ane_prefill_dual_ane",
+                data.get("qwen35_ane_prefill_dual_ane", True),
+            )
             add("qwen35_ane_prefill_gdn", data.get("qwen35_ane_prefill_gdn", True))
             if data.get("qwen35_ane_prefill_gdn", True):
                 add(
@@ -1844,9 +1852,7 @@ class EnginePool:
         if reason is not None:
             raise ModelUnavailableError(entry.model_id, reason)
 
-    def apply_settings_overrides(
-        self, settings_manager: ModelSettingsManager
-    ) -> None:
+    def apply_settings_overrides(self, settings_manager: ModelSettingsManager) -> None:
         """Apply persisted settings to discovered entries.
 
         Applies model_type_override, then saves the recommended sampling
@@ -1952,8 +1958,7 @@ class EnginePool:
         if len(signatures) > 1:
             raise ValueError(
                 "cluster model path is ambiguous across incompatible public "
-                "model IDs: "
-                + ", ".join(sorted(model_id for model_id, _ in matches))
+                "model IDs: " + ", ".join(sorted(model_id for model_id, _ in matches))
             )
         return min(
             matches,
@@ -2086,7 +2091,10 @@ class EnginePool:
                 f"cluster model '{model_id}' is still loaded and cannot be removed"
             )
         registry = self._cluster_registry
-        if registry is not None and registry.get_for_model(entry.model_path) is not None:
+        if (
+            registry is not None
+            and registry.get_for_model(entry.model_path) is not None
+        ):
             return False
         del self._entries[model_id]
         logger.info("Removed cluster-only model registration %s", model_id)
@@ -2692,7 +2700,7 @@ class EnginePool:
                 continue
             try:
                 total += engine.process_memory_bytes()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("external process memory read failed", exc_info=True)
         return total
 
@@ -3962,8 +3970,7 @@ class EnginePool:
         )
         if executor is None or model is None:
             logger.info(
-                "ANE bank release skipped for request %s: %s not resolvable "
-                "on '%s'",
+                "ANE bank release skipped for request %s: %s not resolvable on '%s'",
                 request_id,
                 "executor" if executor is None else "model object",
                 model_id,
@@ -3971,7 +3978,7 @@ class EnginePool:
             return 0
         try:
             from .patches.qwen35_ane_prefill import release_qwen35_ane_prefill
-        except Exception:  # noqa: BLE001 - patch optional at runtime
+        except Exception:
             return 0
 
         def _release_on_engine_thread() -> tuple[int, int]:
@@ -4165,14 +4172,12 @@ class EnginePool:
         )
 
         try:
-            concurrent_stop = getattr(
-                entry.engine, "stop_without_global_cleanup", None
-            )
+            concurrent_stop = getattr(entry.engine, "stop_without_global_cleanup", None)
             if concurrent_activity and callable(concurrent_stop):
                 await concurrent_stop()
             else:
                 await entry.engine.stop(
-                    **({'local_only': True} if local_only and distributed else {})
+                    **({"local_only": True} if local_only and distributed else {})
                 )
         except Exception as e:
             if distributed or video:
@@ -4285,8 +4290,7 @@ class EnginePool:
             # measurable; otherwise an immediate settings reload can fail 507.
             footprint_pending = (
                 0 < min_expected_freed <= pre_unload_footprint
-                and get_phys_footprint()
-                > pre_unload_footprint - min_expected_freed
+                and get_phys_footprint() > pre_unload_footprint - min_expected_freed
             )
             if actual_freed >= min_expected_freed and not footprint_pending:
                 settled = True
@@ -4889,7 +4893,9 @@ class EnginePool:
                     logger.info(
                         f"Successfully loaded {model_id} as LLM (fallback from VLM)"
                     )
-                elif entry.engine_type == "image" and isinstance(start_error, ImportError):
+                elif entry.engine_type == "image" and isinstance(
+                    start_error, ImportError
+                ):
                     # ImageEngine imports mlx-vlm lazily during model load.
                     # If the core package went missing after admission, surface
                     # the centralized dependency error instead of raw import.
@@ -4898,7 +4904,9 @@ class EnginePool:
                     raise ModelLoadingError(
                         model_id, MLX_VLM_MISSING_MESSAGE
                     ) from start_error
-                elif entry.engine_type == "image" and isinstance(start_error, ValueError):
+                elif entry.engine_type == "image" and isinstance(
+                    start_error, ValueError
+                ):
                     # ImageEngine validates the manifest before loading model
                     # weights. Surface unsupported families and stale
                     # quantize settings as ordinary model-load failures.
@@ -5326,16 +5334,18 @@ class EnginePool:
                         not self._entry_is_diffusion_model(e)
                         or bool(getattr(e.engine, "supports_tool_calling", False))
                     ),
-                    "unavailable_reason": model_unavailable_reason(
-                        e.config_model_type
-                    ),
+                    "unavailable_reason": model_unavailable_reason(e.config_model_type),
                     "realtime_stt": is_realtime_stt_model(
                         e.model_type, e.config_model_type
                     ),
                     # d1 decision checkpoints share lfm3_omni but run on the decision engine.
                     "realtime_voice": (
                         realtime_duplex
-                        or (e.engine_type == "vlm" and e.realtime_voice and not e.realtime_duplex)
+                        or (
+                            e.engine_type == "vlm"
+                            and e.realtime_voice
+                            and not e.realtime_duplex
+                        )
                     ),
                     "realtime_duplex": realtime_duplex,
                     "supports_audio_input": (

@@ -16,9 +16,7 @@ from mlx_vlm.models.qwen4_exp import qsa_fast, qsa_nax  # noqa: E402
 
 
 def _native_available() -> bool:
-    return fast.is_native_available() and fast.has_symbol(
-        "sparse_gqa_attention"
-    )
+    return fast.is_native_available() and fast.has_symbol("sparse_gqa_attention")
 
 
 def test_qwen4_sparse_gqa_route_forwards_compact_blocks_and_transposes(monkeypatch):
@@ -185,9 +183,9 @@ def test_qwen4_sparse_gqa_native_matches_fp32_gather_reference(
         dimension_tile=dimension_tile,
     )
     complete = (starts + 1) // 4
-    expanded = (
-        blocks[..., None] * 4 + mx.arange(4, dtype=mx.int32)
-    ).reshape(1, query_tokens, 2048)
+    expanded = (blocks[..., None] * 4 + mx.arange(4, dtype=mx.int32)).reshape(
+        1, query_tokens, 2048
+    )
     tail = complete[None, :, None] * 4 + mx.arange(3, dtype=mx.int32)
     tail_valid = tail <= starts[None, :, None]
     selected = mx.concatenate((expanded, tail), axis=-1)
@@ -197,12 +195,9 @@ def test_qwen4_sparse_gqa_native_matches_fp32_gather_reference(
     safe = mx.where(selected_valid, selected, 0)
     gathered_k = qsa_fast._gather_kv_rows(keys, safe)
     gathered_v = qsa_fast._gather_kv_rows(values, safe)
-    grouped_q = queries.transpose(0, 2, 1, 3).reshape(
-        1, query_tokens, 2, 12, 256
-    )
+    grouped_q = queries.transpose(0, 2, 1, 3).reshape(1, query_tokens, 2, 12, 256)
     scores = (
-        grouped_q.astype(mx.float32)
-        @ gathered_k.astype(mx.float32).swapaxes(-1, -2)
+        grouped_q.astype(mx.float32) @ gathered_k.astype(mx.float32).swapaxes(-1, -2)
     ) / (256**0.5)
     scores = mx.where(
         selected_valid[:, :, None, None],
@@ -213,7 +208,9 @@ def test_qwen4_sparse_gqa_native_matches_fp32_gather_reference(
     reference = (probs @ gathered_v).reshape(1, query_tokens, 24, 256)
     native_rows = native.transpose(0, 2, 1, 3)
     mx.eval(native_rows, reference)
-    max_error = mx.max(mx.abs(native_rows.astype(mx.float32) - reference.astype(mx.float32)))
+    max_error = mx.max(
+        mx.abs(native_rows.astype(mx.float32) - reference.astype(mx.float32))
+    )
     assert float(max_error.item()) <= 5e-3
 
 
@@ -247,8 +244,7 @@ def test_qwen4_sparse_gqa_native_masks_future_blocks_in_first_chunk():
     complete = visible // 4
     block_valid = mx.arange(512)[None, None, :] < complete[..., None]
     expanded = (
-        blocks.astype(mx.int32)[..., None] * 4
-        + mx.arange(4, dtype=mx.int32)
+        blocks.astype(mx.int32)[..., None] * 4 + mx.arange(4, dtype=mx.int32)
     ).reshape(1, query_tokens, 2048)
     expanded_valid = mx.broadcast_to(
         block_valid[..., None], (1, query_tokens, 512, 4)
@@ -261,12 +257,9 @@ def test_qwen4_sparse_gqa_native_masks_future_blocks_in_first_chunk():
 
     gathered_k = qsa_fast._gather_kv_rows(keys, safe)
     gathered_v = qsa_fast._gather_kv_rows(values, safe)
-    grouped_q = queries.transpose(0, 2, 1, 3).reshape(
-        1, query_tokens, 2, 12, 256
-    )
+    grouped_q = queries.transpose(0, 2, 1, 3).reshape(1, query_tokens, 2, 12, 256)
     scores = (
-        grouped_q.astype(mx.float32)
-        @ gathered_k.astype(mx.float32).swapaxes(-1, -2)
+        grouped_q.astype(mx.float32) @ gathered_k.astype(mx.float32).swapaxes(-1, -2)
     ) / (256**0.5)
     scores = mx.where(
         selected_valid[:, :, None, None],
@@ -325,7 +318,10 @@ def _nax_fp64_reference(q, k, v, sel, q_offset):
         complete = (p + 1) // 4
         valid = sel[t, : min(512, complete)]
         toks = np.concatenate(
-            [(valid[:, None] * 4 + np.arange(4)).reshape(-1), np.arange(complete * 4, p + 1)]
+            [
+                (valid[:, None] * 4 + np.arange(4)).reshape(-1),
+                np.arange(complete * 4, p + 1),
+            ]
         )
         for h in range(24):
             s = k[h // 12, toks] @ q[h, t] / 16.0
@@ -377,7 +373,10 @@ def test_nax_attention_matches_native_and_fp64_reference(
     # Both round an fp32 result to bf16: identical error against fp64 up to
     # fp32 summation order (at most one bf16 ulp apart, almost always equal).
     half_ulp = np.abs(ref) * 2.0**-8 + 1e-6
-    assert np.mean(np.abs(g - ref) > half_ulp) <= 2 * np.mean(np.abs(n - ref) > half_ulp) + 1e-3
+    assert (
+        np.mean(np.abs(g - ref) > half_ulp)
+        <= 2 * np.mean(np.abs(n - ref) > half_ulp) + 1e-3
+    )
     assert np.max(np.abs(g - n) / (np.abs(n) * 2.0**-7 + 1e-6)) <= 1.0 + 1e-6
     assert np.mean(g == n) > 0.99
 
@@ -396,18 +395,30 @@ def test_rows_past_kl_are_never_consumed(kl_mod):
     assert kl % 4 == kl_mod
     q = mx.random.normal((1, 24, lq, 256)).astype(mx.bfloat16)
     spare = mx.full((1, 2, 7, 256), float("nan"), dtype=mx.bfloat16)
-    kbuf = mx.concatenate([mx.random.normal((1, 2, kl, 256)).astype(mx.bfloat16), spare], axis=2)
-    vbuf = mx.concatenate([mx.random.normal((1, 2, kl, 256)).astype(mx.bfloat16), spare], axis=2)
+    kbuf = mx.concatenate(
+        [mx.random.normal((1, 2, kl, 256)).astype(mx.bfloat16), spare], axis=2
+    )
+    vbuf = mx.concatenate(
+        [mx.random.normal((1, 2, kl, 256)).astype(mx.bfloat16), spare], axis=2
+    )
     k, v = kbuf[:, :, :kl], vbuf[:, :, :kl]
     sel = mx.array(_selections(rng, lq, q_offset))[None]
     got = qsa_nax.sparse_gqa_attention(q, k, v, sel, q_offset=q_offset)
     native = fast.sparse_gqa_attention(
-        q, k, v, mx.contiguous(sel.astype(mx.uint32)[:, None]), 256**-0.5, q_offset,
-        key_tile=64, dimension_tile=64,
+        q,
+        k,
+        v,
+        mx.contiguous(sel.astype(mx.uint32)[:, None]),
+        256**-0.5,
+        q_offset,
+        key_tile=64,
+        dimension_tile=64,
     ).transpose(0, 2, 1, 3)
     mx.eval(got, native)
     assert not mx.any(mx.isnan(got)).item()
-    assert mx.allclose(got.astype(mx.float32), native.astype(mx.float32), atol=1e-2).item()
+    assert mx.allclose(
+        got.astype(mx.float32), native.astype(mx.float32), atol=1e-2
+    ).item()
 
 
 @needs_nax
@@ -437,7 +448,10 @@ def test_gathered_qsa_routes_through_nax_and_matches_native(monkeypatch):
     mx.eval(routed, native)
     assert routed.shape == native.shape == (1, lq, 24, 256)
     diff = mx.abs(routed.astype(mx.float32) - native.astype(mx.float32))
-    assert float(mx.max(diff / (mx.abs(native.astype(mx.float32)) * 2.0**-7 + 1e-6))) <= 1.0 + 1e-6
+    assert (
+        float(mx.max(diff / (mx.abs(native.astype(mx.float32)) * 2.0**-7 + 1e-6)))
+        <= 1.0 + 1e-6
+    )
 
 
 def test_nax_route_fails_closed(monkeypatch):

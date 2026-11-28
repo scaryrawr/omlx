@@ -48,7 +48,9 @@ def _config_path() -> Path:
         config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
         directory = config_home / "opencode"
     jsonc = directory / "opencode.jsonc"
-    return jsonc if jsonc.exists() or jsonc.is_symlink() else directory / "opencode.json"
+    return (
+        jsonc if jsonc.exists() or jsonc.is_symlink() else directory / "opencode.json"
+    )
 
 
 def opencode_provider_config(ctx: IntegrationContext) -> dict:
@@ -187,7 +189,9 @@ def _preserve_model_metadata(
             continue
         if isinstance(previous.get("tools"), bool):
             capabilities.pop("tools")
-        audio_input = ctx.models_status_map.get(model_id, {}).get("supports_audio_input")
+        audio_input = ctx.models_status_map.get(model_id, {}).get(
+            "supports_audio_input"
+        )
         if model_types.get(model_id) is not None:
             if (
                 not isinstance(audio_input, bool)
@@ -249,11 +253,14 @@ class OpenCodeIntegration(Integration):
             if ctx.model and ctx.model in provider["models"]:
                 updates["model"] = f"omlx/{ctx.model}"
             _preserve_model_metadata(existing, provider, ctx)
-            updated = json.dumps(
-                _merge_config(existing, updates),
-                indent=2,
-                allow_nan=False,
-            ) + "\n"
+            updated = (
+                json.dumps(
+                    _merge_config(existing, updates),
+                    indent=2,
+                    allow_nan=False,
+                )
+                + "\n"
+            )
         except ValueError as exc:
             raise ValueError(
                 f"Cannot update {path}: {exc}. Config was not changed."

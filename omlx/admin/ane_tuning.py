@@ -121,7 +121,9 @@ class ANETuningRun:
     results: list[dict[str, Any]] = field(default_factory=list)
     fractions: list[float] = field(default_factory=list)
     recommendation: dict[str, Any] | None = None
-    evaluation_prompts: dict[str, list[list[int]]] = field(default_factory=dict, repr=False)
+    evaluation_prompts: dict[str, list[list[int]]] = field(
+        default_factory=dict, repr=False
+    )
     error_message: str = ""
     termination_reason: str = ""
     # Smallest gdn_fraction whose aligned ANE slice covers the z projection
@@ -130,25 +132,27 @@ class ANETuningRun:
     task: asyncio.Task | None = None
     created_at: float = field(default_factory=time.time)
     deadline: float | None = None
-    _cancel_calibration: threading.Event = field(default_factory=threading.Event, repr=False)
+    _cancel_calibration: threading.Event = field(
+        default_factory=threading.Event, repr=False
+    )
 
 
-class _CalibrationCancelled(Exception):
+class _CalibrationCancelledError(Exception):
     pass
 
 
 def _check_calibration_cancelled(run: ANETuningRun) -> None:
     if run._cancel_calibration.is_set():
-        raise _CalibrationCancelled
+        raise _CalibrationCancelledError
 
 
-class _K2BudgetExpired(Exception):
+class _K2BudgetExpiredError(Exception):
     pass
 
 
 def _check_k2_budget(run):
     if run.deadline is not None and time.monotonic() >= run.deadline:
-        raise _K2BudgetExpired
+        raise _K2BudgetExpiredError
 
 
 def _fraction_grid() -> list[float]:
@@ -225,9 +229,7 @@ def create_run(request: ANETuningRequest) -> ANETuningRun:
     # This is an upper bound until the loaded checkpoint tells us whether CPU
     # sharing and GDN are eligible. The live snapshot is reduced afterwards.
     cpu_gate_points = (
-        len(_cpu_fraction_grid())
-        if request.allow_cpu and request.allow_cpu_gate
-        else 1
+        len(_cpu_fraction_grid()) if request.allow_cpu and request.allow_cpu_gate else 1
     )
     cpu_down_points = (
         len(_cpu_down_fraction_grid())
@@ -272,11 +274,7 @@ def run_snapshot(run: ANETuningRun) -> dict[str, Any]:
         "current": run.current,
         "total": run.total,
         "results": [
-            {
-                key: value
-                for key, value in result.items()
-                if not key.startswith("_")
-            }
+            {key: value for key, value in result.items() if not key.startswith("_")}
             for result in run.results
         ],
         "recommendation": run.recommendation,
@@ -312,9 +310,7 @@ def _refresh_speedups(run: ANETuningRun) -> None:
         processing_tps = result.get("processing_tps")
         if processing_tps is None:
             continue
-        result["speedup_percent"] = round(
-            (processing_tps / baseline - 1.0) * 100.0, 2
-        )
+        result["speedup_percent"] = round((processing_tps / baseline - 1.0) * 100.0, 2)
 
 
 def _tail_padding_min_tokens(
@@ -418,7 +414,7 @@ async def _measure_result_slot(
     run.message = f"Testing {candidate.label}…"
     try:
         result = await _measure_candidate(run, engine_pool, base_settings, candidate)
-    except _K2BudgetExpired:
+    except _K2BudgetExpiredError:
         slot["state"] = "skipped"
         slot["detail"] = "Time budget reached"
         raise
@@ -442,7 +438,9 @@ async def _measure_result_slot(
         _refresh_speedups(run)
 
 
-def _settings_for_candidate(base: Any, request: ANETuningRequest, candidate: _Candidate):
+def _settings_for_candidate(
+    base: Any, request: ANETuningRequest, candidate: _Candidate
+):
     settings = replace(base)
     settings.qwen35_ane_prefill_enabled = candidate.enabled
     settings.qwen35_ane_prefill_sequence_length = request.sequence_length
@@ -557,13 +555,18 @@ def _ane_execution_observed(
     if not trace or not trace.get("profiling_available"):
         return None
     categories = trace.get("categories") or {}
-    if require_mlp and int((categories.get("mlp") or {}).get("operations", 0) or 0) <= 0:
+    if (
+        require_mlp
+        and int((categories.get("mlp") or {}).get("operations", 0) or 0) <= 0
+    ):
         return False
-    if require_gdn and int((categories.get("gdn") or {}).get("operations", 0) or 0) <= 0:
+    if (
+        require_gdn
+        and int((categories.get("gdn") or {}).get("operations", 0) or 0) <= 0
+    ):
         return False
     return any(
-        int(values.get("operations", 0) or 0) > 0
-        for values in categories.values()
+        int(values.get("operations", 0) or 0) > 0 for values in categories.values()
     )
 
 
@@ -702,12 +705,15 @@ async def _measure_candidate(
         if profile_enabled and fast is not None:
             fast.ane_profile_set_enabled(False)
 
-    if candidate.backend == "k2" and candidate.enabled:
-        if (
+    if (
+        candidate.backend == "k2"
+        and candidate.enabled
+        and (
             not profile_enabled
             or sum(group.get("operations", 0) for group in profile.values()) <= 0
-        ):
-            raise RuntimeError("K2 ANE candidate did not record native execution")
+        )
+    ):
+        raise RuntimeError("K2 ANE candidate did not record native execution")
 
     observations = [
         _ane_execution_observed(
@@ -719,7 +725,11 @@ async def _measure_candidate(
     ]
     # Reject only a positive observation that compiled programs remained idle.
     # If profiling was unavailable, the result is unknown and stays eligible.
-    if candidate.enabled and any(o is False for o in observations) and not any(observations):
+    if (
+        candidate.enabled
+        and any(o is False for o in observations)
+        and not any(observations)
+    ):
         operations = _observed_operations(traces)
         step = _prefill_step_size(engine)
         if any(operations.values()):
@@ -732,8 +742,7 @@ async def _measure_candidate(
             )
         elif step is None:
             cause = (
-                "sequence_length must not exceed the scheduler's prefill "
-                "chunk width."
+                "sequence_length must not exceed the scheduler's prefill chunk width."
             )
         elif run.request.sequence_length > step:
             cause = (
@@ -785,8 +794,7 @@ def _balanced_fractions(
     if total_rate <= 0:
         return None
     return [
-        _nearest(rate / total_rate, allowed)
-        for rate, allowed in zip(rates, choices)
+        _nearest(rate / total_rate, allowed) for rate, allowed in zip(rates, choices)
     ]
 
 
@@ -810,13 +818,18 @@ def _profile_refinement(
     gdn = profile.get("gdn") or {}
     ane_fraction = float(candidate.mlp_fraction or 0.0)
     cpu_fraction = float(candidate.cpu_fraction or 0.0)
-    gpu_fraction = 1.0 - ane_fraction * (2 if candidate.fused_down else 1) - cpu_fraction
+    gpu_fraction = (
+        1.0 - ane_fraction * (2 if candidate.fused_down else 1) - cpu_fraction
+    )
     mlp_ops = float(mlp.get("operations", 0.0))
     if mlp_ops > 0 and ane_fraction > 0 and gpu_fraction > 0:
-        ane_time = max(
-            float(mlp.get("ane0_eval_ns", 0.0)),
-            float(mlp.get("ane1_eval_ns", 0.0)),
-        ) / mlp_ops
+        ane_time = (
+            max(
+                float(mlp.get("ane0_eval_ns", 0.0)),
+                float(mlp.get("ane1_eval_ns", 0.0)),
+            )
+            / mlp_ops
+        )
         gpu_time = float(mlp.get("gpu_completion_ns", 0.0)) / mlp_ops
         ane_width = ane_fraction * (2 if candidate.fused_down else 1)
         widths = [ane_width]
@@ -825,9 +838,7 @@ def _profile_refinement(
             (
                 [2 * value for value in _fused_fraction_grid()]
                 if candidate.fused_down
-                else sorted(
-                    set([*_fraction_grid(), 0.35, 0.40, 0.465, 0.50, 0.55])
-                )
+                else sorted(set([*_fraction_grid(), 0.35, 0.40, 0.465, 0.50, 0.55]))
             )
         ]
         if cpu_fraction > 0:
@@ -851,10 +862,13 @@ def _profile_refinement(
     cpu_gdn_fraction = float(candidate.cpu_gdn_fraction or 0.0)
     gdn_ops = float(gdn.get("operations", 0.0))
     if candidate.gdn_enabled and gdn_fraction is not None and gdn_ops > 0:
-        ane_time = max(
-            float(gdn.get("ane0_eval_ns", 0.0)),
-            float(gdn.get("ane1_eval_ns", 0.0)),
-        ) / gdn_ops
+        ane_time = (
+            max(
+                float(gdn.get("ane0_eval_ns", 0.0)),
+                float(gdn.get("ane1_eval_ns", 0.0)),
+            )
+            / gdn_ops
+        )
         gpu_time = float(gdn.get("gpu_completion_ns", 0.0)) / gdn_ops
         # The production GDN path precision-caps ANE at the token-local z
         # projection. Its structural floor is therefore also its only real
@@ -1112,9 +1126,7 @@ def _calibrate_fused_components_sync(
     fractions = _fused_fraction_grid()
     cpu_fractions = _fused_cpu_fraction_grid() if cpu_supported else [0.0]
     gdn_fractions = (
-        [float(run.gdn_floor)]
-        if gdn is not None and run.gdn_floor is not None
-        else []
+        [float(run.gdn_floor)] if gdn is not None and run.gdn_floor is not None else []
     )
     gdn_cpu_fractions = _cpu_gdn_fraction_grid() if gdn_cpu_supported else [0.0]
 
@@ -1166,9 +1178,7 @@ def _calibrate_fused_components_sync(
     if gdn is not None:
         gdn_prepared = []
         for fraction in gdn_fractions:
-            config = patch._AneGDNConfig(
-                run.request.sequence_length, fraction, 8, True
-            )
+            config = patch._AneGDNConfig(run.request.sequence_length, fraction, 8, True)
             value = patch._prepare_gdn_for_bank(gdn, config)
             if value is not None and value[2] is not None:
                 state, dense0, dense1 = value
@@ -1198,9 +1208,7 @@ def _calibrate_fused_components_sync(
         for cpu_fraction in cpu_fractions
         if 2 * fraction + cpu_fraction < 1.0
     ]
-    thread_points = (
-        3 * len(_cpu_thread_grid()) if cpu_supported else 1
-    )
+    thread_points = 3 * len(_cpu_thread_grid()) if cpu_supported else 1
     run.total = (
         3
         + len(valid_combinations)
@@ -1209,9 +1217,7 @@ def _calibrate_fused_components_sync(
     )
     gate = mlp.gate_proj
     input_dim = int(gate.weight.shape[1]) * 8
-    x = mx.zeros(
-        (1, run.request.sequence_length, input_dim), dtype=gate.scales.dtype
-    )
+    x = mx.zeros((1, run.request.sequence_length, input_dim), dtype=gate.scales.dtype)
     mx.eval(x)
     coarse_repeats = _COARSE_SAMPLES
 
@@ -1239,9 +1245,7 @@ def _calibrate_fused_components_sync(
         state, _weights = value
         model0, model1 = fused_models[fraction]
         state = replace(state, model=model0, model1=model1)
-        latency = _time_fused_mlp_state(
-            patch, mlp, x, config, state, coarse_repeats
-        )
+        latency = _time_fused_mlp_state(patch, mlp, x, config, state, coarse_repeats)
         mlp_results.append((latency, fraction, cpu_fraction))
         preview_ms, preview_ane, preview_cpu = min(mlp_results)
         _preview_phase(
@@ -1260,9 +1264,7 @@ def _calibrate_fused_components_sync(
             fused_down=True,
         )
         run.current += 1
-        run.message = (
-            f"Fused MLP: ANE {fraction:.1%} each, CPU {cpu_fraction:.1%}…"
-        )
+        run.message = f"Fused MLP: ANE {fraction:.1%} each, CPU {cpu_fraction:.1%}…"
         del state, _weights
         mx.clear_cache()
     if not mlp_results:
@@ -1379,9 +1381,7 @@ def _calibrate_fused_components_sync(
             ranked_threads = sorted(thread_results)
             fastest_ms = ranked_threads[0][0]
             tied_threads = [
-                result
-                for result in ranked_threads
-                if result[0] <= fastest_ms * 1.005
+                result for result in ranked_threads if result[0] <= fastest_ms * 1.005
             ]
             # Resolve a sub-0.5% tie without consulting saved settings: prefer
             # the least dispersed result, then the lower resource count.
@@ -1407,8 +1407,8 @@ def _calibrate_fused_components_sync(
                     worker_alternate_threads,
                     _,
                 ) = alternate
-                worker_uncertainty = (
-                    abs(alternate_ms - worker_ms) / min(alternate_ms, worker_ms)
+                worker_uncertainty = abs(alternate_ms - worker_ms) / min(
+                    alternate_ms, worker_ms
                 )
             logger.info(
                 "[ane-tuner-fused-worker-choice] threads=%d latency_ms=%.3f "
@@ -1510,9 +1510,7 @@ def _calibrate_fused_components_sync(
                 cpu_threads=best_threads,
                 cpu_shared_resource=cpu_shared,
             )
-            state = patch._prepare_gdn_runtime_state(
-                gdn, config, model0, model1
-            )
+            state = patch._prepare_gdn_runtime_state(gdn, config, model0, model1)
             if state is not None:
                 gdn_contenders.append((fraction, cpu_fraction, config, state))
         if not gdn_contenders:
@@ -1564,9 +1562,7 @@ def _calibrate_fused_components_sync(
         ranked_gdn.sort()
         fastest_gdn_ms = ranked_gdn[0][0]
         tied_gdn = [
-            result
-            for result in ranked_gdn
-            if result[0] <= fastest_gdn_ms * 1.005
+            result for result in ranked_gdn if result[0] <= fastest_gdn_ms * 1.005
         ]
         selected_gdn = min(
             tied_gdn,
@@ -1588,9 +1584,7 @@ def _calibrate_fused_components_sync(
         )
         if alternate is not None:
             alternate_ms, gdn_alternate, gdn_cpu_alternate, _ = alternate
-            gdn_uncertainty = (
-                abs(alternate_ms - gdn_ms) / min(alternate_ms, gdn_ms)
-            )
+            gdn_uncertainty = abs(alternate_ms - gdn_ms) / min(alternate_ms, gdn_ms)
         logger.info(
             "[ane-tuner-gdn-choice] ane=%.3f cpu=%.3f latency_ms=%.3f "
             "alternate_ane=%s alternate_cpu=%s uncertainty=%.4f",
@@ -1717,7 +1711,7 @@ async def _calibrate_components(
         # Await the worker before unload can clear its temporary module state.
         try:
             future.result()
-        except _CalibrationCancelled:
+        except _CalibrationCancelledError:
             pass
         except Exception:
             logger.debug("ANE calibration failed while cancelling", exc_info=True)
@@ -1748,9 +1742,7 @@ def _calibrate_components_sync(
         else None
     )
     if gdn is not None:
-        run.gdn_floor = _min_viable_gdn_fraction(
-            patch, gdn, 128 if dual_ane else 64
-        )
+        run.gdn_floor = _min_viable_gdn_fraction(patch, gdn, 128 if dual_ane else 64)
 
     gate = mlp.gate_proj
     down = mlp.down_proj
@@ -1779,9 +1771,7 @@ def _calibrate_components_sync(
         and bits in (4, 5, 6, 8)
         and gate.scales.dtype == mx.float16
         and mlp.up_proj.scales.dtype == mx.float16
-        and fast.has_symbol(
-            patch._cpu_gate_kernel_symbol(bits, dual=dual_ane)
-        )
+        and fast.has_symbol(patch._cpu_gate_kernel_symbol(bits, dual=dual_ane))
     )
     cpu_down_supported = bool(
         run.request.allow_cpu
@@ -1816,9 +1806,7 @@ def _calibrate_components_sync(
         if cpu_down_supported and run.request.allow_cpu_down
         else [0.0]
     )
-    gdn_cpu_fractions = (
-        _cpu_gdn_fraction_grid() if gdn_cpu_supported else [0.0]
-    )
+    gdn_cpu_fractions = _cpu_gdn_fraction_grid() if gdn_cpu_supported else [0.0]
 
     run.phase = "compiling_calibration"
     run.message = "Compiling representative ANE calibration bank…"
@@ -1860,15 +1848,17 @@ def _calibrate_components_sync(
             run.request.sequence_length,
         )
         if banked is None:
-            raise RuntimeError("Representative ANE calibration bank could not be loaded")
+            raise RuntimeError(
+                "Representative ANE calibration bank could not be loaded"
+            )
         models0, models1, _ = banked
     else:
         mx.eval(*dense0)
-        single_banked = patch._compile_single_banks(
-            dense0, run.request.sequence_length
-        )
+        single_banked = patch._compile_single_banks(dense0, run.request.sequence_length)
         if single_banked is None:
-            raise RuntimeError("Representative ANE calibration bank could not be loaded")
+            raise RuntimeError(
+                "Representative ANE calibration bank could not be loaded"
+            )
         models0, _ = single_banked
         models1 = [None] * len(models0)
     ane_models: dict[tuple[str, float], tuple[Any, Any, Any]] = {}
@@ -1895,13 +1885,13 @@ def _calibrate_components_sync(
     )
 
     input_dim = int(gate.weight.shape[1]) * 32 // bits
-    x = mx.zeros(
-        (1, run.request.sequence_length, input_dim), dtype=gate.scales.dtype
-    )
+    x = mx.zeros((1, run.request.sequence_length, input_dim), dtype=gate.scales.dtype)
     mx.eval(x)
     calibration_repeats = _COARSE_SAMPLES
 
-    _set_phase_running(run, _GATE_SLOT, "Balancing MLP gate/up across ANE, CPU and GPU…")
+    _set_phase_running(
+        run, _GATE_SLOT, "Balancing MLP gate/up across ANE, CPU and GPU…"
+    )
     gate_results: list[tuple[float, float, float]] = []
     for fraction in valid_mlp_fractions:
         model0, model1, _ = ane_models[("mlp", fraction)]
@@ -1915,32 +1905,23 @@ def _calibrate_components_sync(
                 cpu_threads=cpu_threads,
                 cpu_shared_resource=cpu_shared,
             )
-            state = patch._prepare_pair_runtime_state(
-                mlp, config, model0, model1
-            )
+            state = patch._prepare_pair_runtime_state(mlp, config, model0, model1)
             if state is None:
                 continue
-            latency = _time_mlp_state(
-                patch, mlp, x, config, state, calibration_repeats
-            )
+            latency = _time_mlp_state(patch, mlp, x, config, state, calibration_repeats)
             gate_results.append((latency, fraction, cpu_fraction))
             preview = min(gate_results)
             _preview_phase(
                 run,
                 _GATE_SLOT,
-                detail=(
-                    f"Current best · ANE {preview[1]:.1%} · "
-                    f"CPU {preview[2]:.1%}"
-                ),
+                detail=(f"Current best · ANE {preview[1]:.1%} · CPU {preview[2]:.1%}"),
                 latency_ms=preview[0],
                 mlp_fraction=preview[1],
                 cpu_enabled=preview[2] > 0,
                 cpu_fraction=preview[2],
             )
             run.current += 1
-            run.message = (
-                f"MLP gate/up: ANE {fraction:.1%}, CPU {cpu_fraction:.1%}…"
-            )
+            run.message = f"MLP gate/up: ANE {fraction:.1%}, CPU {cpu_fraction:.1%}…"
     if not gate_results:
         raise RuntimeError("Every representative MLP gate/up candidate failed")
     gate_ms, best_mlp, best_cpu = min(gate_results)
@@ -1954,7 +1935,9 @@ def _calibrate_components_sync(
         cpu_fraction=best_cpu,
     )
 
-    _set_phase_running(run, _DOWN_SLOT, "Balancing MLP down projection across CPU and GPU…")
+    _set_phase_running(
+        run, _DOWN_SLOT, "Balancing MLP down projection across CPU and GPU…"
+    )
     down_results: list[tuple[float, float]] = []
     model0, model1, _ = ane_models[("mlp", best_mlp)]
     for down_fraction in down_fractions:
@@ -1971,17 +1954,14 @@ def _calibrate_components_sync(
         state = patch._prepare_pair_runtime_state(mlp, config, model0, model1)
         if state is None:
             continue
-        latency = _time_mlp_state(
-            patch, mlp, x, config, state, calibration_repeats
-        )
+        latency = _time_mlp_state(patch, mlp, x, config, state, calibration_repeats)
         down_results.append((latency, down_fraction))
         preview = min(down_results)
         _preview_phase(
             run,
             _DOWN_SLOT,
             detail=(
-                f"Current best · CPU {preview[1]:.1%} · "
-                f"GPU {1.0 - preview[1]:.1%}"
+                f"Current best · CPU {preview[1]:.1%} · GPU {1.0 - preview[1]:.1%}"
             ),
             latency_ms=preview[0],
             mlp_fraction=best_mlp,
@@ -2029,9 +2009,7 @@ def _calibrate_components_sync(
                     cpu_threads=cpu_threads,
                     cpu_shared_resource=cpu_shared,
                 )
-                state = patch._prepare_gdn_runtime_state(
-                    gdn, config, model0, model1
-                )
+                state = patch._prepare_gdn_runtime_state(gdn, config, model0, model1)
                 if state is None:
                     continue
                 latency = _time_gdn_state(
@@ -2054,9 +2032,7 @@ def _calibrate_components_sync(
                     cpu_gdn_fraction=preview[2],
                 )
                 run.current += 1
-                run.message = (
-                    f"GDN: ANE {fraction:.1%}, CPU {cpu_fraction:.1%}…"
-                )
+                run.message = f"GDN: ANE {fraction:.1%}, CPU {cpu_fraction:.1%}…"
         if not gdn_results:
             raise RuntimeError("Every representative GDN candidate failed")
         gdn_ms, best_gdn, best_gdn_cpu = min(gdn_results)
@@ -2123,8 +2099,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
         reason = (
             "the private ANE runtime is unavailable on this machine"
             if not runtime_available
-            else "the private ANE procedure-bank compiler is missing from "
-            "this build"
+            else "the private ANE procedure-bank compiler is missing from this build"
         )
         logger.warning(
             "ANE tuning for %s skipped: %s; recommending GPU-only",
@@ -2148,9 +2123,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
         run.status = "completed"
         run.phase = "completed"
         run.current = run.total
-        run.message = (
-            f"ANE prefill is not usable here ({reason}); GPU-only recommended"
-        )
+        run.message = f"ANE prefill is not usable here ({reason}); GPU-only recommended"
         return
 
     previous_speed_priority = _pin_speed_priority(engine_pool)
@@ -2167,9 +2140,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
             await engine_pool._unload_engine(model_id)
 
         baseline = _Candidate("GPU only", False)
-        await _measure_result_slot(
-            run, _GPU_SLOT, engine_pool, base_settings, baseline
-        )
+        await _measure_result_slot(run, _GPU_SLOT, engine_pool, base_settings, baseline)
 
         gpu_settings = _settings_for_candidate(base_settings, run.request, baseline)
         engine = await engine_pool.get_engine(
@@ -2225,8 +2196,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
             )
             refinement_changed = True
             logger.info(
-                "[ane-tuner-full-model-correction] gdn=%.3f->%.3f "
-                "cpu_gdn=%.3f->%.3f",
+                "[ane-tuner-full-model-correction] gdn=%.3f->%.3f cpu_gdn=%.3f->%.3f",
                 float(candidate.gdn_fraction or 0.0),
                 float(refined.gdn_fraction or 0.0),
                 float(candidate.cpu_gdn_fraction or 0.0),
@@ -2283,8 +2253,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
                     exc_info=True,
                 )
                 run.termination_reason = (
-                    f"Skipped {refined.label} after it failed: "
-                    f"{_exception_reason(exc)}"
+                    f"Skipped {refined.label} after it failed: {_exception_reason(exc)}"
                 )
         else:
             _complete_phase(
@@ -2366,11 +2335,7 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
         run.phase = "cancelled"
         run.message = "Tuning cancelled"
         interrupted = next(
-            (
-                result
-                for result in run.results
-                if result["state"] == "running"
-            ),
+            (result for result in run.results if result["state"] == "running"),
             run.results[active_slot],
         )
         if interrupted["state"] in ("pending", "running"):
@@ -2379,25 +2344,20 @@ async def run_tuning(run: ANETuningRun, engine_pool: Any) -> None:
         run.termination_reason = (
             f"Cancelled by user after {run.current} of {run.total} tests completed."
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("ANE tuning failed for %s", run.request.model_id)
         run.status = "error"
         run.phase = "error"
         run.error_message = _exception_reason(exc)
         interrupted = next(
-            (
-                result
-                for result in run.results
-                if result["state"] == "running"
-            ),
+            (result for result in run.results if result["state"] == "running"),
             run.results[active_slot],
         )
         if interrupted["state"] in ("pending", "running"):
             interrupted["state"] = "failed"
             interrupted["error"] = run.error_message
         run.termination_reason = (
-            f"Stopped after {run.current} of {run.total} tests: "
-            f"{run.error_message}"
+            f"Stopped after {run.current} of {run.total} tests: {run.error_message}"
         )
         run.message = "Tuning stopped early"
         baseline_result = run.results[_GPU_SLOT]
@@ -2496,9 +2456,7 @@ async def _run_k2_tuning(run: ANETuningRun, engine_pool: Any) -> None:
     try:
         from ..custom_kernels.quant_matmul import ane as fast
 
-        if not fast.ane_available() or not hasattr(
-            fast._ext, "ane_compile_program"
-        ):
+        if not fast.ane_available() or not hasattr(fast._ext, "ane_compile_program"):
             raise RuntimeError("K2 tuning requires the native ANE extension")
         manager = getattr(engine_pool, "_settings_manager", None)
         if manager is None:
@@ -2536,7 +2494,7 @@ async def _run_k2_tuning(run: ANETuningRun, engine_pool: Any) -> None:
         run.status = run.phase = "completed"
         run.current = run.total
         run.message = "Tuning complete"
-    except _K2BudgetExpired:
+    except _K2BudgetExpiredError:
         run.status = run.phase = "completed"
         run.recommendation = None
         run.message = run.termination_reason = "Run interrupted at 3 minutes"

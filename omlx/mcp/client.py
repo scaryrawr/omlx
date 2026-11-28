@@ -7,7 +7,7 @@ MCP client for connecting to individual MCP servers.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .types import (
     MCPServerConfig,
@@ -56,10 +56,10 @@ class MCPClient:
         self._session = None
         self._read = None
         self._write = None
-        self._tools: List[MCPTool] = []
+        self._tools: list[MCPTool] = []
         self._state = MCPServerState.DISCONNECTED
-        self._error: Optional[str] = None
-        self._last_connected: Optional[float] = None
+        self._error: str | None = None
+        self._last_connected: float | None = None
         self._lock = asyncio.Lock()
 
     @property
@@ -78,7 +78,7 @@ class MCPClient:
         return self._state == MCPServerState.CONNECTED
 
     @property
-    def tools(self) -> List[MCPTool]:
+    def tools(self) -> list[MCPTool]:
         """Get discovered tools."""
         return self._tools
 
@@ -147,10 +147,10 @@ class MCPClient:
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
-        except ImportError:
+        except ImportError as _cause:
             raise ImportError(
                 "MCP SDK required for MCP support. Install with: pip install mcp"
-            )
+            ) from _cause
 
         server_params = StdioServerParameters(
             command=self.config.command,
@@ -176,10 +176,10 @@ class MCPClient:
         try:
             from mcp import ClientSession
             from mcp.client.sse import sse_client
-        except ImportError:
+        except ImportError as _cause:
             raise ImportError(
                 "MCP SDK required for MCP support. Install with: pip install mcp"
-            )
+            ) from _cause
 
         # Create SSE client context
         self._sse_client = sse_client(self.config.url, headers=self.config.headers)
@@ -196,13 +196,13 @@ class MCPClient:
     async def _connect_streamable_http(self):
         """Connect via streamable_http transport."""
         try:
+            import httpx
             from mcp import ClientSession
             from mcp.client.streamable_http import streamable_http_client
-            import httpx
-        except ImportError:
+        except ImportError as _cause:
             raise ImportError(
                 "MCP SDK required for MCP support. Install with: pip install mcp"
-            )
+            ) from _cause
 
         headers = self.config.headers or {}
         self._http_client = httpx.AsyncClient(headers=headers)
@@ -313,8 +313,8 @@ class MCPClient:
     async def call_tool(
         self,
         tool_name: str,
-        arguments: Dict[str, Any],
-        timeout: Optional[float] = None,
+        arguments: dict[str, Any],
+        timeout: float | None = None,
     ) -> MCPToolResult:
         """
         Call a tool on the MCP server.
@@ -358,12 +358,10 @@ class MCPClient:
             return MCPToolResult(
                 tool_name=tool_name,
                 content=content,
-                is_error=bool(
-                    _sdk_attr(result, "is_error", "isError", default=False)
-                ),
+                is_error=bool(_sdk_attr(result, "is_error", "isError", default=False)),
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return MCPToolResult(
                 tool_name=tool_name,
                 content=None,
@@ -382,9 +380,7 @@ class MCPClient:
         """Extract content from MCP tool result."""
         if not hasattr(result, "content") or not result.content:
             # Fall back to structured content if available
-            structured = _sdk_attr(
-                result, "structured_content", "structuredContent"
-            )
+            structured = _sdk_attr(result, "structured_content", "structuredContent")
             if structured:
                 return structured
             return None

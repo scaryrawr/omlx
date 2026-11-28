@@ -111,7 +111,9 @@ _PAIRS = r"""
 """
 
 # ACTIVATION writes act[out] from the float sums g and u of one (pair, row).
-_GATE_UP_SOURCE = _PAIRS + r"""
+_GATE_UP_SOURCE = (
+    _PAIRS
+    + r"""
     const device uint32_t* gw = wg + (size_t(e) * GROWS + n0) * KW + lane * 2;
     const device uint32_t* uw = wu + (size_t(e) * UROWS + UOFF + n0) * KW + lane * 2;
     const device uint8_t* gs = sg + (size_t(e) * GROWS + n0) * KS + lane_scale;
@@ -164,8 +166,11 @@ _GATE_UP_SOURCE = _PAIRS + r"""
         }
     }
 """
+)
 
-_DOWN_SOURCE = _PAIRS + r"""
+_DOWN_SOURCE = (
+    _PAIRS
+    + r"""
     const device uint32_t* dw = w + (size_t(e) * NOUT + n0) * KW + lane * 2;
     const device uint8_t* ds = s + (size_t(e) * NOUT + n0) * KS + lane_scale;
 
@@ -207,6 +212,7 @@ _DOWN_SOURCE = _PAIRS + r"""
         }
     }
 """
+)
 
 
 @dataclass(frozen=True)

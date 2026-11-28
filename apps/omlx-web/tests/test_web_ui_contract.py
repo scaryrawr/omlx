@@ -83,14 +83,18 @@ class TestLoginPage:
 
 
 class TestProtectedPages:
-    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"])
+    @pytest.mark.parametrize(
+        "path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"]
+    )
     def test_browser_without_session_redirects_to_login(self, web, path):
         client, _ = web
         resp = client.get(path, headers=HTML)
         assert resp.status_code == 302
         assert resp.headers["location"] == "/admin"
 
-    @pytest.mark.parametrize("path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"])
+    @pytest.mark.parametrize(
+        "path", ["/admin/dashboard", "/admin/chat", "/admin/imagine"]
+    )
     def test_json_without_session_is_401(self, web, path):
         client, _ = web
         resp = client.get(path, headers=JSON)

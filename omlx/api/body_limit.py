@@ -76,7 +76,7 @@ class RequestBodySizeLimitMiddleware:
                             f"of {limit} bytes."
                         ),
                         "type": "request_too_large",
-                    }
+                    },
                 },
             )
             await response(scope, receive, send)
@@ -95,8 +95,7 @@ class RequestBodySizeLimitMiddleware:
                 if total > limit:
                     overflowed = True
                     logger.warning(
-                        "Chunked request body on %s %s exceeded limit %d; "
-                        "truncating",
+                        "Chunked request body on %s %s exceeded limit %d; truncating",
                         scope.get("method"),
                         scope.get("path"),
                         limit,

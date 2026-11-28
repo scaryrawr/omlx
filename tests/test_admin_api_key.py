@@ -10,10 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+import omlx.admin.routes as admin_routes
+import omlx.server  # noqa: F401 — ensure server module is imported first (triggers set_admin_getters)
 from omlx.admin.auth import validate_api_key, verify_any_api_key, verify_api_key
 from omlx.model_settings import ModelSettings
-import omlx.server  # noqa: F401 — ensure server module is imported first (triggers set_admin_getters)
-import omlx.admin.routes as admin_routes
 
 
 class TestListModelsSettings:
@@ -60,9 +60,17 @@ class TestListModelsSettings:
         mock_server_state.default_model = None
 
         with (
-            patch.object(admin_routes, "_get_engine_pool", return_value=mock_engine_pool),
-            patch.object(admin_routes, "_get_settings_manager", return_value=mock_settings_manager),
-            patch.object(admin_routes, "_get_server_state", return_value=mock_server_state),
+            patch.object(
+                admin_routes, "_get_engine_pool", return_value=mock_engine_pool
+            ),
+            patch.object(
+                admin_routes,
+                "_get_settings_manager",
+                return_value=mock_settings_manager,
+            ),
+            patch.object(
+                admin_routes, "_get_server_state", return_value=mock_server_state
+            ),
         ):
             result = asyncio.run(admin_routes.list_models(is_admin=True))
 
@@ -117,9 +125,15 @@ class TestListModelsSettings:
             patch.object(admin_routes, "_get_settings_manager", return_value=manager),
             patch.object(admin_routes, "_get_server_state", return_value=state),
             patch.object(admin_routes, "_get_global_settings", return_value=None),
-            patch.object(admin_routes, "_dflash_compat_for_model", return_value=(False, "")),
-            patch.object(admin_routes, "_mtp_compat_for_model", return_value=(False, "")),
-            patch.object(admin_routes, "_paroquant_compat_for_model", return_value=(False, "")),
+            patch.object(
+                admin_routes, "_dflash_compat_for_model", return_value=(False, "")
+            ),
+            patch.object(
+                admin_routes, "_mtp_compat_for_model", return_value=(False, "")
+            ),
+            patch.object(
+                admin_routes, "_paroquant_compat_for_model", return_value=(False, "")
+            ),
             patch(
                 "omlx.patches.mlx_vlm_qwen4_exp_compat.residency."
                 "qwen4_exp_residency_estimate",
@@ -178,8 +192,7 @@ class TestListModelsSettings:
                 admin_routes, "_paroquant_compat_for_model", return_value=(False, "")
             ),
             patch(
-                "omlx.patches.deepseek_v41.residency."
-                "deepseek_v41_residency_estimate",
+                "omlx.patches.deepseek_v41.residency.deepseek_v41_residency_estimate",
                 return_value=estimate,
             ),
         ):
@@ -431,7 +444,12 @@ class TestVerifyAnyApiKey:
 
     def test_matches_first_sub_key(self):
         from omlx.settings import SubKeyEntry
-        sub_keys = [SubKeyEntry(key="sub1"), SubKeyEntry(key="sub2"), SubKeyEntry(key="sub3")]
+
+        sub_keys = [
+            SubKeyEntry(key="sub1"),
+            SubKeyEntry(key="sub2"),
+            SubKeyEntry(key="sub3"),
+        ]
         assert verify_any_api_key("sub1", "main-key", sub_keys) is True
 
 
@@ -488,7 +506,9 @@ class TestSubKeyCRUD:
         mock_settings.auth.sub_keys = []
         original = _patch_getter(mock_settings)
         try:
-            request = admin_routes.CreateSubKeyRequest(key="new-sub-key", name="My Sub Key")
+            request = admin_routes.CreateSubKeyRequest(
+                key="new-sub-key", name="My Sub Key"
+            )
             result = asyncio.run(admin_routes.create_sub_key(request, is_admin=True))
             assert result["success"] is True
             assert result["sub_key"]["key"] == "new-sub-key"
@@ -517,6 +537,7 @@ class TestSubKeyCRUD:
     def test_create_sub_key_duplicate_existing(self):
         """Creating a sub key that already exists should fail."""
         from fastapi import HTTPException
+
         from omlx.settings import SubKeyEntry
 
         mock_settings = _mock_global_settings(api_key="main-key")
@@ -588,6 +609,7 @@ class TestSubKeyCRUD:
         import json
 
         from fastapi import HTTPException
+
         from omlx.settings import SubKeyEntry
 
         mock_settings = _mock_global_settings(api_key="main-key")
@@ -608,7 +630,7 @@ class TestSubKeyCRUD:
 
         mock_settings = _mock_global_settings(api_key="main-key")
         mock_settings.auth.sub_keys = []
-        mock_settings.save.side_effect = IOError("disk full")
+        mock_settings.save.side_effect = OSError("disk full")
         original = _patch_getter(mock_settings)
         try:
             request = admin_routes.CreateSubKeyRequest(key="new-sub-key")
@@ -852,11 +874,19 @@ class TestStatsSecurity:
         }
 
         with (
-            patch.object(admin_routes, "_get_global_settings", return_value=mock_settings),
+            patch.object(
+                admin_routes, "_get_global_settings", return_value=mock_settings
+            ),
             patch("omlx.server_metrics.get_server_metrics", return_value=mock_metrics),
             patch.object(admin_routes, "_get_engine_info", return_value={}),
-            patch.object(admin_routes, "_build_active_models_data", return_value={"models": []}),
-            patch.object(admin_routes, "_build_runtime_cache_observability", return_value={"models": []}),
+            patch.object(
+                admin_routes, "_build_active_models_data", return_value={"models": []}
+            ),
+            patch.object(
+                admin_routes,
+                "_build_runtime_cache_observability",
+                return_value={"models": []},
+            ),
         ):
             result = asyncio.run(admin_routes.get_server_stats(is_admin=True))
 
@@ -866,7 +896,9 @@ class TestStatsSecurity:
     def test_reveal_api_key_returns_stored_secret(self):
         mock_settings = MagicMock()
         mock_settings.auth.api_key = "super-secret-key"
-        with patch.object(admin_routes, "_get_global_settings", return_value=mock_settings):
+        with patch.object(
+            admin_routes, "_get_global_settings", return_value=mock_settings
+        ):
             result = asyncio.run(admin_routes.reveal_api_key(is_admin=True))
         assert result == {"api_key": "super-secret-key"}
 
@@ -879,7 +911,9 @@ class TestStatsSecurity:
                 "_build_active_models_data",
                 return_value=active_models,
             ),
-            patch.object(admin_routes, "_build_runtime_cache_observability") as build_runtime_cache,
+            patch.object(
+                admin_routes, "_build_runtime_cache_observability"
+            ) as build_runtime_cache,
         ):
             result = asyncio.run(admin_routes.get_server_activity(is_admin=True))
 
@@ -927,12 +961,20 @@ class TestStatsSecurity:
         }
 
         with (
-            patch.object(admin_routes, "_get_global_settings", return_value=mock_settings),
+            patch.object(
+                admin_routes, "_get_global_settings", return_value=mock_settings
+            ),
             patch("omlx.server_metrics.get_server_metrics", return_value=mock_metrics),
             patch("omlx.server.resolve_model_id", return_value="real-id"),
             patch.object(admin_routes, "_get_engine_info", return_value={}),
-            patch.object(admin_routes, "_build_active_models_data", return_value={"models": []}),
-            patch.object(admin_routes, "_build_runtime_cache_observability", return_value={"models": []}),
+            patch.object(
+                admin_routes, "_build_active_models_data", return_value={"models": []}
+            ),
+            patch.object(
+                admin_routes,
+                "_build_runtime_cache_observability",
+                return_value={"models": []},
+            ),
         ):
             asyncio.run(admin_routes.get_server_stats(model="my-alias", is_admin=True))
 
@@ -958,12 +1000,20 @@ class TestStatsSecurity:
         }
 
         with (
-            patch.object(admin_routes, "_get_global_settings", return_value=mock_settings),
+            patch.object(
+                admin_routes, "_get_global_settings", return_value=mock_settings
+            ),
             patch("omlx.server_metrics.get_server_metrics", return_value=mock_metrics),
             patch("omlx.server.resolve_model_id") as mock_resolve,
             patch.object(admin_routes, "_get_engine_info", return_value={}),
-            patch.object(admin_routes, "_build_active_models_data", return_value={"models": []}),
-            patch.object(admin_routes, "_build_runtime_cache_observability", return_value={"models": []}),
+            patch.object(
+                admin_routes, "_build_active_models_data", return_value={"models": []}
+            ),
+            patch.object(
+                admin_routes,
+                "_build_runtime_cache_observability",
+                return_value={"models": []},
+            ),
         ):
             asyncio.run(admin_routes.get_server_stats(is_admin=True))
 
@@ -1039,16 +1089,12 @@ class TestRuntimeCacheObservability:
 
         entry_a = SimpleNamespace(
             engine=SimpleNamespace(
-                _engine=SimpleNamespace(
-                    engine=SimpleNamespace(scheduler=scheduler_a)
-                )
+                _engine=SimpleNamespace(engine=SimpleNamespace(scheduler=scheduler_a))
             )
         )
         entry_b = SimpleNamespace(
             engine=SimpleNamespace(
-                _engine=SimpleNamespace(
-                    engine=SimpleNamespace(scheduler=scheduler_b)
-                )
+                _engine=SimpleNamespace(engine=SimpleNamespace(scheduler=scheduler_b))
             )
         )
 
@@ -1184,9 +1230,7 @@ class TestRuntimeCacheObservability:
 
         bad_entry = SimpleNamespace(
             engine=SimpleNamespace(
-                _engine=SimpleNamespace(
-                    engine=SimpleNamespace(scheduler=bad_scheduler)
-                )
+                _engine=SimpleNamespace(engine=SimpleNamespace(scheduler=bad_scheduler))
             )
         )
         good_entry = SimpleNamespace(
@@ -1244,9 +1288,7 @@ class TestRuntimeCacheObservability:
 
         entry = SimpleNamespace(
             engine=SimpleNamespace(
-                _engine=SimpleNamespace(
-                    engine=SimpleNamespace(scheduler=scheduler)
-                )
+                _engine=SimpleNamespace(engine=SimpleNamespace(scheduler=scheduler))
             )
         )
 

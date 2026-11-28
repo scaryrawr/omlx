@@ -4,49 +4,49 @@
 import pytest
 
 from omlx.exceptions import (
-    # Base exception
-    OMLXError,
-    # Cache exceptions
-    CacheError,
-    CacheCorruptionError,
-    CacheMissError,
-    CacheEvictionError,
-    CacheStorageError,
-    # Scheduler exceptions
-    SchedulerError,
-    RequestError,
-    RequestNotFoundError,
-    RequestAbortedError,
-    BatchingError,
-    # Model exceptions
-    ModelError,
-    ModelLoadError,
-    ModelInferenceError,
-    TokenizerError,
+    CACHE_CORRUPTION_PATTERNS,
     # API exceptions
     APIError,
-    InvalidRequestError,
-    RateLimitError,
     AuthenticationError,
+    BatchingError,
+    CacheCorruptionError,
+    # Cache exceptions
+    CacheError,
+    CacheEvictionError,
+    CacheMissError,
+    CacheStorageError,
     # Configuration exceptions
     ConfigurationError,
+    # Engine pool exceptions
+    EnginePoolError,
+    InsufficientMemoryError,
+    InvalidRequestError,
+    MCPConnectionError,
+    # MCP exceptions
+    MCPError,
+    MCPToolExecutionError,
+    # Model exceptions
+    ModelError,
+    ModelInferenceError,
+    ModelLoadError,
+    ModelLoadingError,
+    ModelNotFoundError,
+    ModelTooLargeError,
+    # Base exception
+    OMLXError,
     # Memory exceptions
     OMLXMemoryError,
     OutOfMemoryError,
-    # Engine pool exceptions
-    EnginePoolError,
-    ModelNotFoundError,
-    ModelTooLargeError,
-    InsufficientMemoryError,
+    RateLimitError,
+    RequestAbortedError,
+    RequestError,
+    RequestNotFoundError,
+    # Scheduler exceptions
+    SchedulerError,
+    TokenizerError,
     describe_ceiling_binding,
-    ModelLoadingError,
-    # MCP exceptions
-    MCPError,
-    MCPConnectionError,
-    MCPToolExecutionError,
     # Helper function
     is_cache_corruption_error,
-    CACHE_CORRUPTION_PATTERNS,
 )
 
 
@@ -338,7 +338,9 @@ class TestIsCacheCorruptionError:
                 id="none-attribute",
             ),
             pytest.param(
-                ValueError("Shapes (1,8,256,128) and (1,8,512,128) are not broadcastable"),
+                ValueError(
+                    "Shapes (1,8,256,128) and (1,8,512,128) are not broadcastable"
+                ),
                 id="not-broadcastable",
             ),
             pytest.param(
@@ -443,8 +445,12 @@ class TestExceptionHierarchy:
         ]
 
         for exc in exceptions_to_test:
-            assert isinstance(exc, OMLXError), f"{type(exc).__name__} should inherit from OMLXError"
-            assert isinstance(exc, Exception), f"{type(exc).__name__} should inherit from Exception"
+            assert isinstance(exc, OMLXError), (
+                f"{type(exc).__name__} should inherit from OMLXError"
+            )
+            assert isinstance(exc, Exception), (
+                f"{type(exc).__name__} should inherit from Exception"
+            )
 
     def test_engine_pool_special_exceptions(self):
         """Test engine pool exceptions that have special constructors."""

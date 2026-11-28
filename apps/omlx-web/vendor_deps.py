@@ -9,7 +9,6 @@ Usage:
     python vendor_deps.py
 """
 
-import re
 import ssl
 import urllib.request
 from pathlib import Path
@@ -20,7 +19,9 @@ STATIC = Path(__file__).parent / "omlx_web" / "static"
 SSL_CTX = ssl.create_default_context()
 
 
-def _download(url: str, dest: Path, description: str = "", optional: bool = False) -> bool:
+def _download(
+    url: str, dest: Path, description: str = "", optional: bool = False
+) -> bool:
     """Download a file from URL to destination path.
 
     Args:
@@ -184,8 +185,18 @@ def download_inter_fonts() -> None:
 # =========================================================================
 CJK_FONTS = {
     # (font_family, fontsource_id, subset, dir_name, file_prefix)
-    "noto-sans-sc": ("Noto Sans SC", "noto-sans-sc", "chinese-simplified", "NotoSansSC"),
-    "noto-sans-tc": ("Noto Sans TC", "noto-sans-tc", "chinese-traditional", "NotoSansTC"),
+    "noto-sans-sc": (
+        "Noto Sans SC",
+        "noto-sans-sc",
+        "chinese-simplified",
+        "NotoSansSC",
+    ),
+    "noto-sans-tc": (
+        "Noto Sans TC",
+        "noto-sans-tc",
+        "chinese-traditional",
+        "NotoSansTC",
+    ),
     "noto-sans-kr": ("Noto Sans KR", "noto-sans-kr", "korean", "NotoSansKR"),
     "noto-sans-jp": ("Noto Sans JP", "noto-sans-jp", "japanese", "NotoSansJP"),
 }
@@ -202,7 +213,9 @@ def download_cjk_fonts() -> None:
 
         for weight, weight_name in CJK_WEIGHTS.items():
             filename = f"{prefix}-{weight_name}.woff2"
-            url = f"{CJK_FONT_BASE}/{fontsource_id}@latest/{subset}-{weight}-normal.woff2"
+            url = (
+                f"{CJK_FONT_BASE}/{fontsource_id}@latest/{subset}-{weight}-normal.woff2"
+            )
             _download(url, font_dir / filename)
 
         # Generate @font-face CSS

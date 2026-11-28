@@ -5,7 +5,7 @@ KERNEL_BUILD_DEPS = $(shell $(PYTHON) -c "import tomllib; \
 	reqs = tomllib.load(open('pyproject.toml', 'rb'))['build-system']['requires']; \
 	print(' '.join(repr(r) for r in reqs if r.startswith(('setuptools', 'cmake', 'nanobind'))))")
 
-.PHONY: install install-no-kernels mcp dev dev-no-kernels kernels clean-kernels web app
+.PHONY: install install-no-kernels mcp dev dev-no-kernels kernels clean-kernels web app lint format
 
 # Editable install of the server and the web UI, then the native custom kernels.
 install: install-no-kernels
@@ -48,3 +48,10 @@ web:
 # Build a runnable macOS app bundle with freshly compiled native custom kernels.
 app:
 	apps/omlx-mac/Scripts/build.sh release --with-custom-kernel
+
+lint:
+	uv run ruff check .
+	uv run ruff format --check .
+
+format:
+	uv run ruff format .

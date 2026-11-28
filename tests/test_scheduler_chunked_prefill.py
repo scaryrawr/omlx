@@ -44,7 +44,7 @@ from omlx.scheduler import (
     _bind_text_prefill_rope_delta,
     _default_generation_stream,
     _PrefillAbortedError,
-    _PrefillEvictionNeeded,
+    _PrefillEvictionNeededError,
     _PrefillState,
 )
 
@@ -729,11 +729,13 @@ class TestAdvanceChunkedPrefills:
         sched.prefilling.append(req)
         sched._prefill_states[req.request_id] = state
 
-        with patch.object(sched, "_step_prefill_chunk", return_value=True):
-            with patch.object(sched, "_emit_final_boundary_if_needed"):
-                scheduled = []
-                rejected = []
-                sched._advance_chunked_prefills(scheduled, rejected)
+        with (
+            patch.object(sched, "_step_prefill_chunk", return_value=True),
+            patch.object(sched, "_emit_final_boundary_if_needed"),
+        ):
+            scheduled = []
+            rejected = []
+            sched._advance_chunked_prefills(scheduled, rejected)
 
         # Moved to running, removed from prefilling
         assert req not in sched.prefilling
@@ -909,11 +911,13 @@ class TestScheduleWaitingChunkedFork:
         # step_size=4, prompt=3 tokens → not long enough to trigger chunked fork
         sched, req = self._setup(n_tokens=3, step_size=4)
 
-        with patch.object(
-            sched, "_do_external_prefill", return_value=([], [0])
-        ) as mock_ep:
-            with patch.object(sched, "_begin_prefill") as mock_bp:
-                sched._schedule_waiting()
+        with (
+            patch.object(
+                sched, "_do_external_prefill", return_value=([], [0])
+            ) as mock_ep,
+            patch.object(sched, "_begin_prefill") as mock_bp,
+        ):
+            sched._schedule_waiting()
 
         mock_ep.assert_called_once()
         mock_bp.assert_not_called()
@@ -923,11 +927,13 @@ class TestScheduleWaitingChunkedFork:
         # step_size=4, 10 tokens → triggers chunked path
         sched, req = self._setup(n_tokens=10, step_size=4)
 
-        with patch.object(
-            sched, "_begin_prefill", return_value=_make_prefill_state(sched, req)
-        ) as mock_bp:
-            with patch.object(sched, "_step_prefill_chunk", return_value=False):
-                sched._schedule_waiting()
+        with (
+            patch.object(
+                sched, "_begin_prefill", return_value=_make_prefill_state(sched, req)
+            ) as mock_bp,
+            patch.object(sched, "_step_prefill_chunk", return_value=False),
+        ):
+            sched._schedule_waiting()
 
         mock_bp.assert_called_once()
         assert req.request_id in sched._prefill_states
@@ -964,11 +970,13 @@ class TestScheduleWaitingChunkedFork:
         sched, req = self._setup(n_tokens=10, step_size=4)
         fake_state = _make_prefill_state(sched, req, n_remaining=1)
 
-        with patch.object(sched, "_begin_prefill", return_value=fake_state):
-            with patch.object(sched, "_step_prefill_chunk", return_value=True):
-                with patch.object(sched, "_emit_final_boundary_if_needed"):
-                    with patch("omlx.scheduler._sync_and_clear_cache"):
-                        sched._schedule_waiting()
+        with (
+            patch.object(sched, "_begin_prefill", return_value=fake_state),
+            patch.object(sched, "_step_prefill_chunk", return_value=True),
+            patch.object(sched, "_emit_final_boundary_if_needed"),
+            patch("omlx.scheduler._sync_and_clear_cache"),
+        ):
+            sched._schedule_waiting()
 
         assert req.request_id not in sched._prefill_states
         assert req not in sched.prefilling
@@ -978,11 +986,13 @@ class TestScheduleWaitingChunkedFork:
         """chunked_prefill=False always uses the full-prefill path."""
         sched, req = self._setup(n_tokens=100, chunked=False, step_size=4)
 
-        with patch.object(
-            sched, "_do_external_prefill", return_value=([], [0])
-        ) as mock_ep:
-            with patch.object(sched, "_begin_prefill") as mock_bp:
-                sched._schedule_waiting()
+        with (
+            patch.object(
+                sched, "_do_external_prefill", return_value=([], [0])
+            ) as mock_ep,
+            patch.object(sched, "_begin_prefill") as mock_bp,
+        ):
+            sched._schedule_waiting()
 
         mock_ep.assert_called_once()
         mock_bp.assert_not_called()
@@ -1090,19 +1100,21 @@ class TestScheduleWaitingChunkedFork:
         assert tracker.get_model_progress("test"), "tracker entry not set up"
 
         try:
-            with patch.object(
-                sched,
-                "_begin_prefill",
-                return_value=_make_prefill_state(sched, req),
-            ):
-                with patch.object(
+            with (
+                patch.object(
+                    sched,
+                    "_begin_prefill",
+                    return_value=_make_prefill_state(sched, req),
+                ),
+                patch.object(
                     sched,
                     "_step_prefill_chunk",
                     side_effect=RuntimeError(
                         "Memory limit exceeded during chunked prefill"
                     ),
-                ):
-                    scheduled, rejected = sched._schedule_waiting()
+                ),
+            ):
+                scheduled, rejected = sched._schedule_waiting()
 
             assert rid not in sched.requests
             assert rid not in sched._prefill_states
@@ -1224,17 +1236,19 @@ class TestPrefillRejectionReleasesPagedCache:
         sched.add_request(req)
         sched.block_aware_cache.reset_mock()
 
-        with patch.object(
-            sched,
-            "_begin_prefill",
-            return_value=_make_prefill_state(sched, req),
-        ):
-            with patch.object(
+        with (
+            patch.object(
+                sched,
+                "_begin_prefill",
+                return_value=_make_prefill_state(sched, req),
+            ),
+            patch.object(
                 sched,
                 "_step_prefill_chunk",
                 side_effect=RuntimeError("kernel panic"),
-            ):
-                sched._schedule_waiting()
+            ),
+        ):
+            sched._schedule_waiting()
 
         sched.block_aware_cache.release_cache.assert_called_once_with("oom-first-chunk")
 
@@ -1278,7 +1292,7 @@ class TestPrefillRejectionReleasesPagedCache:
 
 class TestFirstChunkEvictionPreservesPrefix:
     def test_first_chunk_eviction_pause_keeps_reconstructed_prefix(self):
-        """_PrefillEvictionNeeded raised before the first chunk's forward
+        """_PrefillEvictionNeededError raised before the first chunk's forward
         pass must not discard a reconstructed SSD prefix. The eviction pause
         keeps prompt_cache / block_table / cached_tokens / remaining_tokens
         attached, so when no idle model can be evicted the retry prefills
@@ -1312,17 +1326,19 @@ class TestFirstChunkEvictionPreservesPrefix:
             requested_tokens=4,
             reason="adaptive_prefill_throttle",
         )
-        with patch.object(
-            sched,
-            "_begin_prefill",
-            return_value=_make_prefill_state(sched, req),
-        ):
-            with patch.object(
+        with (
+            patch.object(
+                sched,
+                "_begin_prefill",
+                return_value=_make_prefill_state(sched, req),
+            ),
+            patch.object(
                 sched,
                 "_step_prefill_chunk",
-                side_effect=_PrefillEvictionNeeded(eviction),
-            ):
-                scheduled, rejected = sched._schedule_waiting()
+                side_effect=_PrefillEvictionNeededError(eviction),
+            ),
+        ):
+            scheduled, rejected = sched._schedule_waiting()
 
         assert scheduled == []
         assert rejected == []
@@ -1578,7 +1594,9 @@ def test_step_prefill_chunk_announces_the_next_chunk_to_the_model():
     scheduler = Scheduler(
         model=model,
         tokenizer=tokenizer,
-        config=SchedulerConfig(prefill_step_size=4, chunked_prefill=True, paged_cache_block_size=0),
+        config=SchedulerConfig(
+            prefill_step_size=4, chunked_prefill=True, paged_cache_block_size=0
+        ),
     )
     request = _make_request("lookahead", n_tokens=11)
     state = _make_prefill_state(scheduler, request, n_remaining=10)
@@ -1587,7 +1605,11 @@ def test_step_prefill_chunk_announces_the_next_chunk_to_the_model():
         while not scheduler._step_prefill_chunk(state):
             pass
     assert model.chunk_lengths == [4, 4, 2]
-    assert model.seen == [([10, 11, 12, 13], []), ([14, 15, 16, 17], [10, 11, 12, 13]), ([18, 19], [14, 15, 16, 17])]
+    assert model.seen == [
+        ([10, 11, 12, 13], []),
+        ([14, 15, 16, 17], [10, 11, 12, 13]),
+        ([18, 19], [14, 15, 16, 17]),
+    ]
 
 
 def test_external_prefill_announces_the_next_chunk_to_the_model():
@@ -1610,13 +1632,19 @@ def test_external_prefill_announces_the_next_chunk_to_the_model():
         tokenizer=tokenizer,
         config=SchedulerConfig(prefill_step_size=4, paged_cache_block_size=0),
     )
-    tokens = list(range(10, 21))  # 10 prefill tokens, the last token goes to the batch generator
+    tokens = list(
+        range(10, 21)
+    )  # 10 prefill tokens, the last token goes to the batch generator
     request = _make_request("lookahead-external", n_tokens=11)
     cache = [types.SimpleNamespace(state=mx.array([0]))]
     with patch("omlx.scheduler._sync_and_clear_cache"):
         scheduler._do_external_prefill(request, tokens, cache)
     assert model.chunk_lengths == [4, 4, 2]
-    assert model.seen == [([10, 11, 12, 13], []), ([14, 15, 16, 17], [10, 11, 12, 13]), ([18, 19], [14, 15, 16, 17])]
+    assert model.seen == [
+        ([10, 11, 12, 13], []),
+        ([14, 15, 16, 17], [10, 11, 12, 13]),
+        ([18, 19], [14, 15, 16, 17]),
+    ]
 
 
 def test_external_prefill_announces_engram_next_chunk_to_the_model():
@@ -1630,9 +1658,7 @@ def test_external_prefill_announces_engram_next_chunk_to_the_model():
             self.seen = []
 
         def prefetch_engram(self, next_ids, current_ids, cache=None):
-            self.seen.append(
-                (next_ids.tolist()[0], current_ids.tolist()[0], cache)
-            )
+            self.seen.append((next_ids.tolist()[0], current_ids.tolist()[0], cache))
 
     model = EngramLookaheadModel()
     tokenizer = MagicMock()
@@ -1666,9 +1692,7 @@ def test_step_prefill_chunk_announces_engram_next_chunk_to_the_model():
             self.seen = []
 
         def prefetch_engram(self, next_ids, current_ids, cache=None):
-            self.seen.append(
-                (next_ids.tolist()[0], current_ids.tolist()[0], cache)
-            )
+            self.seen.append((next_ids.tolist()[0], current_ids.tolist()[0], cache))
 
     model = EngramLookaheadModel()
     tokenizer = MagicMock()
@@ -2684,7 +2708,7 @@ def test_a_guard_pause_before_the_generation_prompt_keeps_the_pack(monkeypatch):
 
     def plan_with_guard(self, state, **kwargs):
         if state.tokens_processed == 5 and kwargs.get("guarded", True):
-            raise _PrefillEvictionNeeded(eviction)
+            raise _PrefillEvictionNeededError(eviction)
         return plan(self, state, **kwargs)
 
     monkeypatch.setattr(Scheduler, "_plan_prefill_chunk", plan_with_guard)

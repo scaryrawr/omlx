@@ -500,7 +500,9 @@ class DiscoveredModel:
     preserve_thinking_default: bool | None = (
         None  # True when template supports preserve_thinking (Qwen 3.6+)
     )
-    reasoning_efforts: list[str] | None = None  # Template effort levels (None = no effort)
+    reasoning_efforts: list[str] | None = (
+        None  # Template effort levels (None = no effort)
+    )
     model_context_length: int | None = (
         None  # Declared context length from config.json (None if unknown)
     )
@@ -670,17 +672,23 @@ def _infer_qwen_image_metadata(model_path: Path) -> dict[str, object] | None:
     try:
         with index_path.open() as file:
             index = json.load(file)
-        if not isinstance(index, dict) or index.get("_class_name") != "QwenImage21Pipeline":
+        if (
+            not isinstance(index, dict)
+            or index.get("_class_name") != "QwenImage21Pipeline"
+        ):
             return None
         with (model_path / "transformer" / "config.json").open() as file:
             transformer = json.load(file)
         if (
             not isinstance(transformer, dict)
             or transformer.get("_class_name") != "QwenImage21Transformer2DModel"
-            or index.get("transformer") != ["diffusers", "QwenImage21Transformer2DModel"]
+            or index.get("transformer")
+            != ["diffusers", "QwenImage21Transformer2DModel"]
             or index.get("vae") != ["diffusers", "AutoencoderKLQwenImage21"]
         ):
-            logger.warning("Invalid Qwen Image 2.1 component identity at %s", model_path)
+            logger.warning(
+                "Invalid Qwen Image 2.1 component identity at %s", model_path
+            )
             return None
         sigmas = index.get("sample_sigmas")
         if sigmas is not None and (
@@ -702,7 +710,16 @@ def _infer_qwen_image_metadata(model_path: Path) -> dict[str, object] | None:
         return None
 
     # Distinguish the official Turbo recipe without relying on a folder name.
-    turbo_sigmas = [1, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
+    turbo_sigmas = [
+        1,
+        0.978453,
+        0.95418,
+        0.926626,
+        0.89508,
+        0.845148,
+        0.704534,
+        0.414568,
+    ]
     metadata: dict[str, object] = {
         "base_model": (
             "qwen-image-2-1-turbo" if sigmas == turbo_sigmas else "qwen-image-2-1"
@@ -810,7 +827,9 @@ def _load_image_manifest(model_path: Path) -> ImageModelManifest | None:
     metadata["manifest_path"] = str(manifest_path)
     spec = get_image_model_spec(base_model)
     if spec is not None and spec.base_model.startswith("qwen-image-2-1"):
-        local_path = Path(model_path_value).expanduser() if model_path_value else model_path
+        local_path = (
+            Path(model_path_value).expanduser() if model_path_value else model_path
+        )
         if model_path_value and not local_path.is_absolute():
             local_path = model_path / local_path
         qwen_metadata = _infer_qwen_image_metadata(local_path)
@@ -1081,6 +1100,7 @@ def _has_vision_subconfig(config: dict) -> bool:
         or bool(config.get("mm_vision_tower"))
     )
 
+
 def _architecture_indicates_causal_lm(architectures: list[str]) -> bool:
     """True when ``architectures`` describe a text causal LM (not mlx-audio STS).
 
@@ -1258,9 +1278,7 @@ def detect_model_type(model_path: Path) -> ModelType:
             "lfm3_audio",
             "qwen3_omni_moe",
         }:
-            logger.info(
-                f"{model_type} detected as VLM (mlx-vlm native model)"
-            )
+            logger.info(f"{model_type} detected as VLM (mlx-vlm native model)")
             return "vlm"
         if _has_vision_subconfig(config):
             return "vlm"
@@ -1709,10 +1727,21 @@ _VISION_WEIGHT_PREFIXES = (
 )
 
 _SAFETENSORS_DTYPE_BYTES = {
-    "F64": 8, "I64": 8, "U64": 8,
-    "F32": 4, "I32": 4, "U32": 4,
-    "F16": 2, "BF16": 2, "I16": 2, "U16": 2,
-    "F8_E4M3": 1, "F8_E5M2": 1, "I8": 1, "U8": 1, "BOOL": 1,
+    "F64": 8,
+    "I64": 8,
+    "U64": 8,
+    "F32": 4,
+    "I32": 4,
+    "U32": 4,
+    "F16": 2,
+    "BF16": 2,
+    "I16": 2,
+    "U16": 2,
+    "F8_E4M3": 1,
+    "F8_E5M2": 1,
+    "I8": 1,
+    "U8": 1,
+    "BOOL": 1,
 }
 
 
@@ -1735,9 +1764,7 @@ def _vision_weight_bytes(model_path: Path) -> int:
         except (OSError, ValueError, struct.error):
             continue
         for name, meta in header.items():
-            if name == "__metadata__" or not name.startswith(
-                _VISION_WEIGHT_PREFIXES
-            ):
+            if name == "__metadata__" or not name.startswith(_VISION_WEIGHT_PREFIXES):
                 continue
             try:
                 dtype_size = _SAFETENSORS_DTYPE_BYTES.get(meta["dtype"], 0)
@@ -1948,7 +1975,7 @@ def model_directory_access_error(path: Path) -> str | None:
             return f"Model directory is not a directory: {path}"
         next(path.iterdir(), None)
     except OSError as e:
-        return f"Model directory is not readable: {path} " f"({type(e).__name__}: {e})"
+        return f"Model directory is not readable: {path} ({type(e).__name__}: {e})"
     return None
 
 
@@ -1963,7 +1990,7 @@ def model_directory_write_error(path: Path, *, create: bool = False) -> str | No
         if not path.is_dir():
             return f"Model directory is not a directory: {path}"
     except OSError as e:
-        return f"Model directory is not writable: {path} " f"({type(e).__name__}: {e})"
+        return f"Model directory is not writable: {path} ({type(e).__name__}: {e})"
 
     access_error = model_directory_access_error(path)
     if access_error is not None:
@@ -1978,7 +2005,7 @@ def model_directory_write_error(path: Path, *, create: bool = False) -> str | No
             f.write(b"")
             f.flush()
     except OSError as e:
-        return f"Model directory is not writable: {path} " f"({type(e).__name__}: {e})"
+        return f"Model directory is not writable: {path} ({type(e).__name__}: {e})"
 
     return None
 
@@ -2102,6 +2129,7 @@ def _safetensors_has_mlx_metadata(path: Path) -> bool:
 
 
 _MLX_NAME_RE = re.compile(r"(^|[-_/])mlx($|[-_/])", re.IGNORECASE)
+
 
 # Speculative-decoding helper checkpoints (e.g. z-lab/Qwen3.6-27B-DFlash) are
 # MLX-loadable drafts even though their safetensors are saved in PyTorch ("pt")
@@ -2273,7 +2301,10 @@ def _detect_audio_input(
     if family == "gemma4_unified" and config.get("audio_config", {}) is None:
         return False
     prefixes: tuple[str, ...] = (
-        "audio_tower.", "embed_audio.", "audio_encoder.", "thinker.audio_tower."
+        "audio_tower.",
+        "embed_audio.",
+        "audio_encoder.",
+        "thinker.audio_tower.",
     )
     if family in ("inkling", "inkling_mm_model"):
         prefixes += ("audio.",)
@@ -2301,7 +2332,9 @@ def _detect_audio_input(
                 and sidecar.suffix == ".safetensors"
             )
         except (OSError, RuntimeError) as exc:
-            logger.warning("Cannot resolve audio input sidecar in %s: %s", model_dir, exc)
+            logger.warning(
+                "Cannot resolve audio input sidecar in %s: %s", model_dir, exc
+            )
             return None
         if not valid:
             logger.warning(
@@ -2319,7 +2352,7 @@ def _detect_audio_input(
             with safetensors.safe_open(str(path), framework="np") as weights:
                 if any(
                     key.removeprefix("model.").startswith(prefixes)
-                    for key in weights.keys()  # noqa: SIM118
+                    for key in weights.keys()
                 ):
                     return True
         except (OSError, safetensors.SafetensorError) as exc:
@@ -2404,7 +2437,9 @@ def _register_model(
             )
             template_text = _read_chat_template_text(payload_dir)
             thinking_default = detect_thinking_default(payload_dir, template_text)
-            preserve_thinking_default = detect_preserve_thinking(payload_dir, template_text)
+            preserve_thinking_default = detect_preserve_thinking(
+                payload_dir, template_text
+            )
             reasoning_efforts = detect_reasoning_effort(payload_dir, template_text)
             model_context_length = _read_model_context_length(payload_dir)
             capabilities = []
@@ -2490,9 +2525,7 @@ def _register_model(
 
         size_gb = estimated_size / (1024**3)
         text_only_note = (
-            f", text-only: {text_only_size / (1024 ** 3):.2f}GB"
-            if text_only_size
-            else ""
+            f", text-only: {text_only_size / (1024**3):.2f}GB" if text_only_size else ""
         )
         logger.info(
             f"Discovered model: {model_id} "

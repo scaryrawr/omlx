@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: N803, N806
 """Tests for the Qwen3.5/3.6 GDN prefill Metal patch."""
 
 from __future__ import annotations
@@ -153,9 +152,7 @@ def test_prefill_patch_passthrough_for_decode_mask_and_unsupported_shape(monkeyp
 
     bad_v = _Tensor((1, 128, 48, 96 + 16))
     assert (
-        gd.gated_delta_update(
-            q, q, bad_v, _Tensor((1, 128, 48)), None, None, None
-        )[0]
+        gd.gated_delta_update(q, q, bad_v, _Tensor((1, 128, 48)), None, None, None)[0]
         == "original"
     )
 
@@ -247,7 +244,9 @@ def test_blocked_seq_matches_stock_kernel_small():
     q = (mx.random.normal((B, T, Hk, Dk), key=keys[0]) * Dk**-1.0).astype(mx.bfloat16)
     k = (mx.random.normal((B, T, Hk, Dk), key=keys[1]) * Dk**-0.5).astype(mx.bfloat16)
     v = mx.random.normal((B, T, Hv, Dv), key=keys[2]).astype(mx.bfloat16)
-    g = mx.exp(-mx.random.uniform(0.01, 3.0, (B, T, Hv), key=keys[3])).astype(mx.float32)
+    g = mx.exp(-mx.random.uniform(0.01, 3.0, (B, T, Hv), key=keys[3])).astype(
+        mx.float32
+    )
     beta = mx.sigmoid(mx.random.normal((B, T, Hv), key=keys[4])).astype(mx.float32)
     state = (mx.random.normal((B, Hv, Dv, Dk), key=keys[5]) * 0.1).astype(mx.float32)
     mx.eval(q, k, v, g, beta, state)
@@ -257,9 +256,7 @@ def test_blocked_seq_matches_stock_kernel_small():
     mx.eval(y_ref, s_ref, y_fast, s_fast)
 
     y_err = mx.max(mx.abs(y_fast.astype(mx.float32) - y_ref.astype(mx.float32))).item()
-    s_rel = (
-        mx.max(mx.abs(s_fast - s_ref)) / (mx.max(mx.abs(s_ref)) + 1e-9)
-    ).item()
+    s_rel = (mx.max(mx.abs(s_fast - s_ref)) / (mx.max(mx.abs(s_ref)) + 1e-9)).item()
     assert y_err < 2e-2
     assert s_rel < 1e-5
 
@@ -274,22 +271,14 @@ def test_blocked_seq_float32_default_fits_threadgroup_memory():
     # 40,192 bytes of threadgroup memory and cannot load on a 32 KiB device.
     B, T, Hk, Hv, Dk, Dv = 1, 64, 16, 32, 128, 128
     keys = [mx.random.key(i) for i in range(6)]
-    q = (mx.random.normal((B, T, Hk, Dk), key=keys[0]) * Dk**-1.0).astype(
-        mx.float32
-    )
-    k = (mx.random.normal((B, T, Hk, Dk), key=keys[1]) * Dk**-0.5).astype(
-        mx.float32
-    )
+    q = (mx.random.normal((B, T, Hk, Dk), key=keys[0]) * Dk**-1.0).astype(mx.float32)
+    k = (mx.random.normal((B, T, Hk, Dk), key=keys[1]) * Dk**-0.5).astype(mx.float32)
     v = mx.random.normal((B, T, Hv, Dv), key=keys[2]).astype(mx.float32)
     g = mx.exp(-mx.random.uniform(0.01, 3.0, (B, T, Hv), key=keys[3])).astype(
         mx.float32
     )
-    beta = mx.sigmoid(mx.random.normal((B, T, Hv), key=keys[4])).astype(
-        mx.float32
-    )
-    state = (mx.random.normal((B, Hv, Dv, Dk), key=keys[5]) * 0.1).astype(
-        mx.float32
-    )
+    beta = mx.sigmoid(mx.random.normal((B, T, Hv), key=keys[4])).astype(mx.float32)
+    state = (mx.random.normal((B, Hv, Dv, Dk), key=keys[5]) * 0.1).astype(mx.float32)
     mx.eval(q, k, v, g, beta, state)
 
     y_ref, s_ref = gated_delta_kernel(q, k, v, g, beta, state)
@@ -297,9 +286,7 @@ def test_blocked_seq_float32_default_fits_threadgroup_memory():
     mx.eval(y_ref, s_ref, y_fast, s_fast)
 
     y_err = mx.max(mx.abs(y_fast - y_ref)).item()
-    s_rel = (
-        mx.max(mx.abs(s_fast - s_ref)) / (mx.max(mx.abs(s_ref)) + 1e-9)
-    ).item()
+    s_rel = (mx.max(mx.abs(s_fast - s_ref)) / (mx.max(mx.abs(s_ref)) + 1e-9)).item()
     assert y_err < 1e-6
     assert s_rel < 1e-6
 
@@ -311,7 +298,9 @@ def test_prefill_patch_preserves_cache_owned_kernel_dispatch(monkeypatch):
     import omlx.custom_kernels.attention.gated_delta as kernels
     import omlx.patches.qwen35_gdn_chunked as patch
 
-    monkeypatch.setattr(gated_delta, "gated_delta_update", gated_delta.gated_delta_update)
+    monkeypatch.setattr(
+        gated_delta, "gated_delta_update", gated_delta.gated_delta_update
+    )
     monkeypatch.setattr(language, "gated_delta_update", language.gated_delta_update)
     monkeypatch.setattr(patch.mx.metal, "is_available", lambda: True)
     initial = mx.zeros((1, 1, 128, 128))

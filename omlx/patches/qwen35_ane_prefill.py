@@ -249,11 +249,7 @@ def _fused_swiglu_symbol(bits: int, *, dual: bool) -> str:
     if bits == 4:
         return "ane_dual_q4_swiglu_t" if dual else "ane_q4_swiglu_t"
     if bits in (5, 6, 8):
-        return (
-            "ane_dual_affine_swiglu_t"
-            if dual
-            else "ane_affine_swiglu_t"
-        )
+        return "ane_dual_affine_swiglu_t" if dual else "ane_affine_swiglu_t"
     raise ValueError(f"Unsupported ANE SwiGLU bit width: {bits}")
 
 
@@ -412,31 +408,17 @@ def _eligible_pair(mlp: Any) -> bool:
 
 def _cpu_gate_kernel_symbol(bits: int, *, dual: bool = True) -> str | None:
     if bits == 4:
-        return (
-            "ane_dual_cpu_fp16_q4_swiglu_t"
-            if dual
-            else "ane_cpu_fp16_q4_swiglu_t"
-        )
+        return "ane_dual_cpu_fp16_q4_swiglu_t" if dual else "ane_cpu_fp16_q4_swiglu_t"
     if bits in (5, 6, 8):
-        return (
-            "ane_dual_cpu_fp16_swiglu_t"
-            if dual
-            else "ane_cpu_fp16_swiglu_t"
-        )
+        return "ane_dual_cpu_fp16_swiglu_t" if dual else "ane_cpu_fp16_swiglu_t"
     return None
 
 
 def _cpu_gdn_kernel_symbol(*, dual: bool) -> str:
-    return (
-        "ane_dual_cpu_fp16_affine_qmm_t"
-        if dual
-        else "ane_cpu_fp16_affine_qmm_t"
-    )
+    return "ane_dual_cpu_fp16_affine_qmm_t" if dual else "ane_cpu_fp16_affine_qmm_t"
 
 
-def _prepare_cpu_linear(
-    linear: Any, fraction: float
-) -> _CpuLinearState | None:
+def _prepare_cpu_linear(linear: Any, fraction: float) -> _CpuLinearState | None:
     """Eagerly split one affine projection into FP16 CPU and quantized GPU rows."""
     from omlx.custom_kernels.quant_matmul import ane as fast
 
@@ -496,27 +478,15 @@ def _prepare_down_for_bank(
         return None
     bits, group_size = spec
     output_dim = int(linear.weight.shape[0])
-    ane_outputs = (
-        int(output_dim * config.ane_down_fraction) // 128
-    ) * 128
+    ane_outputs = (int(output_dim * config.ane_down_fraction) // 128) * 128
     split = ane_outputs // 2
-    cpu_enabled = bool(
-        config.cpu_down_fraction > 0
-        and dtype == mx.float16
-    )
+    cpu_enabled = bool(config.cpu_down_fraction > 0 and dtype == mx.float16)
     cpu_outputs = (
-        (int(output_dim * config.cpu_down_fraction) // 64) * 64
-        if cpu_enabled
-        else 0
+        (int(output_dim * config.cpu_down_fraction) // 64) * 64 if cpu_enabled else 0
     )
     gpu_start = ane_outputs + cpu_outputs
     gpu_outputs = output_dim - gpu_start
-    if (
-        ane_outputs <= 0
-        or split % 64
-        or gpu_outputs <= 0
-        or gpu_outputs % 64
-    ):
+    if ane_outputs <= 0 or split % 64 or gpu_outputs <= 0 or gpu_outputs % 64:
         return None
 
     def dense_rows(start: int, stop: int) -> mx.array:
@@ -722,9 +692,7 @@ def _compile_pair(mlp: Any, config: _AnePrefillConfig) -> _CombinedMLPState | No
             group_size=group_size,
             cpu_weight=cpu_weight,
             cpu_outputs=cpu_outputs,
-            down_cpu=_prepare_cpu_linear(
-                mlp.down_proj, config.cpu_down_fraction
-            ),
+            down_cpu=_prepare_cpu_linear(mlp.down_proj, config.cpu_down_fraction),
             up_suffix=up_suffix,
         )
         cache[key] = state
@@ -751,9 +719,7 @@ def _prepare_pair_for_bank(
     bits = int(gate.bits)
     group_size = int(gate.group_size)
     dual_ane = bool(config.dual_ane)
-    if bits != 4 and not fast.has_symbol(
-        _fused_swiglu_symbol(bits, dual=dual_ane)
-    ):
+    if bits != 4 and not fast.has_symbol(_fused_swiglu_symbol(bits, dual=dual_ane)):
         return None
     alignment = 128 if dual_ane else 64
     ane_outputs = (int(output_dim * config.fraction) // alignment) * alignment
@@ -836,9 +802,7 @@ def _prepare_pair_for_bank(
             down_cpu=(
                 None
                 if down_ane is not None
-                else _prepare_cpu_linear(
-                    mlp.down_proj, config.cpu_down_fraction
-                )
+                else _prepare_cpu_linear(mlp.down_proj, config.cpu_down_fraction)
             ),
             down_ane=down_ane,
             up_suffix=up_suffix,
@@ -878,9 +842,7 @@ def _prepare_pair_runtime_state(
         config.cpu_fraction > 0
         and gate.scales.dtype == mx.float16
         and up.scales.dtype == mx.float16
-        and fast.has_symbol(
-            _cpu_gate_kernel_symbol(bits, dual=bool(config.dual_ane))
-        )
+        and fast.has_symbol(_cpu_gate_kernel_symbol(bits, dual=bool(config.dual_ane)))
     )
     cpu_outputs = (
         (int(output_dim * config.cpu_fraction) // 64) * 64 if cpu_enabled else 0
@@ -972,9 +934,10 @@ def _post_ane_linear(
 
     from omlx.patches.qwen35_q4_mlp import _Q8_MIN_TOKENS, _linear_qmm
 
-    if getattr(linear, "bits", None) == 8:
-        if x.ndim >= 3 and int(x.shape[-2]) < _Q8_MIN_TOKENS:
-            return linear(x)
+    if (getattr(linear, "bits", None) == 8) and (
+        x.ndim >= 3 and int(x.shape[-2]) < _Q8_MIN_TOKENS
+    ):
+        return linear(x)
     return _linear_qmm(linear, x, variant)
 
 
@@ -994,11 +957,7 @@ def _post_ane_down(
             cpu_threads=config.cpu_threads,
             cpu_shared_resource=config.cpu_shared_resource,
         )
-    if (
-        state.model is None
-        or state.model1 is None
-        or state.scales.dtype != x.dtype
-    ):
+    if state.model is None or state.model1 is None or state.scales.dtype != x.dtype:
         raise RuntimeError("ANE down-projection state is incomplete")
 
     from omlx.custom_kernels.quant_matmul import ane as fast
@@ -1146,9 +1105,7 @@ def _compile_gdn(gdn: Any, config: _AneGDNConfig) -> _CombinedGDNState | None:
         and fast.has_symbol(_cpu_gdn_kernel_symbol(dual=dual_ane))
     )
     cpu_outputs = (
-        (int(total_outputs * config.cpu_fraction) // 64) * 64
-        if cpu_enabled
-        else 0
+        (int(total_outputs * config.cpu_fraction) // 64) * 64 if cpu_enabled else 0
     )
     gpu_outputs = total_outputs - ane_outputs - cpu_outputs
     # The native GPU suffix accepts one quantization format. The quality-safe
@@ -1177,11 +1134,7 @@ def _compile_gdn(gdn: Any, config: _AneGDNConfig) -> _CombinedGDNState | None:
         cpu_outputs,
         qkv_spec,
         z_spec,
-        (
-            "z_qkv_b_a_pad_dual_affine"
-            if dual_ane
-            else "z_qkv_b_a_pad_affine"
-        )
+        ("z_qkv_b_a_pad_dual_affine" if dual_ane else "z_qkv_b_a_pad_affine")
         if packed_suffix is not None
         else ("z_qkv_dual_row_int8" if dual_ane else "z_qkv_row_int8"),
     )
@@ -1395,9 +1348,7 @@ def _prepare_gdn_for_bank(
         and fast.has_symbol(_cpu_gdn_kernel_symbol(dual=dual_ane))
     )
     cpu_outputs = (
-        (int(total_outputs * config.cpu_fraction) // 64) * 64
-        if cpu_enabled
-        else 0
+        (int(total_outputs * config.cpu_fraction) // 64) * 64 if cpu_enabled else 0
     )
     gpu_outputs = total_outputs - ane_outputs - cpu_outputs
     if ane_outputs != z_outputs or gpu_outputs <= 0 or gpu_outputs % 64:
@@ -1517,14 +1468,10 @@ def _prepare_gdn_runtime_state(
     cpu_enabled = bool(
         config.cpu_fraction > 0
         and qkv.scales.dtype == mx.float16
-        and fast.has_symbol(
-            _cpu_gdn_kernel_symbol(dual=bool(config.dual_ane))
-        )
+        and fast.has_symbol(_cpu_gdn_kernel_symbol(dual=bool(config.dual_ane)))
     )
     cpu_outputs = (
-        (int(total_outputs * config.cpu_fraction) // 64) * 64
-        if cpu_enabled
-        else 0
+        (int(total_outputs * config.cpu_fraction) // 64) * 64 if cpu_enabled else 0
     )
     gpu_outputs = total_outputs - ane_outputs - cpu_outputs
     if ane_outputs != z_outputs or gpu_outputs <= 0 or gpu_outputs % 64:
@@ -1738,9 +1685,7 @@ def _gdn_backend(
                 target_verify,
             )
         if padded is not None:
-            projected.append(
-                tuple(value[..., :tail_rows, :] for value in padded)
-            )
+            projected.append(tuple(value[..., :tail_rows, :] for value in padded))
         else:
             projected.append(
                 tuple(
@@ -1835,9 +1780,10 @@ def _backend_exact(
             return None
     if state is None:
         return None
-    if state.scales.dtype != x.dtype or int(state.weight.shape[1]) * 32 != int(
-        x.shape[-1]
-    ) * state.bits:
+    if (
+        state.scales.dtype != x.dtype
+        or int(state.weight.shape[1]) * 32 != int(x.shape[-1]) * state.bits
+    ):
         return None
 
     try:
@@ -2096,9 +2042,7 @@ def _backend(
             gate = _tail_qmm_or_linear(mlp.gate_proj, tail_x, config.variant)
             up = _tail_qmm_or_linear(mlp.up_proj, tail_x, config.variant)
             outputs.append(
-                _tail_qmm_or_linear(
-                    mlp.down_proj, swiglu(gate, up), config.variant
-                )
+                _tail_qmm_or_linear(mlp.down_proj, swiglu(gate, up), config.variant)
             )
     return mx.concatenate(outputs, axis=-2)
 
@@ -2159,9 +2103,7 @@ def install_qwen35_ane_prefill_dispatch() -> bool:
     return False
 
 
-def _bank_chunk_spans(
-    weights: list[mx.array], max_bytes: int
-) -> list[tuple[int, int]]:
+def _bank_chunk_spans(weights: list[mx.array], max_bytes: int) -> list[tuple[int, int]]:
     """Split procedure weights into contiguous spans of at most ``max_bytes``.
 
     A span always holds at least one procedure, so an oversized single
@@ -2299,12 +2241,8 @@ def _compile_dual_banks(
     return _bank_split_ladder(
         [int(weight.nbytes) for weight in weights0],
         lambda start, stop: (
-            fast.ane_compile_linear_bank(
-                weights0[start:stop], sequence_length, 1
-            ),
-            fast.ane_compile_linear_bank(
-                weights1[start:stop], sequence_length, 2
-            ),
+            fast.ane_compile_linear_bank(weights0[start:stop], sequence_length, 1),
+            fast.ane_compile_linear_bank(weights1[start:stop], sequence_length, 2),
         ),
     )
 
@@ -2334,9 +2272,7 @@ def _compile_single_banks(
                 _ANE_BANK_RETRY_MAX_MEMORY_FRACTION * 100,
             )
             return None
-        spans = (
-            [(0, len(weights))] if cap <= 0 else _bank_chunk_spans(weights, cap)
-        )
+        spans = [(0, len(weights))] if cap <= 0 else _bank_chunk_spans(weights, cap)
         try:
             models: list[Any] = []
             for start, stop in spans:
@@ -2488,8 +2424,7 @@ def _enable_dual_procedure_banks(
     if 4 in candidate_bits and not fast.has_symbol("ane_dual_q4_swiglu_t"):
         return None
     if any(
-        bits != 4
-        and not fast.has_symbol(_fused_swiglu_symbol(bits, dual=True))
+        bits != 4 and not fast.has_symbol(_fused_swiglu_symbol(bits, dual=True))
         for bits in candidate_bits
     ):
         return None
@@ -2517,16 +2452,10 @@ def _enable_dual_procedure_banks(
         builder0 = builder1 = None
         if fast.has_symbol("AneLinearBankBuilder"):
             try:
-                builder0 = fast.ane_linear_bank_builder(
-                    config.sequence_length
-                )
-                builder1 = fast.ane_linear_bank_builder(
-                    config.sequence_length
-                )
+                builder0 = fast.ane_linear_bank_builder(config.sequence_length)
+                builder1 = fast.ane_linear_bank_builder(config.sequence_length)
             except Exception:
-                logger.debug(
-                    "ANE bank builder unavailable; staging all slices at once"
-                )
+                logger.debug("ANE bank builder unavailable; staging all slices at once")
                 builder0 = builder1 = None
         weights0: list[mx.array] = []
         weights1: list[mx.array] = []
@@ -2645,9 +2574,7 @@ def _enable_dual_procedure_banks(
 
         selected_down_layers = {index for index, _ in down_entries}
         assigned_mlp_states = [
-            state
-            if index in selected_down_layers
-            else replace(state, down_ane=None)
+            state if index in selected_down_layers else replace(state, down_ane=None)
             for index, (_, state) in enumerate(prepared_mlps)
         ]
         assigned_gdn_states = [entry[1] for entry in prepared_gdns]
@@ -2683,14 +2610,10 @@ def _enable_dual_procedure_banks(
                 down_ane=down_state,
             )
 
-        for (module, _), state in zip(
-            prepared_mlps, assigned_mlp_states, strict=True
-        ):
+        for (module, _), state in zip(prepared_mlps, assigned_mlp_states, strict=True):
             module._omlx_ane_prefill_config = config
             module._omlx_ane_prefill_state = state
-        for (module, _), state in zip(
-            prepared_gdns, assigned_gdn_states, strict=True
-        ):
+        for (module, _), state in zip(prepared_gdns, assigned_gdn_states, strict=True):
             module._omlx_ane_gdn_config = gdn_config
             module._omlx_ane_gdn_state = state
             _register_gdn_module(module)
@@ -2712,9 +2635,7 @@ def _enable_dual_procedure_banks(
         disabled = 0
         for procedure, (kind, index) in enumerate(procedure_entries):
             module = (
-                prepared_gdns[index][0]
-                if kind == "gdn"
-                else prepared_mlps[index][0]
+                prepared_gdns[index][0] if kind == "gdn" else prepared_mlps[index][0]
             )
             try:
                 for warm_model in (models0[procedure], models1[procedure]):
@@ -2832,12 +2753,8 @@ def _enable_fused_down_banks(
         builder0 = builder1 = None
         if hasattr(fast, "ane_fused_bank_builder"):
             try:
-                builder0 = fast.ane_fused_bank_builder(
-                    config.sequence_length
-                )
-                builder1 = fast.ane_fused_bank_builder(
-                    config.sequence_length
-                )
+                builder0 = fast.ane_fused_bank_builder(config.sequence_length)
+                builder1 = fast.ane_fused_bank_builder(config.sequence_length)
             except Exception:
                 builder0 = builder1 = None
         staged: list[tuple[Any, Any]] = []
@@ -3133,9 +3050,7 @@ def enable_qwen35_ane_prefill(
             "ANE CPU down-projection fraction must be between 0.0 and 0.50"
         )
     if not 0.0 <= ane_down_fraction <= 0.50:
-        raise ValueError(
-            "ANE down-projection fraction must be between 0.0 and 0.50"
-        )
+        raise ValueError("ANE down-projection fraction must be between 0.0 and 0.50")
     if not 0.0 <= cpu_gdn_fraction <= 0.50:
         raise ValueError("ANE CPU GDN fraction must be between 0.0 and 0.50")
     if not 0 <= cpu_threads <= 64:
@@ -3216,9 +3131,7 @@ def enable_qwen35_ane_prefill(
                 "Qwen ANE CPU sharing requires an FP16 checkpoint clone; "
                 "continuing with ANE/GPU only"
             )
-            config = replace(
-                config, cpu_fraction=0.0, cpu_down_fraction=0.0
-            )
+            config = replace(config, cpu_fraction=0.0, cpu_down_fraction=0.0)
             cpu_gdn_fraction = 0.0
         elif cpu_shared_resource:
             if fast.cpu_shared_resource_available():
@@ -3274,9 +3187,7 @@ def enable_qwen35_ane_prefill(
                 gdn_fraction,
                 dual_ane,
             )
-            _log_gdn_recurrent_safe_cap(
-                model, gdn_fraction, gdn_count, dual_ane
-            )
+            _log_gdn_recurrent_safe_cap(model, gdn_fraction, gdn_count, dual_ane)
             logger.info(
                 "Eagerly compiled %d fused MLP/down and %d GDN procedures "
                 "into %d "
@@ -3286,17 +3197,11 @@ def enable_qwen35_ane_prefill(
                 gdn_count,
                 resident_programs,
                 sequence_length,
-                (
-                    "NAX"
-                    if fast.ane_hybrid_nax_enabled()
-                    else "classic Metal"
-                ),
+                ("NAX" if fast.ane_hybrid_nax_enabled() else "classic Metal"),
             )
             cpu_mlps = []
             for module in candidates:
-                fused_state = getattr(
-                    module, "_omlx_ane_fused_down_state", None
-                )
+                fused_state = getattr(module, "_omlx_ane_fused_down_state", None)
                 if (
                     fused_state is not None
                     and fused_state.cpu_gate_up_weight is not None
@@ -3304,9 +3209,7 @@ def enable_qwen35_ane_prefill(
                     cpu_mlps.append(module)
             cpu_gdns = [
                 module
-                for module in (
-                    model.modules() if hasattr(model, "modules") else ()
-                )
+                for module in (model.modules() if hasattr(model, "modules") else ())
                 if getattr(
                     getattr(module, "_omlx_ane_gdn_state", None),
                     "cpu_outputs",
@@ -3538,9 +3441,7 @@ def qwen35_ane_prefill_status(model: Any) -> dict:
         "shed": bool(getattr(model, "_omlx_ane_prefill_shed", False)),
         "mlp_layers": mlp,
         "gdn_layers": gdn,
-        "dual_ane_layers": int(
-            getattr(model, "_omlx_ane_dual_prefill_count", 0) or 0
-        ),
+        "dual_ane_layers": int(getattr(model, "_omlx_ane_dual_prefill_count", 0) or 0),
         "resident_programs": int(
             getattr(model, "_omlx_ane_resident_program_count", 0) or 0
         ),
@@ -3567,9 +3468,7 @@ def release_qwen35_ane_prefill(model: Any) -> tuple[int, int]:
     Returns ``(modules_released, resident_programs_before)``.
     """
     modules_released = 0
-    programs_before = int(
-        getattr(model, "_omlx_ane_resident_program_count", 0) or 0
-    )
+    programs_before = int(getattr(model, "_omlx_ane_resident_program_count", 0) or 0)
     for module in model.modules() if hasattr(model, "modules") else ():
         for state_attr, failed_attr in (
             ("_omlx_ane_prefill_state", "_omlx_ane_prefill_failed"),

@@ -1,6 +1,6 @@
 # Copyright © 2025 Apple Inc.
 # SPDX-License-Identifier: Apache 2.0
-# ruff: noqa: E722, F401, N806, UP006, UP007, UP032, UP035, UP045
+# ruff: noqa: N806, UP006, UP007, UP035, UP045
 """DeepSeek V4 DSML chat template (derived from mlx-lm deepseek_v32).
 
 The encoding core is vendored from ``deepseek-ai/DeepSeek-V4-Flash-0731``.
@@ -55,9 +55,7 @@ assistant_msg_template: str = "{reasoning}{content}{tool_calls}" + eos_token
 assistant_msg_wo_eos_template: str = "{reasoning}{content}{tool_calls}"
 thinking_template: str = "{reasoning_content}"
 
-response_format_template: str = (
-    "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
-)
+response_format_template: str = "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{schema}"
 tool_call_template: str = (
     '<{dsml_token}invoke name="{name}">\n{arguments}\n</{dsml_token}invoke>'
 )
@@ -119,6 +117,7 @@ def normalize_reasoning_effort(value: Optional[str]) -> str:
         )
         return DEFAULT_REASONING_EFFORT
     return normalized
+
 
 TOOLS_TEMPLATE = """## Tools
 
@@ -460,9 +459,9 @@ def render_message(
     task = messages[index].get("task")
     if task is not None:
         # Task special token for internal classification tasks
-        assert (
-            task in VALID_TASKS
-        ), f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+        assert task in VALID_TASKS, (
+            f"Invalid task: '{task}'. Valid tasks are: {list(VALID_TASKS)}"
+        )
         task_sp_token = DS_TASK_SP_TOKENS[task]
 
         if task != "action":
@@ -481,9 +480,13 @@ def render_message(
     elif messages[index].get("role") in ["user", "developer"]:
         # Normal generation: append Assistant + thinking token
         prompt += ASSISTANT_SP_TOKEN
-        if not drop_thinking and thinking_mode == "thinking":
-            prompt += thinking_start_token
-        elif drop_thinking and thinking_mode == "thinking" and index >= last_user_idx:
+        if (
+            not drop_thinking
+            and thinking_mode == "thinking"
+            or drop_thinking
+            and thinking_mode == "thinking"
+            and index >= last_user_idx
+        ):
             prompt += thinking_start_token
         else:
             prompt += thinking_end_token

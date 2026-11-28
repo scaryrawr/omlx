@@ -30,7 +30,7 @@ def parse_tool_call(text, tools=None):
         {
             # oMLX uses the qualified name in the OpenAI function.name field.
             "name": (
-                f'{call["namespace"]}::{call["function"]["name"]}'
+                f"{call['namespace']}::{call['function']['name']}"
                 if call.get("namespace") is not None
                 else call["function"]["name"]
             ),

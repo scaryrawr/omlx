@@ -126,9 +126,7 @@ def load_harmony_gpt_oss_encoding() -> HarmonyEncoding:
     raise last_error
 
 
-def preprocess_harmony_messages(
-    messages: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def preprocess_harmony_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Preprocess messages for Harmony (gpt-oss) models.
 
@@ -169,7 +167,9 @@ def preprocess_harmony_messages(
                     msg = {**msg, "content": content}
             elif content is not None:
                 # Non-string content (e.g., list) - log but don't modify
-                logger.debug(f"Assistant message has non-string content: {type(content)}")
+                logger.debug(
+                    f"Assistant message has non-string content: {type(content)}"
+                )
 
             result.append(msg)
 
@@ -271,9 +271,7 @@ class HarmonyStreamingParser:
         for t in start_tokens:
             parser.process(t)
 
-    def process_token(
-        self, token_id: int
-    ) -> tuple[str, int | None, int | None, bool]:
+    def process_token(self, token_id: int) -> tuple[str, int | None, int | None, bool]:
         """
         Process a single token and return routing information.
 
@@ -400,7 +398,9 @@ class HarmonyStreamingParser:
         except Exception as e:
             # Can fail if message is incomplete (e.g., missing <|end|>)
             # This is expected in some cases, so just log and continue
-            logger.debug(f"Harmony parser process_eos failed (expected for incomplete messages): {e}")
+            logger.debug(
+                f"Harmony parser process_eos failed (expected for incomplete messages): {e}"
+            )
 
         if self._in_think_tag:
             self._in_think_tag = False

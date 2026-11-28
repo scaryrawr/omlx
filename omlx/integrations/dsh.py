@@ -594,9 +594,14 @@ def _upsert_ref(lines: list[str], ref_name: str, value: str) -> list[str]:
         # instead of dropping its entries.
         return _upsert_block(lines, r_idx, r_idx + 1, "refs", block)
     # Block-style section: upsert just our key inside it.
-    return _upsert_block(lines, r_idx + 1, _block_content_end(lines, r_idx, r_indent),
-                         ref_name, [f"{' ' * (r_indent + 2)}{entry}"],
-                         allow_inline=True)
+    return _upsert_block(
+        lines,
+        r_idx + 1,
+        _block_content_end(lines, r_idx, r_indent),
+        ref_name,
+        [f"{' ' * (r_indent + 2)}{entry}"],
+        allow_inline=True,
+    )
 
 
 def write_credentials_ref(credentials_path: Path, ref_name: str, value: str) -> None:

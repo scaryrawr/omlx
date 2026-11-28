@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 import pytest
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +59,14 @@ def _model(dsv4, decode_consistent: bool):
     mx.random.seed(7)
     model = dsv4.Model(config)
     # random init is tiny-magnitude; scale it up so attention is not trivially uniform
-    model.update(tree_map(lambda p: p * 4 if p.dtype in (mx.float32, mx.bfloat16) and p.ndim > 1 else p, model.parameters()))
+    model.update(
+        tree_map(
+            lambda p: (
+                p * 4 if p.dtype in (mx.float32, mx.bfloat16) and p.ndim > 1 else p
+            ),
+            model.parameters(),
+        )
+    )
     # run in bfloat16 like the real checkpoint: the exact kernels' bitwise contract is a bf16 one
     model.set_dtype(mx.bfloat16)
     mx.eval(model.parameters())
@@ -76,7 +83,6 @@ def _prefill(model, tokens):
 
 
 def _merge(caches):
-    from mlx_lm.models.cache import CacheList
 
     merged = []
     for layer_caches in zip(*caches):
@@ -84,7 +90,9 @@ def _merge(caches):
     return merged
 
 
-LONG = [(i * 7 + 3) % 64 for i in range(300)]   # 2 ratio-128 pooled rows, 75 ratio-4 rows
+LONG = [
+    (i * 7 + 3) % 64 for i in range(300)
+]  # 2 ratio-128 pooled rows, 75 ratio-4 rows
 
 
 def _batched_short_logits(model, short, forced, steps_together):
@@ -107,7 +115,11 @@ def _batched_short_logits(model, short, forced, steps_together):
 
 
 @pytest.mark.parametrize(
-    "short_len", [pytest.param(5, id="left-padded-window"), pytest.param(140, id="fewer-pooled-rows")]
+    "short_len",
+    [
+        pytest.param(5, id="left-padded-window"),
+        pytest.param(140, id="fewer-pooled-rows"),
+    ],
 )
 def test_short_request_after_long_one_leaves_batch(dsv4, short_len):
     short = [(i * 11 + 5) % 64 for i in range(short_len)]
@@ -125,11 +137,18 @@ def test_short_request_after_long_one_leaves_batch(dsv4, short_len):
             mx.eval(out)
             alone.append(out[0])
 
-        worst = max(float(mx.abs(g.astype(mx.float32) - r.astype(mx.float32)).max()) for g, r in zip(got, alone))
+        worst = max(
+            float(mx.abs(g.astype(mx.float32) - r.astype(mx.float32)).max())
+            for g, r in zip(got, alone)
+        )
         scale = max(float(mx.abs(r.astype(mx.float32)).max()) for r in alone)
         argmax_ok = all(int(g.argmax()) == int(r.argmax()) for g, r in zip(got, alone))
-        assert worst <= 1e-2 * scale, f"short request drifted after the long one left: max |dlogit| {worst:.4f} (scale {scale:.3f})"
+        assert worst <= 1e-2 * scale, (
+            f"short request drifted after the long one left: max |dlogit| {worst:.4f} (scale {scale:.3f})"
+        )
         assert argmax_ok
 
-    differing = [i for i, (a, b) in enumerate(zip(*runs)) if not mx.array_equal(a, b).item()]
+    differing = [
+        i for i, (a, b) in enumerate(zip(*runs)) if not mx.array_equal(a, b).item()
+    ]
     assert not differing, f"exact path differs from stock at steps {differing}"

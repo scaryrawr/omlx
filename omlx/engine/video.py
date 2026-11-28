@@ -73,7 +73,9 @@ class VideoEngine(BaseNonStreamingEngine):
 
         async def terminate() -> None:
             async with self._termination_lock:
-                if process.returncode is not None and not _process_group_exists(process.pid):
+                if process.returncode is not None and not _process_group_exists(
+                    process.pid
+                ):
                     return
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGTERM)

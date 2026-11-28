@@ -161,10 +161,13 @@ class TestKVCompressionSettings:
         url = "/admin/api/models/model-a/settings"
         assert c.put(url, json={"turboquant_kv_scheme": "affine4"}).status_code == 400
         assert c.put(url, json={"turboquant_kv_bits": 4}).status_code == 200
-        r = c.put(url, json={
-            "turboquant_kv_enabled": True,
-            "turboquant_kv_scheme": "affine4",
-        })
+        r = c.put(
+            url,
+            json={
+                "turboquant_kv_enabled": True,
+                "turboquant_kv_scheme": "affine4",
+            },
+        )
         assert r.status_code == 200, r.text
         assert r.json()["settings"]["turboquant_kv_scheme"] == "affine4"
         assert c.put(url, json={"turboquant_kv_bits": 3}).status_code == 400
@@ -173,7 +176,9 @@ class TestKVCompressionSettings:
         assert r.json()["settings"]["turboquant_kv_scheme"] == "affine4"
         assert r.json()["settings"]["turboquant_kv_bits"] == 4
         assert mgr.get_settings("model-a").turboquant_kv_enabled is True
-        r = c.put(url, json={"turboquant_kv_scheme": "turboquant", "turboquant_kv_bits": 2.5})
+        r = c.put(
+            url, json={"turboquant_kv_scheme": "turboquant", "turboquant_kv_bits": 2.5}
+        )
         assert r.status_code == 200, r.text
         assert mgr.get_settings("model-a").turboquant_kv_bits == 2.5
 
@@ -195,10 +200,13 @@ class TestKVCompressionSettings:
         assert r.status_code == 400, r.text
         assert "KV cache compression" in r.json()["detail"]
         assert mgr.get_settings("model-a") == original
-        r = c.put("/admin/api/models/model-a/settings", json={
-            "turboquant_kv_enabled": enable_compression,
-            "vlm_mtp_enabled": not enable_compression,
-        })
+        r = c.put(
+            "/admin/api/models/model-a/settings",
+            json={
+                "turboquant_kv_enabled": enable_compression,
+                "vlm_mtp_enabled": not enable_compression,
+            },
+        )
         assert r.status_code == 200, r.text
 
 
@@ -211,12 +219,20 @@ class TestProfileRoutes:
             "turboquant_kv_scheme": scheme,
             "turboquant_kv_bits": bits,
         }
-        r = c.post("/admin/api/models/model-a/profiles", json={
-            "name": "affine", "display_name": scheme.title(), "settings": settings,
-        })
+        r = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "affine",
+                "display_name": scheme.title(),
+                "settings": settings,
+            },
+        )
         assert r.status_code == 200, r.text
         assert r.json()["profile"]["settings"] == settings
-        assert "turboquant_kv_scheme" in c.get("/admin/api/profile-fields").json()["model_specific"]
+        assert (
+            "turboquant_kv_scheme"
+            in c.get("/admin/api/profile-fields").json()["model_specific"]
+        )
         r = c.post("/admin/api/models/model-a/profiles/affine/apply")
         assert r.status_code == 200, r.text
         assert r.json()["settings"]["turboquant_kv_scheme"] == scheme
@@ -225,9 +241,14 @@ class TestProfileRoutes:
     def test_invalid_kv_profile_does_not_persist(self, client):
         c, mgr = client
         settings = {"turboquant_kv_scheme": "affine8", "turboquant_kv_bits": 4}
-        r = c.post("/admin/api/models/model-a/profiles", json={
-            "name": "bad", "display_name": "Bad", "settings": settings,
-        })
+        r = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "bad",
+                "display_name": "Bad",
+                "settings": settings,
+            },
+        )
         assert r.status_code in (400, 422), r.text
         assert mgr.list_profiles("model-a") == []
 
@@ -306,7 +327,9 @@ class TestProfileRoutes:
         ).config_model_type = "minicpmv4_7"
         response = c.put(
             "/admin/api/models/model-a/settings",
-            json={"mm_processor_kwargs": {"downsample_mode": "4x", "max_slice_nums": 36}},
+            json={
+                "mm_processor_kwargs": {"downsample_mode": "4x", "max_slice_nums": 36}
+            },
         )
         assert response.status_code == 200, response.text
         response = c.post(
@@ -332,7 +355,9 @@ class TestProfileRoutes:
             {"max_slice_nums": 1.5},
         ],
     )
-    def test_processor_profile_controls_are_validated_before_saving(self, client, options):
+    def test_processor_profile_controls_are_validated_before_saving(
+        self, client, options
+    ):
         c, mgr = client
         admin_routes._get_engine_pool().get_entry(
             "model-a"
@@ -1012,9 +1037,12 @@ class TestModelsResponseActiveProfile:
 
     def test_admin_model_type_override_accepts_image(self, client):
         c, mgr = client
-        r = c.put("/admin/api/models/model-a/settings", json={
-            "model_type_override": "image",
-        })
+        r = c.put(
+            "/admin/api/models/model-a/settings",
+            json={
+                "model_type_override": "image",
+            },
+        )
 
         assert r.status_code == 200, r.text
         assert r.json()["model_type"] == "image"
@@ -2019,9 +2047,9 @@ class TestSettingsSnapshotRoutes:
         from omlx.model_settings import validate_ane_prefill
 
         c, mgr = client
-        admin_routes._get_engine_pool().get_entry("model-a").config_model_type = (
-            target_type
-        )
+        admin_routes._get_engine_pool().get_entry(
+            "model-a"
+        ).config_model_type = target_type
         source = ModelSettings(
             temperature=0.2,
             qwen35_ane_prefill_enabled=False,
@@ -2079,9 +2107,7 @@ class TestSettingsSnapshotRoutes:
         assert body["applied"]["turboquant_kv_enabled"] is False
         assert body["applied"]["index_cache_freq"] is None
         saved = mgr.get_settings("model-a")
-        assert body["applied"] == {
-            key: getattr(saved, key) for key in body["applied"]
-        }
+        assert body["applied"] == {key: getattr(saved, key) for key in body["applied"]}
 
     def test_reset_reports_metadata_only_change(self, client):
         c, mgr = client

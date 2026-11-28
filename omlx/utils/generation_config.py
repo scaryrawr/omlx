@@ -40,7 +40,9 @@ def _resolve_generation_config_path(model_path_or_id: str | Path | None) -> Path
     return None
 
 
-def load_generation_config(model_path_or_id: str | Path | None) -> dict[str, Any] | None:
+def load_generation_config(
+    model_path_or_id: str | Path | None,
+) -> dict[str, Any] | None:
     """Load generation_config.json from a local path or Hugging Face cache."""
 
     path = _resolve_generation_config_path(model_path_or_id)

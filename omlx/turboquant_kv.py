@@ -31,7 +31,7 @@ from mlx_vlm.turboquant import (
     _reserve_state_capacity,
     _slice_state,
     _slice_state_range,
-    _state_length,  # noqa: F401 - re-exported for local attention/cache helpers
+    _state_length,
     turboquant_enabled,
 )
 
@@ -295,6 +295,7 @@ def _join_state_token_axis(states, capacity: int):
         start += _state_length(state)
     return _place_states(states[0], placements, _state_rows(states[0]), capacity)
 
+
 def _write_state_rows(dst, src, starts):
     """Write row ``b`` of ``src`` at token column ``starts[b]`` of ``dst``."""
     length = _state_length(src)
@@ -306,8 +307,6 @@ def _write_state_rows(dst, src, starts):
                 ]
         else:
             _write_state_rows(dst_field, src_field, starts)
-
-
 
 
 def _shift_state_rows(state, moves, end: int):
@@ -351,8 +350,7 @@ def _roll_state(state, shifts, axis: int = 2):
         return TurboQuantPolarState(
             dynamic_roll(state.radii, shifts, axis=axis),
             tuple(
-                dynamic_roll(level, shifts, axis=axis)
-                for level in state.level_indices
+                dynamic_roll(level, shifts, axis=axis) for level in state.level_indices
             ),
         )
     if isinstance(state, TurboQuantPolarProdState):
@@ -410,7 +408,7 @@ class BatchTurboQuantKVCache(TurboQuantKVCache):
         # B=1: offset is int (parent-compatible, zero overhead decode)
         # B>1: offset is mx.array (per-request, needs override)
         if self._batch_size > 1:
-            self.offset = mx.array([-l for l in left_padding])
+            self.offset = mx.array([-layer_index for layer_index in left_padding])
         else:
             self.offset = -left_padding[0]
         self._right_padding = None
@@ -617,7 +615,9 @@ class BatchTurboQuantKVCache(TurboQuantKVCache):
             # left padding); sync the physical end before switching to
             # per-request array offsets, where the parent no longer maintains
             # it.
-            lp0 = int(self.left_padding[0].item()) if self.left_padding is not None else 0
+            lp0 = (
+                int(self.left_padding[0].item()) if self.left_padding is not None else 0
+            )
             self._phys_end = max(self._phys_end, self.offset + lp0)
             self.offset = mx.array([self.offset])
 
@@ -808,7 +808,7 @@ class BatchTurboQuantKVCache(TurboQuantKVCache):
             )
         lengths = [c.offset for c in caches]
         max_length = max(lengths)
-        padding = [max_length - l for l in lengths]
+        padding = [max_length - layer_index for layer_index in lengths]
 
         batch = cls(padding, bits=bits, seed=seed)
 

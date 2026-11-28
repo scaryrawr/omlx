@@ -86,7 +86,11 @@ def _step(lengths, length, seed=0):
     """Caches for two full-attention layers, filled to len - length, then one step."""
     mx.random.seed(seed)
     total = max(lengths)
-    caches = [BatchKVCache([total - n for n in lengths]), None, BatchKVCache([total - n for n in lengths])]
+    caches = [
+        BatchKVCache([total - n for n in lengths]),
+        None,
+        BatchKVCache([total - n for n in lengths]),
+    ]
     batch = len(lengths)
     k = mx.random.normal((batch, KV_HEADS, total - length, D)).astype(DTYPE)
     v = mx.random.normal((batch, KV_HEADS, total - length, D)).astype(DTYPE)
@@ -113,7 +117,11 @@ def _solo(original, queries, keys, values, pads):
     """What each row gets as a lone request."""
     rows = []
     for i, p in enumerate(pads):
-        q, k, v = queries[i : i + 1], keys[i : i + 1, :, p:, :], values[i : i + 1, :, p:, :]
+        q, k, v = (
+            queries[i : i + 1],
+            keys[i : i + 1, :, p:, :],
+            values[i : i + 1, :, p:, :],
+        )
         if queries.shape[2] == 1:
             rows.append(mx.fast.scaled_dot_product_attention(q, k, v, scale=SCALE))
         else:
@@ -127,7 +135,10 @@ def _loop(q, k, v):
     return mx.concatenate(
         [
             mx.fast.scaled_dot_product_attention(
-                q[:, :, i : i + 1], k[:, :, : prefix + i + 1], v[:, :, : prefix + i + 1], scale=SCALE
+                q[:, :, i : i + 1],
+                k[:, :, : prefix + i + 1],
+                v[:, :, : prefix + i + 1],
+                scale=SCALE,
             )
             for i in range(q.shape[2])
         ],
@@ -210,7 +221,6 @@ def test_rows_are_cleared_when_the_next_forward_is_not_padded(patched):
     assert not hasattr(cache, patched.mod._ROWS_ATTR)
 
 
-
 def _padded_causal(cache, length):
     """The mask a padded batch should have: left padding plus causal."""
     from mlx_lm.models.base import create_causal_mask
@@ -241,7 +251,9 @@ def test_rows_match_an_independent_masked_reference(patched, length):
 
 def test_forwards_wider_than_a_verify_block_keep_their_path(patched):
     # A prefill chunk through the verifier is not a verify block.
-    cache, q, k, v, mask, _ = _step([SHORT + 3000, LONG], patched.mod._MAX_VERIFY_WIDTH + 7)
+    cache, q, k, v, mask, _ = _step(
+        [SHORT + 3000, LONG], patched.mod._MAX_VERIFY_WIDTH + 7
+    )
     assert not hasattr(cache, patched.mod._ROWS_ATTR)
     _call(q, k, v, cache, mask)
     assert cache in patched.calls

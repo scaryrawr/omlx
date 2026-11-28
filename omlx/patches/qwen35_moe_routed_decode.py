@@ -448,7 +448,9 @@ def _format_header(namespace: str, fmt: _Format) -> str:
         .replace("__GS__", str(fmt.group_size))
         .replace("__FAST__", "1" if fmt.fast else "0")
     )
-    return f"namespace {namespace} {{\n{header}\n{_ROWS}\n}}  // namespace {namespace}\n"
+    return (
+        f"namespace {namespace} {{\n{header}\n{_ROWS}\n}}  // namespace {namespace}\n"
+    )
 
 
 def _name(fmt: _Format) -> str:
@@ -495,9 +497,9 @@ def _down_kernel(routed: _Format, shared: _Format | None):
         source = (
             _DOWN_HEAD
             + _DOWN_SHARED_ROWS
-            + _DOWN_TAIL.replace("SHARED_VALUE", "part[TOPK * RPS + int(simd_lid)]").replace(
-                "GATE_VALUE", "x[TOPK * K + KS]"
-            )
+            + _DOWN_TAIL.replace(
+                "SHARED_VALUE", "part[TOPK * RPS + int(simd_lid)]"
+            ).replace("GATE_VALUE", "x[TOPK * K + KS]")
         )
         name += f"_shared_{_name(shared)}"
     return mx.fast.metal_kernel(
@@ -524,8 +526,20 @@ def _gate_up_window_kernel(routed: _Format, shared: _Format, gate: _Format):
             f"_shared_{_name(shared)}_gate_{_name(gate)}"
         ),
         input_names=[
-            "x", "w", "scales", "biases", "rhs",
-            "sg_w", "sg_s", "sg_b", "su_w", "su_s", "su_b", "g_w", "g_s", "g_b",
+            "x",
+            "w",
+            "scales",
+            "biases",
+            "rhs",
+            "sg_w",
+            "sg_s",
+            "sg_b",
+            "su_w",
+            "su_s",
+            "su_b",
+            "g_w",
+            "g_s",
+            "g_b",
         ],
         output_names=["y"],
         header=header,
@@ -537,12 +551,22 @@ def _gate_up_window_kernel(routed: _Format, shared: _Format, gate: _Format):
 def _down_window_kernel(routed: _Format, shared: _Format):
     """The folded down/combine launch for every row of a verify window."""
     header = _COMMON + _format_header("rd", routed) + _format_header("sd", shared)
-    tail = _DOWN_TAIL.replace("SHARED_VALUE", "part[TOPK * RPS + int(simd_lid)]").replace(
-        "GATE_VALUE", "x[TOPK * K + KS]"
-    )
+    tail = _DOWN_TAIL.replace(
+        "SHARED_VALUE", "part[TOPK * RPS + int(simd_lid)]"
+    ).replace("GATE_VALUE", "x[TOPK * K + KS]")
     return mx.fast.metal_kernel(
         name=f"omlx_qwen35_moe_down_combine_window_{_name(routed)}_shared_{_name(shared)}",
-        input_names=["x", "w", "scales", "biases", "sd_w", "sd_s", "sd_b", "rhs", "scores"],
+        input_names=[
+            "x",
+            "w",
+            "scales",
+            "biases",
+            "sd_w",
+            "sd_s",
+            "sd_b",
+            "rhs",
+            "scores",
+        ],
         output_names=["y"],
         header=header,
         source=_DOWN_WINDOW_HEAD + _DOWN_SHARED_ROWS + tail + "    }\n",
@@ -651,7 +675,12 @@ def _shared_formats(block, hidden: int, dtype: mx.Dtype):
     shared, gate = block.get("shared_expert"), block.get("shared_expert_gate")
     if type(shared) is not Qwen3_5MLP:
         return None
-    layers = (shared.get("gate_proj"), shared.get("up_proj"), shared.get("down_proj"), gate)
+    layers = (
+        shared.get("gate_proj"),
+        shared.get("up_proj"),
+        shared.get("down_proj"),
+        gate,
+    )
     if not all(
         _quantized_ok(layer, nn.QuantizedLinear) and layer["scales"].dtype == dtype
         for layer in layers
@@ -670,7 +699,10 @@ def _shared_formats(block, hidden: int, dtype: mx.Dtype):
         or width % (_GATE_UP_ROWS * _GATE_UP_SIMDGROUPS)
     ):
         return None
-    operands = lambda layer: tuple(layer[k] for k in ("weight", "scales", "biases"))
+
+    def operands(layer):
+        return tuple(layer[k] for k in ("weight", "scales", "biases"))
+
     return (
         width,
         gu_fmt,
@@ -811,7 +843,13 @@ def routed_decode_plan(block, x) -> _Plan | None:
 def _down(plan: _Plan, h, indices, scores, shape, shared=None, gate=None):
     """The one-token down/combine launch over gate+up output ``h``."""
     if plan.fold:
-        down_inputs = [h, *plan.down_operands, *plan.shared_down_operands, indices, scores]
+        down_inputs = [
+            h,
+            *plan.down_operands,
+            *plan.shared_down_operands,
+            indices,
+            scores,
+        ]
     else:
         # The shared expert comes first in the inputs, so its launches are
         # encoded (and can run) before the router's.
@@ -950,11 +988,15 @@ def routed_verify_window(block, x):
     if not folded:
         routing = softmax_topk_rows(logits, plan.top_k, WINDOW_MAX_ROWS)
         if routing is None:
-            routing = fused_router_topk(mx.softmax(logits, axis=-1, precise=True), plan.top_k)
+            routing = fused_router_topk(
+                mx.softmax(logits, axis=-1, precise=True), plan.top_k
+            )
         inds, scores = routing
     try:
         if folded:
-            y = (routed_decode_logits if rows == 1 else routed_window_logits)(plan, x, logits)
+            y = (routed_decode_logits if rows == 1 else routed_window_logits)(
+                plan, x, logits
+            )
         elif rows == 1:
             y = routed_decode(plan, x, inds, scores)
         else:
@@ -965,7 +1007,9 @@ def routed_verify_window(block, x):
             logger.info("Qwen MoE fused verify-window experts engaged")
     except Exception:
         _WINDOW_DISABLED = True
-        logger.warning("fused verify-window experts failed; verifier fallback", exc_info=True)
+        logger.warning(
+            "fused verify-window experts failed; verifier fallback", exc_info=True
+        )
         return None
     return y
 
@@ -1040,7 +1084,9 @@ def apply_qwen35_moe_routed_decode_patch() -> bool:
         if not folded:
             routing = softmax_topk_row(logits, self.top_k)
             if routing is None:
-                routing = fused_router_topk(mx.softmax(logits, axis=-1, precise=True), self.top_k)
+                routing = fused_router_topk(
+                    mx.softmax(logits, axis=-1, precise=True), self.top_k
+                )
             inds, scores = routing
             if scores.dtype != x.dtype:
                 return orig_call(self, x)

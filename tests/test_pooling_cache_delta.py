@@ -290,10 +290,12 @@ def test_legacy_full_block_can_anchor_v4_delta_chain(tmp_path):
     tokens = list(range(3 * BLOCK_SIZE))
     snapshots = {
         BLOCK_SIZE: _delta_pooling_layer(BLOCK_SIZE, include_overlap_state=True),
-        2
-        * BLOCK_SIZE: _delta_pooling_layer(2 * BLOCK_SIZE, include_overlap_state=True),
-        3
-        * BLOCK_SIZE: _delta_pooling_layer(3 * BLOCK_SIZE, include_overlap_state=True),
+        2 * BLOCK_SIZE: _delta_pooling_layer(
+            2 * BLOCK_SIZE, include_overlap_state=True
+        ),
+        3 * BLOCK_SIZE: _delta_pooling_layer(
+            3 * BLOCK_SIZE, include_overlap_state=True
+        ),
     }
     mixed = cache.store_cache(
         "req-mixed-chain",

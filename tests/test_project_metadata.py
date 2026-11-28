@@ -9,9 +9,11 @@ from pathlib import Path
 
 
 def _dependency_name(requirement: str) -> str:
-    return re.split(r"\s*(?:[<>=!~]=?|@|\[)", requirement.strip(), maxsplit=1)[
-        0
-    ].lower().replace("_", "-")
+    return (
+        re.split(r"\s*(?:[<>=!~]=?|@|\[)", requirement.strip(), maxsplit=1)[0]
+        .lower()
+        .replace("_", "-")
+    )
 
 
 def test_mlx_vlm_is_core_and_image_extra_is_compatibility_only():

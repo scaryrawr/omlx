@@ -707,14 +707,16 @@ def quantize(
                     specs.get(name),
                     bits=allocation[name]["bits"],
                     importance=importance,
-                    progress=lambda done, total, name=name, written=written_bytes: _emit_progress(
-                        progress_callback,
-                        "quantizing",
-                        projection_start
-                        + (99 - projection_start)
-                        * written
-                        / max(budget["remaining_weights"]["tensor_bytes"], 1),
-                        f"Quantizing {name}: {done}/{total} rows",
+                    progress=lambda done, total, name=name, written=written_bytes: (
+                        _emit_progress(
+                            progress_callback,
+                            "quantizing",
+                            projection_start
+                            + (99 - projection_start)
+                            * written
+                            / max(budget["remaining_weights"]["tensor_bytes"], 1),
+                            f"Quantizing {name}: {done}/{total} rows",
+                        )
                     ),
                 )
                 values.update(converted)

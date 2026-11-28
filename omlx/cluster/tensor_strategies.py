@@ -157,8 +157,7 @@ def _native_layerwise_shard(
     supported, reason = native_shard_is_layer_local(getattr(model, "shard", None))
     if not supported:
         raise RuntimeError(
-            "native tensor strategy cannot safely shard one layer at a time: "
-            + reason
+            "native tensor strategy cannot safely shard one layer at a time: " + reason
         )
     owner, layers = _common_layer_owner(model)
     original = list(layers)
@@ -472,15 +471,9 @@ def _shard_qwen3_next(
                 )
             layer.mlp = _wrap_sharded_moe(mlp, group, mx)
         else:
-            mlp.gate_proj = shard_linear(
-                mlp.gate_proj, "all-to-sharded", group=group
-            )
-            mlp.down_proj = shard_linear(
-                mlp.down_proj, "sharded-to-all", group=group
-            )
-            mlp.up_proj = shard_linear(
-                mlp.up_proj, "all-to-sharded", group=group
-            )
+            mlp.gate_proj = shard_linear(mlp.gate_proj, "all-to-sharded", group=group)
+            mlp.down_proj = shard_linear(mlp.down_proj, "sharded-to-all", group=group)
+            mlp.up_proj = shard_linear(mlp.up_proj, "all-to-sharded", group=group)
         mx.eval(layer.parameters())
         mx.clear_cache()
         _emit(
@@ -516,18 +509,10 @@ def _shard_nemotron_h(
         if isinstance(mixer, NemotronHAttention):
             _require_divisible(mixer.num_heads, size, "attention heads")
             _require_divisible(mixer.num_key_value_heads, size, "KV heads")
-            mixer.q_proj = shard_linear(
-                mixer.q_proj, "all-to-sharded", group=group
-            )
-            mixer.k_proj = shard_linear(
-                mixer.k_proj, "all-to-sharded", group=group
-            )
-            mixer.v_proj = shard_linear(
-                mixer.v_proj, "all-to-sharded", group=group
-            )
-            mixer.o_proj = shard_linear(
-                mixer.o_proj, "sharded-to-all", group=group
-            )
+            mixer.q_proj = shard_linear(mixer.q_proj, "all-to-sharded", group=group)
+            mixer.k_proj = shard_linear(mixer.k_proj, "all-to-sharded", group=group)
+            mixer.v_proj = shard_linear(mixer.v_proj, "all-to-sharded", group=group)
+            mixer.o_proj = shard_linear(mixer.o_proj, "sharded-to-all", group=group)
             mixer.num_heads //= size
             mixer.num_key_value_heads //= size
         elif isinstance(mixer, NemotronHMamba2Mixer):
@@ -555,12 +540,8 @@ def _shard_nemotron_h(
                         2 * full_intermediate + full_bc + (rank + 1) * bc,
                     ),
                     mx.arange(
-                        2 * full_intermediate
-                        + 2 * full_bc
-                        + rank * heads,
-                        2 * full_intermediate
-                        + 2 * full_bc
-                        + (rank + 1) * heads,
+                        2 * full_intermediate + 2 * full_bc + rank * heads,
+                        2 * full_intermediate + 2 * full_bc + (rank + 1) * heads,
                     ),
                 ]
             )
@@ -579,9 +560,7 @@ def _shard_nemotron_h(
             # The affine layer bias (mamba_proj_bias) is per output row too.
             if getattr(mixer.in_proj, "bias", None) is not None:
                 mixer.in_proj.bias = mx.contiguous(mixer.in_proj.bias[indices])
-            mixer.out_proj = shard_linear(
-                mixer.out_proj, "sharded-to-all", group=group
-            )
+            mixer.out_proj = shard_linear(mixer.out_proj, "sharded-to-all", group=group)
             conv_indices = mx.concatenate(
                 [
                     mx.arange(rank * intermediate, (rank + 1) * intermediate),
@@ -605,9 +584,7 @@ def _shard_nemotron_h(
             mixer.A_log = mx.contiguous(mixer.A_log[start:end])
             mixer.D = mx.contiguous(mixer.D[start:end])
             mixer.norm.weight = mx.contiguous(
-                mixer.norm.weight[
-                    rank * intermediate : (rank + 1) * intermediate
-                ]
+                mixer.norm.weight[rank * intermediate : (rank + 1) * intermediate]
             )
             mixer.num_heads = heads
             mixer.n_groups = groups

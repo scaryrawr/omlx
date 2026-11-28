@@ -107,7 +107,9 @@ def test_chat_history_sorts_before_saving_and_storage_owns_eviction():
         "    startRenamingChat(chat)",
     )
 
-    assert save.index("this.sortChatHistory()") < save.index("this.saveChatHistory([chatId])")
+    assert save.index("this.sortChatHistory()") < save.index(
+        "this.saveChatHistory([chatId])"
+    )
     assert "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)" not in save
     assert "limit: MAX_CHAT_HISTORY_SIZE" in _template()
 
@@ -228,7 +230,9 @@ def test_empty_thinking_content_is_not_rendered_or_replayed():
     assert "if (!this.hasVisibleThinking(content)) return '';" in renderer
     assert "if (this.hasVisibleThinking(thinkingContent))" in renderer
     assert "&& this.hasVisibleThinking(stream.streamingThinking)" in stream
-    assert "reasoning_content: this.hasVisibleThinking(stream.streamingThinking)" in stream
+    assert (
+        "reasoning_content: this.hasVisibleThinking(stream.streamingThinking)" in stream
+    )
     assert 'x-if="hasVisibleThinking(msg._thinking)"' in html
     assert 'x-show="hasVisibleThinking(currentStream()?.streamingThinking)"' in html
 
@@ -264,7 +268,9 @@ def test_regeneration_hides_the_turn_until_the_new_variant_lands():
         "getStreamSession",
         "currentStream",
     ]
-    result = _run_chat(names, """
+    result = _run_chat(
+        names,
+        """
 app.currentChatId = 'c';
 app.messages = [
     {id: 'u0', role: 'user'}, {id: 'a0', role: 'assistant'},
@@ -283,7 +289,7 @@ app.messages[2]._activeVariantId = 'a3';
 const landed = visible();
 stream.isStreaming = false;
 console.log(JSON.stringify({during, activeTab, landed, after: visible()}));
-"""
+""",
     )
     assert result["during"] == ["u0", "a0", "u1"]
     assert result["activeTab"] is False
@@ -303,7 +309,9 @@ def test_profile_picks_where_sampling_values_come_from():
         "samplingMode",
         "selectProfileOption",
     ]
-    result = _run_chat(names, """
+    result = _run_chat(
+        names,
+        """
 const CUSTOM_PROFILE_OPTION = '__custom__';
 globalThis.window = {t: key => key};
 app.currentModel = 'm';
@@ -326,7 +334,7 @@ app.activePromptProfile = 'Writer';
 app.selectProfileOption('__custom__');
 console.log(JSON.stringify({model, writer, custom,
     seeded: app.snapshotGenerationSettings(), active: app.activePromptProfile}));
-"""
+""",
     )
     assert result["model"] is None
     assert result["writer"] == {"temperature": 1.1}
@@ -344,7 +352,9 @@ def test_a_new_turn_uses_the_panel_model_and_settings():
         "resolveApiModel",
         "resolveApiGenerationOverrides",
     ]
-    result = _run_chat(names, """
+    result = _run_chat(
+        names,
+        """
 app.resolveGatewayModelId = id => id;
 app.snapshotGenerationSettings = () => ({reasoning_effort: 'max'});
 const messages = [
@@ -358,7 +368,7 @@ console.log(JSON.stringify({
     generation: app.resolveApiGenerationOverrides(messages, 2),
     prompt: app.resolveApiSystemPrompt(messages, 'New.', 2),
 }));
-"""
+""",
     )
     assert result == {
         "model": "new",
@@ -369,7 +379,9 @@ console.log(JSON.stringify({
 
 def test_picking_a_reply_restores_its_sampling_profile():
     names = ["normalizeProfileName", "samplingFields", "applyVariantPanelSnapshot"]
-    result = _run_chat(names, """
+    result = _run_chat(
+        names,
+        """
 globalThis.window = {t: key => key};
 app.variantModelMissing = () => false;
 app.resolveGatewayModelId = id => id;
@@ -391,7 +403,7 @@ const pick = async (meta) => {
         legacy: await pick({}),
     }));
 })();
-"""
+""",
     )
     assert result == {
         "custom": None,

@@ -140,8 +140,12 @@ def test_current_interpreter_and_matching_staged_extension_pass(tmp_path):
     directory.mkdir()
     (directory / ("_ext" + sysconfig.get_config_var("EXT_SUFFIX"))).touch()
     result = _run_checker(
-        "--build-python", sys.executable, "--donor-python", sys.executable,
-        "--extension-directory", str(directory),
+        "--build-python",
+        sys.executable,
+        "--donor-python",
+        sys.executable,
+        "--extension-directory",
+        str(directory),
     )
     assert result.returncode == 0, result.stderr
 

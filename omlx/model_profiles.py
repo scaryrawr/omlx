@@ -166,9 +166,7 @@ def _filter_and_sanitize(
     dropped on save and when overlaying stored (possibly legacy) records.
     """
     data = rename_legacy_fields(data)
-    return {
-        k: v for k, v in data.items() if k in allowed and v is not None and v != ""
-    }
+    return {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
 
 
 def filter_universal_fields(data: dict[str, Any]) -> dict[str, Any]:

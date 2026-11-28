@@ -38,7 +38,11 @@ ASSISTANT_CONFIG = {
     "model_type": "gemma4_assistant",
     "backbone_hidden_size": 24,
     "tie_word_embeddings": True,
-    "text_config": {"model_type": "gemma4_text", "hidden_size": 8, "num_hidden_layers": 2},
+    "text_config": {
+        "model_type": "gemma4_text",
+        "hidden_size": 8,
+        "num_hidden_layers": 2,
+    },
 }
 
 
@@ -56,9 +60,7 @@ def _write_base_output(tmp_path):
     mx.save_safetensors(str(out / "model-00001-of-00001.safetensors"), weights)
     index = {
         "metadata": {"total_size": 100},
-        "weight_map": {
-            k: "model-00001-of-00001.safetensors" for k in weights
-        },
+        "weight_map": {k: "model-00001-of-00001.safetensors" for k in weights},
     }
     (out / "model.safetensors.index.json").write_text(json.dumps(index))
     return out
@@ -251,33 +253,30 @@ def _write_qwen_donor(
                 prefix + "mtp.norm.weight": mx.ones((8,), dtype=bf16),
                 prefix + "mtp.pre_fc_norm_embedding.weight": mx.ones((8,), dtype=bf16),
                 prefix + "mtp.pre_fc_norm_hidden.weight": mx.ones((8,), dtype=bf16),
-                prefix
-                + "mtp.layers.0.input_layernorm.weight": mx.ones((8,), dtype=bf16),
+                prefix + "mtp.layers.0.input_layernorm.weight": mx.ones(
+                    (8,), dtype=bf16
+                ),
             }
         )
         if quantized:
             weights.update(
                 {
-                    prefix
-                    + "mtp.layers.0.self_attn.q_proj.weight": mx.full(
+                    prefix + "mtp.layers.0.self_attn.q_proj.weight": mx.full(
                         (8, 1), 7, dtype=mx.uint32
                     ),
-                    prefix
-                    + "mtp.layers.0.self_attn.q_proj.scales": mx.ones(
+                    prefix + "mtp.layers.0.self_attn.q_proj.scales": mx.ones(
                         (8, 1), dtype=bf16
                     ),
-                    prefix
-                    + "mtp.layers.0.self_attn.q_proj.biases": mx.zeros(
+                    prefix + "mtp.layers.0.self_attn.q_proj.biases": mx.zeros(
                         (8, 1), dtype=bf16
                     ),
-                    prefix
-                    + "mtp.layers.0.mlp.gate_proj.weight": mx.full(
+                    prefix + "mtp.layers.0.mlp.gate_proj.weight": mx.full(
                         (16, 1), 3, dtype=mx.uint32
                     ),
-                    prefix
-                    + "mtp.layers.0.mlp.gate_proj.scales": mx.ones((16, 1), dtype=bf16),
-                    prefix
-                    + "mtp.layers.0.mlp.gate_proj.biases": mx.zeros(
+                    prefix + "mtp.layers.0.mlp.gate_proj.scales": mx.ones(
+                        (16, 1), dtype=bf16
+                    ),
+                    prefix + "mtp.layers.0.mlp.gate_proj.biases": mx.zeros(
                         (16, 1), dtype=bf16
                     ),
                 }
@@ -293,12 +292,12 @@ def _write_qwen_donor(
         else:
             weights.update(
                 {
-                    prefix
-                    + "mtp.layers.0.self_attn.q_proj.weight": mx.ones(
+                    prefix + "mtp.layers.0.self_attn.q_proj.weight": mx.ones(
                         (8, 8), dtype=bf16
                     ),
-                    prefix
-                    + "mtp.layers.0.mlp.gate_proj.weight": mx.ones((16, 8), dtype=bf16),
+                    prefix + "mtp.layers.0.mlp.gate_proj.weight": mx.ones(
+                        (16, 8), dtype=bf16
+                    ),
                 }
             )
     (donor / "config.json").write_text(json.dumps(config))

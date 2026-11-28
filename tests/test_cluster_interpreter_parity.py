@@ -183,7 +183,9 @@ def stub_admission(monkeypatch):
         launch, "_validate_deployment_admission", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        launch, "ceiling_breakdown", lambda *_a, **_k: {"hard_limit": 512 * 1024**3},
+        launch,
+        "ceiling_breakdown",
+        lambda *_a, **_k: {"hard_limit": 512 * 1024**3},
         raising=False,
     )
     monkeypatch.setattr(
@@ -213,12 +215,14 @@ def _preflight_runner(python_version: str | None):
     ("local_version", "remote_version", "warning"),
     [
         pytest.param(
-            "3.11.9", "3.12.13",
+            "3.11.9",
+            "3.12.13",
             "python minor differs: local=3.11.9 remote=3.12.13",
             id="different-minor",
         ),
         pytest.param(
-            "3.12.13", "3.12.14",
+            "3.12.13",
+            "3.12.14",
             "python patch differs: local=3.12.13 remote=3.12.14",
             id="different-patch",
         ),

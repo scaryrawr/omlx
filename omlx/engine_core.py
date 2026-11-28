@@ -899,7 +899,7 @@ class EngineCore:
             # deferred abort is idempotent and harmless if it never landed).
             try:
                 self.scheduler.abort_request(request_id)
-            except Exception as abort_exc:  # noqa: BLE001
+            except Exception as abort_exc:
                 logger.debug(
                     f"Abort of partial insert for {request_id} failed: {abort_exc}"
                 )
@@ -1080,9 +1080,7 @@ class EngineCore:
                             # abort fires on measured usage, which the message
                             # already states.
                             "limit_bytes": (
-                                watermark or ceiling or None
-                                if reason is None
-                                else None
+                                watermark or ceiling or None if reason is None else None
                             ),
                         },
                     )
@@ -1528,8 +1526,7 @@ class EngineCore:
                     )
                 except Exception as exc:
                     fatal_exit(
-                        f"Engine {self._engine_id}: final MLX reclaim failed: "
-                        f"{exc!r}"
+                        f"Engine {self._engine_id}: final MLX reclaim failed: {exc!r}"
                     )
 
             # MLX 0.32.2 makes compiled AttachedData destruction GIL-safe, and

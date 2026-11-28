@@ -1871,8 +1871,9 @@ class TestGlobalSettings:
 
     def test_env_override_server(self):
         """Test environment variable override for server settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {
                     "OMLX_HOST": "0.0.0.0",
@@ -1880,23 +1881,26 @@ class TestGlobalSettings:
                     "OMLX_LOG_LEVEL": "debug",
                 },
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.server.host == "0.0.0.0"
-                assert settings.server.port == 9999
-                assert settings.server.log_level == "debug"
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.server.host == "0.0.0.0"
+            assert settings.server.port == 9999
+            assert settings.server.log_level == "debug"
 
     def test_env_override_max_audio_upload_size(self):
         """OMLX_MAX_AUDIO_UPLOAD_SIZE overrides the default 100MB cap."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_MAX_AUDIO_UPLOAD_SIZE": "250MB"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.server.max_audio_upload_size == "250MB"
-                assert settings.server.max_audio_upload_bytes() == 250 * 1024 * 1024
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.server.max_audio_upload_size == "250MB"
+            assert settings.server.max_audio_upload_bytes() == 250 * 1024 * 1024
 
     def test_cli_override_max_audio_upload_size(self):
         """--max-audio-upload-size is applied via CLI overrides."""
@@ -1912,19 +1916,21 @@ class TestGlobalSettings:
 
     def test_env_override_max_image_settings(self):
         """OMLX_MAX_IMAGE_UPLOAD_SIZE and OMLX_MAX_IMAGE_SIDE_LENGTH override defaults."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {
                     "OMLX_MAX_IMAGE_UPLOAD_SIZE": "25MB",
                     "OMLX_MAX_IMAGE_SIDE_LENGTH": "1024",
                 },
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.server.max_image_upload_size == "25MB"
-                assert settings.server.max_image_upload_bytes() == 25 * 1024 * 1024
-                assert settings.server.max_image_side_length == 1024
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.server.max_image_upload_size == "25MB"
+            assert settings.server.max_image_upload_bytes() == 25 * 1024 * 1024
+            assert settings.server.max_image_side_length == 1024
 
     def test_cli_override_max_image_settings(self):
         """--max-image-upload-size and --max-image-side-length are applied via CLI overrides."""
@@ -1944,54 +1950,63 @@ class TestGlobalSettings:
 
     def test_env_override_model(self):
         """Test environment variable override for model settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {
                     "OMLX_MODEL_DIR": "/env/models",
                 },
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.model.model_dir == "/env/models"
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.model.model_dir == "/env/models"
 
     def test_env_override_scheduler(self):
         """Test environment variable override for scheduler settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_MAX_CONCURRENT_REQUESTS": "512"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.scheduler.max_concurrent_requests == 512
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.scheduler.max_concurrent_requests == 512
 
     def test_env_override_embedding_batch_size(self):
         """Test environment variable override for embedding batch size."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_EMBEDDING_BATCH_SIZE": "24"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.scheduler.embedding_batch_size == 24
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.scheduler.embedding_batch_size == 24
 
     def test_env_override_scheduler_legacy_fallback(self):
         """Test legacy OMLX_MAX_NUM_SEQS env var is accepted as fallback."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_MAX_NUM_SEQS": "256"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.scheduler.max_concurrent_requests == 256
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.scheduler.max_concurrent_requests == 256
 
     def test_env_override_cache(self):
         """Test environment variable override for cache settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {
                     "OMLX_CACHE_ENABLED": "false",
@@ -2001,24 +2016,27 @@ class TestGlobalSettings:
                     "OMLX_GDN_SSD_PENDING_MAX_SIZE": "1GB",
                 },
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.cache.enabled is False
-                assert settings.cache.ssd_cache_dir == "/env/cache"
-                assert settings.cache.ssd_cache_max_size == "200GB"
-                assert settings.cache.gdn_ssd_split_enabled is True
-                assert settings.cache.gdn_ssd_pending_max_size == "1GB"
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.cache.enabled is False
+            assert settings.cache.ssd_cache_dir == "/env/cache"
+            assert settings.cache.ssd_cache_max_size == "200GB"
+            assert settings.cache.gdn_ssd_split_enabled is True
+            assert settings.cache.gdn_ssd_pending_max_size == "1GB"
 
     def test_env_override_initial_cache_blocks(self):
         """Test environment variable override for initial_cache_blocks."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_INITIAL_CACHE_BLOCKS": "16384"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.cache.initial_cache_blocks == 16384
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.cache.initial_cache_blocks == 16384
 
     def test_env_override_cache_enabled_values(self):
         """Test various values for OMLX_CACHE_ENABLED."""
@@ -2035,35 +2053,40 @@ class TestGlobalSettings:
 
     def test_env_override_auth(self):
         """Test environment variable override for auth settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(os.environ, {"OMLX_API_KEY": "env-key"}, clear=False):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.auth.api_key == "env-key"
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, {"OMLX_API_KEY": "env-key"}, clear=False),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.auth.api_key == "env-key"
 
     def test_env_override_mcp(self):
         """Test environment variable override for MCP settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
-                os.environ, {"OMLX_MCP_CONFIG": "/env/mcp.json"}, clear=False
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.mcp.config_path == "/env/mcp.json"
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, {"OMLX_MCP_CONFIG": "/env/mcp.json"}, clear=False),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.mcp.config_path == "/env/mcp.json"
 
     def test_env_override_hf_endpoint(self):
         """Test environment variable override for HuggingFace settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {"OMLX_HF_ENDPOINT": "https://hf-mirror.com"},
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.huggingface.endpoint == "https://hf-mirror.com"
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.huggingface.endpoint == "https://hf-mirror.com"
 
     def test_env_override_network(self):
         """Test environment variable override for network proxy settings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
                 os.environ,
                 {
                     "OMLX_HTTP_PROXY": "http://proxy.company.com:8080",
@@ -2072,20 +2095,23 @@ class TestGlobalSettings:
                     "OMLX_CA_BUNDLE": "/tmp/corp-ca.pem",
                 },
                 clear=False,
-            ):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.network.http_proxy == "http://proxy.company.com:8080"
-                assert settings.network.https_proxy == "http://proxy.company.com:8443"
-                assert settings.network.no_proxy == "localhost,127.0.0.1"
-                assert settings.network.ca_bundle == "/tmp/corp-ca.pem"
+            ),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            assert settings.network.http_proxy == "http://proxy.company.com:8080"
+            assert settings.network.https_proxy == "http://proxy.company.com:8443"
+            assert settings.network.no_proxy == "localhost,127.0.0.1"
+            assert settings.network.ca_bundle == "/tmp/corp-ca.pem"
 
     def test_env_override_invalid_port_logs_warning(self):
         """Test invalid OMLX_PORT logs warning and keeps default."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.dict(os.environ, {"OMLX_PORT": "not-a-number"}, clear=False):
-                settings = GlobalSettings.load(base_path=tmpdir)
-                # Should keep default due to parse error
-                assert settings.server.port == 8000
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, {"OMLX_PORT": "not-a-number"}, clear=False),
+        ):
+            settings = GlobalSettings.load(base_path=tmpdir)
+            # Should keep default due to parse error
+            assert settings.server.port == 8000
 
     def test_env_override_after_file(self):
         """Test env vars override file settings."""
@@ -2426,7 +2452,7 @@ class TestInitSettings:
             tempfile.TemporaryDirectory() as tmpdir1,
             tempfile.TemporaryDirectory() as tmpdir2,
         ):
-            settings1 = init_settings(base_path=tmpdir1)
+            init_settings(base_path=tmpdir1)
             settings2 = init_settings(base_path=tmpdir2)
 
             assert get_settings() is settings2

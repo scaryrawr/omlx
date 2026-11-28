@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 import omlx.admin.accuracy_benchmark as accuracy_benchmark
 from omlx.admin.accuracy_benchmark import (
     VALID_BENCHMARKS,
     AccuracyBenchmarkRequest,
-    AccuracyBenchmarkRun,
     _accumulated_results,
     add_to_queue,
     cancel_queue,
@@ -55,14 +55,14 @@ class TestAccuracyBenchmarkRequest:
         assert req.benchmarks["mmlu"] == 0
 
     def test_empty_benchmarks_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             AccuracyBenchmarkRequest(
                 model_id="test-model",
                 benchmarks={},
             )
 
     def test_invalid_benchmark_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             AccuracyBenchmarkRequest(
                 model_id="test-model",
                 benchmarks={"invalid_bench": 100},
@@ -106,7 +106,7 @@ class TestAccuracyBenchmarkRequest:
         assert req.sampling_profile == "model_settings"
 
     def test_sampling_profile_invalid_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             AccuracyBenchmarkRequest(
                 model_id="test-model",
                 benchmarks={"mmlu": 100},
@@ -117,6 +117,7 @@ class TestAccuracyBenchmarkRequest:
 class TestQueueAndResults:
     def setup_method(self):
         from omlx.admin.accuracy_benchmark import _queue
+
         _queue.clear()
         reset_accumulated_results()
 
@@ -136,13 +137,17 @@ class TestQueueAndResults:
         assert len(status["queue"]) == 0
 
     def test_accumulated_results(self):
-        _accumulated_results.append({"model_id": "m1", "benchmark": "mmlu", "accuracy": 0.5})
+        _accumulated_results.append(
+            {"model_id": "m1", "benchmark": "mmlu", "accuracy": 0.5}
+        )
         results = get_accumulated_results()
         assert len(results) == 1
         assert results[0]["model_id"] == "m1"
 
     def test_reset_accumulated_results(self):
-        _accumulated_results.append({"model_id": "m1", "benchmark": "mmlu", "accuracy": 0.5})
+        _accumulated_results.append(
+            {"model_id": "m1", "benchmark": "mmlu", "accuracy": 0.5}
+        )
         reset_accumulated_results()
         assert len(get_accumulated_results()) == 0
 
@@ -150,6 +155,7 @@ class TestQueueAndResults:
 class TestRunLifecycle:
     def setup_method(self):
         from omlx.admin.accuracy_benchmark import _accuracy_runs
+
         _accuracy_runs.clear()
 
     def test_create_run(self):
@@ -265,14 +271,16 @@ class TestRunAccuracyBenchmark:
 
         mock_evaluator = MagicMock()
         mock_evaluator.load_dataset = AsyncMock(return_value=[])
-        mock_evaluator.run = AsyncMock(return_value=MagicMock(
-            benchmark_name="mmlu",
-            accuracy=0.0,
-            total_questions=0,
-            correct_count=0,
-            time_seconds=0.0,
-            category_scores=None,
-        ))
+        mock_evaluator.run = AsyncMock(
+            return_value=MagicMock(
+                benchmark_name="mmlu",
+                accuracy=0.0,
+                total_questions=0,
+                correct_count=0,
+                time_seconds=0.0,
+                category_scores=None,
+            )
+        )
 
         mock_bench_cls = MagicMock(return_value=mock_evaluator)
 
@@ -281,7 +289,6 @@ class TestRunAccuracyBenchmark:
 
         # Should have stopped early
         assert len(run.results) == 0
-
 
     @pytest.mark.asyncio
     async def test_resident_target_is_reused_and_leased_for_the_run(self):
@@ -340,14 +347,20 @@ class TestSamplingProfile:
         mock_pool.get_engine = AsyncMock(return_value=mock_engine)
         mock_pool._unload_engine = AsyncMock()
         mock_pool.release_engine = AsyncMock()
-        mock_pool._settings_manager.get_settings = MagicMock(return_value=model_settings)
+        mock_pool._settings_manager.get_settings = MagicMock(
+            return_value=model_settings
+        )
         return mock_pool
 
     async def _captured_sampling_kwargs(self, req, mock_pool):
         run = create_run(req)
         mock_result = MagicMock(
-            benchmark_name="mmlu", accuracy=0.5, total_questions=1,
-            correct_count=1, time_seconds=0.1, category_scores=None,
+            benchmark_name="mmlu",
+            accuracy=0.5,
+            total_questions=1,
+            correct_count=1,
+            time_seconds=0.1,
+            category_scores=None,
             thinking_used=False,
         )
         mock_evaluator = MagicMock()
@@ -701,17 +714,19 @@ class TestLocalTruncation:
 
     @pytest.mark.asyncio
     async def test_budget_limited_answers_are_counted(self):
-        result = await self._run_local([
-            self._question(0, True, "stop", 900),
-            self._question(1, True, "stop", 1200),
-            self._question(2, False, "stop", 700),
-            self._question(3, False, "length", 8192),
-            # Cut off after the answer was already stated: scored correct.
-            self._question(4, True, "length", 128),
-            # Engine errors, raised or reported: neither truncated nor finished.
-            self._question(5, False, None, 0),
-            self._question(6, False, "error", 12),
-        ])
+        result = await self._run_local(
+            [
+                self._question(0, True, "stop", 900),
+                self._question(1, True, "stop", 1200),
+                self._question(2, False, "stop", 700),
+                self._question(3, False, "length", 8192),
+                # Cut off after the answer was already stated: scored correct.
+                self._question(4, True, "length", 128),
+                # Engine errors, raised or reported: neither truncated nor finished.
+                self._question(5, False, None, 0),
+                self._question(6, False, "error", 12),
+            ]
+        )
         assert result["truncated_count"] == 2
         assert result["truncated_correct_count"] == 1
         assert result["finished_count"] == 3
@@ -726,20 +741,24 @@ class TestLocalTruncation:
 
     @pytest.mark.asyncio
     async def test_clean_run_reports_zero_truncation(self):
-        result = await self._run_local([
-            self._question(0, True, "stop", 900),
-            self._question(1, False, "stop", 700),
-        ])
+        result = await self._run_local(
+            [
+                self._question(0, True, "stop", 900),
+                self._question(1, False, "stop", 700),
+            ]
+        )
         assert result["truncated_count"] == 0
         assert result["truncated_correct_count"] == 0
         assert result["finished_accuracy"] == result["accuracy"]
 
     @pytest.mark.asyncio
     async def test_all_truncated_has_no_finished_accuracy(self):
-        result = await self._run_local([
-            self._question(0, False, "length", 8192),
-            self._question(1, False, "length", 8192),
-        ])
+        result = await self._run_local(
+            [
+                self._question(0, False, "length", 8192),
+                self._question(1, False, "length", 8192),
+            ]
+        )
         assert result["truncated_count"] == 2
         assert result["finished_count"] == 0
         assert result["finished_accuracy"] is None
@@ -848,9 +867,16 @@ class TestQueueChainOwnership:
             async def load_dataset(self, sample_size=0):
                 return [{"id": "1"}]
 
-            async def run(self, engine, items, on_progress, batch_size=1,
-                          sampling_kwargs=None, enable_thinking=False,
-                          max_tokens_override=None):
+            async def run(
+                self,
+                engine,
+                items,
+                on_progress,
+                batch_size=1,
+                sampling_kwargs=None,
+                enable_thinking=False,
+                max_tokens_override=None,
+            ):
                 nonlocal b_finished_normally
                 if engine.model_id == "model-b":
                     b_entered.set()
@@ -893,9 +919,7 @@ class TestQueueChainOwnership:
         accuracy_benchmark._current_run_id = "live-run"
         accuracy_benchmark._current_model = "model-c"
 
-        await accuracy_benchmark._continue_queue(
-            pool, accuracy_benchmark._chain_id - 1
-        )
+        await accuracy_benchmark._continue_queue(pool, accuracy_benchmark._chain_id - 1)
 
         status = get_queue_status()
         assert [q["model_id"] for q in status["queue"]] == ["model-d"]
@@ -925,9 +949,16 @@ class TestQueueChainOwnership:
             async def load_dataset(self, sample_size=0):
                 return [{"id": "1"}]
 
-            async def run(self, engine, items, on_progress, batch_size=1,
-                          sampling_kwargs=None, enable_thinking=False,
-                          max_tokens_override=None):
+            async def run(
+                self,
+                engine,
+                items,
+                on_progress,
+                batch_size=1,
+                sampling_kwargs=None,
+                enable_thinking=False,
+                max_tokens_override=None,
+            ):
                 run_log.append(("enter", engine.model_id))
                 try:
                     if engine.model_id == "model-b":
@@ -988,14 +1019,14 @@ class TestQueueChainOwnership:
             # The live chain finishes model-c, then runs model-d normally.
             c_release.set()
             await self._wait_for(
-                lambda: not get_queue_status()["running"]
-                and not get_queue_status()["queue"]
+                lambda: (
+                    not get_queue_status()["running"]
+                    and not get_queue_status()["queue"]
+                )
             )
 
         # model-d ran strictly after model-c finished — never concurrently.
-        assert run_log.index(("enter", "model-d")) > run_log.index(
-            ("exit", "model-c")
-        )
+        assert run_log.index(("enter", "model-d")) > run_log.index(("exit", "model-c"))
         completed = [r["model_id"] for r in get_accumulated_results()]
         assert completed == ["model-a", "model-c", "model-d"]
 
@@ -1059,13 +1090,13 @@ class TestCommunityUpload:
         with (
             patch.dict(
                 "omlx.eval.BENCHMARKS",
-                {"mmlu": self._mock_bench_cls("mmlu"),
-                 "gsm8k": self._mock_bench_cls("gsm8k")},
+                {
+                    "mmlu": self._mock_bench_cls("mmlu"),
+                    "gsm8k": self._mock_bench_cls("gsm8k"),
+                },
                 clear=True,
             ),
-            patch(
-                "omlx.admin.accuracy_benchmark.build_upload_context", mock_build
-            ),
+            patch("omlx.admin.accuracy_benchmark.build_upload_context", mock_build),
             patch(
                 "omlx.admin.accuracy_benchmark.upload_intelligence_result",
                 mock_upload,
@@ -1127,9 +1158,7 @@ class TestCommunityUpload:
                 "omlx.admin.accuracy_benchmark.ExternalChatAdapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "omlx.admin.accuracy_benchmark.build_upload_context", mock_build
-            ),
+            patch("omlx.admin.accuracy_benchmark.build_upload_context", mock_build),
             patch(
                 "omlx.admin.accuracy_benchmark.upload_intelligence_result",
                 mock_upload,

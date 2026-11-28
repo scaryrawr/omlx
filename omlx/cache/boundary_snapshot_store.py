@@ -53,9 +53,7 @@ _MAX_PENDING_WRITES = 128
 _DEFAULT_PENDING_MAX_BYTES = 512 * 1024 * 1024
 _PENDING_RESERVATION_TIMEOUT_S = 2.0
 _GDN_SIDECAR_FORMAT_VERSION = "2"
-_GDN_STATE_DTYPES = frozenset(
-    {"fp32", "bf16", "int8", "rht_int8", "rht_int16"}
-)
+_GDN_STATE_DTYPES = frozenset({"fp32", "bf16", "int8", "rht_int8", "rht_int16"})
 _GDN_INT8_CODEC = "int8_rowwise_last_axis_v1"
 _GDN_RHT_INT8_CODEC = "rht_int8_rowwise_last_axis_v1"
 _GDN_RHT_INT16_CODEC = "rht_int16_rowwise_last_axis_v1"
@@ -347,9 +345,9 @@ class BoundarySnapshotSSDStore:
                 # deciding which writes to cancel, so it cannot remove the
                 # marker and then race this registration.
                 with self._registry_lock:
-                    self._file_registry.setdefault(request_id, {})[
-                        token_count
-                    ] = file_path
+                    self._file_registry.setdefault(request_id, {})[token_count] = (
+                        file_path
+                    )
 
             # 5. Enqueue for background write.  Saturation never falls back
             # to retaining MLX state in RAM: after the bounded wait above we
@@ -362,8 +360,7 @@ class BoundarySnapshotSSDStore:
                 self._write_queue.put_nowait((pw_key, pending, file_path))
             except queue.Full:
                 logger.warning(
-                    "Boundary snapshot write queue full, writing "
-                    "snapshot %s/%d inline",
+                    "Boundary snapshot write queue full, writing snapshot %s/%d inline",
                     request_id,
                     token_count,
                 )
@@ -397,7 +394,9 @@ class BoundarySnapshotSSDStore:
         except (TypeError, ValueError):
             return None
         if not self._is_safe_snapshot_path(file_path):
-            logger.warning("Refusing to load unsafe boundary snapshot path: %s", file_path)
+            logger.warning(
+                "Refusing to load unsafe boundary snapshot path: %s", file_path
+            )
             return None
 
         # Fast path: still in pending writes buffer.
@@ -477,7 +476,9 @@ class BoundarySnapshotSSDStore:
                 mx.eval(*arrays.values())
             return reconstructed
         except Exception as e:
-            logger.debug("Failed to load committed boundary snapshot %s: %s", file_path, e)
+            logger.debug(
+                "Failed to load committed boundary snapshot %s: %s", file_path, e
+            )
             return None
 
     def take_staged_file(
@@ -695,9 +696,7 @@ class BoundarySnapshotSSDStore:
         # pulled. If it's genuinely stuck (slow disk, dead thread) fall
         # back to the cancelled-counter rescue rather than blocking the
         # caller.
-        acquired = self._writer_busy.acquire(
-            timeout=self._CLEANUP_REQUEST_TIMEOUT_S
-        )
+        acquired = self._writer_busy.acquire(timeout=self._CLEANUP_REQUEST_TIMEOUT_S)
         try:
             # Remove files.
             req_dir = self._request_dir(request_id)
@@ -763,9 +762,7 @@ class BoundarySnapshotSSDStore:
                         # If cleanup_all is the LAST call before process
                         # exit without an explicit shutdown(), the writer
                         # thread will only be reaped on daemon teardown.
-                        logger.debug(
-                            "cleanup_all: dropped writer-sentinel on Full"
-                        )
+                        logger.debug("cleanup_all: dropped writer-sentinel on Full")
                     break
                 drained_items.append(item)
             except queue.Empty:
@@ -779,9 +776,7 @@ class BoundarySnapshotSSDStore:
         # path. After the timeout we proceed anyway: the worst case is
         # an orphaned file in the recreated directory, which next
         # startup's cleanup_all() will clear.
-        acquired = self._writer_busy.acquire(
-            timeout=self._CLEANUP_ALL_TIMEOUT_S
-        )
+        acquired = self._writer_busy.acquire(timeout=self._CLEANUP_ALL_TIMEOUT_S)
         try:
             if not acquired:
                 logger.warning(
@@ -819,9 +814,7 @@ class BoundarySnapshotSSDStore:
                 try:
                     shutil.rmtree(self._snapshot_dir)
                 except Exception as e:
-                    logger.debug(
-                        "Failed to clean up all boundary snapshots: %s", e
-                    )
+                    logger.debug("Failed to clean up all boundary snapshots: %s", e)
             self._snapshot_dir.mkdir(parents=True, exist_ok=True)
         finally:
             if acquired:
@@ -922,9 +915,7 @@ class BoundarySnapshotSSDStore:
         """Remove ``pending`` only if it is still this key's generation."""
         if self._pending_writes.get(pw_key) is not pending:
             return False
-        self._remove_pending_locked(
-            pw_key, release_reservation=release_reservation
-        )
+        self._remove_pending_locked(pw_key, release_reservation=release_reservation)
         return True
 
     def _drop_registry_entry(self, request_id: str, token_count: int) -> None:
@@ -952,9 +943,10 @@ class BoundarySnapshotSSDStore:
             with self._writer_busy:
                 with self._pending_cond:
                     candidate = self._pending_writes.get(pw_key)
-                    owns_pending = candidate is not None and candidate.get(
-                        "tensors_raw"
-                    ) is tensors_raw
+                    owns_pending = (
+                        candidate is not None
+                        and candidate.get("tensors_raw") is tensors_raw
+                    )
                 if not owns_pending:
                     # cleanup_request may have removed the inline marker and
                     # consumed its cancellation counter before this writer
@@ -965,20 +957,14 @@ class BoundarySnapshotSSDStore:
                     return False
                 if self._is_cancelled(pw_key[0]):
                     return False
-                if (
-                    not self._is_safe_snapshot_path(file_path)
-                    or temp_path.is_symlink()
-                ):
+                if not self._is_safe_snapshot_path(file_path) or temp_path.is_symlink():
                     logger.warning(
                         "Refusing to stage boundary snapshot through symlink: %s",
                         file_path,
                     )
                     return False
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                if (
-                    not self._is_safe_snapshot_path(file_path)
-                    or temp_path.is_symlink()
-                ):
+                if not self._is_safe_snapshot_path(file_path) or temp_path.is_symlink():
                     logger.warning(
                         "Refusing to stage boundary snapshot through symlink: %s",
                         file_path,
@@ -990,10 +976,7 @@ class BoundarySnapshotSSDStore:
                         temp_path.unlink()
                     self._dec_cancelled(pw_key[0])
                     return False
-                if (
-                    not self._is_safe_snapshot_path(file_path)
-                    or temp_path.is_symlink()
-                ):
+                if not self._is_safe_snapshot_path(file_path) or temp_path.is_symlink():
                     with suppress(OSError):
                         temp_path.unlink()
                     logger.warning(
@@ -1123,10 +1106,7 @@ class BoundarySnapshotSSDStore:
                 return
             file_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = _unique_tmp_path(file_path)
-            if (
-                not self._is_safe_snapshot_path(file_path)
-                or temp_path.is_symlink()
-            ):
+            if not self._is_safe_snapshot_path(file_path) or temp_path.is_symlink():
                 logger.warning(
                     "Refusing to stage boundary snapshot through symlink: %s",
                     file_path,
@@ -1204,8 +1184,7 @@ class BoundarySnapshotSSDStore:
                 )
                 self._release_pending_reservation_locked(pending)
             if removed and (
-                not self._is_safe_snapshot_path(file_path)
-                or not file_path.is_file()
+                not self._is_safe_snapshot_path(file_path) or not file_path.is_file()
             ):
                 self._drop_registry_entry(pw_key[0], pw_key[1])
 
@@ -1314,9 +1293,7 @@ class BoundarySnapshotSSDStore:
                                     _GDN_RHT_INT8_CODEC,
                                     _GDN_RHT_INT16_CODEC,
                                 }:
-                                    info[f"state_{k}_rht_seed"] = str(
-                                        _GDN_RHT_SEED
-                                    )
+                                    info[f"state_{k}_rht_seed"] = str(_GDN_RHT_SEED)
                                     info[f"state_{k}_rht_dim"] = str(elem.shape[-1])
                             else:
                                 arrays[key] = elem
@@ -1632,14 +1609,10 @@ class BoundarySnapshotSSDStore:
                 scale_raw = tensors_raw.get(scale_key)
                 if scale_raw is None:
                     kind = "int16" if codec in _GDN_INT16_CODECS else "int8"
-                    raise ValueError(
-                        f"missing GDN {kind} scale tensor: {scale_key}"
-                    )
+                    raise ValueError(f"missing GDN {kind} scale tensor: {scale_key}")
                 raw, dtype_str, shape = scale_raw
                 scale = _restore_tensor_from_bytes(raw, dtype_str, shape)
-                payload_dtype = (
-                    mx.int16 if codec in _GDN_INT16_CODECS else mx.int8
-                )
+                payload_dtype = mx.int16 if codec in _GDN_INT16_CODECS else mx.int8
                 self._validate_gdn_scale(
                     tensor, scale, scale_key, payload_dtype=payload_dtype
                 )
@@ -1677,12 +1650,8 @@ class BoundarySnapshotSSDStore:
                 scale = arrays.get(scale_key)
                 if scale is None:
                     kind = "int16" if codec in _GDN_INT16_CODECS else "int8"
-                    raise ValueError(
-                        f"missing GDN {kind} scale tensor: {scale_key}"
-                    )
-                payload_dtype = (
-                    mx.int16 if codec in _GDN_INT16_CODECS else mx.int8
-                )
+                    raise ValueError(f"missing GDN {kind} scale tensor: {scale_key}")
+                payload_dtype = mx.int16 if codec in _GDN_INT16_CODECS else mx.int8
                 self._validate_gdn_scale(
                     tensor, scale, scale_key, payload_dtype=payload_dtype
                 )

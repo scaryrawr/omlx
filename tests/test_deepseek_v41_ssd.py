@@ -150,7 +150,9 @@ def test_real_ssd_reopen_full_and_partial_prefix(
     store = BoundarySnapshotSSDStore(tmp_path / "boundary")
     try:
         prefix = open_prefix(ssd)
-        assert not prefix._gdn_split_layout_supported(["DeepseekV41Cache"] * len(model.layers))
+        assert not prefix._gdn_split_layout_supported(
+            ["DeepseekV41Cache"] * len(model.layers)
+        )
         for end in range(block_size, 13, block_size):
             following = block_size if decoder_replay == "skip" and end < 12 else 0
             mx.eval(

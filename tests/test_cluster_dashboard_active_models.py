@@ -20,7 +20,6 @@ from omlx.engine.distributed import DistributedBatchedEngine
 from omlx.engine_pool import EngineEntry, EnginePool
 
 
-
 def _deployment(
     model_path: str = "/models/nemotron",
     *,
@@ -41,9 +40,7 @@ def _deployment(
             for rank, node_id in enumerate(node_ids)
         ),
         assignments=tuple(
-            PipelineAssignment(
-                node_id, rank, rank * 2, rank * 2 + 2, 10, 10, 8, 128
-            )
+            PipelineAssignment(node_id, rank, rank * 2, rank * 2 + 2, 10, 10, 8, 128)
             for rank, node_id in enumerate(node_ids)
         ),
         plan_hash="d" * 64,
@@ -121,9 +118,7 @@ def test_get_live_metrics_reads_rank_zero_marker(tmp_path):
 def test_get_live_metrics_marks_old_heartbeat_stale(tmp_path):
     engine = _engine_with_marker(tmp_path)
     payload = _metrics_payload()
-    payload["updated_at"] = (
-        datetime.now(UTC) - timedelta(seconds=120)
-    ).isoformat()
+    payload["updated_at"] = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     _write_marker(tmp_path, "dash-test", payload)
 
     live = engine.get_live_metrics()
@@ -153,9 +148,7 @@ def test_get_live_metrics_returns_none_without_marker_or_metrics(tmp_path):
 def _pool_with_cluster_entry(tmp_path, deployment) -> EnginePool:
     pool = EnginePool()
     pool._cluster_registry = SimpleNamespace(
-        get_for_model=lambda model: deployment
-        if model == deployment.model
-        else None
+        get_for_model=lambda model: deployment if model == deployment.model else None
     )
     pool._entries["nemotron"] = EngineEntry(
         model_id="nemotron",
@@ -186,9 +179,9 @@ def test_pool_status_cluster_payload_pipeline_strategy(tmp_path):
 
 def test_pool_status_cluster_payload_tensor_strategy(tmp_path):
     deployment = _deployment(host_count=2, tensor_parallel_size=2)
-    cluster = _pool_with_cluster_entry(tmp_path, deployment).get_status()[
-        "models"
-    ][0]["cluster"]
+    cluster = _pool_with_cluster_entry(tmp_path, deployment).get_status()["models"][0][
+        "cluster"
+    ]
 
     assert cluster["strategy"] == "tensor"
     assert cluster["tensor_parallel_size"] == 2
@@ -197,9 +190,9 @@ def test_pool_status_cluster_payload_tensor_strategy(tmp_path):
 
 def test_pool_status_cluster_payload_hybrid_strategy(tmp_path):
     deployment = _deployment(host_count=4, tensor_parallel_size=2)
-    cluster = _pool_with_cluster_entry(tmp_path, deployment).get_status()[
-        "models"
-    ][0]["cluster"]
+    cluster = _pool_with_cluster_entry(tmp_path, deployment).get_status()["models"][0][
+        "cluster"
+    ]
 
     assert cluster["strategy"] == "hybrid"
     assert cluster["world_size"] == 4

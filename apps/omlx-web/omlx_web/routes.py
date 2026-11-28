@@ -6,6 +6,7 @@ Request-time values come from the WebUIHost that the server sets, so this
 module does not import omlx.
 """
 
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -49,10 +50,8 @@ templates.env.globals["static"] = _static_version
 # i18n defaults (English). _sync_locale() switches them per render.
 _i18n_dir = Path(__file__).parent / "i18n"
 _en_locale: dict = {}
-try:
+with contextlib.suppress(Exception):
     _en_locale = json.loads((_i18n_dir / "en.json").read_text(encoding="utf-8"))
-except Exception:
-    pass
 templates.env.globals["t"] = lambda key: _en_locale.get(key, key)
 templates.env.globals["custom_theme"] = lambda: None
 templates.env.globals["locale_json"] = json.dumps(_en_locale, ensure_ascii=False)

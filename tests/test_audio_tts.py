@@ -11,6 +11,7 @@ required. Integration tests (marked @pytest.mark.slow) need a real model.
 import asyncio
 import base64
 import builtins
+import contextlib
 import io
 import re
 import struct
@@ -18,6 +19,7 @@ import threading
 import tomllib
 import wave
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -250,8 +252,9 @@ class TestTTSKokoroLangInference:
 
     @staticmethod
     def _engine_with_fake_model(captured: dict):
-        import numpy as np
         from types import SimpleNamespace
+
+        import numpy as np
 
         from omlx.engine.tts import TTSEngine
 
@@ -660,9 +663,9 @@ class TestTTSEndpointErrors:
         )
 
         assert response.status_code == 400
-        detail = response.json().get("detail") or response.json().get(
-            "error", {}
-        ).get("message", "")
+        detail = response.json().get("detail") or response.json().get("error", {}).get(
+            "message", ""
+        )
         assert "Qwen3-TTS" in detail
 
     def test_missing_model_field_returns_error(self, server_tts_client):
@@ -929,9 +932,7 @@ class TestTTSStreaming:
         assert response.status_code == 500
         assert "audio/wav" not in response.headers.get("content-type", "")
 
-    def test_streaming_unsupported_kokoro_language_returns_400(
-        self, server_tts_client
-    ):
+    def test_streaming_unsupported_kokoro_language_returns_400(self, server_tts_client):
         from omlx.exceptions import UnsupportedKokoroLanguageError
 
         client, mock_pool = server_tts_client
@@ -950,9 +951,9 @@ class TestTTSStreaming:
         )
 
         assert response.status_code == 400
-        detail = response.json().get("detail") or response.json().get(
-            "error", {}
-        ).get("message", "")
+        detail = response.json().get("detail") or response.json().get("error", {}).get(
+            "message", ""
+        )
         assert "Qwen3-TTS" in detail
 
 
@@ -1009,9 +1010,11 @@ class TestTTSLFM3Speech:
             assert seen["active"] is True
             assert engine.has_active_requests() is False
 
-            with patch.object(LFM3Speech, "_run", side_effect=RuntimeError("boom")):
-                with pytest.raises(RuntimeError, match="boom"):
-                    asyncio.run(speech.transcribe("clip.wav"))
+            with (
+                patch.object(LFM3Speech, "_run", side_effect=RuntimeError("boom")),
+                pytest.raises(RuntimeError, match="boom"),
+            ):
+                asyncio.run(speech.transcribe("clip.wav"))
             assert engine.has_active_requests() is False
         finally:
             executor.shutdown()
@@ -1219,7 +1222,7 @@ class TestTTSVoiceRouting:
 
             engine._model = fake_model
 
-            try:
+            with suppress(RuntimeError):
                 asyncio.run(
                     engine.synthesize(
                         "Hello",
@@ -1228,8 +1231,6 @@ class TestTTSVoiceRouting:
                         **synth_kwargs,
                     )
                 )
-            except RuntimeError:
-                pass  # "no audio output" is expected with empty generate
 
             return fake_model.generate.call_args
 
@@ -1332,10 +1333,8 @@ class TestTTSVoiceRouting:
         fake_model.generate = generate_mock
         engine._model = fake_model
 
-        try:
+        with contextlib.suppress(RuntimeError):
             asyncio.run(engine.synthesize("Hello", "Vivian", 0.75))
-        except RuntimeError:
-            pass
 
         kwargs = fake_model.generate.call_args.kwargs
         assert kwargs.get("voice") == "Vivian"
@@ -1414,7 +1413,7 @@ class TestTTSVoiceClonePassthrough:
 
             engine._model = fake_model
 
-            try:
+            with suppress(RuntimeError):
                 asyncio.run(
                     engine.synthesize(
                         "Hello",
@@ -1422,8 +1421,6 @@ class TestTTSVoiceClonePassthrough:
                         ref_text=ref_text,
                     )
                 )
-            except RuntimeError:
-                pass  # "no audio output" expected
 
             return fake_model.generate.call_args
 
@@ -1719,10 +1716,8 @@ class TestTTSGenerationParams:
             fake_model.generate = generate_mock
             engine._model = fake_model
 
-            try:
+            with contextlib.suppress(RuntimeError):
                 asyncio.run(engine.synthesize("Hello", **synth_kwargs))
-            except RuntimeError:
-                pass
 
             return fake_model.generate.call_args
 
@@ -1858,12 +1853,8 @@ class TestMing3Patches:
             assert got_last == want_last
             assert mx.array_equal(got, want).item()
 
-    @pytest.mark.parametrize(
-        "cfg, temperature", [(2.0, 0.5), (1.0, 0.5), (0.0, 0.0)]
-    )
-    def test_tiny_compiled_flow_matches_eager_flow(
-        self, monkeypatch, cfg, temperature
-    ):
+    @pytest.mark.parametrize("cfg, temperature", [(2.0, 0.5), (1.0, 0.5), (0.0, 0.0)])
+    def test_tiny_compiled_flow_matches_eager_flow(self, monkeypatch, cfg, temperature):
         from omlx.patches.mlx_audio_ming3 import apply_ming3_patches
 
         tiny_flow = pytest.importorskip("mlx_audio.tts.models.lingv3_tts.flow")

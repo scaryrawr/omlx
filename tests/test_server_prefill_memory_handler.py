@@ -230,9 +230,7 @@ class TestJsonResponseOrKeepaliveFastPath:
         async def _succeed_fast():
             return '{"ok": true}'
 
-        resp = await srv._json_response_or_keepalive(
-            self._Request(), _succeed_fast()
-        )
+        resp = await srv._json_response_or_keepalive(self._Request(), _succeed_fast())
         assert resp.status_code == 200
         assert resp.body == b'{"ok": true}'
 
@@ -401,22 +399,22 @@ class TestResponsesEndpointReaches400:
             fake_pool.check_ttl_expirations = AsyncMock()
             fake_pool.shutdown = AsyncMock()
             srv._server_state.engine_pool = fake_pool
-            with TestClient(app, raise_server_exceptions=False) as client:
-                with (
-                    patch.object(srv, "resolve_model_id", lambda name: name),
-                    patch.object(srv, "validate_context_window", lambda *a, **k: None),
-                ):
-                    resp = client.post(
-                        "/v1/responses",
-                        json={
-                            "model": "test-model",
-                            "input": "Hello, world.",
-                            "stream": False,
-                        },
-                    )
-            assert (
-                resp.status_code == 400
-            ), f"expected 400, got {resp.status_code}: {resp.text}"
+            with (
+                TestClient(app, raise_server_exceptions=False) as client,
+                patch.object(srv, "resolve_model_id", lambda name: name),
+                patch.object(srv, "validate_context_window", lambda *a, **k: None),
+            ):
+                resp = client.post(
+                    "/v1/responses",
+                    json={
+                        "model": "test-model",
+                        "input": "Hello, world.",
+                        "stream": False,
+                    },
+                )
+            assert resp.status_code == 400, (
+                f"expected 400, got {resp.status_code}: {resp.text}"
+            )
             body = resp.json()
             assert "error" in body, body
             assert "Prefill would require" in body["error"]["message"]

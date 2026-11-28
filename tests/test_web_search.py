@@ -241,9 +241,7 @@ class TestBraveProvider:
         assert seen["token"] == "key123"
         assert "q=mlx" in seen["url"]
         assert "count=5" in seen["url"]
-        assert rows == [
-            {"title": "T", "url": "https://example.com/", "snippet": "D"}
-        ]
+        assert rows == [{"title": "T", "url": "https://example.com/", "snippet": "D"}]
 
     async def test_empty_key_fails_without_request(self):
         def handler(request):
@@ -311,9 +309,7 @@ class TestSearXNGProvider:
         rows = await provider.search("mlx", 3)
         assert seen["url"].startswith("http://searx.local:8080/search?")
         assert "format=json" in seen["url"]
-        assert rows == [
-            {"title": "T", "url": "https://example.com/", "snippet": "C"}
-        ]
+        assert rows == [{"title": "T", "url": "https://example.com/", "snippet": "C"}]
 
     async def test_empty_url_fails(self):
         provider = SearXNGProvider("")
@@ -361,9 +357,7 @@ class TestRunWebSearch:
         assert payload["error"]["code"] == "unexpected_failure"
 
     async def test_max_results_setting_caps_results(self, monkeypatch):
-        monkeypatch.setattr(
-            websearch, "_ddgs_text", lambda q, n, b: fake_rows(10)
-        )
+        monkeypatch.setattr(websearch, "_ddgs_text", lambda q, n, b: fake_rows(10))
         payload = await run_web_search(
             "mlx", make_integrations(web_search_max_results=5)
         )
@@ -392,9 +386,7 @@ class TestRunWebSearch:
         assert len(seen["query"]) == websearch.MAX_QUERY_CHARS
 
     async def test_full_mode_attaches_page_content(self, monkeypatch):
-        monkeypatch.setattr(
-            websearch, "_ddgs_text", lambda q, n, b: fake_rows(2)
-        )
+        monkeypatch.setattr(websearch, "_ddgs_text", lambda q, n, b: fake_rows(2))
         fetched = []
 
         async def fake_fetch(url, transport=None, max_chars=0, truncate=True):
@@ -555,9 +547,7 @@ class TestFetchUrl:
 
     async def test_too_many_redirects(self, public_dns):
         def handler(request):
-            return httpx.Response(
-                301, headers={"location": "https://example.com/loop"}
-            )
+            return httpx.Response(301, headers={"location": "https://example.com/loop"})
 
         payload = await run_fetch_url(
             "https://example.com/", transport=httpx.MockTransport(handler)
@@ -774,7 +764,6 @@ class TestAdminWebSearchTest:
         assert response.json()["ok"] is True
         assert seen["backend"] == "yahoo,mojeek"
         assert seen["max_results"] == 7
-
 
     def test_failure_payload_passes_through(self):
         response = self._client().post(

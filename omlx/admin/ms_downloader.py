@@ -13,8 +13,8 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import requests
 
@@ -23,11 +23,11 @@ from .hf_downloader import (
     _ETA_WINDOW,
     DownloadStatus,
     DownloadTask,
+    _format_model_size,
+    _format_param_count,
     _QueuePersistenceMixin,
     _SpeedMeter,
     _WireSpeedMeter,
-    _format_model_size,
-    _format_param_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,11 +113,11 @@ def _extract_model_size_from_files(file_list: list) -> int:
 
 _ENRICH_CACHE: dict[str, tuple[float, dict]] = {}
 _ENRICH_CACHE_TTL = 24 * 3600  # 24h — config.json is effectively immutable
-_ENRICH_CACHE_MAX = 1024       # bound memory under aggressive search/list use
-_ENRICH_CONCURRENCY = 8        # parallel fetches per recommended/search call
+_ENRICH_CACHE_MAX = 1024  # bound memory under aggressive search/list use
+_ENRICH_CONCURRENCY = 8  # parallel fetches per recommended/search call
 
 
-def _enrich_cache_get(model_id: str) -> Optional[dict]:
+def _enrich_cache_get(model_id: str) -> dict | None:
     entry = _ENRICH_CACHE.get(model_id)
     if entry is None:
         return None
@@ -137,7 +137,7 @@ def _enrich_cache_put(model_id: str, data: dict) -> None:
     _ENRICH_CACHE[model_id] = (time.time(), data)
 
 
-def _estimate_params_from_config(config: Optional[dict]) -> int:
+def _estimate_params_from_config(config: dict | None) -> int:
     """Estimate decoder-transformer parameter count from a HF-style config.
 
     Handles dense Llama/Qwen/Mistral families and MoE variants
@@ -167,9 +167,7 @@ def _estimate_params_from_config(config: Optional[dict]) -> int:
             hidden_size // num_heads if num_heads else 0
         )
         num_experts = int(
-            config.get("num_local_experts")
-            or config.get("num_experts")
-            or 1
+            config.get("num_local_experts") or config.get("num_experts") or 1
         )
         tie_embeddings = bool(config.get("tie_word_embeddings", True))
     except (TypeError, ValueError):
@@ -179,9 +177,8 @@ def _estimate_params_from_config(config: Optional[dict]) -> int:
 
     # Attention: Q + O are full hidden_size; K + V are reduced for GQA.
     if num_heads and head_dim:
-        attn = (
-            2 * hidden_size * (num_heads * head_dim)
-            + 2 * hidden_size * (num_kv * head_dim)
+        attn = 2 * hidden_size * (num_heads * head_dim) + 2 * hidden_size * (
+            num_kv * head_dim
         )
     else:
         attn = 4 * hidden_size * hidden_size
@@ -203,7 +200,7 @@ def _estimate_params_from_config(config: Optional[dict]) -> int:
     return total
 
 
-async def _fetch_model_config(model_id: str) -> Optional[dict]:
+async def _fetch_model_config(model_id: str) -> dict | None:
     """Fetch and parse a model's config.json from ModelScope.
 
     Returns None on any error (network, non-200, non-JSON) so callers can
@@ -215,8 +212,7 @@ async def _fetch_model_config(model_id: str) -> Optional[dict]:
 
     endpoint = _get_ms_endpoint()
     url = (
-        f"{endpoint}/api/v1/models/{model_id}/repo"
-        f"?FilePath=config.json&Revision=master"
+        f"{endpoint}/api/v1/models/{model_id}/repo?FilePath=config.json&Revision=master"
     )
     try:
         resp = await asyncio.wait_for(
@@ -287,7 +283,8 @@ async def _enrich_ms_entry(entry: dict, sem: asyncio.Semaphore) -> dict:
         need_size = (entry.get("size") or 0) <= 0
         detail_task = (
             asyncio.create_task(_fetch_model_detail_size(model_id))
-            if need_size else None
+            if need_size
+            else None
         )
 
         config = await config_task
@@ -326,7 +323,7 @@ def _parse_ms_model_entry(entry: dict) -> dict:
         model_id = name
     else:
         model_id = path
-    
+
     downloads = entry.get("Downloads") or 0
     likes = entry.get("Likes") or entry.get("Stars") or 0
     # StorageSize is the total size in bytes
@@ -367,9 +364,7 @@ async def _fetch_ms_models_rest(
         payload["Name"] = query
     try:
         resp = await asyncio.wait_for(
-            asyncio.to_thread(
-                requests.put, url, json=payload, timeout=_MS_API_TIMEOUT
-            ),
+            asyncio.to_thread(requests.put, url, json=payload, timeout=_MS_API_TIMEOUT),
             timeout=_MS_API_TIMEOUT + 5,
         )
         if resp.status_code == 200:
@@ -497,13 +492,16 @@ class MSDownloader(_QueuePersistenceMixin):
             # show with a blank size than hide a candidate the user has
             # enough RAM for).
             models = [
-                m for m in models
+                m
+                for m in models
                 if (m.get("size", 0) == 0) or (m["size"] <= max_memory_bytes)
             ]
 
         # Sort by downloads for popular, keep original order for trending
         trending = models[:result_limit]
-        popular = sorted(models, key=lambda x: x.get("downloads", 0), reverse=True)[:result_limit]
+        popular = sorted(models, key=lambda x: x.get("downloads", 0), reverse=True)[
+            :result_limit
+        ]
 
         return {
             "trending": trending,
@@ -555,9 +553,7 @@ class MSDownloader(_QueuePersistenceMixin):
             if not models_data:
                 models_data = data.get("models", [])
         else:
-            models_data = await _fetch_ms_models_rest(
-                query=query, page_size=200
-            )
+            models_data = await _fetch_ms_models_rest(query=query, page_size=200)
 
         # Filter by query string (case-insensitive)
         query_lower = query.lower()
@@ -664,7 +660,7 @@ class MSDownloader(_QueuePersistenceMixin):
                 if card_text.startswith("---"):
                     end = card_text.find("---", 3)
                     if end != -1:
-                        card_text = card_text[end + 3:].strip()
+                        card_text = card_text[end + 3 :].strip()
                 model_card = card_text
         except Exception:
             pass  # README not available
@@ -700,7 +696,7 @@ class MSDownloader(_QueuePersistenceMixin):
     def __init__(
         self,
         model_dir: str,
-        on_complete: Optional[Callable] = None,
+        on_complete: Callable | None = None,
         tasks_file: str | Path | None = None,
     ):
         self._model_dir = Path(model_dir)
@@ -720,9 +716,7 @@ class MSDownloader(_QueuePersistenceMixin):
         """Update the model directory path."""
         self._model_dir = Path(new_dir)
 
-    async def start_download(
-        self, model_id: str, ms_token: str = ""
-    ) -> DownloadTask:
+    async def start_download(self, model_id: str, ms_token: str = "") -> DownloadTask:
         """Start downloading a model from ModelScope.
 
         Args:
@@ -739,7 +733,7 @@ class MSDownloader(_QueuePersistenceMixin):
         if not MS_SDK_AVAILABLE:
             raise RuntimeError(
                 "ModelScope SDK not installed. "
-                "Install with: pip install \"omlx[modelscope]\""
+                'Install with: pip install "omlx[modelscope]"'
             )
 
         model_id = model_id.strip()
@@ -756,9 +750,7 @@ class MSDownloader(_QueuePersistenceMixin):
                 DownloadStatus.PENDING,
                 DownloadStatus.DOWNLOADING,
             ):
-                raise ValueError(
-                    f"Download for '{model_id}' is already in progress"
-                )
+                raise ValueError(f"Download for '{model_id}' is already in progress")
 
         task_id = str(uuid.uuid4())
         task = DownloadTask(task_id=task_id, repo_id=model_id)
@@ -833,9 +825,7 @@ class MSDownloader(_QueuePersistenceMixin):
         self._persist()
         return True
 
-    async def retry_download(
-        self, task_id: str, ms_token: str = ""
-    ) -> DownloadTask:
+    async def retry_download(self, task_id: str, ms_token: str = "") -> DownloadTask:
         """Retry a failed or cancelled download, resuming from existing files.
 
         Args:
@@ -883,7 +873,7 @@ class MSDownloader(_QueuePersistenceMixin):
         # resumes them.
         self._shutting_down = True
         # Cancel all progress polling tasks
-        for task_id, progress_task in list(self._progress_tasks.items()):
+        for _task_id, progress_task in list(self._progress_tasks.items()):
             if not progress_task.done():
                 progress_task.cancel()
         self._progress_tasks.clear()
@@ -931,9 +921,7 @@ class MSDownloader(_QueuePersistenceMixin):
                             timeout=_MS_API_TIMEOUT,
                         )
                         if file_list:
-                            task.total_size = _extract_model_size_from_files(
-                                file_list
-                            )
+                            task.total_size = _extract_model_size_from_files(file_list)
                 except Exception as e:
                     logger.warning(
                         f"Could not fetch file info for {task.repo_id}: {e}. "
@@ -988,7 +976,9 @@ class MSDownloader(_QueuePersistenceMixin):
                             shutil.rmtree(target_dir)
                             logger.info(f"Cleaned up cancelled download: {target_dir}")
                         except Exception as cleanup_err:
-                            logger.warning(f"Failed to clean up {target_dir}: {cleanup_err}")
+                            logger.warning(
+                                f"Failed to clean up {target_dir}: {cleanup_err}"
+                            )
                     # Drop empty org folder left behind by the cancelled download.
                     parent = target_dir.parent
                     if (
@@ -1009,9 +999,7 @@ class MSDownloader(_QueuePersistenceMixin):
                 task.status = DownloadStatus.COMPLETED
                 task.progress = 100.0
                 task.speed_bps = 0.0
-                task.downloaded_size = task.total_size or self._get_dir_size(
-                    target_dir
-                )
+                task.downloaded_size = task.total_size or self._get_dir_size(target_dir)
                 task.completed_at = time.time()
 
                 logger.info(
@@ -1024,9 +1012,7 @@ class MSDownloader(_QueuePersistenceMixin):
                     try:
                         await self._on_complete()
                     except Exception as e:
-                        logger.error(
-                            f"Error in download completion callback: {e}"
-                        )
+                        logger.error(f"Error in download completion callback: {e}")
 
         except asyncio.CancelledError:
             if task.status not in (
@@ -1104,9 +1090,7 @@ class MSDownloader(_QueuePersistenceMixin):
 
                 if task.total_size > 0:
                     # Cap at 99% until snapshot_download confirms completion
-                    task.progress = min(
-                        (current_size / task.total_size) * 100, 99.0
-                    )
+                    task.progress = min((current_size / task.total_size) * 100, 99.0)
 
                 # Activity detection: size change OR file mtime change
                 if current_size != last_size:
@@ -1126,8 +1110,7 @@ class MSDownloader(_QueuePersistenceMixin):
                         "Try retrying the download."
                     )
                     logger.warning(
-                        f"MS Download stalled for {task.repo_id} "
-                        f"(task_id={task_id})"
+                        f"MS Download stalled for {task.repo_id} (task_id={task_id})"
                     )
                     # Cancel the snapshot_download thread
                     active_task = self._active_tasks.get(task_id)
@@ -1149,10 +1132,8 @@ class MSDownloader(_QueuePersistenceMixin):
         try:
             for f in path.rglob("*"):
                 if f.is_file():
-                    try:
+                    with contextlib.suppress(OSError):
                         total += f.stat().st_size
-                    except OSError:
-                        pass
         except OSError:
             pass
         return total

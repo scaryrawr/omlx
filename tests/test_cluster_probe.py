@@ -204,5 +204,3 @@ def test_mlx_version_uses_core_module_version(monkeypatch):
         SimpleNamespace(__version__="0.32.0"),
     )
     assert probe.hardware.get_mlx_version() == "0.32.0"
-
-

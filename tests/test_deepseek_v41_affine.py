@@ -75,7 +75,6 @@ def test_affine_decode_grouped_matches_stock(monkeypatch, bits):
 )
 def test_affine_prefill_native_blocks_and_pair(monkeypatch, bits):
     from omlx.patches.deepseek_v4 import switch_layers
-
     from omlx.patches.deepseek_v41 import quantization
 
     # Exercise the native kernels even on GPUs that prefer stock prefill GEMMs.

@@ -375,7 +375,9 @@ def test_source_gate_rejects_mixed_legacy_and_fixed_sets(pinned_sources):
                 )
 
 
-def test_partial_pinned_source_fails_before_activation(qwen, monkeypatch, pinned_sources):
+def test_partial_pinned_source_fails_before_activation(
+    qwen, monkeypatch, pinned_sources
+):
     from omlx.patches.mlx_vlm_qwen_image_compat._backport import BACKPORT_PROFILES
 
     fixed = compat._prepare_sources(pinned_sources, BACKPORT_PROFILES)

@@ -860,7 +860,8 @@ def _plan_replacement(
         if issubclass(parent_type, _FusedSwitchGLU):
             parent_type = parent_type.__bases__[1]
         supported = any(
-            parent_type is layers.SwitchGLU and type(target)
+            parent_type is layers.SwitchGLU
+            and type(target)
             in (layers.SwitchLinear, layers.QuantizedSwitchLinear, *OQH_SWITCH)
             for layers in (lm_switch_layers, vlm_switch_layers)
         )

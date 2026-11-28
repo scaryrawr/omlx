@@ -119,10 +119,9 @@ def build_upload_context(request: Any, engine_pool: Any) -> dict:
                 model_settings["prefill_accelerator"] = {
                     key: value for key, value in helper.items() if key != "a8"
                 }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
-                f"Accuracy upload: failed to read settings for "
-                f"{request.model_id}: {e}"
+                f"Accuracy upload: failed to read settings for {request.model_id}: {e}"
             )
 
     return {
@@ -231,9 +230,7 @@ def _category_counts(question_results: Any) -> dict | None:
     return counts
 
 
-async def upload_intelligence_result(
-    run: Any, ctx: dict, result_data: dict
-) -> dict:
+async def upload_intelligence_result(run: Any, ctx: dict, result_data: dict) -> dict:
     """Upload one suite result. Never raises; returns the outcome dict."""
     if result_data.get("total", 0) < _MIN_UPLOAD_QUESTIONS:
         return {"skipped": "min_questions"}
@@ -241,7 +238,7 @@ async def upload_intelligence_result(
         return {"skipped": "lora_adapter"}
     try:
         return await _do_upload(ctx, result_data)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"Intelligence benchmark upload failed: {e}")
         return {"error": str(e)[:300]}
 
@@ -318,8 +315,7 @@ async def _do_upload(ctx: dict, result_data: dict) -> dict:
     if raw_gzip and ctx.get("owner_hash_full"):
         owner_display = ctx["owner_hash_full"][:-1]
         put_url = (
-            f"{OMLX_AI_INTEL_API_URL}/{outcome['id']}/raw"
-            f"?owner_hash={owner_display}"
+            f"{OMLX_AI_INTEL_API_URL}/{outcome['id']}/raw?owner_hash={owner_display}"
         )
         try:
             resp2 = await asyncio.to_thread(
@@ -335,7 +331,7 @@ async def _do_upload(ctx: dict, result_data: dict) -> dict:
                     "Accuracy upload: raw upload failed "
                     f"({_sanitize_upload_error(resp2)})"
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"Accuracy upload: raw upload failed: {e}")
             outcome["raw_uploaded"] = False
     else:

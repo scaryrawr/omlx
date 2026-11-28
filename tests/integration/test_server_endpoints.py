@@ -11,11 +11,10 @@ import re
 import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-
 from fastapi.testclient import TestClient
 
 from omlx.api.responses_utils import ResponseStore
@@ -31,7 +30,7 @@ from omlx.models.decision import DecisionContextLengthError, DecisionRequestErro
 class MockEmbeddingOutput:
     """Mock embedding output for testing."""
 
-    embeddings: List[List[float]] = field(
+    embeddings: list[list[float]] = field(
         default_factory=lambda: [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
     )
     total_tokens: int = 10
@@ -42,8 +41,8 @@ class MockEmbeddingOutput:
 class MockRerankOutput:
     """Mock rerank output for testing."""
 
-    scores: List[float] = field(default_factory=lambda: [0.9, 0.5, 0.3])
-    indices: List[int] = field(default_factory=lambda: [0, 1, 2])
+    scores: list[float] = field(default_factory=lambda: [0.9, 0.5, 0.3])
+    indices: list[int] = field(default_factory=lambda: [0, 1, 2])
     total_tokens: int = 50
 
 
@@ -52,13 +51,13 @@ class MockGenerationOutput:
     """Mock generation output for testing."""
 
     text: str = "Hello, I am a helpful assistant."
-    tokens: List[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
+    tokens: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
     prompt_tokens: int = 10
     completion_tokens: int = 5
     finish_reason: str = "stop"
     new_text: str = ""
     finished: bool = True
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
     cached_tokens: int = 0
 
 
@@ -69,7 +68,7 @@ class MockEmbeddingEngineImpl(EmbeddingEngine):
         # Don't call super().__init__ to avoid loading real model
         self._model_name = model_name
         self._model = None  # Set as None but present
-        self.calls: List[Dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
 
     @property
     def model_name(self) -> str:
@@ -89,7 +88,7 @@ class MockEmbeddingEngineImpl(EmbeddingEngine):
             dimensions=3,
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {"model_name": self._model_name, "loaded": True}
 
 
@@ -100,7 +99,7 @@ class MockRerankerEngineImpl(RerankerEngine):
         # Don't call super().__init__ to avoid loading real model
         self._model_name = model_name
         self._model = None  # Set as None but present
-        self.calls: List[Dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
 
     @property
     def model_name(self) -> str:
@@ -113,7 +112,7 @@ class MockRerankerEngineImpl(RerankerEngine):
         pass
 
     async def rerank(
-        self, query: str, documents: List[str], top_n: Optional[int] = None, **kwargs
+        self, query: str, documents: list[str], top_n: int | None = None, **kwargs
     ) -> MockRerankOutput:
         self.calls.append({"documents": list(documents), "kwargs": dict(kwargs)})
         n_docs = len(documents)
@@ -127,7 +126,7 @@ class MockRerankerEngineImpl(RerankerEngine):
             total_tokens=n_docs * 20,
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {"model_name": self._model_name, "loaded": True}
 
 
@@ -142,7 +141,7 @@ class MockTokenizer:
         ids = [100 + i for i, _ in enumerate(re.findall(r"\n|\S+", text))]
         return [self.bos_token_id, *ids] if add_special_tokens else ids
 
-    def decode(self, tokens: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
         return f"<decoded:{len(tokens)} tokens>"
 
     def convert_ids_to_tokens(self, tokens: list[int]) -> list[str]:
@@ -152,7 +151,7 @@ class MockTokenizer:
         return 1000
 
     def apply_chat_template(
-        self, messages: List[Dict], tokenize: bool = False, **kwargs
+        self, messages: list[dict], tokenize: bool = False, **kwargs
     ) -> str:
         parts = []
         for msg in messages:
@@ -180,7 +179,7 @@ class MockBaseEngine(BaseEngine):
         return self._tokenizer
 
     @property
-    def model_type(self) -> Optional[str]:
+    def model_type(self) -> str | None:
         return self._model_type
 
     @property
@@ -210,7 +209,7 @@ class MockBaseEngine(BaseEngine):
         )
 
     def count_chat_tokens(
-        self, messages: List[Dict], tools=None, chat_template_kwargs=None, **kwargs
+        self, messages: list[dict], tools=None, chat_template_kwargs=None, **kwargs
     ) -> int:
         prompt = self._tokenizer.apply_chat_template(messages, tokenize=False)
         return len(self._tokenizer.encode(prompt))
@@ -229,10 +228,10 @@ class MockBaseEngine(BaseEngine):
         prompt = self._tokenizer.apply_chat_template(messages, tokenize=False)
         return self._tokenizer.encode(prompt, kwargs.get("add_special_tokens"))
 
-    async def chat(self, messages: List[Dict], **kwargs) -> MockGenerationOutput:
+    async def chat(self, messages: list[dict], **kwargs) -> MockGenerationOutput:
         return MockGenerationOutput(text="Chat response.")
 
-    async def stream_chat(self, messages: List[Dict], **kwargs):
+    async def stream_chat(self, messages: list[dict], **kwargs):
         yield MockGenerationOutput(
             text="Hello",
             new_text="Hello",
@@ -245,7 +244,7 @@ class MockBaseEngine(BaseEngine):
             finish_reason="stop",
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {}
 
     def get_cache_stats(self):
@@ -255,13 +254,13 @@ class MockBaseEngine(BaseEngine):
 class RecordingResponsesEngine(MockBaseEngine):
     """Mock engine that records request messages across /v1/responses calls."""
 
-    def __init__(self, outputs: Optional[List[MockGenerationOutput]] = None):
+    def __init__(self, outputs: list[MockGenerationOutput] | None = None):
         super().__init__()
         self._outputs = list(outputs or [])
-        self.recorded_messages: List[List[Dict[str, Any]]] = []
+        self.recorded_messages: list[list[dict[str, Any]]] = []
         self._model_type = "gpt_oss"
 
-    async def chat(self, messages: List[Dict], **kwargs) -> MockGenerationOutput:
+    async def chat(self, messages: list[dict], **kwargs) -> MockGenerationOutput:
         self.recorded_messages.append(messages)
         if self._outputs:
             return self._outputs.pop(0)
@@ -275,7 +274,7 @@ class MockDecisionEngineImpl(DecisionEngine):
         # Don't call super().__init__ to avoid loading real model
         self._model_name = model_name
         self.encode_error: Exception | None = None
-        self.encoded: List[Dict[str, Any]] = []
+        self.encoded: list[dict[str, Any]] = []
 
     async def start(self) -> None:
         pass
@@ -302,10 +301,10 @@ class MockEnginePool:
 
     def __init__(
         self,
-        llm_engine: Optional[MockBaseEngine] = None,
-        embedding_engine: Optional[MockEmbeddingEngineImpl] = None,
-        reranker_engine: Optional[MockRerankerEngineImpl] = None,
-        decision_engine: Optional[MockDecisionEngineImpl] = None,
+        llm_engine: MockBaseEngine | None = None,
+        embedding_engine: MockEmbeddingEngineImpl | None = None,
+        reranker_engine: MockRerankerEngineImpl | None = None,
+        decision_engine: MockDecisionEngineImpl | None = None,
     ):
         self._llm_engine = llm_engine or MockBaseEngine()
         self._embedding_engine = embedding_engine
@@ -314,9 +313,9 @@ class MockEnginePool:
         self._models = [
             {"id": "test-model", "loaded": True, "pinned": False, "size": 1000000}
         ]
-        self._entries: Dict[str, Any] = {}
-        self.get_engine_calls: List[Dict[str, Any]] = []
-        self.release_calls: List[str] = []
+        self._entries: dict[str, Any] = {}
+        self.get_engine_calls: list[dict[str, Any]] = []
+        self.release_calls: list[str] = []
         self.abort_requested_models: set[str] = set()
 
     @property
@@ -341,20 +340,20 @@ class MockEnginePool:
     def resolve_model_id(self, model_id_or_alias, settings_manager=None):
         return model_id_or_alias
 
-    def get_model_ids(self) -> List[str]:
+    def get_model_ids(self) -> list[str]:
         return [m["id"] for m in self._models]
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         return {
             "models": self._models,
             "loaded_count": self.loaded_model_count,
             "max_model_memory": self.max_model_memory,
         }
 
-    def get_active_model_aliases(self, settings_manager) -> Dict[str, str]:
+    def get_active_model_aliases(self, settings_manager) -> dict[str, str]:
         if settings_manager is None:
             return {}
-        aliases_by_name: Dict[str, List[str]] = {}
+        aliases_by_name: dict[str, list[str]] = {}
         for m in self._models:
             model_id = m["id"]
             settings = settings_manager.get_settings(model_id)
@@ -365,7 +364,7 @@ class MockEnginePool:
             if not alias:
                 continue
             aliases_by_name.setdefault(alias, []).append(model_id)
-        active: Dict[str, str] = {}
+        active: dict[str, str] = {}
         lower_ids = {m["id"].lower(): m["id"] for m in self._models}
         for alias, model_ids in aliases_by_name.items():
             if len(model_ids) != 1:
@@ -457,7 +456,7 @@ def mock_engine_pool(
 @pytest.fixture
 def client(mock_engine_pool):
     """Create a test client with mocked server state."""
-    from omlx.server import app, _server_state
+    from omlx.server import _server_state, app
 
     # Store original state
     original_pool = _server_state.engine_pool
@@ -735,7 +734,7 @@ class TestResponsesEndpoint:
         assert "model=test-model" in summaries[-1]
 
     def test_response_endpoint_recovers_tool_call_from_thinking(self, tmp_path):
-        from omlx.server import app, _server_state
+        from omlx.server import _server_state, app
 
         state_dir = tmp_path / "response-state"
         engine = RecordingResponsesEngine(
@@ -808,7 +807,7 @@ class TestResponsesEndpoint:
             _server_state.responses_store = original_store
 
     def test_previous_response_id_persists_across_store_restart(self, tmp_path):
-        from omlx.server import app, _server_state
+        from omlx.server import _server_state, app
 
         state_dir = tmp_path / "response-state"
         engine = RecordingResponsesEngine(
@@ -879,7 +878,7 @@ class TestResponsesEndpoint:
             _server_state.responses_store = original_store
 
     def test_missing_previous_response_id_returns_404(self, tmp_path):
-        from omlx.server import app, _server_state
+        from omlx.server import _server_state, app
 
         engine = RecordingResponsesEngine(outputs=[MockGenerationOutput(text="Done.")])
         pool = MockEnginePool(llm_engine=engine)
@@ -910,7 +909,7 @@ class TestResponsesEndpoint:
             _server_state.responses_store = original_store
 
     def test_harmony_history_drops_reasoning_content(self, tmp_path):
-        from omlx.server import app, _server_state
+        from omlx.server import _server_state, app
 
         engine = RecordingResponsesEngine(outputs=[MockGenerationOutput(text="Done.")])
         pool = MockEnginePool(llm_engine=engine)

@@ -193,9 +193,7 @@ def test_scheduler_gdn_and_ssd_observability_is_mapped_to_model_row(tmp_path):
     assert row["errors"] == 1
     assert row["hot_cache_hits"] == 4
     assert row["boundary_snapshots"]["capture_attempts"] == 5
-    assert row["boundary_snapshots"]["reasons"] == {
-        "cache_offset_mismatch": 1
-    }
+    assert row["boundary_snapshots"]["reasons"] == {"cache_offset_mismatch": 1}
     assert row["last_prefix_lookup"]["reused_kv_tokens"] == 16384
     assert row["last_prefix_lookup"]["unreused_common_prefix_tokens"] == 1616
 

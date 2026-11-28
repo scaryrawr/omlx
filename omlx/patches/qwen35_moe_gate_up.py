@@ -51,8 +51,8 @@ from ..scheduler import _sync_and_clear_cache
 from . import moe_verify_gather
 from .m5_gather_qmm import fused_gate_up_activation
 from .m5_gather_qmm_a8 import try_routed_a8
-from .moe_routes import sort_routes
 from .module_cache import cached_per_module
+from .moe_routes import sort_routes
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,11 @@ def _unsorted_switch(plan, x, indices):
     activation and ``down_proj(..., sorted_indices=False)`` through
     mlx-vlm's ``QuantizedSwitchLinear.__call__``.
     """
-    (gw, gs, gb, g_group, g_bits, g_mode), (dw, ds, db, d_group, d_bits, d_mode), act = plan
+    (
+        (gw, gs, gb, g_group, g_bits, g_mode),
+        (dw, ds, db, d_group, d_bits, d_mode),
+        act,
+    ) = plan
     x_gate_up = mx.gather_qmm(
         mx.expand_dims(x, (-2, -3)),
         gw,
@@ -274,7 +278,9 @@ def _make_vlm_patched_call(original):
             return self._combine(routed, weights, shared, residual)
         if indices.size < 64:
             # fused_call's unsorted branch (decode rows) with cached operands.
-            plan = cached_per_module(self, "_omlx_gate_up_decode_plan", _build_decode_plan)
+            plan = cached_per_module(
+                self, "_omlx_gate_up_decode_plan", _build_decode_plan
+            )
             if plan is not None:
                 routed = _unsorted_switch(plan, x, indices)
                 return self._combine(routed, weights, shared, residual)

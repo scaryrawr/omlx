@@ -95,14 +95,16 @@ def codex_model_catalog(
             models_from_status.append(
                 replace(
                     model,
-                    context_window=info.get("max_context_window") or model.context_window,
+                    context_window=info.get("max_context_window")
+                    or model.context_window,
                     model_type=info.get("model_type", model.model_type),
                     reasoning=info.get("reasoning", model.reasoning),
                     reasoning_effort_options=tuple(
                         level
                         for level in info.get(
                             "reasoning_levels", model.reasoning_effort_options
-                        ) or ()
+                        )
+                        or ()
                         if level not in ("off", "on")
                     ),
                 )

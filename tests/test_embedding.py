@@ -287,7 +287,9 @@ class TestEmbeddingUtils:
             {"type": "text", "text": "a diagram"},
             {"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}},
         ]
-        assert normalize_input(parts) == [{"text": "a diagram", "image": IMAGE_DATA_URI}]
+        assert normalize_input(parts) == [
+            {"text": "a diagram", "image": IMAGE_DATA_URI}
+        ]
 
     def test_normalize_input_image_only_content_parts(self):
         """Image-only parts produce an item without a text key."""
@@ -301,9 +303,7 @@ class TestEmbeddingUtils:
             {"type": "text", "text": "two"},
             {"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}},
         ]
-        assert normalize_input(parts) == [
-            {"text": "one\ntwo", "image": IMAGE_DATA_URI}
-        ]
+        assert normalize_input(parts) == [{"text": "one\ntwo", "image": IMAGE_DATA_URI}]
 
     def test_normalize_input_audio_content_part(self):
         """input_audio parts fold into the data-URI form items take."""
@@ -325,7 +325,9 @@ class TestEmbeddingUtils:
 
     def test_normalize_input_rejects_unknown_part_type(self):
         parts = [{"type": "file", "file": {"filename": "x.pdf"}}]
-        with pytest.raises(InvalidRequestError, match="Unsupported embedding content part"):
+        with pytest.raises(
+            InvalidRequestError, match="Unsupported embedding content part"
+        ):
             normalize_input(parts)
 
     def test_normalize_input_rejects_image_part_without_url(self):
@@ -443,6 +445,7 @@ class TestModelDiscoveryEmbedding:
         }
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "embedding"
+
 
 class TestExtractEmbeddingsArray:
     """Tests for _extract_embeddings_array method."""
@@ -846,9 +849,10 @@ class TestEmbeddingCompileFallback:
         model._is_compiled = True
         model._compiled_embed = MagicMock()
 
-        with patch("omlx.models.embedding.gc.collect") as collect, patch(
-            "omlx.models.embedding.mx"
-        ) as mock_mx:
+        with (
+            patch("omlx.models.embedding.gc.collect") as collect,
+            patch("omlx.models.embedding.mx") as mock_mx,
+        ):
             model.close()
 
         assert model.model is None
@@ -1454,8 +1458,7 @@ class TestEncoderEmbeddingLoading:
         model = self._load(tmp_path, dict(self._BERT_CONFIG))
 
         assert (
-            model.model.max_input_length
-            == self._BERT_CONFIG["max_position_embeddings"]
+            model.model.max_input_length == self._BERT_CONFIG["max_position_embeddings"]
         )
 
     def test_embed_tokenizes_with_tokenizer_call(self, tmp_path):
@@ -1520,12 +1523,14 @@ class TestEncoderEmbeddingLoading:
         from omlx.models.embedding import MLXEmbeddingModel
 
         model = MLXEmbeddingModel(str(tmp_path))
-        with patch(
-            "omlx.models.embedding.load_processor",
-            return_value=self.MockEncoderTokenizer(config["vocab_size"]),
+        with (
+            patch(
+                "omlx.models.embedding.load_processor",
+                return_value=self.MockEncoderTokenizer(config["vocab_size"]),
+            ),
+            pytest.raises(ValueError, match="Missing 20 parameters:"),
         ):
-            with pytest.raises(Exception):
-                model.load()
+            model.load()
         assert model._loaded is False
 
 
@@ -1676,9 +1681,9 @@ class TestNativeQwen2Embedding:
         # Mask-aware pooling agrees to float32 noise (~1e-4); a hardcoded
         # ``[:, -1]`` pool would read the trailing pad token under right padding
         # and diverge by O(0.1+). 1e-3 sits cleanly between the two regimes.
-        assert (
-            np.max(np.abs(right - left)) < 1e-3
-        ), "last-token pool is not mask-aware: left/right padding diverged"
+        assert np.max(np.abs(right - left)) < 1e-3, (
+            "last-token pool is not mask-aware: left/right padding diverged"
+        )
 
     def test_qwen2_is_causal_flag_controls_attention(self, tmp_path):
         """is_causal=False makes attention bidirectional (gte-Qwen2 family).
@@ -1705,9 +1710,9 @@ class TestNativeQwen2Embedding:
             return float(np.max(np.abs(a - b)))
 
         assert first_token_drift(is_causal=True) < 1e-6, "causal leaked future token"
-        assert (
-            first_token_drift(is_causal=False) > 1e-3
-        ), "bidirectional did not attend forward"
+        assert first_token_drift(is_causal=False) > 1e-3, (
+            "bidirectional did not attend forward"
+        )
 
 
 class TestDeclaredPoolingMode:
@@ -1721,8 +1726,13 @@ class TestDeclaredPoolingMode:
     """
 
     @staticmethod
-    def _model(tmp_path, pooling_config=None, pool_dir_name="1_Pooling",
-               modules=None, name_or_path=None):
+    def _model(
+        tmp_path,
+        pooling_config=None,
+        pool_dir_name="1_Pooling",
+        modules=None,
+        name_or_path=None,
+    ):
         import json
         from pathlib import Path
 
@@ -1736,7 +1746,9 @@ class TestDeclaredPoolingMode:
         if modules is not None:
             (root / "modules.json").write_text(json.dumps(modules))
         if name_or_path is not None:
-            (root / "config.json").write_text(json.dumps({"_name_or_path": name_or_path}))
+            (root / "config.json").write_text(
+                json.dumps({"_name_or_path": name_or_path})
+            )
         return MLXEmbeddingModel(str(root))
 
     @staticmethod
@@ -1758,8 +1770,13 @@ class TestDeclaredPoolingMode:
             tmp_path,
             pooling_config={"pooling_mode_cls_token": True},
             pool_dir_name="2_Pooling",
-            modules=[{"idx": 1, "type": "sentence_transformers.models.Pooling",
-                      "path": "2_Pooling"}],
+            modules=[
+                {
+                    "idx": 1,
+                    "type": "sentence_transformers.models.Pooling",
+                    "path": "2_Pooling",
+                }
+            ],
         )
         mode, source = m._resolve_pooling_mode()
         assert mode == "cls"
@@ -1779,8 +1796,15 @@ class TestDeclaredPoolingMode:
         d = tmp_path / "bge-m3-mlx-fp16"
         d.mkdir()
         m = self._model(
-            d, modules=[{"idx": 1, "type": "sentence_transformers.models.Pooling",
-                         "path": "1_Pooling"}])
+            d,
+            modules=[
+                {
+                    "idx": 1,
+                    "type": "sentence_transformers.models.Pooling",
+                    "path": "1_Pooling",
+                }
+            ],
+        )
         mode, source = m._resolve_pooling_mode()
         assert mode == "cls"
         assert "known family" in source
@@ -1808,8 +1832,11 @@ class TestDeclaredPoolingMode:
         m._using_native = True
         m._pooling_mode, m._pooling_source = m._resolve_pooling_mode()
         hidden = mx.array([[[3.0, 4.0], [0.0, 1.0]]])
-        out = np.array(m._extract_embeddings_array(
-            self._outputs(hidden), mx.ones((1, 2), dtype=mx.int32)))
+        out = np.array(
+            m._extract_embeddings_array(
+                self._outputs(hidden), mx.ones((1, 2), dtype=mx.int32)
+            )
+        )
         # CLS row is (3, 4); L2-normalized it is (0.6, 0.8) — not the raw row,
         # and not the text_embeds sentinel.
         assert np.allclose(out, [[0.6, 0.8]])
@@ -1823,8 +1850,10 @@ class TestDeclaredPoolingMode:
         """
         import mlx.core as mx
 
-        for declared, mode in (({"pooling_mode_mean_tokens": True}, "mean"),
-                               ({"pooling_mode": "lasttoken"}, "lasttoken")):
+        for declared, mode in (
+            ({"pooling_mode_mean_tokens": True}, "mean"),
+            ({"pooling_mode": "lasttoken"}, "lasttoken"),
+        ):
             m = self._model(tmp_path / mode, declared)
             m._pooling_mode, m._pooling_source = m._resolve_pooling_mode()
             assert m._pooling_mode == mode
@@ -1840,9 +1869,13 @@ class TestDeclaredPoolingMode:
             alone = []
             for rows, keep in ((a, 2), (b, 3)):
                 single = mx.array([rows[:keep]])
-                alone.append(np.array(m._extract_embeddings_array(
-                    self._outputs(single),
-                    mx.ones((1, keep), dtype=mx.int32)))[0])
+                alone.append(
+                    np.array(
+                        m._extract_embeddings_array(
+                            self._outputs(single), mx.ones((1, keep), dtype=mx.int32)
+                        )
+                    )[0]
+                )
             assert np.allclose(batched, np.stack(alone), atol=1e-5), mode
 
     # ── end-to-end, compile off ───────────────────────────────────────────
@@ -1937,7 +1970,6 @@ class TestDeclaredPoolingMode:
 
         out = np.array(m.embed(["ab", "abc"]).embeddings)
         assert np.allclose(out, self._E2E_EXPECTED, atol=1e-5)
-
 
 
 class TestEmbeddingDtype:
@@ -2039,9 +2071,7 @@ class TestMlxVlmEmbeddingLoading:
         load_processor.assert_not_called()
 
     @pytest.mark.parametrize("from_hub", [False, True])
-    def test_declared_pooling_config_is_preserved_for_mlx_vlm(
-        self, tmp_path, from_hub
-    ):
+    def test_declared_pooling_config_is_preserved_for_mlx_vlm(self, tmp_path, from_hub):
         pooling_config = {
             "pooling_mode_max_tokens": True,
             "include_prompt": True,
@@ -2059,9 +2089,7 @@ class TestMlxVlmEmbeddingLoading:
 
         with (
             patch("mlx_vlm.utils.snapshot_download", return_value=str(tmp_path)),
-            patch(
-                "omlx.models.embedding.load_embedding_model", return_value=loaded
-            ),
+            patch("omlx.models.embedding.load_embedding_model", return_value=loaded),
             patch("omlx.models.embedding.load_processor", return_value=processor),
             patch.object(model, "_try_compile", return_value=False),
         ):
@@ -2089,9 +2117,7 @@ class TestMlxVlmEmbeddingLoading:
         model = MLXEmbeddingModel(str(tmp_path))
 
         with (
-            patch(
-                "omlx.models.embedding.load_embedding_model", return_value=loaded
-            ),
+            patch("omlx.models.embedding.load_embedding_model", return_value=loaded),
             patch("omlx.models.embedding.load_processor", return_value=processor),
             patch.object(model, "_try_compile", return_value=False),
         ):
@@ -2284,9 +2310,7 @@ class TestMlxVlmEmbeddingGemma2:
         engine = EmbeddingEngine(
             str(model_dir), audio_enabled=True, audio_max_seconds=90
         )
-        with patch(
-            "omlx.models.embedding.load_processor", return_value=MagicMock()
-        ):
+        with patch("omlx.models.embedding.load_processor", return_value=MagicMock()):
             asyncio.run(engine.start())
         assert engine._model.audio_enabled is True
         assert engine._model.audio_max_seconds == 90
@@ -2333,7 +2357,6 @@ class TestMlxVlmEmbeddingGemma2:
         model.embed([{"text": "a cat", "image": IMAGE_DATA_URI}])
 
         assert "audio_kwargs" not in processor.apply_chat_template.call_args.kwargs
-
 
 
 class TestSiglipEmbedding:

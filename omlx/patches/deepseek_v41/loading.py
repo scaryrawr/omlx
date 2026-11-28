@@ -177,7 +177,9 @@ def load(
     if ced_prefill:
         if config.ced_layout_supported():
             config.ced_prefill = True
-            logger.info("DeepSeek V4.1 CED prefill enabled: decoder tail %d", config.window_size)
+            logger.info(
+                "DeepSeek V4.1 CED prefill enabled: decoder tail %d", config.window_size
+            )
         else:
             config.ced_prefill = False
             logger.warning(
@@ -358,13 +360,16 @@ def load(
                     for key in values:
                         if mapping.get(key) != filename:
                             raise ValueError(f"Unexpected or misplaced weight: {key}")
-                    yield values, {
-                        name: spec
-                        for name, spec in format_spec.get(
-                            "quantized_modules", {}
-                        ).items()
-                        if name + ".weight" in values
-                    }
+                    yield (
+                        values,
+                        {
+                            name: spec
+                            for name, spec in format_spec.get(
+                                "quantized_modules", {}
+                            ).items()
+                            if name + ".weight" in values
+                        },
+                    )
 
         oqh = oqh_format.oqh_paths(raw)
         seen, replaced, all_quantized = set(), set(), {}
@@ -458,7 +463,7 @@ def load(
             )
         ):
             raise ValueError(
-                f"Incomplete V4.1 checkpoint; missing={sorted(expected-seen)[:8]}, extra={sorted(seen-expected)[:8]}"
+                f"Incomplete V4.1 checkpoint; missing={sorted(expected - seen)[:8]}, extra={sorted(seen - expected)[:8]}"
             )
         tokenizer = PreTrainedTokenizerFast.from_pretrained(path)
         from .tool_parser import parse_tool_call, tool_call_end, tool_call_start

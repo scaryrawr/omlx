@@ -36,8 +36,7 @@ import logging
 import os
 import re
 from collections import Counter
-from functools import lru_cache
-from typing import Optional
+from functools import cache
 
 import mlx.core as mx
 
@@ -609,18 +608,27 @@ _SHARED_GATE_UP_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _shared_gate_up_kernel():
     return mx.fast.metal_kernel(
         name="glm5_moe_shared_gate_up_swiglu",
-        input_names=["x", "limit", "sh_gate_w", "sh_gate_s", "sh_gate_b", "sh_up_w", "sh_up_s", "sh_up_b"],
+        input_names=[
+            "x",
+            "limit",
+            "sh_gate_w",
+            "sh_gate_s",
+            "sh_gate_b",
+            "sh_up_w",
+            "sh_up_s",
+            "sh_up_b",
+        ],
         output_names=["out"],
         header=_QMV_HEADER,
         source=_SHARED_GATE_UP_SOURCE,
     )
 
 
-def mlp_gate_up_swiglu(x: mx.array, gate, up, limit: float) -> Optional[mx.array]:
+def mlp_gate_up_swiglu(x: mx.array, gate, up, limit: float) -> mx.array | None:
     """One token of Glm5NextMLP's gate/up projections and clamped SwiGLU in
     one dispatch (the shared-expert gate/up kernel): ``silu(min(gate(x),
     limit)) * clip(up(x), -limit, limit)`` for ``x`` [1, K], each projection
@@ -645,8 +653,15 @@ def mlp_gate_up_swiglu(x: mx.array, gate, up, limit: float) -> Optional[mx.array
     STATS["mlp_gate_up"] += 1
     return _shared_gate_up_kernel()(
         inputs=[x, mx.array([limit], dtype=mx.float32), gw, gs, gb, uw, us, ub],
-        template=[("T", x.dtype), ("K", K), ("N", N), ("SBITS", bits), ("SGS", gsz),
-                  ("RPS", rps), ("NSG", nsg)],
+        template=[
+            ("T", x.dtype),
+            ("K", K),
+            ("N", N),
+            ("SBITS", bits),
+            ("SGS", gsz),
+            ("RPS", rps),
+            ("NSG", nsg),
+        ],
         grid=(32, (N // (rps * nsg)) * nsg, 1),
         threadgroup=(32, nsg, 1),
         output_shapes=[(1, N)],
@@ -771,13 +786,13 @@ def _source(body: str, **defines) -> str:
     return "\n".join(lines) + "\n" + body + "\n" + "\n".join(undef) + "\n"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _gate_up_kernel(
     has_shared: bool,
     shared_wide: bool = False,
     slot_major: bool = False,
     select: bool = False,
-    oqh: Optional[str] = None,
+    oqh: str | None = None,
 ):
     """``oqh``: None for affine experts, "rows" or "groups" for oQh experts."""
     routes = ["sel_sig", "sel_biased", "sel_scaling"] if select else ["indices"]
@@ -787,7 +802,14 @@ def _gate_up_kernel(
         routed = ["gate_w", "gate_s", "gate_b", "up_w", "up_s", "up_b"]
     inputs = ["x"] + (["x_rot"] if oqh else []) + routes + ["limit"] + routed
     if has_shared or shared_wide:
-        inputs += ["sh_gate_w", "sh_gate_s", "sh_gate_b", "sh_up_w", "sh_up_s", "sh_up_b"]
+        inputs += [
+            "sh_gate_w",
+            "sh_gate_s",
+            "sh_gate_b",
+            "sh_up_w",
+            "sh_up_s",
+            "sh_up_b",
+        ]
     suffix = "_widesh" if shared_wide else ("_shared" if has_shared else "")
     suffix += "_sm" if slot_major else ""
     suffix += "_select" if select else ""
@@ -812,13 +834,13 @@ def _gate_up_kernel(
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _down_kernel(
     has_shared: bool,
     add_shared_y: bool,
     slot_major: bool = False,
     shared_wide: bool = False,
-    oqh: Optional[str] = None,
+    oqh: str | None = None,
 ):
     """``oqh``: None for affine experts, "rows" or "groups" for oQh experts."""
     routed = ["down_w", "down_rs"] if oqh == "rows" else ["down_w", "down_s", "down_b"]
@@ -829,8 +851,10 @@ def _down_kernel(
             inputs += ["sh_act"]
     elif add_shared_y:
         inputs += ["shared_y"]
-    suffix = "_widesh" if shared_wide else (
-        "_shared" if has_shared else ("_add" if add_shared_y else "")
+    suffix = (
+        "_widesh"
+        if shared_wide
+        else ("_shared" if has_shared else ("_add" if add_shared_y else ""))
     )
     suffix += "_sm" if slot_major else ""
     suffix += f"_oqh_{oqh}" if oqh else ""
@@ -874,10 +898,18 @@ def _affine_parts(layer):
     """(weight, scales, biases, bits, group_size) of an affine quantized layer."""
     if getattr(layer, "mode", "affine") != "affine":
         return None
-    biases = layer.get("biases") if hasattr(layer, "get") else getattr(layer, "biases", None)
+    biases = (
+        layer.get("biases") if hasattr(layer, "get") else getattr(layer, "biases", None)
+    )
     if biases is None or "bias" in layer:
         return None
-    return layer["weight"], layer["scales"], biases, int(layer.bits), int(layer.group_size)
+    return (
+        layer["weight"],
+        layer["scales"],
+        biases,
+        int(layer.bits),
+        int(layer.group_size),
+    )
 
 
 def _oqh_group_parts(layer):
@@ -896,7 +928,7 @@ def _oqh_group_parts(layer):
 _ROUTED_PARTS = {None: _affine_parts, "rows": _oqh_parts, "groups": _oqh_group_parts}
 
 
-def _oqh_mode(layer, rotated) -> Optional[str]:
+def _oqh_mode(layer, rotated) -> str | None:
     """None for affine experts; for oQh ones (a rotated input) "rows" or "groups"."""
     if rotated is None:
         return None
@@ -916,7 +948,7 @@ def moe_gate_up_swiglu(
     nsg: int = 2,
     shared_wide: bool = False,
     select=None,
-    x_rot: Optional[mx.array] = None,
+    x_rot: mx.array | None = None,
 ):
     """Clamped-SwiGLU activations for every (token, routed expert[, shared]).
 
@@ -976,7 +1008,11 @@ def moe_gate_up_swiglu(
         N //= 2
         estride, up_off = 2 * N, N
     topk = indices.shape[1]
-    if x.dtype not in (mx.bfloat16, mx.float16) or gs.dtype != x.dtype or us.dtype != x.dtype:
+    if (
+        x.dtype not in (mx.bfloat16, mx.float16)
+        or gs.dtype != x.dtype
+        or us.dtype != x.dtype
+    ):
         return None
     if not _qmv_fast_ok(rbits, rgs, N, K) or N % (rps * nsg):
         return None
@@ -991,8 +1027,15 @@ def moe_gate_up_swiglu(
     rows = [gw, gs, uw, us] if oqh == "rows" else [gw, gs, gb, uw, us, ub]
     inputs = [x] + ([x_rot] if oqh else []) + routes + limits + rows
     template = [
-        ("T", x.dtype), ("K", K), ("N", N), ("TOPK", topk), ("RBITS", rbits),
-        ("RPS", rps), ("NSG", nsg), ("ESTRIDE", estride), ("UP_OFF", up_off),
+        ("T", x.dtype),
+        ("K", K),
+        ("N", N),
+        ("TOPK", topk),
+        ("RBITS", rbits),
+        ("RPS", rps),
+        ("NSG", nsg),
+        ("ESTRIDE", estride),
+        ("UP_OFF", up_off),
     ]
     if oqh != "rows":
         template.append(("RGS", rgs))
@@ -1016,7 +1059,9 @@ def moe_gate_up_swiglu(
         inputs += [sgw, sgs, sgb, suw, sus, sub]
         template += [("SBITS", sbits), ("SGS", sgsz)]
     slot_major = _slot_major(T)
-    kernel = _gate_up_kernel(has_shared, shared_wide, slot_major, select is not None, oqh)
+    kernel = _gate_up_kernel(
+        has_shared, shared_wide, slot_major, select is not None, oqh
+    )
     STATS["moe_gate_up"] += 1
     tiles = N // (rps * nsg)
     slots = T * topk + 1 if shared_wide else T * (topk + int(has_shared))
@@ -1066,13 +1111,13 @@ def moe_down_combine(
     scores: mx.array,
     routed_down,
     shared_down=None,
-    shared_y: Optional[mx.array] = None,
+    shared_y: mx.array | None = None,
     *,
-    shared_act: Optional[mx.array] = None,
+    shared_act: mx.array | None = None,
     rps: int = 4,
     nsg: int = 2,
-    act_rot: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    act_rot: mx.array | None = None,
+) -> mx.array | None:
     """Routed down projections combined with the routing weights (+ shared).
 
     ``act`` is [T, TOPK (+1), K] from :func:`moe_gate_up_swiglu`, ``scores``
@@ -1110,8 +1155,13 @@ def moe_down_combine(
     rows = [dw, ds] if oqh == "rows" else [dw, ds, db]
     inputs = [act] + ([act_rot] if oqh else []) + [indices, scores] + rows
     template = [
-        ("T", act.dtype), ("K", K), ("N", N), ("TOPK", topk), ("RBITS", rbits),
-        ("RPS", rps), ("NSG", nsg),
+        ("T", act.dtype),
+        ("K", K),
+        ("N", N),
+        ("TOPK", topk),
+        ("RBITS", rbits),
+        ("RPS", rps),
+        ("NSG", nsg),
     ]
     if oqh != "rows":
         template.append(("RGS", rgs))
@@ -1136,7 +1186,9 @@ def moe_down_combine(
             return None
         inputs.append(shared_y)
     slot_major = _slot_major(T)
-    kernel = _down_kernel(has_shared, shared_y is not None, slot_major, shared_wide, oqh)
+    kernel = _down_kernel(
+        has_shared, shared_y is not None, slot_major, shared_wide, oqh
+    )
     STATS["moe_down"] += 1
     if shared_wide:
         STATS["moe_down_shared_wide"] += 1
@@ -1235,7 +1287,7 @@ _HC_MIX1_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hc_mix1_kernel():
     return mx.fast.metal_kernel(
         name="glm5_hc_mix_rms_gemv_row",
@@ -1280,7 +1332,7 @@ def router_weights(gate) -> mx.array:
     return _exact_bf16(gate, "weight")
 
 
-def hc_mix(x: mx.array, fn: mx.array, eps: float) -> Optional[mx.array]:
+def hc_mix(x: mx.array, fn: mx.array, eps: float) -> mx.array | None:
     """``(rms_norm(x.astype(f32).flatten(-2)) @ fn.T)`` per token, M=1 exact.
 
     ``x`` is [B, L, HC, D] bf16/fp16, ``fn`` [MIX, HC*D] float32 (or its
@@ -1292,7 +1344,7 @@ def hc_mix(x: mx.array, fn: mx.array, eps: float) -> Optional[mx.array]:
     B, L, hc, d = x.shape
     K = hc * d
     mix = fn.shape[0]
-    if fn.shape[1] != K or K % 4096 or mix >= 4096 or K < 16 * mix:
+    if fn.shape[1] != K or K % 4096 or mix >= 4096 or 16 * mix > K:
         return None
     if x.dtype not in (mx.bfloat16, mx.float16, mx.float32):
         return None
@@ -1390,7 +1442,7 @@ _DSA_SCORES_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_scores_kernel():
     return mx.fast.metal_kernel(
         name="glm5_dsa_decode_scores",
@@ -1410,7 +1462,7 @@ def dsa_decode_scores(
     kpool: int,
     *,
     nsg: int = 8,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """Masked indexer scores for L <= 8 query rows of one sequence.
 
     ``q`` [1, L, H, D], ``pool_keys`` [1, P, D],
@@ -1424,7 +1476,11 @@ def dsa_decode_scores(
     P = pool_keys.shape[1]
     if not (1 <= L <= 8) or D % 8 or H % nsg or P == 0:
         return None
-    if q.dtype not in (mx.bfloat16, mx.float16) or pool_keys.dtype != q.dtype or weights.dtype != q.dtype:
+    if (
+        q.dtype not in (mx.bfloat16, mx.float16)
+        or pool_keys.dtype != q.dtype
+        or weights.dtype != q.dtype
+    ):
         return None
     # Inputs are made row contiguous by the kernel launch (a no-op for the
     # pooled cache view, whose rows are contiguous for one sequence).
@@ -1437,7 +1493,14 @@ def dsa_decode_scores(
             mx.array([query_pos0], dtype=mx.int32),
             mx.array([pool_len, P], dtype=mx.int32),
         ],
-        template=[("T", q.dtype), ("L", L), ("HEADS", H), ("DIM", D), ("NSG", nsg), ("KPOOL", kpool)],
+        template=[
+            ("T", q.dtype),
+            ("L", L),
+            ("HEADS", H),
+            ("DIM", D),
+            ("NSG", nsg),
+            ("KPOOL", kpool),
+        ],
         grid=(32 * ((P + 7) // 8), nsg, 1),
         threadgroup=(32, nsg, 1),
         output_shapes=[(1, L, P)],
@@ -1585,7 +1648,7 @@ _DSA_SELECT_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_select_kernel():
     return mx.fast.metal_kernel(
         name="glm5_dsa_select_topk",
@@ -1604,7 +1667,7 @@ def dsa_select_topk(
     kpool: int,
     tail_width: int,
     output_width: int,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """Selected token indices of ``scores`` [1, L, P] (L <= 8): the native
     ``dsa_topk_indices(scores[:, None], topk)`` pool rows, expanded as
     Glm5NextIndexer.__call__ expands them. ``left_padding`` is the KV
@@ -1622,7 +1685,9 @@ def dsa_select_topk(
         inputs=[
             scores,
             mx.array([P, query_pos0, pool_len], dtype=mx.int32),
-            left_padding.astype(mx.int32) if left_padding.dtype != mx.int32 else left_padding,
+            left_padding.astype(mx.int32)
+            if left_padding.dtype != mx.int32
+            else left_padding,
         ],
         template=[
             ("T", scores.dtype),
@@ -1682,7 +1747,7 @@ _POOL_COMPRESS_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _pool_compress_kernel():
     return mx.fast.metal_kernel(
         name="glm5_pool_compress",
@@ -1692,7 +1757,7 @@ def _pool_compress_kernel():
     )
 
 
-def pool_compress(keys: mx.array, gate: mx.array, ape: mx.array) -> Optional[mx.array]:
+def pool_compress(keys: mx.array, gate: mx.array, ape: mx.array) -> mx.array | None:
     """``Glm5NextIndexer._compress_windows(keys, gate)``: ``keys`` and
     ``gate`` [B, S, hd], ``ape`` [kpool, hd], all of one 16-bit float dtype.
     Returns [B, S // kpool, hd], or None when not covered."""
@@ -1700,7 +1765,7 @@ def pool_compress(keys: mx.array, gate: mx.array, ape: mx.array) -> Optional[mx.
         return None
     B, S, hd = keys.shape
     kp = ape.shape[0]
-    if ape.shape[1] != hd or not 1 <= hd <= 1024 or S < kp:
+    if ape.shape[1] != hd or not 1 <= hd <= 1024 or kp > S:
         return None
     if (
         keys.dtype not in (mx.bfloat16, mx.float16)
@@ -1744,7 +1809,7 @@ _DSA_GATHER_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_gather_kernel():
     return mx.fast.metal_kernel(
         name="glm5_dsa_gather_selected",
@@ -1765,7 +1830,11 @@ def dsa_gather_selected(kv_latent: mx.array, indices: mx.array):
         return None
     D = kv_latent.shape[3]
     W = indices.shape[2]
-    if kv_latent.shape[2] < 1 or D % 8 or kv_latent.dtype not in (mx.bfloat16, mx.float16):
+    if (
+        kv_latent.shape[2] < 1
+        or D % 8
+        or kv_latent.dtype not in (mx.bfloat16, mx.float16)
+    ):
         return None
     rows = 8
     STATS["dsa_gather"] += 1
@@ -1855,7 +1924,7 @@ _DSA_DECODE_ATTN_SOURCE = r"""
 _DSA_DECODE_ATTN_ROWS = 8  # TK: selected rows per threadgroup
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_decode_attn_kernel():
     return mx.fast.metal_kernel(
         name="glm5_dsa_decode_attention_scores",
@@ -1878,7 +1947,7 @@ def dsa_decode_attention_supported(heads: int, dim: int, dtype) -> bool:
 
 def dsa_decode_attention(
     q_lat: mx.array, kv_latent: mx.array, indices: mx.array, scale: float
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """``dsa_gather_selected`` + ``mx.fast.scaled_dot_product_attention`` of
     one token: ``q_lat`` [1, H, 1, D] embedded queries, ``kv_latent`` [1, 1,
     Kv, D], ``indices`` [1, 1, W] int32 (-1 = unused). Returns [1, H, 1, D],
@@ -2091,7 +2160,7 @@ _DSA_ROWS_PV_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_rows_scores_kernel(masked: bool):
     return mx.fast.metal_kernel(
         name="glm5_dsa_rows_scores" + ("_masked" if masked else ""),
@@ -2103,7 +2172,7 @@ def _dsa_rows_scores_kernel(masked: bool):
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _dsa_rows_pv_kernel():
     return mx.fast.metal_kernel(
         name="glm5_dsa_rows_pv",
@@ -2139,8 +2208,8 @@ def dsa_attention_rows(
     idx: mx.array,
     kv_lens: mx.array,
     scale: float,
-    valid: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    valid: mx.array | None = None,
+) -> mx.array | None:
     """Sparse attention of R one-token rows over their selected latent rows,
     each row as its decode step computes it (gather + SDPA fallback).
 
@@ -2492,7 +2561,7 @@ _KDA_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _kda_kernel(
     has_conv_state: bool,
     has_state: bool,
@@ -2528,11 +2597,11 @@ def _kda_kernel(
 
 def kda_decode_step(
     proj: mx.array,
-    conv_state: Optional[mx.array],
+    conv_state: mx.array | None,
     conv_w: mx.array,
     a_log: mx.array,
     dt_bias: mx.array,
-    state: Optional[mx.array],
+    state: mx.array | None,
     norm_w: mx.array,
     *,
     heads: int,
@@ -2546,8 +2615,8 @@ def kda_decode_step(
     lower_bound: float,
     f_b=None,
     g_b=None,
-    a_pre: Optional[mx.array] = None,
-    gate_pre: Optional[mx.array] = None,
+    a_pre: mx.array | None = None,
+    gate_pre: mx.array | None = None,
 ):
     """Fused KDA layer body for B sequences of T <= 8 tokens each.
 
@@ -2583,10 +2652,22 @@ def kda_decode_step(
         return None
     pre = a_pre is not None
     inputs_extra = []
-    template = [("T", proj.dtype), ("TOK", T), ("DK", head_dim), ("QKV", qkv),
-                ("PROJ_W", width), ("OFF_FA", off_fa), ("OFF_GA", off_ga), ("OFF_B", off_b)]
+    template = [
+        ("T", proj.dtype),
+        ("TOK", T),
+        ("DK", head_dim),
+        ("QKV", qkv),
+        ("PROJ_W", width),
+        ("OFF_FA", off_fa),
+        ("OFF_GA", off_ga),
+        ("OFF_B", off_b),
+    ]
     if pre:
-        if gate_pre is None or a_pre.shape != (B, T, qkv) or gate_pre.shape != (B, T, qkv):
+        if (
+            gate_pre is None
+            or a_pre.shape != (B, T, qkv)
+            or gate_pre.shape != (B, T, qkv)
+        ):
             return None
         if a_pre.dtype != proj.dtype or gate_pre.dtype != proj.dtype:
             return None
@@ -2771,7 +2852,7 @@ _ROUTER_SELECT_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _router_logits_kernel():
     return mx.fast.metal_kernel(
         name="glm5_router_logits_sigmoid",
@@ -2782,7 +2863,7 @@ def _router_logits_kernel():
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _router_select_kernel():
     return mx.fast.metal_kernel(
         name="glm5_router_select",
@@ -2864,7 +2945,11 @@ def moe_router(
     threads = 32  # one simdgroup per token (eight selection rounds)
     indices, scores = _router_select_kernel()(
         inputs=[sig, biased, mx.array([scaling], dtype=mx.float32)],
-        template=[("E", E), ("TOPK", top_k), ("NORM", int(bool(norm_topk_prob) and top_k > 1))],
+        template=[
+            ("E", E),
+            ("TOPK", top_k),
+            ("NORM", int(bool(norm_topk_prob) and top_k > 1)),
+        ],
         grid=(threads * T, 1, 1),
         threadgroup=(threads, 1, 1),
         output_shapes=[(T, top_k), (T, top_k)],
@@ -3008,7 +3093,7 @@ def _atoi(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-@lru_cache(maxsize=None)
+@cache
 def fused_decode_supported() -> bool:
     """True on gen-15+ GPUs (M3 and newer). From gen 15 MLX runs multi-row
     affine qmv as qmv_wide, which these kernels replay, and the 1024-thread
@@ -3020,7 +3105,7 @@ def fused_decode_supported() -> bool:
     return match is not None and int(match.group(1)) >= 15
 
 
-@lru_cache(maxsize=None)
+@cache
 def nax_relaxed_fp32_matmul() -> bool:
     """True when MLX runs fp32 GEMMs on NAX with relaxed (TF32) precision:
     NAX available and ``env::enable_tf32()`` (MLX_ENABLE_TF32, default 1).
@@ -3031,8 +3116,8 @@ def nax_relaxed_fp32_matmul() -> bool:
     return is_nax_available()
 
 
-@lru_cache(maxsize=None)
-def hc_comb_product() -> Optional[str]:
+@cache
+def hc_comb_product() -> str | None:
     """How MLX runs the one-token fp32 comb product of the HC expand
     ([HC, HC] x [HC, D]): ``"nax"`` (relaxed matmul2d), ``"simd"`` (8x8
     simdgroup MMAs, GPUs without NAX) or None when no kernel here replays it
@@ -3044,7 +3129,7 @@ def hc_comb_product() -> Optional[str]:
     return None
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hc_expand1_kernel(product: str):
     simd = product == "simd"
     return mx.fast.metal_kernel(
@@ -3058,7 +3143,7 @@ def _hc_expand1_kernel(product: str):
 
 def hc_expand_one(
     x: mx.array, residual: mx.array, post: mx.array, comb: mx.array
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """``_hc_expand_op(x, residual, post, comb)`` for a single token.
 
     ``x`` [1, 1, D], ``residual`` [1, 1, HC, D] (bf16/fp16), ``post``
@@ -3355,10 +3440,13 @@ inline void glm_hc_post_comb(
 
 """
 
-_HC_POST_HEADER = _HC_POST_COMB_HEADER + r"""
+_HC_POST_HEADER = (
+    _HC_POST_COMB_HEADER
+    + r"""
 #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
 using namespace mpp::tensor_ops;
 """
+)
 
 _HC_POST_PROLOGUE = r"""
   const ushort lane = thread_index_in_simdgroup;
@@ -3385,7 +3473,9 @@ _HC_POST_PROLOGUE = r"""
   const threadgroup float* comb = (const threadgroup float*)comb_rows;
 """
 
-_HC_POST_SOURCE = _HC_POST_PROLOGUE + r"""
+_HC_POST_SOURCE = (
+    _HC_POST_PROLOGUE
+    + r"""
   const short qid = lane >> 2;
   const short fm = ((qid & 4) | ((lane >> 1) & 3));
   const short fn = ((qid & 2) | (lane & 1)) * 4;
@@ -3420,8 +3510,11 @@ _HC_POST_SOURCE = _HC_POST_PROLOGUE + r"""
     }
   }
 """
+)
 
-_HC_POST_SIMD_SOURCE = _HC_POST_PROLOGUE + r"""
+_HC_POST_SIMD_SOURCE = (
+    _HC_POST_PROLOGUE
+    + r"""
   short fm, fn;
   float vals[4][2];
   glm_hc_comb_simd_mma<HC, D>(comb, residual, tile, lane, fm, fn, vals);
@@ -3433,9 +3526,10 @@ _HC_POST_SIMD_SOURCE = _HC_POST_PROLOGUE + r"""
     }
   }
 """
+)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hc_pre_fused_kernel(deferred: bool):
     inputs = ["y", "mm", "post"] if deferred else ["x"]
     inputs += ["fn", "eps", "scale", "base", "norm_weight"]
@@ -3449,7 +3543,7 @@ def _hc_pre_fused_kernel(deferred: bool):
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hc_post_mm_kernel(product: str):
     simd = product == "simd"
     return mx.fast.metal_kernel(
@@ -3471,7 +3565,12 @@ def hc_defer_supported(connection, norm, dtype, width: int) -> bool:
     mix = (2 + 4) * 4
     if fn.dtype != mx.float32 or fn.shape != (mix, 4 * width):
         return False
-    if width % 1024 or width > 4096 or norm.weight.shape != (width,) or norm.weight.dtype != dtype:
+    if (
+        width % 1024
+        or width > 4096
+        or norm.weight.shape != (width,)
+        or norm.weight.dtype != dtype
+    ):
         return False
     if connection.scale.shape != (3,) or connection.base.shape != (mix,):
         return False
@@ -3504,20 +3603,26 @@ def hc_pre_fused(connection, norm, x=None, deferred=None):
         inputs = [x]
     mix = connection.fn.shape[0]
     inputs += [
-        mix_weights(connection), mx.array([connection.norm_eps], dtype=mx.float32),
-        connection.scale, connection.base, norm.weight,
+        mix_weights(connection),
+        mx.array([connection.norm_eps], dtype=mx.float32),
+        connection.scale,
+        connection.base,
+        norm.weight,
     ]
     STATS["hc_pre_fused"] += 1
     outs = _hc_pre_fused_kernel(deferred is not None)(
         inputs=inputs,
         template=[
-            ("T", dtype), ("HC", 4), ("D", D),
+            ("T", dtype),
+            ("HC", 4),
+            ("D", D),
             ("HC_EPS_INT", round(connection.hc_eps / 1e-9)),
             ("NORM_EPS_INT", round(norm.eps / 1e-9)),
         ],
         grid=(1024 * (mix // 4), 1, 1),
         threadgroup=(1024, 1, 1),
-        output_shapes=[(1, 1, D), (1, 1, mix)] + ([(1, 1, 4, D)] if deferred is not None else []),
+        output_shapes=[(1, 1, D), (1, 1, mix)]
+        + ([(1, 1, 4, D)] if deferred is not None else []),
         output_dtypes=[dtype, mx.float32] + ([dtype] if deferred is not None else []),
     )
     return outs[0], outs[1], (outs[2] if deferred is not None else None)
@@ -3535,9 +3640,12 @@ def hc_post_mm(connection, mixes: mx.array, residual: mx.array):
         _hc_post_mm_kernel(hc_comb_product())(
             inputs=[mixes, connection.scale, connection.base, residual],
             template=[
-                ("T", residual.dtype), ("HC", 4), ("D", D),
+                ("T", residual.dtype),
+                ("HC", 4),
+                ("D", D),
                 ("ITERS", int(connection.sinkhorn_iters)),
-                ("HC_EPS_INT", round(connection.hc_eps / 1e-9)), ("SIMDS", simds),
+                ("HC_EPS_INT", round(connection.hc_eps / 1e-9)),
+                ("SIMDS", simds),
             ],
             grid=(32 * simds * ((tiles + simds - 1) // simds), 1, 1),
             threadgroup=(32 * simds, 1, 1),
@@ -3595,7 +3703,7 @@ _MH_QMV_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _mh_qmv_kernel(fast: bool):
     return mx.fast.metal_kernel(
         name="glm5_mla_head_qmv" + ("_fast" if fast else "_block"),
@@ -3606,7 +3714,7 @@ def _mh_qmv_kernel(fast: bool):
     )
 
 
-def mla_head_qmv(x: mx.array, layer, nsg: int = 8) -> Optional[mx.array]:
+def mla_head_qmv(x: mx.array, layer, nsg: int = 8) -> mx.array | None:
     """``layer(x)`` (a ``QuantizedMultiLinear``, transpose=True) for one token:
     ``x`` [1, H, 1, K] -> [1, H, 1, N], or None when not covered."""
     if getattr(layer, "mode", "affine") != "affine" or layer.get("biases") is None:
@@ -3623,11 +3731,15 @@ def mla_head_qmv(x: mx.array, layer, nsg: int = 8) -> Optional[mx.array]:
         return None
     if K in (64, 128) and bits in (4, 8):
         return None  # MLX routes these to qmv_quad
-    if x.dtype not in (mx.bfloat16, mx.float16) or s.dtype != x.dtype or b.dtype != x.dtype:
+    if (
+        x.dtype not in (mx.bfloat16, mx.float16)
+        or s.dtype != x.dtype
+        or b.dtype != x.dtype
+    ):
         return None
     pack = {5: 8, 6: 4}.get(bits, 32 // bits)
     fast = N % 8 == 0 and K % (pack * 2 * 32) == 0
-    if not fast and not (K == pack * 32 and N >= 8 and gs % pack == 0):
+    if not fast and not (pack * 32 == K and N >= 8 and gs % pack == 0):
         return None
     if N % (4 * nsg):
         nsg = 2
@@ -3636,7 +3748,14 @@ def mla_head_qmv(x: mx.array, layer, nsg: int = 8) -> Optional[mx.array]:
     STATS["mla_head_qmv"] += 1
     return _mh_qmv_kernel(fast)(
         inputs=[x.reshape(H, K), w, s, b],
-        template=[("T", x.dtype), ("K", K), ("N", N), ("BITS", bits), ("GS", gs), ("NSG", nsg)],
+        template=[
+            ("T", x.dtype),
+            ("K", K),
+            ("N", N),
+            ("BITS", bits),
+            ("GS", gs),
+            ("NSG", nsg),
+        ],
         grid=(32, (N // (4 * nsg)) * nsg, H),
         threadgroup=(32, nsg, 1),
         output_shapes=[(1, H, 1, N)],
@@ -3717,7 +3836,7 @@ _MULTI_QMV_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _multi_qmv_kernel(n_parts: int, tokens: int):
     inputs = ["x"]
     for i in range(n_parts):
@@ -3731,14 +3850,18 @@ def _multi_qmv_kernel(n_parts: int, tokens: int):
     )
 
 
-def multi_qmv(x: mx.array, layers) -> Optional[list]:
+def multi_qmv(x: mx.array, layers) -> list | None:
     """``[linear(x) for linear in layers]`` for 1..8 rows in one dispatch.
 
     ``x`` [T, K]; ``layers`` 1..4 affine quantized linears (no bias) with the
     same bits/group size, K inputs and output rows divisible by 8. Returns
     the [T, N_i] outputs or None when not covered.
     """
-    if x.ndim != 2 or not 1 <= len(layers) <= 4 or x.dtype not in (mx.bfloat16, mx.float16):
+    if (
+        x.ndim != 2
+        or not 1 <= len(layers) <= 4
+        or x.dtype not in (mx.bfloat16, mx.float16)
+    ):
         return None
     T, K = x.shape
     if not 1 <= T <= 8:
@@ -3750,7 +3873,7 @@ def multi_qmv(x: mx.array, layers) -> Optional[list]:
     if any((p[3], p[4]) != (bits, gs) for p in parts):
         return None
     rows = []
-    for w, s, b, _, _ in parts:
+    for w, s, _b, _, _ in parts:
         if w.ndim != 2 or w.shape[1] * 32 // bits != K or s.dtype != x.dtype:
             return None
         rows.append(w.shape[0])
@@ -3768,14 +3891,16 @@ def multi_qmv(x: mx.array, layers) -> Optional[list]:
     template = [("T", x.dtype), ("K", K), ("BITS", bits), ("GS", gs)]
     template += [(f"N{i}", rows[i] if i < len(rows) else 0) for i in range(4)]
     STATS["multi_qmv"] += 1
-    return list(_multi_qmv_kernel(len(layers), T)(
-        inputs=inputs,
-        template=template,
-        grid=(64 * (sum(rows) // 8), 1, 1),
-        threadgroup=(64, 1, 1),
-        output_shapes=[(T, n) for n in rows],
-        output_dtypes=[x.dtype] * len(rows),
-    ))
+    return list(
+        _multi_qmv_kernel(len(layers), T)(
+            inputs=inputs,
+            template=template,
+            grid=(64 * (sum(rows) // 8), 1, 1),
+            threadgroup=(64, 1, 1),
+            output_shapes=[(T, n) for n in rows],
+            output_dtypes=[x.dtype] * len(rows),
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3891,7 +4016,7 @@ _ROWS_GEMV_SOURCE = r"""
 """
 
 
-@lru_cache(maxsize=None)
+@cache
 def _rows_gemv_kernel():
     return mx.fast.metal_kernel(
         name="glm5_rows_gemv",
@@ -3901,7 +4026,7 @@ def _rows_gemv_kernel():
     )
 
 
-def rows_gemv(x: mx.array, weight: mx.array) -> Optional[mx.array]:
+def rows_gemv(x: mx.array, weight: mx.array) -> mx.array | None:
     """``x @ weight.T`` with every row as the one-row gemv computes it.
 
     ``x`` [..., K] (2..16 rows), ``weight`` [N, K] of x's dtype (bf16/fp16).

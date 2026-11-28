@@ -740,7 +740,7 @@ class TestEngineCorePropagation:
 
     def _make_engine_core(self, draft_model=None, default_enabled=True):
         """Create a minimal EngineCore for testing add_request propagation."""
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         from omlx.engine_core import EngineCore
 
@@ -1021,7 +1021,6 @@ class TestLogicalCacheOffset:
 
 
 class TestUndoLookahead:
-
     @staticmethod
     def _kv(n, seed):
         return mx.random.normal((1, 2, n, 4), key=mx.random.key(seed))

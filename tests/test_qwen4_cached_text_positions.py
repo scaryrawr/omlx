@@ -18,7 +18,9 @@ def _adapter():
 
 
 @pytest.mark.parametrize("cached_tokens", [40000, 40001])
-def test_complete_text_cache_hit_keeps_gathered_decode_and_verify(cached_tokens, monkeypatch):
+def test_complete_text_cache_hit_keeps_gathered_decode_and_verify(
+    cached_tokens, monkeypatch
+):
     import omlx.models.vlm as vlm_module
 
     # This checks the cache-hit proof, not the threshold policy (which keeps

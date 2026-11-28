@@ -264,9 +264,7 @@ def _attention_block(q, k, v, rel, sink, scale, left_padding):
         threadgroup=(32 * _NSG, 1, 1),
         output_shapes=[(1, hq, length, nsplit, d + 2)],
         output_dtypes=[mx.float32],
-    )[
-        0
-    ]
+    )[0]
     return _kernel("long_attention_merge", _MERGE_SOURCE, ["part", "sink"], ["out"])(
         inputs=[part, sink],
         template=[("T", q.dtype), ("D", d), ("NSG", _MERGE_NSG)],

@@ -11,11 +11,13 @@ from mlx.utils import tree_flatten
 from mlx_vlm.quantization.nvfp4 import replace_scaled_quantized_linears
 
 import omlx.patches.m5_gather_qmm as m5
+from omlx.patches.deepseek_v4 import switch_layers as deepseek_switch
 from omlx.patches.deepseek_v4.switch_layers import (
     NVFP4_GLOBAL_SCALE,
     SwitchGLU,
     install_nvfp4_global_scales,
 )
+from omlx.patches.glm_moe_dsa import switch_layers as glm_switch
 from omlx.patches.mlx_vlm_glm5_next_compat import (
     apply_mlx_vlm_glm5_next_compat_patch,
 )
@@ -30,6 +32,23 @@ requires_metal = pytest.mark.skipif(
 )
 
 E, N, K = 4, 64, 128
+
+
+@pytest.mark.parametrize(
+    "layer_class",
+    [
+        deepseek_switch.SwitchGLU,
+        deepseek_switch.SwitchMLP,
+        glm_switch.SwitchGLU,
+        glm_switch.SwitchMLP,
+    ],
+)
+def test_default_activation_is_owned_by_each_layer(layer_class):
+    first = layer_class(K, N, E)
+    second = layer_class(K, N, E)
+    assert first.activation is not second.activation
+    custom = nn.GELU()
+    assert layer_class(K, N, E, activation=custom).activation is custom
 
 
 @pytest.fixture(autouse=True)

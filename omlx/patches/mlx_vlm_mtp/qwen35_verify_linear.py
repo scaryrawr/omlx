@@ -50,7 +50,9 @@ def apply():
         if x.ndim == 3 and (
             x.shape[0] > 1 or (x.shape[1] > 1 and _routes_quantized_linear())
         ):
-            return tuple(verify_linear._target_verify_linear(linear, x) for linear in linears)
+            return tuple(
+                verify_linear._target_verify_linear(linear, x) for linear in linears
+            )
         return original_linears(linears, x)
 
     for name in (

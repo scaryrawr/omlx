@@ -344,14 +344,22 @@ def test_interleaved_prefills_keep_their_dspark_contexts():
     ]
 
 
-
-@pytest.mark.parametrize("prompts", [([3, 4, 5, 6], [7, 8, 9, 10]), ([3, 4, 5, 6, 7, 8], [9, 10]), ([3], [4, 5, 6], [7, 8])])
+@pytest.mark.parametrize(
+    "prompts",
+    [
+        ([3, 4, 5, 6], [7, 8, 9, 10]),
+        ([3, 4, 5, 6, 7, 8], [9, 10]),
+        ([3], [4, 5, 6], [7, 8]),
+    ],
+)
 def test_dspark_stages_batched_across_requests_match_each_request(prompts):
     model = LanguageModel(mtp_config())
     load_reference_weights(model)
     hiddens = []
     for ids in prompts:
-        _, hidden = model(mx.array([ids]), cache=model.make_cache(), return_dspark_hidden=True)
+        _, hidden = model(
+            mx.array([ids]), cache=model.make_cache(), return_dspark_hidden=True
+        )
         hiddens.append(hidden)
     anchors = [mx.array([[11 + row]]) for row in range(len(prompts))]
 
@@ -371,7 +379,9 @@ def test_dspark_stages_batched_across_requests_match_each_request(prompts):
         )
     )
     batched = two_cycles(
-        lambda rows, caches: model.dspark_hidden_rows(rows, anchors, caches, draft_length=3)
+        lambda rows, caches: model.dspark_hidden_rows(
+            rows, anchors, caches, draft_length=3
+        )
     )
     for expected, actual in zip(single[:2], batched[:2]):
         assert actual.shape == expected.shape == (len(prompts), 3, expected.shape[-1])

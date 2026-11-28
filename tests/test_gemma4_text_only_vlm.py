@@ -10,11 +10,11 @@ import pytest
 
 pytest.importorskip("mlx_vlm.utils")
 
-import mlx.core as mx  # noqa: E402
-import mlx_vlm.utils as _vu  # noqa: E402
+import mlx.core as mx
+import mlx_vlm.utils as _vu
 
-from omlx.engine.vlm import _strip_vision_config_if_orphaned  # noqa: E402
-from omlx.model_discovery import discover_models  # noqa: E402
+from omlx.engine.vlm import _strip_vision_config_if_orphaned
+from omlx.model_discovery import discover_models
 
 MERGED_HEAD = {"mtp_assistant_config": {"num_hidden_layers": 4}}
 
@@ -90,7 +90,9 @@ def test_unified_audio_without_vision_stays_on_vlm(tmp_path: Path):
     config = _config(d)
     config["audio_config"] = {"output_proj_dims": 8}
     (d / "config.json").write_text(json.dumps(config))
-    _write_safetensors(d / "model.safetensors", ["embed_audio.embedding_projection.weight"])
+    _write_safetensors(
+        d / "model.safetensors", ["embed_audio.embedding_projection.weight"]
+    )
 
     found = discover_models(tmp_path)["unified_audio"]
     assert found.engine_type == "vlm"

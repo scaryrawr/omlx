@@ -343,7 +343,7 @@ def _kernel(kind):
         outputs, source = ["out"], _MERGE
     elif kind.startswith("index_mma_rows"):
         # One query row per request of a decode batch, each scoring its own key buffer.
-        b_n = int(kind[len("index_mma_rows"):])
+        b_n = int(kind[len("index_mma_rows") :])
         keys = [f"keys{r}" for r in range(b_n)]
         chain = " : ".join(f"query == {r} ? {k}" for r, k in enumerate(keys[:-1]))
         geometry = (
@@ -359,7 +359,12 @@ def _kernel(kind):
             "const int N = meta[1], M = MS, visible = (meta[3] + int(query) + 1) / ratio;\n"
             "    const auto kp = keys;   // constant space when MLX binds an empty cache's stand-in"
         )
-        outputs, source = ["scores"], _INDEX_MMA.replace("ROW_GEOMETRY", geometry) if kind == "index_mma" else _INDEX
+        outputs, source = (
+            ["scores"],
+            _INDEX_MMA.replace("ROW_GEOMETRY", geometry)
+            if kind == "index_mma"
+            else _INDEX,
+        )
     return mx.fast.metal_kernel(
         name="deepseek_v41_packed_" + kind,
         input_names=inputs,
@@ -545,16 +550,27 @@ def packed_index_scores(
     )[0]
 
 
-def packed_index_scores_rows(q, keys, weights, positions, ratio, widths, candidates=None):
+def packed_index_scores_rows(
+    q, keys, weights, positions, ratio, widths, candidates=None
+):
     """packed_index_scores of B decode requests in one kernel: query row r of q
     [1, B, H, D] / weights [1, B, H] (one token at positions[r]) scores its own request's
     keys[r] ([1, N_r, row]) over its first widths[r] keys, or over its row of candidates
     ([1, B, MS], MS = max(widths)). Returns [1, B, MS] fp32: row r's first widths[r]
     scores are those packed_index_scores gives the request alone, the rest unset."""
     _, b_n, heads, dim = q.shape
-    if not (dim <= 128 and heads >= 8 and dim % 32 == 0) or len(keys) != b_n or b_n > 16:
-        raise ValueError("Row-batched index scores need the MMA geometry and one key buffer per row")
-    if any(k.ndim != 3 or k.dtype != mx.uint8 or k.shape[-1] != dim // 2 + dim // 32 for k in keys):
+    if (
+        not (dim <= 128 and heads >= 8 and dim % 32 == 0)
+        or len(keys) != b_n
+        or b_n > 16
+    ):
+        raise ValueError(
+            "Row-batched index scores need the MMA geometry and one key buffer per row"
+        )
+    if any(
+        k.ndim != 3 or k.dtype != mx.uint8 or k.shape[-1] != dim // 2 + dim // 32
+        for k in keys
+    ):
         raise ValueError("Expected packed FP4 index keys")
     ms = max(widths)
     head_split = heads >= 32
@@ -565,9 +581,14 @@ def packed_index_scores_rows(q, keys, weights, positions, ratio, widths, candida
             # An empty cache's stand-in stays in device memory (tiny inputs bind as constant).
             *(k if k.size else mx.zeros((dim,), mx.uint8) for k in keys),
             weights.astype(mx.float32),
-            mx.zeros((1,), mx.int32) if candidates is None else candidates.astype(mx.int32),
+            mx.zeros((1,), mx.int32)
+            if candidates is None
+            else candidates.astype(mx.int32),
             mx.array([heads, 0, ms, 0, ratio, 0], mx.int32),
-            mx.array([[k.shape[1], w, p] for k, w, p in zip(keys, widths, positions)], mx.int32),
+            mx.array(
+                [[k.shape[1], w, p] for k, w, p in zip(keys, widths, positions)],
+                mx.int32,
+            ),
         ],
         template=[
             ("D", dim),
@@ -593,7 +614,9 @@ def index_select_rows(scores, widths, counts, candidates=None):
     ids = _index_select_kernel(rows=True)(
         inputs=[
             scores.astype(mx.float32),
-            mx.zeros((8,), mx.int32) if candidates is None else candidates.astype(mx.int32),
+            mx.zeros((8,), mx.int32)
+            if candidates is None
+            else candidates.astype(mx.int32),
             mx.array([ms, ks, 0, 0, 0, 0, 0, 0], mx.uint32),
             mx.array([[w, k] for w, k in zip(widths, counts)], mx.uint32),
         ],
@@ -1166,7 +1189,9 @@ def index_select(scores, count, candidates=None):
     return _index_select_kernel()(
         inputs=[
             scores.astype(mx.float32),
-            mx.zeros((8,), mx.int32) if candidates is None else candidates.astype(mx.int32),
+            mx.zeros((8,), mx.int32)
+            if candidates is None
+            else candidates.astype(mx.int32),
             mx.array([n, count, 0, 0, 0, 0, 0, 0], mx.uint32),
         ],
         template=[("CAND", candidates is not None)],

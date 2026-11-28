@@ -29,8 +29,8 @@ from omlx.admin.benchmark import (
     _log_ane_benchmark_trace,
     _prefill_helper_details,
     _run_batch_test,
-    _setting_feature_flags,
     _run_single_test,
+    _setting_feature_flags,
     _upload_model_name,
     _upload_model_repo,
     cleanup_old_runs,
@@ -1169,7 +1169,9 @@ class TestFilterUploadedSettings:
         return ModelSettings(**overrides)
 
     def test_kv_compression_scheme_is_preserved(self):
-        settings = self._settings(turboquant_kv_enabled=True, turboquant_kv_scheme="affine4")
+        settings = self._settings(
+            turboquant_kv_enabled=True, turboquant_kv_scheme="affine4"
+        )
         assert _filter_uploaded_settings(settings)["turboquant_kv_scheme"] == "affine4"
 
     def test_performance_fields_are_kept(self):

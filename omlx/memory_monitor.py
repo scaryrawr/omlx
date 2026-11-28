@@ -18,7 +18,7 @@ import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from omlx.cache.paged_cache import PagedCacheManager
@@ -258,13 +258,13 @@ class MemoryMonitor:
         self._max_memory = self._get_max_memory()
 
         self._last_check_time = 0.0
-        self._last_memory_info: Optional[MemoryInfo] = None
+        self._last_memory_info: MemoryInfo | None = None
         self._lock = threading.Lock()
 
         # Model info for memory estimation (set by scheduler)
-        self._num_layers: Optional[int] = None
-        self._num_kv_heads: Optional[int] = None
-        self._head_dim: Optional[int] = None
+        self._num_layers: int | None = None
+        self._num_kv_heads: int | None = None
+        self._head_dim: int | None = None
         # KV storage width; may be fractional with TurboQuant.
         self._dtype_size: float = 2
         self._prefill_dtype_size: float = 2
@@ -274,8 +274,8 @@ class MemoryMonitor:
         # _dtype_size (which the scheduler may override to a fractional TurboQuant
         # KV width). Set via set_model_info(compute_dtype_size=...).
         self._score_dtype_size: float = _SDPA_FALLBACK_SCORE_DTYPE_SIZE
-        self._num_attention_heads: Optional[int] = None
-        self._num_kv_cache_layers: Optional[int] = None
+        self._num_attention_heads: int | None = None
+        self._num_kv_cache_layers: int | None = None
         # Sliding-window (RotatingKVCache-family) layers as (count, window)
         # groups. Their resident KV is bounded at window + chunk - 1 tokens
         # per layer, so they need a capped term instead of the linear
@@ -289,7 +289,7 @@ class MemoryMonitor:
         # measured once from a live cache after the first prefill chunk.
         self._fixed_state_bytes: int = 0
         # PagedCacheManager for KV cache memory measurement
-        self._paged_cache_manager: Optional["PagedCacheManager"] = None
+        self._paged_cache_manager: PagedCacheManager | None = None
         self._block_size: int = 256  # Default block size
 
         # Baseline memory (model weights) - set after model load
@@ -319,7 +319,7 @@ class MemoryMonitor:
         return get_max_working_set_bytes()
 
     def set_paged_cache_manager(
-        self, manager: "PagedCacheManager", block_size: int = 64
+        self, manager: PagedCacheManager, block_size: int = 64
     ) -> None:
         """
         Set PagedCacheManager for memory monitoring.
@@ -481,14 +481,14 @@ class MemoryMonitor:
         num_kv_heads: int,
         head_dim: int,
         dtype_size: float = 2,
-        num_attention_heads: Optional[int] = None,
-        num_kv_cache_layers: Optional[int] = None,
-        compute_dtype_size: Optional[float] = None,
-        kv_bytes_per_token: Optional[float] = None,
+        num_attention_heads: int | None = None,
+        num_kv_cache_layers: int | None = None,
+        compute_dtype_size: float | None = None,
+        kv_bytes_per_token: float | None = None,
         rotating_layer_specs: Sequence[tuple[int, int]] | None = None,
         prefill_memory_profile: PrefillMemoryProfile | None = None,
         ane_prefill_transient_bytes: int = 0,
-        prefill_dtype_size: Optional[float] = None,
+        prefill_dtype_size: float | None = None,
         affine_prefill: bool = False,
     ) -> None:
         """
@@ -632,10 +632,10 @@ class MemoryMonitor:
     def estimate_block_memory(
         self,
         block_size: int,
-        num_layers: Optional[int] = None,
-        num_kv_heads: Optional[int] = None,
-        head_dim: Optional[int] = None,
-        dtype_size: Optional[float] = None,
+        num_layers: int | None = None,
+        num_kv_heads: int | None = None,
+        head_dim: int | None = None,
+        dtype_size: float | None = None,
     ) -> float:
         """
         Estimate memory usage for a KV cache block.
@@ -904,9 +904,7 @@ class MemoryMonitor:
 
     def is_qwen4_gathered_prefill_profile(self) -> bool:
         """True when this monitor prices Qwen4 QSA gathered-core prefill."""
-        return isinstance(
-            self._prefill_memory_profile, _Qwen4ExpPrefillMemoryProfile
-        )
+        return isinstance(self._prefill_memory_profile, _Qwen4ExpPrefillMemoryProfile)
 
     def uses_flat_overhead_accounting(self) -> bool:
         """Use static token costs and charge released pool overhead once."""
@@ -1425,9 +1423,7 @@ class _Qwen4ExpPrefillMemoryProfile:
                 * min(kv_tile, core_kv)
                 * SDPA256_UNFUSED_SCORE_DTYPE_SIZE
             )
-            output = (
-                self.num_attention_heads * query_tokens * self.head_dim * 4
-            )
+            output = self.num_attention_heads * query_tokens * self.head_dim * 4
             core = int(output + tile_scores)
         return indexer + core
 
@@ -1470,14 +1466,10 @@ class _GLM5NextPrefillMemoryProfile:
             return 0
         # Store one latent and pooled indexer keys; the value cache has zero width.
         # The monitor measures fixed GDN state separately.
-        per_token = self.kv_lora_rank + self.index_head_dim // max(
-            self.index_kpool, 1
-        )
+        per_token = self.kv_lora_rank + self.index_head_dim // max(self.index_kpool, 1)
         return int(self.sparse_layers * per_token * self.dtype_size * int(num_tokens))
 
-    def estimate_prefill_transient_bytes(
-        self, query_tokens: int, kv_len: int
-    ) -> int:
+    def estimate_prefill_transient_bytes(self, query_tokens: int, kv_len: int) -> int:
         if query_tokens <= 0 or kv_len <= 0:
             return 0
         query_tokens = int(query_tokens)
@@ -1513,7 +1505,10 @@ class _GLM5NextPrefillMemoryProfile:
                     * query_tokens
                     * min(kv_tile, kv_len)
                     * self.score_dtype_size
-                    + self.num_attention_heads * query_tokens * self.qk_nope_head_dim * 4
+                    + self.num_attention_heads
+                    * query_tokens
+                    * self.qk_nope_head_dim
+                    * 4
                 )
             kv_expand = (
                 kv_len
@@ -1528,10 +1523,16 @@ class _GLM5NextPrefillMemoryProfile:
             pooled = max(kv_len // max(self.index_kpool, 1), 1)
             indexer = (
                 self.index_n_heads * query_tokens * pooled * 4
-                + query_tokens * (self.index_n_heads + 1) * self.index_head_dim * self.dtype_size
+                + query_tokens
+                * (self.index_n_heads + 1)
+                * self.index_head_dim
+                * self.dtype_size
             )
             q_latent = (
-                query_tokens * self.num_attention_heads * self.kv_lora_rank * self.dtype_size
+                query_tokens
+                * self.num_attention_heads
+                * self.kv_lora_rank
+                * self.dtype_size
             )
             if kv_len < _GLM5_NEXT_SPARSE_MLA_MIN_KV:
                 # Exact-block attention expands all cached K/V, regardless of query length.
@@ -1555,7 +1556,11 @@ class _GLM5NextPrefillMemoryProfile:
         # GDN layer: fused q/k/v input stream, short conv in/out, fp32
         # l2-norm temporaries and the chunked delta-rule scan intermediates.
         gdn = (
-            query_tokens * self.linear_num_heads * self.linear_head_dim * self.dtype_size * 8
+            query_tokens
+            * self.linear_num_heads
+            * self.linear_head_dim
+            * self.dtype_size
+            * 8
             + query_tokens * self.linear_num_heads * 64 * 4
         )
         return int(max(sparse, gdn + moe))
@@ -1659,9 +1664,7 @@ def _make_qwen4_exp_prefill_memory_profile(
         return None
     layer_types = _cfg_get(config, "layer_types") or ()
     qsa_layers = sum(
-        1
-        for kind in layer_types
-        if kind in {"qwen_sparse_attention", "full_attention"}
+        1 for kind in layer_types if kind in {"qwen_sparse_attention", "full_attention"}
     )
     if qsa_layers <= 0:
         interval = _cfg_get(config, "full_attention_interval") or 4
@@ -1712,9 +1715,7 @@ class _DeepSeekV41PrefillMemoryProfile:
             return 0
         return int(self.resident_kv_bytes_per_token) * int(num_tokens)
 
-    def estimate_prefill_transient_bytes(
-        self, query_tokens: int, kv_len: int
-    ) -> int:
+    def estimate_prefill_transient_bytes(self, query_tokens: int, kv_len: int) -> int:
         if query_tokens <= 0 or kv_len <= 0:
             return 0
         query_tokens = int(query_tokens)
@@ -1731,9 +1732,7 @@ class _DeepSeekV41PrefillMemoryProfile:
         )
         # Hyper-connection: hc_mult parallel streams of the residual, three
         # concurrent copies around mix/pre/post, plus the fp32 weights row.
-        hc = query_tokens * self.hc_mult * (
-            3 * self.dim * self.dtype_size + 4
-        )
+        hc = query_tokens * self.hc_mult * (3 * self.dim * self.dtype_size + 4)
         # MoE: routed gather, gate/up intermediates and the down projection
         # for the activated experts of one layer.
         moe = (
@@ -1958,10 +1957,7 @@ def collect_kv_layer_specs(
 
     def _walk(c: Any) -> None:
         nonlocal full, arrays
-        if (
-            type(c) in kv_types
-            or type(c).__name__ in _FULL_KV_CACHE_CLASS_NAMES
-        ):
+        if type(c) in kv_types or type(c).__name__ in _FULL_KV_CACHE_CLASS_NAMES:
             full += 1
             return
         if isinstance(c, list_types):
@@ -2112,11 +2108,11 @@ def _ane_prefill_transient_bytes(model: Any) -> int:
         from omlx.patches.qwen35_ane_prefill import ane_prefill_transient_bytes
 
         return int(ane_prefill_transient_bytes(model))
-    except Exception:  # noqa: BLE001 - patch optional; never break estimation
+    except Exception:
         return 0
 
 
-def set_model_info_from_model(monitor: "MemoryMonitor", model: Any) -> None:
+def set_model_info_from_model(monitor: MemoryMonitor, model: Any) -> None:
     """Populate ``monitor`` with KV/SDPA dims read from an mlx-lm ``model``.
 
     The engine-agnostic baseline used by guards outside the ``Scheduler``
@@ -2254,7 +2250,7 @@ def set_model_info_from_model(monitor: "MemoryMonitor", model: Any) -> None:
 
 
 def raise_if_prefill_exceeds(
-    monitor: "MemoryMonitor | None",
+    monitor: MemoryMonitor | None,
     *,
     prefill_memory_guard: bool,
     hard_limit_bytes: int,

@@ -35,7 +35,6 @@ software-pipelined variant nondeterministic on M5.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Optional
 
 import mlx.core as mx
 
@@ -390,7 +389,7 @@ def nax_sparse_mla_available() -> bool:
         from omlx.custom_kernels.nax import is_nax_available
 
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -403,7 +402,7 @@ def sparse_mla_attention_nax(
     q_pe: mx.array | None = None,
     k_pe: mx.array | None = None,
     sinks: mx.array | None = None,
-) -> Optional[mx.array]:
+) -> mx.array | None:
     """Causal sparse MLA for NoPE latents on the tensor units.
 
     q_latent: [1, H, L, 512], kv_latent: [1, 1, K, 512] (bf16/fp16, the

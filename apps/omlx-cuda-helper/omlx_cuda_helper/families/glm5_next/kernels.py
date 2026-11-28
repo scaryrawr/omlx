@@ -126,9 +126,7 @@ def _bank(x, weight, scales, biases, index, bits: int, count: int, splits: int):
         threadgroup=(_TILE_THREADS, 1, 1),
         output_shapes=[(x.shape[0], out)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def _moe_grid(tiles: int, count: int, routes: int) -> tuple[int, int, int]:
@@ -202,9 +200,7 @@ def moe_activation(moe, x: mx.array, experts: mx.array):
         threadgroup=(_TILE_THREADS, 1, 1),
         output_shapes=[(tokens * k, inner)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def moe_down(moe, act: mx.array, inds: mx.array) -> mx.array:
@@ -235,9 +231,7 @@ def moe_sum(down: mx.array, inverse: mx.array, weights: mx.array) -> mx.array:
         threadgroup=(out // 8, 1, 1),
         output_shapes=[(1, tokens, out)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def _oqh_routed(moe, x: mx.array, experts: mx.array, weights: mx.array):
@@ -342,11 +336,7 @@ def hc_expand(branch: mx.array, residual: mx.array, post: mx.array, comb: mx.arr
         threadgroup=(256, 1, 1),
         output_shapes=[(rows, streams, width)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ][
-        None
-    ]
+    )[0][None]
 
 
 def _kda_fits(kda, *arrays: mx.array) -> bool:
@@ -409,11 +399,7 @@ def kda_decay(kda, a: mx.array):
         threadgroup=(256, 1, 1),
         output_shapes=[a.shape[1:]],
         output_dtypes=[mx.float32],
-    )[
-        0
-    ][
-        None
-    ]
+    )[0][None]
 
 
 def kda_norm_gate(kda, out: mx.array, gate: mx.array):
@@ -438,11 +424,7 @@ def kda_norm_gate(kda, out: mx.array, gate: mx.array):
         threadgroup=(256, 1, 1),
         output_shapes=[out.shape[1:]],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ][
-        None
-    ]
+    )[0][None]
 
 
 def window_scores(q, pool, weights, position: int, kpool: int) -> mx.array:
@@ -462,9 +444,7 @@ def window_scores(q, pool, weights, position: int, kpool: int) -> mx.array:
         threadgroup=(256, 1, 1),
         output_shapes=[(rows, windows)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def top_windows(scores: mx.array, count: int) -> mx.array:
@@ -537,8 +517,4 @@ def sparse_attention(q_latent, kv, tokens, scale: float):
         threadgroup=(256, 1, 1),
         output_shapes=[(64, rows, 512)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ][
-        None
-    ]
+    )[0][None]

@@ -17,13 +17,14 @@ is active for each model at a time.
 import logging
 import threading
 import weakref
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class ModelOwnershipError(Exception):
     """Raised when a model is already owned by another engine."""
+
     pass
 
 
@@ -49,15 +50,11 @@ class ModelRegistry:
     def _init(self) -> None:
         """Initialize registry state."""
         # model_id -> (weak_ref_to_engine, engine_id)
-        self._owners: Dict[int, Tuple[weakref.ref, str]] = {}
+        self._owners: dict[int, tuple[weakref.ref, str]] = {}
         self._registry_lock = threading.Lock()
 
     def acquire(
-        self,
-        model: Any,
-        engine: Any,
-        engine_id: str,
-        force: bool = False
+        self, model: Any, engine: Any, engine_id: str, force: bool = False
     ) -> bool:
         """
         Attempt to acquire ownership of a model.
@@ -124,7 +121,7 @@ class ModelRegistry:
                     return True
         return False
 
-    def is_owned(self, model: Any) -> Tuple[bool, Optional[str]]:
+    def is_owned(self, model: Any) -> tuple[bool, str | None]:
         """
         Check if a model is owned.
 
@@ -146,7 +143,7 @@ class ModelRegistry:
     def _reset_owner(self, owner: Any) -> None:
         """Reset the scheduler of a previous owner."""
         try:
-            if hasattr(owner, 'scheduler'):
+            if hasattr(owner, "scheduler"):
                 owner.scheduler.deep_reset()
         except Exception as e:
             logger.warning(f"Failed to reset previous owner: {e}")
@@ -161,7 +158,8 @@ class ModelRegistry:
         cleaned = 0
         with self._registry_lock:
             stale = [
-                model_id for model_id, (weak_ref, _) in self._owners.items()
+                model_id
+                for model_id, (weak_ref, _) in self._owners.items()
                 if weak_ref() is None
             ]
             for model_id in stale:
@@ -171,13 +169,10 @@ class ModelRegistry:
             logger.debug(f"Cleaned up {cleaned} stale registry entries")
         return cleaned
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get registry statistics."""
         with self._registry_lock:
-            active = sum(
-                1 for _, (ref, _) in self._owners.items()
-                if ref() is not None
-            )
+            active = sum(1 for _, (ref, _) in self._owners.items() if ref() is not None)
             return {
                 "total_entries": len(self._owners),
                 "active_owners": active,

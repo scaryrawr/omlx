@@ -144,6 +144,7 @@ class TestModelSettings:
     def test_trust_remote_code_excluded_from_profiles(self):
         """Security flag must never propagate via profiles or templates."""
         from omlx.model_profiles import EXCLUDED_FROM_PROFILES
+
         assert "trust_remote_code" in EXCLUDED_FROM_PROFILES
 
     def test_max_context_window(self):
@@ -188,7 +189,7 @@ class TestModelSettings:
             "temperature": 0.8,
             "repetition_penalty": 1.3,
             "is_pinned": True,
-            "invalid_key": "should be ignored"
+            "invalid_key": "should be ignored",
         }
         settings = ModelSettings.from_dict(data)
         assert settings.temperature == 0.8
@@ -232,7 +233,10 @@ class TestModelSettings:
         )
         d = original.to_dict()
         restored = ModelSettings.from_dict(d)
-        assert restored.chat_template_kwargs == {"enable_thinking": True, "custom_key": 42}
+        assert restored.chat_template_kwargs == {
+            "enable_thinking": True,
+            "custom_key": 42,
+        }
 
     def test_chat_template_kwargs_from_dict(self):
         """Test chat_template_kwargs created from dict."""
@@ -335,10 +339,19 @@ class TestModelSettings:
 
     def test_legacy_kv_compression_file_load(self, tmp_path):
         manager = ModelSettingsManager(tmp_path)
-        manager.settings_file.write_text(json.dumps({
-            "version": 1,
-            "models": {"model": {"turboquant_kv_enabled": True, "turboquant_kv_bits": 2.5}},
-        }))
+        manager.settings_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "models": {
+                        "model": {
+                            "turboquant_kv_enabled": True,
+                            "turboquant_kv_bits": 2.5,
+                        }
+                    },
+                }
+            )
+        )
         restored = ModelSettingsManager(tmp_path).get_settings("model")
         assert restored.turboquant_kv_scheme == "turboquant"
         assert restored.turboquant_kv_bits == 2.5
@@ -346,17 +359,21 @@ class TestModelSettings:
 
     def test_invalid_legacy_turboquant_bits_keep_other_settings(self, tmp_path):
         manager = ModelSettingsManager(tmp_path)
-        manager.settings_file.write_text(json.dumps({
-            "version": 1,
-            "models": {
-                "model": {
-                    "model_alias": "fast",
-                    "is_pinned": True,
-                    "turboquant_kv_enabled": True,
-                    "turboquant_kv_bits": 5,
+        manager.settings_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "models": {
+                        "model": {
+                            "model_alias": "fast",
+                            "is_pinned": True,
+                            "turboquant_kv_enabled": True,
+                            "turboquant_kv_bits": 5,
+                        }
+                    },
                 }
-            },
-        }))
+            )
+        )
         restored = ModelSettingsManager(tmp_path).get_settings("model")
         assert restored.model_alias == "fast"
         assert restored.is_pinned is True
@@ -443,16 +460,20 @@ class TestModelSettingsManager:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create settings file
             settings_file = Path(tmpdir) / "model_settings.json"
-            settings_file.write_text(json.dumps({
-                "version": 1,
-                "models": {
-                    "llama-3b": {
-                        "temperature": 0.7,
-                        "is_pinned": True,
-                        "is_default": True
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "models": {
+                            "llama-3b": {
+                                "temperature": 0.7,
+                                "is_pinned": True,
+                                "is_default": True,
+                            }
+                        },
                     }
-                }
-            }))
+                )
+            )
 
             manager = ModelSettingsManager(Path(tmpdir))
             settings = manager.get_settings("llama-3b")
@@ -630,7 +651,10 @@ class TestModelSettingsManager:
             manager = ModelSettingsManager(Path(tmpdir))
 
             settings = ModelSettings(
-                chat_template_kwargs={"enable_thinking": False, "reasoning_effort": "medium"}
+                chat_template_kwargs={
+                    "enable_thinking": False,
+                    "reasoning_effort": "medium",
+                }
             )
             manager.set_settings("test-model", settings)
 
@@ -648,9 +672,7 @@ class TestModelSettingsManager:
             manager = ModelSettingsManager(Path(tmpdir))
 
             # Set kwargs
-            settings = ModelSettings(
-                chat_template_kwargs={"enable_thinking": True}
-            )
+            settings = ModelSettings(chat_template_kwargs={"enable_thinking": True})
             manager.set_settings("test-model", settings)
             assert manager.get_settings("test-model").chat_template_kwargs is not None
 
@@ -775,9 +797,7 @@ class TestModelSettingsManager:
             enable_thinking=True,
         )
 
-        assert merge_chat_template_request_kwargs(settings) == {
-            "enable_thinking": True
-        }
+        assert merge_chat_template_request_kwargs(settings) == {"enable_thinking": True}
 
     def test_merge_chat_template_request_kwargs_respects_forced_keys(self):
         """Forced keys block request-level chat-template overrides."""
@@ -805,7 +825,9 @@ class TestModelSettingsManager:
 
         kwargs = {} if enabled is None else {"enable_thinking": enabled}
         expected = {"enable_thinking": True} if not kwargs and budget == 1 else kwargs
-        assert merge_chat_template_kwargs(None, kwargs, thinking_budget=budget) == expected
+        assert (
+            merge_chat_template_kwargs(None, kwargs, thinking_budget=budget) == expected
+        )
 
     def test_zero_thinking_budget_does_not_enable_thinking(self):
         """Zero means no thinking budget activation at template-render time."""
@@ -824,12 +846,16 @@ class TestModelSettingsManager:
             def worker(model_id):
                 try:
                     for i in range(10):
-                        manager.set_settings(model_id, ModelSettings(temperature=i/10))
+                        manager.set_settings(
+                            model_id, ModelSettings(temperature=i / 10)
+                        )
                         _ = manager.get_settings(model_id)
                 except Exception as e:
                     errors.append(e)
 
-            threads = [threading.Thread(target=worker, args=(f"model-{i}",)) for i in range(5)]
+            threads = [
+                threading.Thread(target=worker, args=(f"model-{i}",)) for i in range(5)
+            ]
             for t in threads:
                 t.start()
             for t in threads:

@@ -45,6 +45,7 @@ from .deployment import (
     validate_model_path_map,
     validate_ssh_target,
 )
+from .identity import get_node_identity
 from .launch import (
     DistributedLaunchError,
     DistributedTeardownError,
@@ -86,7 +87,6 @@ from .planner import (
     with_mtp_head,
 )
 from .registry import get_cluster_registry, get_device_registry
-from .identity import get_node_identity
 from .replan import (
     hosts_from_deployment,
     nodes_from_deployment,
@@ -637,9 +637,8 @@ def _tensor_split_arg(value: dict[str, list[int]] | None) -> Any:
 
 
 def _create_cluster_plan(request: ClusterPlanRequest):
-    if (
-        request.tensor_parallel_size > 1
-        and request.tensor_parallel_size != len(request.nodes)
+    if request.tensor_parallel_size > 1 and request.tensor_parallel_size != len(
+        request.nodes
     ):
         raise PlanningError(
             "Tensor parallelism must use every detected node. Combining tensor "
@@ -837,9 +836,7 @@ def _resolve_fabric(
 
     interfaces = {host: probe_host_interfaces(host) for host in hosts}
     verify = verifier or verify_link_reachability
-    verified_links: dict[
-        tuple[tuple[str, str, str], ...], tuple[bool, str]
-    ] = {}
+    verified_links: dict[tuple[tuple[str, str, str], ...], tuple[bool, str]] = {}
 
     def verify_once(link: Any) -> tuple[bool, str]:
         endpoints = (link.source, link.peer)
@@ -897,8 +894,7 @@ def _resolve_fabric(
     if rdma["ok"] and unverified_rdma is not None:
         rdma["ok"] = False
         rdma["reason"] = (
-            "not every cluster pair verified over RDMA: "
-            f"{unverified_rdma.reason}"
+            f"not every cluster pair verified over RDMA: {unverified_rdma.reason}"
         )
 
     proposed, reason = choose_backend(pair_links)
@@ -1455,8 +1451,7 @@ def _run_staging_job(
             inventory = model_staging_inventory(model_path)
             shards = index_shards(model_path)
             sidecar_sizes = {
-                str(name): int(size)
-                for name, size in inventory["sidecars"].items()
+                str(name): int(size) for name, size in inventory["sidecars"].items()
             }
         else:
             shards, sidecar_sizes = remote_model_staging_inventory(
@@ -1488,11 +1483,11 @@ def _run_staging_job(
                 destination_dir = explicit_destination or str(model_path)
                 destination_path = Path(destination_dir)
                 present = (
-                {
-                    path.name: path.stat().st_size
-                    for path in destination_path.iterdir()
-                    if path.is_file()
-                }
+                    {
+                        path.name: path.stat().st_size
+                        for path in destination_path.iterdir()
+                        if path.is_file()
+                    }
                     if destination_path.is_dir()
                     else {}
                 )
@@ -1512,8 +1507,7 @@ def _run_staging_job(
             needed = tuple(
                 name
                 for name in (*plan.missing, *sidecars)
-                if present.get(name)
-                != (shard_sizes | sidecar_sizes).get(name)
+                if present.get(name) != (shard_sizes | sidecar_sizes).get(name)
             )
             total_bytes = sum((shard_sizes | sidecar_sizes)[name] for name in needed)
 
@@ -1554,8 +1548,7 @@ def _run_staging_job(
                 _update_staging_job(job_id, apply)
 
             expected_sizes = {
-                name: (shard_sizes | sidecar_sizes)[name]
-                for name in needed
+                name: (shard_sizes | sidecar_sizes)[name] for name in needed
             }
             # When this Mac is one end, the data takes the address the
             # collectives verified (Thunderbolt first) if SSH answers there.
@@ -1599,8 +1592,8 @@ def _run_staging_job(
                 node["status"] = "ready" if staging_result.ok else "failed"
                 node["result"] = staging_result.to_dict()
                 if not staging_result.ok:
-                    node["error"] = (
-                        "Failed to copy: " + ", ".join(staging_result.failed)
+                    node["error"] = "Failed to copy: " + ", ".join(
+                        staging_result.failed
                     )
 
             _update_staging_job(job_id, finish)
@@ -1614,7 +1607,8 @@ def _run_staging_job(
                 job["error"] = "Model staging failed on " + ", ".join(failed_nodes)
 
         _update_staging_job(job_id, complete)
-    except Exception as exc:  # noqa: BLE001 - background job reports the failure
+    except Exception as exc:
+
         def fail(job: dict[str, Any], *, error=str(exc)) -> None:
             job["status"] = "failed"
             job["ready"] = False
@@ -1738,7 +1732,9 @@ def _reconcile_runtime_ownership(payload: dict[str, Any], pool: Any) -> None:
         job["ownership"] = (
             "loaded"
             if deployment_id in loaded
-            else "loading" if deployment_id in loading else "detached"
+            else "loading"
+            if deployment_id in loading
+            else "detached"
         )
         if job["ownership"] == "detached":
             job["live"] = False
@@ -1804,8 +1800,12 @@ def _execution_for_request(
         requested,
         async_overlap=request.async_overlap,
         cache_affinity=request.cache_affinity,
-        prompt_cache_ssd=getattr(request, "prompt_cache_ssd", requested.prompt_cache_ssd),
-        prompt_cache_ssd_max_bytes=getattr(request, "prompt_cache_ssd_max_bytes", requested.prompt_cache_ssd_max_bytes),
+        prompt_cache_ssd=getattr(
+            request, "prompt_cache_ssd", requested.prompt_cache_ssd
+        ),
+        prompt_cache_ssd_max_bytes=getattr(
+            request, "prompt_cache_ssd_max_bytes", requested.prompt_cache_ssd_max_bytes
+        ),
         # The context chosen beside the model is both a reservation and a
         # runtime ceiling. Without this fallback the planner could reserve
         # 256k while the server used an unrelated advanced default (or no
@@ -1877,9 +1877,7 @@ def _create_deployment(
         plan.assignments,
         backend=request.backend,
     )
-    if (
-        execution.pipeline_microbatch_size != requested_microbatch
-    ):
+    if execution.pipeline_microbatch_size != requested_microbatch:
         plan_request.pipeline_microbatch_size = execution.pipeline_microbatch_size
         plan = _create_cluster_plan(plan_request)
     if len(request.hosts) != len(request.nodes):
@@ -1969,12 +1967,9 @@ def _performance_optimized_deployment(
         remote_model_layout(
             validate_ssh_target(source),
             deployment.model,
-            python_executable=(
-                request.model_source_python or DEFAULT_REMOTE_PYTHON
-            ),
+            python_executable=(request.model_source_python or DEFAULT_REMOTE_PYTHON),
         )
-        if source
-        and source not in {LOCAL_NODE, "127.0.0.1", "localhost", "::1"}
+        if source and source not in {LOCAL_NODE, "127.0.0.1", "localhost", "::1"}
         else inspect_safetensors_layout(deployment.model)
     )
     # Same budgets the approved plan was built from — reserve, split cap and
@@ -2134,9 +2129,7 @@ async def cluster_node_budgets(request: ClusterNodeBudgetRequest) -> dict[str, A
 
     try:
         hosts = [
-            host.model_copy(
-                update={"ssh": validate_ssh_target(host.ssh.strip())}
-            )
+            host.model_copy(update={"ssh": validate_ssh_target(host.ssh.strip())})
             for host in request.hosts
         ]
     except ValueError as exc:
@@ -2214,17 +2207,14 @@ async def cluster_models(request: ClusterModelInventoryRequest) -> dict[str, Any
                 python_executable=host.python_executable or DEFAULT_REMOTE_PYTHON,
             )
             source_python = host.python_executable or DEFAULT_REMOTE_PYTHON
-            models = [
-                dict(model, python_executable=source_python) for model in models
-            ]
+            models = [dict(model, python_executable=source_python) for model in models]
             return host.node_id, validated, models, ""
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             return host.node_id, target, [], str(exc)
 
     results = await asyncio.gather(*(read_host(host) for host in request.hosts))
     inventories = [
-        (node_id, ssh_target, models)
-        for node_id, ssh_target, models, _ in results
+        (node_id, ssh_target, models) for node_id, ssh_target, models, _ in results
     ]
     errors = [
         {"node_id": node_id, "ssh": ssh_target, "detail": error}
@@ -2329,9 +2319,7 @@ def _catalogue_for_candidates(
             fit.to_dict()
             | {
                 "model_path": candidate.model_path,
-                "model_source": (
-                    "127.0.0.1" if _local_ssh_target(source) else source
-                ),
+                "model_source": ("127.0.0.1" if _local_ssh_target(source) else source),
                 "source_node_id": candidate.source_node_id,
             }
         )
@@ -2485,8 +2473,7 @@ async def _activate_and_report(
                     "backend": deployment.backend,
                     "world_size": deployment.world_size,
                     "profiles": [
-                        profile.to_dict()
-                        for profile in deployment.performance_profiles
+                        profile.to_dict() for profile in deployment.performance_profiles
                     ],
                     "plan_changed": False,
                 }
@@ -2846,12 +2833,16 @@ async def replan_cluster_deployment(request: ClusterReplanRequest):
             tensor_parallel_size=(
                 request.tensor_parallel_size
                 if request.tensor_parallel_size is not None
-                else current.tensor_parallel_size if current is not None else 1
+                else current.tensor_parallel_size
+                if current is not None
+                else 1
             ),
             target_context_tokens=(
                 request.target_context_tokens
                 if request.target_context_tokens is not None
-                else current.target_context_tokens if current is not None else 8192
+                else current.target_context_tokens
+                if current is not None
+                else 8192
             ),
             path_map=path_map,
             mtp=(
@@ -3067,8 +3058,7 @@ async def load_cluster_deployment(deployment_id: str):
             if not callable(register):
                 raise
             estimated_size = sum(
-                assignment.planned_weight_bytes
-                for assignment in deployment.assignments
+                assignment.planned_weight_bytes for assignment in deployment.assignments
             )
             model_id, _ = register(
                 deployment.model,

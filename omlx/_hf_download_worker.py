@@ -59,7 +59,7 @@ def main() -> int:
     try:
         kwargs = _read_request()
         _download_without_xet(kwargs)
-    except Exception as error:  # noqa: BLE001 - report child failure to parent
+    except Exception as error:
         response = {
             "ok": False,
             "error_type": type(error).__name__,

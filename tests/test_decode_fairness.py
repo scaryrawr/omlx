@@ -145,10 +145,7 @@ class TestContendedChunkCap:
         s = _make_scheduler()
         s.running = {"r1": MagicMock()}
         assert s._contended_prefill_cap() == _CONTENDED_PREFILL_CHUNK
-        assert (
-            s._prefill_step_size_for_progress(0, 100000)
-            == _CONTENDED_PREFILL_CHUNK
-        )
+        assert s._prefill_step_size_for_progress(0, 100000) == _CONTENDED_PREFILL_CHUNK
 
     def test_cap_with_other_engine_decoding(self):
         s = _make_scheduler()
@@ -178,10 +175,7 @@ class TestQwen35PrefillFloor:
         s = _make_scheduler()
         s._qwen35_prefill_floor = 4096
         s.running = {"r1": MagicMock()}
-        assert (
-            s._prefill_step_size_for_progress(0, 100000)
-            == _CONTENDED_PREFILL_CHUNK
-        )
+        assert s._prefill_step_size_for_progress(0, 100000) == _CONTENDED_PREFILL_CHUNK
 
     def test_non_qwen_model_unaffected(self):
         s = _make_scheduler()
@@ -293,9 +287,11 @@ class TestStepGating:
         s.running = {"r1": MagicMock()}
         s.prefilling.append(MagicMock())
         s._decode_time_owed_s = 10.0
-        with patch.object(s, "_advance_chunked_prefills") as advance:
-            with patch.object(s, "_schedule_waiting", return_value=([], [])):
-                s.step()
+        with (
+            patch.object(s, "_advance_chunked_prefills") as advance,
+            patch.object(s, "_schedule_waiting", return_value=([], [])),
+        ):
+            s.step()
         advance.assert_not_called()
 
     def test_step_advances_chunks_when_debt_repaid(self):
@@ -303,9 +299,11 @@ class TestStepGating:
         s.running = {"r1": MagicMock()}
         s.prefilling.append(MagicMock())
         s._decode_time_owed_s = 0.0
-        with patch.object(s, "_advance_chunked_prefills") as advance:
-            with patch.object(s, "_schedule_waiting", return_value=([], [])):
-                s.step()
+        with (
+            patch.object(s, "_advance_chunked_prefills") as advance,
+            patch.object(s, "_schedule_waiting", return_value=([], [])),
+        ):
+            s.step()
         advance.assert_called_once()
 
     def test_step_repays_debt_from_decode_wall_time(self):
@@ -320,9 +318,11 @@ class TestStepGating:
     def test_chunk_only_step_reports_has_work(self):
         s = _make_scheduler()
         s.prefilling.append(MagicMock())
-        with patch.object(s, "_advance_chunked_prefills"):
-            with patch.object(s, "_schedule_waiting", return_value=([], [])):
-                out = s.step()
+        with (
+            patch.object(s, "_advance_chunked_prefills"),
+            patch.object(s, "_schedule_waiting", return_value=([], [])),
+        ):
+            out = s.step()
         assert out.has_work
 
     def test_step_publishes_decode_activity(self):
@@ -362,9 +362,11 @@ class TestHoldStepBehavior:
         s = _make_scheduler()
         s.prefilling.append(MagicMock())
         s._prefill_hold_until = time.perf_counter() + 5.0
-        with patch.object(s, "_advance_chunked_prefills") as advance:
-            with patch.object(s, "_schedule_waiting", return_value=([], [])):
-                out = s.step()
+        with (
+            patch.object(s, "_advance_chunked_prefills") as advance,
+            patch.object(s, "_schedule_waiting", return_value=([], [])),
+        ):
+            out = s.step()
         advance.assert_not_called()
         assert not out.has_work
 

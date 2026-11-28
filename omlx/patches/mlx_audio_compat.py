@@ -9,9 +9,9 @@ import threading
 from functools import wraps
 from typing import NoReturn
 
-from omlx.exceptions import UnsupportedKokoroLanguageError
-
 from transformers import AutoTokenizer
+
+from omlx.exceptions import UnsupportedKokoroLanguageError
 
 try:
     from mlx_audio.tts.models.bailingmm.bailingmm import Model as BailingMMModel
@@ -43,9 +43,7 @@ def ensure_english_kokoro_g2p() -> bool:
     """Keep English Kokoro on Misaki's built-in G2P without loading eSpeak."""
     with _KOKORO_G2P_LOCK:
         try:
-            pipeline = importlib.import_module(
-                "mlx_audio.tts.models.kokoro.pipeline"
-            )
+            pipeline = importlib.import_module("mlx_audio.tts.models.kokoro.pipeline")
         except ImportError as exc:
             raise RuntimeError(
                 "Unable to install the English-only Kokoro G2P compatibility "

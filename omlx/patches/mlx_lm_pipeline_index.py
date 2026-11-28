@@ -125,11 +125,7 @@ def _open_with_single_file_index(
         if not 0 < header_size <= _MAX_HEADER_BYTES:
             return _real_open(file, mode, *args, **kwargs)
         header = _real_json.loads(stream.read(header_size))
-    weight_map = {
-        name: shard.name
-        for name in header
-        if name != "__metadata__"
-    }
+    weight_map = {name: shard.name for name in header if name != "__metadata__"}
     return io.StringIO(_real_json.dumps({"weight_map": weight_map}))
 
 

@@ -88,10 +88,7 @@ class LinkBandwidth:
         return self.source == "measured" or self.kind in _COLLECTIVE_CAPABLE_KINDS
 
     def describe(self) -> str:
-        return (
-            f"{self.gigabytes_per_second:.2f} GB/s {self.source} "
-            f"({self.kind})"
-        )
+        return f"{self.gigabytes_per_second:.2f} GB/s {self.source} ({self.kind})"
 
     def to_dict(self) -> dict[str, Any]:
         return {

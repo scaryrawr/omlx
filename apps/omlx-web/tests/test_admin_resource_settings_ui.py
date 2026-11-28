@@ -8,9 +8,7 @@ import pytest
 from omlx.settings import CONCURRENT_PRIORITIES
 
 ROOT = Path(__file__).resolve().parents[1]
-SETTINGS = (
-    ROOT / "omlx_web/templates/dashboard/_settings.html"
-).read_text()
+SETTINGS = (ROOT / "omlx_web/templates/dashboard/_settings.html").read_text()
 
 
 def _concurrent_priority_select():
@@ -106,4 +104,3 @@ assert.equal(state.mainTab, 'status');
         [node, "-e", script], cwd=ROOT, capture_output=True, text=True
     )
     assert result.returncode == 0, result.stdout + result.stderr
-

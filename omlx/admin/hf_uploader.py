@@ -18,7 +18,6 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Optional
 
 from ..model_discovery import CLEF_HEAD_WEIGHTS, D3_READOUT_WEIGHTS
 from ..oq import (
@@ -383,7 +382,9 @@ class UploadTask:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "total_size": self.total_size,
-            "total_size_formatted": _format_size(self.total_size) if self.total_size else "",
+            "total_size_formatted": _format_size(self.total_size)
+            if self.total_size
+            else "",
             "repo_url": self.repo_url,
         }
 
@@ -428,7 +429,7 @@ class HFUploader:
             api = HfApi()
             info = await asyncio.to_thread(api.whoami, token=token)
         except Exception as e:
-            raise ValueError(f"Invalid token: {e}")
+            raise ValueError(f"Invalid token: {e}") from e
 
         username = info.get("name", "")
         orgs = [
@@ -481,17 +482,18 @@ class HFUploader:
                             continue
                         try:
                             size = sum(
-                                f.stat().st_size
-                                for f in path.glob("*.safetensors")
+                                f.stat().st_size for f in path.glob("*.safetensors")
                             )
                             if size == 0:
                                 continue
-                            models.append({
-                                "name": path.name,
-                                "path": str(path),
-                                "size": size,
-                                "size_formatted": _format_size(size),
-                            })
+                            models.append(
+                                {
+                                    "name": path.name,
+                                    "path": str(path),
+                                    "size": size,
+                                    "size_formatted": _format_size(size),
+                                }
+                            )
                         except Exception:
                             continue
             return models
@@ -528,11 +530,13 @@ class HFUploader:
                             continue
                         seen.add(path.name)
                         has_readme = _has_meaningful_readme(path)
-                        models.append({
-                            "name": path.name,
-                            "path": str(path),
-                            "has_readme": has_readme,
-                        })
+                        models.append(
+                            {
+                                "name": path.name,
+                                "path": str(path),
+                                "has_readme": has_readme,
+                            }
+                        )
             return models
 
         return await asyncio.to_thread(_scan)
@@ -568,7 +572,9 @@ class HFUploader:
             raise ValueError(f"Model directory not found: {model_path}")
 
         if not (source / "config.json").exists():
-            raise ValueError(f"Not a valid model directory (no config.json): {model_path}")
+            raise ValueError(
+                f"Not a valid model directory (no config.json): {model_path}"
+            )
 
         repo_id = repo_id.strip()
         if "/" not in repo_id or len(repo_id.split("/")) != 2:
@@ -580,14 +586,10 @@ class HFUploader:
         # Check for duplicate active uploads
         for task in self._tasks.values():
             if task.repo_id == repo_id and task.status in _ACTIVE_STATUSES:
-                raise ValueError(
-                    f"Upload to '{repo_id}' is already in progress"
-                )
+                raise ValueError(f"Upload to '{repo_id}' is already in progress")
 
         model_name = source.name
-        total_size = sum(
-            f.stat().st_size for f in source.rglob("*") if f.is_file()
-        )
+        total_size = sum(f.stat().st_size for f in source.rglob("*") if f.is_file())
 
         task_id = str(uuid.uuid4())
         task = UploadTask(
@@ -600,7 +602,14 @@ class HFUploader:
         self._tasks[task_id] = task
 
         self._active_tasks[task_id] = asyncio.create_task(
-            self._run_upload(task_id, token, readme_source_path, auto_readme, redownload_notice, private)
+            self._run_upload(
+                task_id,
+                token,
+                readme_source_path,
+                auto_readme,
+                redownload_notice,
+                private,
+            )
         )
 
         logger.info(f"Upload queued: {model_name} -> {repo_id} (task_id={task_id})")
@@ -683,8 +692,8 @@ class HFUploader:
         from huggingface_hub import HfApi
 
         task = self._tasks[task_id]
-        tmp_readme: Optional[Path] = None
-        readme_backup: Optional[Path] = None
+        tmp_readme: Path | None = None
+        readme_backup: Path | None = None
 
         try:
             async with self._upload_sem:
@@ -711,7 +720,7 @@ class HFUploader:
 
                 # Handle README
                 readme_in_model = model_path / "README.md"
-                readme_bytes: Optional[bytes] = None
+                readme_bytes: bytes | None = None
                 if readme_source_path:
                     source_readme = Path(readme_source_path) / "README.md"
                     if source_readme.exists():

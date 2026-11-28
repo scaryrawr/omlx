@@ -443,13 +443,12 @@ class Gemma4OutputParserSession:
                     advance += len("thought\n")
                 elif source.startswith("thought", after):
                     advance += len("thought")
-            elif marker == _CLOSE_MARKER:
+            elif (marker == _CLOSE_MARKER) and (self._in_thought):
                 # Stray close outside a thought block: drop silently to keep
                 # the marker out of visible content.
-                if self._in_thought:
-                    stream_parts.append(_THINK_CLOSE)
-                    visible_parts.append(_THINK_CLOSE)
-                    self._in_thought = False
+                stream_parts.append(_THINK_CLOSE)
+                visible_parts.append(_THINK_CLOSE)
+                self._in_thought = False
             # _TURN_END_MARKER, _TOOL_RESPONSE_OPEN / _CLOSE: silent drop.
 
             pos = idx + advance

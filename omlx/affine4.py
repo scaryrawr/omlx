@@ -151,14 +151,9 @@ class Affine4Codec:
                 [(0, 0)] * (encoded.ndim - 1)
                 + [(0, width * self.values_per_word - self.dim)],
             )
-            words = encoded.reshape(
-                *encoded.shape[:-1], width, self.values_per_word
-            )
+            words = encoded.reshape(*encoded.shape[:-1], width, self.values_per_word)
             packed = mx.sum(
-                words
-                << (
-                    mx.arange(self.values_per_word, dtype=mx.uint32) * self.bits
-                ),
+                words << (mx.arange(self.values_per_word, dtype=mx.uint32) * self.bits),
                 axis=-1,
             )
         else:
@@ -170,16 +165,13 @@ class Affine4Codec:
             dimensions = mx.arange(self.dim, dtype=mx.uint32)
             words = mx.take(state.indices, dimensions // self.values_per_word, axis=-1)
             encoded = (
-                (
-                    words
-                    >> ((dimensions % self.values_per_word) * self.bits)
-                )
+                (words >> ((dimensions % self.values_per_word) * self.bits))
                 & ((1 << self.bits) - 1)
             ).astype(mx.int16)
         else:
-            encoded = _unpack_lowbit(
-                state.indices, self.bits, self.dim
-            ).astype(mx.int16)
+            encoded = _unpack_lowbit(state.indices, self.bits, self.dim).astype(
+                mx.int16
+            )
         sign = 1 << (self.bits - 1)
         return ((encoded ^ sign) - sign).astype(mx.float32)
 
@@ -1247,7 +1239,9 @@ class Affine4KVCache(TurboQuantKVCache):
         flat_keys = keys.reshape(-1, dim)
         flat_values = values.reshape(-1, dim)
         rows = flat_keys.shape[0]
-        packed_width = (dim + self.key_codec.values_per_word - 1) // self.key_codec.values_per_word
+        packed_width = (
+            dim + self.key_codec.values_per_word - 1
+        ) // self.key_codec.values_per_word
         try:
             outputs = kernel(
                 inputs=[
@@ -1305,9 +1299,7 @@ class Affine4KVCache(TurboQuantKVCache):
             )
         return mask
 
-    def _mlx_fused_attention_available(
-        self, queries, keys_state, values_state
-    ) -> bool:
+    def _mlx_fused_attention_available(self, queries, keys_state, values_state) -> bool:
         query_length = queries.shape[-2]
         query_dim = queries.shape[-1]
         value_dim = self.value_codec.dim
@@ -1414,15 +1406,11 @@ class Affine4KVCache(TurboQuantKVCache):
             rotated_queries = self.key_codec.prepare_queries(queries).astype(
                 mx.bfloat16
             )
-            rotated_keys = self.key_codec.dequantize_rotated(
-                keys_state, mx.bfloat16
-            )
+            rotated_keys = self.key_codec.dequantize_rotated(keys_state, mx.bfloat16)
             rotated_values = self.value_codec.dequantize_rotated(
                 values_state, mx.bfloat16
             )
-            if self._mlx_fused_attention_available(
-                queries, keys_state, values_state
-            ):
+            if self._mlx_fused_attention_available(queries, keys_state, values_state):
                 rotated_output = mx.fast.scaled_dot_product_attention(
                     rotated_queries,
                     rotated_keys,
@@ -1536,16 +1524,13 @@ class BatchAffine4KVCache(BatchTurboQuantKVCache, Affine4KVCache):
         # After trim_rows the routes below need each row's end in the mask.
         row_ends = getattr(self, "_row_ends", None)
         ends = None
-        if row_ends is not None and len(row_ends) == self.left_padding.shape[0]:
-            if min(int(e) for e in row_ends) < tokens:
-                ends = mx.array([min(int(e), tokens) for e in row_ends])
+        if (row_ends is not None and len(row_ends) == self.left_padding.shape[0]) and (
+            min(int(e) for e in row_ends) < tokens
+        ):
+            ends = mx.array([min(int(e), tokens) for e in row_ends])
         # Without left padding the plain mask is exact; keeping it a string lets the
         # bf16 prefill use the fused kernel instead of a (query x cache) mask array.
-        if (
-            (mask is None or causal)
-            and ends is None
-            and not self._has_left_padding()
-        ):
+        if (mask is None or causal) and ends is None and not self._has_left_padding():
             return mask
         columns = mx.arange(tokens)
         allowed = columns[None, None, None, :] >= self.left_padding[:, None, None, None]
@@ -1556,7 +1541,9 @@ class BatchAffine4KVCache(BatchTurboQuantKVCache, Affine4KVCache):
                 last = ends[:, None] - query_length + mx.arange(query_length)[None, :]
             allowed = allowed & (columns[None, None, None, :] <= last[:, None, :, None])
         elif ends is not None:
-            allowed = allowed & (columns[None, None, None, :] < ends[:, None, None, None])
+            allowed = allowed & (
+                columns[None, None, None, :] < ends[:, None, None, None]
+            )
         if mask is None or isinstance(mask, str):
             return allowed
         if mask.dtype == mx.bool_:

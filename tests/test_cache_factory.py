@@ -7,18 +7,17 @@ recovery from cache corruption, and hybrid model cache configurations.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from omlx.cache.factory import CacheConfig, CacheFactory
-from omlx.cache.recovery import CacheRecoveryManager
 from omlx.cache.hybrid_cache import (
     LayerCacheConfig,
     ModelCacheConfig,
     create_default_kvcache_config,
 )
+from omlx.cache.recovery import CacheRecoveryManager
 from omlx.cache.type_handlers import CacheType
 
 
@@ -392,7 +391,7 @@ class TestModelCacheConfig:
     def test_from_cache_list_kvcache_only(self):
         """Test from_cache_list with KVCache only."""
         mock_caches = []
-        for i in range(4):
+        for _i in range(4):
             mock = MagicMock()
             mock.__class__.__name__ = "KVCache"
             mock_caches.append(mock)

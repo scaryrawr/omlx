@@ -39,9 +39,10 @@ persistent head cache (``_omlx_mtp_head_clone = False``).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from . import prompt_priming
 
@@ -110,7 +111,7 @@ def _remap_mtp_quant_overrides(params: dict[str, Any], n_main: int, n_mtp: int) 
             prefix = f"model.layers.{n_main + i}."
             if not k.startswith(prefix):
                 continue
-            rest = k[len(prefix):]
+            rest = k[len(prefix) :]
             if rest.startswith(("shared_head.head", "embed_tokens")):
                 # Shared lm_head / embeddings duplicates; sanitize drops
                 # the weights and the modules are the trunk's own.
@@ -230,6 +231,7 @@ def _patch_model_args(glm: Any) -> None:
 # GlmMTPBlock — register on the module.
 # ---------------------------------------------------------------------------
 
+
 def _register_mtp_block(glm: Any) -> None:
     if hasattr(glm, "GlmMTPBlock"):
         return
@@ -237,7 +239,7 @@ def _register_mtp_block(glm: Any) -> None:
     import mlx.core as mx
     import mlx.nn as nn
 
-    GlmMoeDsaDecoderLayer = glm.GlmMoeDsaDecoderLayer
+    glm_moe_dsa_decoder_layer_cls = glm.GlmMoeDsaDecoderLayer
 
     class GlmMTPBlock(nn.Module):
         """One MTP layer: enorm/hnorm fusion + a full GLM decoder layer.
@@ -254,7 +256,7 @@ def _register_mtp_block(glm: Any) -> None:
             self.hnorm = nn.RMSNorm(dim, eps=config.rms_norm_eps)
             self.eh_proj = nn.Linear(2 * dim, dim, bias=False)
             self.norm = nn.RMSNorm(dim, eps=config.rms_norm_eps)
-            self.block = GlmMoeDsaDecoderLayer(config, layer_idx)
+            self.block = glm_moe_dsa_decoder_layer_cls(config, layer_idx)
 
         def __call__(self, h, embed_tokens, input_ids, mask, cache):
             e = self.enorm(embed_tokens(input_ids))
@@ -268,6 +270,7 @@ def _register_mtp_block(glm: Any) -> None:
 # ---------------------------------------------------------------------------
 # GlmMoeDsaModel — return_raw_hidden support.
 # ---------------------------------------------------------------------------
+
 
 def _patch_glm_model_call(glm: Any) -> None:
     """Replace ``GlmMoeDsaModel.__call__`` to optionally return the raw hidden."""
@@ -320,6 +323,7 @@ def _patch_glm_model_call(glm: Any) -> None:
 # Model — wrap __init__, replace __call__, add mtp_forward / make_mtp_cache,
 # wrap sanitize with the MTP weight remapping.
 # ---------------------------------------------------------------------------
+
 
 def _patch_model(glm: Any) -> None:
     cls = glm.Model
@@ -429,9 +433,7 @@ def _patch_model(glm: Any) -> None:
             layer_cache = cache[2 * i : 2 * i + 2]
             if layer_cache[0] is None:
                 layer_cache = None
-            h = mtp_block(
-                h, self.model.embed_tokens, input_ids, mask, layer_cache
-            )
+            h = mtp_block(h, self.model.embed_tokens, input_ids, mask, layer_cache)
             last_block = mtp_block
 
         logits_source = h
@@ -461,7 +463,7 @@ def _patch_model(glm: Any) -> None:
                 return False
         return True
 
-    def sanitize(self, weights: Dict[str, Any]) -> Dict[str, Any]:
+    def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
         """Keep + remap the checkpoint's extra MTP layer.
 
         Raw-HF/FP8 checkpoints store the MTP layer as
@@ -488,10 +490,8 @@ def _patch_model(glm: Any) -> None:
         )
         if has_mtp and not has_mtp_weights:
             # Graceful fallback for checkpoints that stripped the head.
-            try:
+            with contextlib.suppress(AttributeError):
                 del self.mtp
-            except AttributeError:
-                pass
             self._omlx_mtp_decode_enabled = False
             has_mtp = False
             n_mtp = 0
@@ -515,7 +515,7 @@ def _patch_model(glm: Any) -> None:
             finally:
                 self.args.num_hidden_layers = n_main
 
-            remapped: Dict[str, Any] = {}
+            remapped: dict[str, Any] = {}
             special = {
                 "eh_proj.weight": "eh_proj.weight",
                 "enorm.weight": "enorm.weight",
@@ -528,7 +528,7 @@ def _patch_model(glm: Any) -> None:
                     prefix = f"model.layers.{n_main + i}."
                     if not k.startswith(prefix):
                         continue
-                    rest = k[len(prefix):]
+                    rest = k[len(prefix) :]
                     if rest.startswith(("shared_head.head.", "embed_tokens.")):
                         # Duplicates of the shared lm_head / embeddings some
                         # nextn checkpoints carry; the modules are shared.
@@ -560,11 +560,9 @@ def _patch_model(glm: Any) -> None:
                     wk_key = f"{prefix}.wk.{suffix}"
                     wp_key = f"{prefix}.weights_proj.{suffix}"
                     if wk_key in weights and wp_key in weights:
-                        weights[f"{prefix}.wk_weights_proj.{suffix}"] = (
-                            mx.concatenate(
-                                [weights.pop(wk_key), weights.pop(wp_key)],
-                                axis=0,
-                            )
+                        weights[f"{prefix}.wk_weights_proj.{suffix}"] = mx.concatenate(
+                            [weights.pop(wk_key), weights.pop(wp_key)],
+                            axis=0,
                         )
         weights = original_sanitize(self, weights)
         _infer_mtp_quant_overrides(self, weights)

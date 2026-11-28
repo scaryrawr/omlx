@@ -1303,7 +1303,9 @@ class TestConvertAnthropicToInternal:
         import base64
 
         text_data = (
-            base64.b64encode(text.encode()).decode() if source_type == "base64" else text
+            base64.b64encode(text.encode()).decode()
+            if source_type == "base64"
+            else text
         )
         request = MessagesRequest(
             model="claude-3",
@@ -3774,6 +3776,7 @@ class TestExtractMultimodalContent:
                 "video_url": {"url": "data:video/mp4;base64,AA=="},
             }
         ]
+
     def test_input_video_data_is_preserved(self):
         parts = _extract_multimodal_content_list(
             [{"type": "input_video", "input_video": {"data": "AA==", "format": "mp4"}}]
@@ -4305,11 +4308,21 @@ class TestCacheReasoningOutput:
     def test_follows_history_retention_by_default(self):
         from omlx.api.utils import cache_reasoning_output
 
-        assert cache_reasoning_output(None, native_reasoning=False, chat_template_kwargs={}) is False
-        assert cache_reasoning_output(None, native_reasoning=True, chat_template_kwargs={}) is True
         assert (
             cache_reasoning_output(
-                None, native_reasoning=False, chat_template_kwargs={"preserve_thinking": True}
+                None, native_reasoning=False, chat_template_kwargs={}
+            )
+            is False
+        )
+        assert (
+            cache_reasoning_output(None, native_reasoning=True, chat_template_kwargs={})
+            is True
+        )
+        assert (
+            cache_reasoning_output(
+                None,
+                native_reasoning=False,
+                chat_template_kwargs={"preserve_thinking": True},
             )
             is True
         )
@@ -4321,10 +4334,17 @@ class TestCacheReasoningOutput:
 
         forced_on = SimpleNamespace(cache_reasoning_output=True)
         forced_off = SimpleNamespace(cache_reasoning_output=False)
-        assert cache_reasoning_output(forced_on, native_reasoning=False, chat_template_kwargs={}) is True
         assert (
             cache_reasoning_output(
-                forced_off, native_reasoning=True, chat_template_kwargs={"preserve_thinking": True}
+                forced_on, native_reasoning=False, chat_template_kwargs={}
+            )
+            is True
+        )
+        assert (
+            cache_reasoning_output(
+                forced_off,
+                native_reasoning=True,
+                chat_template_kwargs={"preserve_thinking": True},
             )
             is False
         )

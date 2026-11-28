@@ -26,6 +26,7 @@ import logging
 import math
 import os
 import shutil
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -101,7 +102,7 @@ def get_system_memory() -> int:
         memory = int(psutil_compat.get_total_memory())
         if memory > 0:
             return memory
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("psutil_compat failed to detect system memory: %s", exc)
 
     # Default to 16GB if detection fails
@@ -152,10 +153,8 @@ def get_auto_ssd_cache_size(cache_dir: Path) -> int:
                 path = Path(directory) / name
                 if path.suffix != ".safetensors" or path.is_symlink():
                     continue
-                try:
+                with suppress(FileNotFoundError):
                     cache_bytes += path.stat().st_size
-                except FileNotFoundError:
-                    pass  # A runtime writer can evict files during the scan.
     return (free_bytes + cache_bytes) // 2
 
 
@@ -463,8 +462,7 @@ class CacheSettings:
             self.gdn_ssd_split_enabled = False
         else:
             raise ValueError(
-                "gdn_snapshot_storage must be one of: "
-                "auto, ssd_sidecar, embedded"
+                "gdn_snapshot_storage must be one of: auto, ssd_sidecar, embedded"
             )
 
     def get_gdn_ssd_split_enabled(self) -> bool:
@@ -575,18 +573,14 @@ class CacheSettings:
             enabled=data.get("enabled", True),
             hot_cache_only=data.get("hot_cache_only", False),
             gdn_ssd_split_enabled=legacy_split,
-            gdn_ssd_pending_max_size=data.get(
-                "gdn_ssd_pending_max_size", "512MB"
-            ),
+            gdn_ssd_pending_max_size=data.get("gdn_ssd_pending_max_size", "512MB"),
             gdn_sidecar_state_dtype=str(
                 data.get("gdn_sidecar_precision", "fp32")
             ).lower(),
             ssd_cache_dir=data.get("ssd_cache_dir"),
             ssd_cache_max_size=data.get("ssd_cache_max_size", "auto"),
             hot_cache_max_size=hot_cache_max_size,
-            hot_cache_write_through=bool(
-                data.get("hot_cache_write_through", False)
-            ),
+            hot_cache_write_through=bool(data.get("hot_cache_write_through", False)),
             ane_compile_cache=bool(data.get("ane_compile_cache", False)),
             initial_cache_blocks=data.get("initial_cache_blocks", 256),
         )
@@ -1098,9 +1092,7 @@ class IntegrationSettings:
             web_search_ddgs_backends=data.get("web_search_ddgs_backends", ""),
             web_search_max_results=data.get("web_search_max_results", 3),
             web_search_content_mode=data.get("web_search_content_mode", "snippet"),
-            web_search_content_truncate=data.get(
-                "web_search_content_truncate", True
-            ),
+            web_search_content_truncate=data.get("web_search_content_truncate", True),
             web_search_content_max_chars=data.get(
                 "web_search_content_max_chars", 20000
             ),
@@ -1668,9 +1660,7 @@ class GlobalSettings:
         # file's 0o600 mode onto the destination. The temp name embeds the
         # pid: with a shared name, two processes saving at once interleave
         # inside the same temp file and the rename publishes the mix.
-        temp_file = settings_file.with_name(
-            f"{settings_file.name}.{os.getpid()}.tmp"
-        )
+        temp_file = settings_file.with_name(f"{settings_file.name}.{os.getpid()}.tmp")
         try:
             with os.fdopen(
                 os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
@@ -1775,11 +1765,7 @@ class GlobalSettings:
         from .utils.network import is_valid_bind_host, network_auth_error
 
         host_parts = (
-            [
-                host.strip()
-                for host in self.server.host.split(",")
-                if host.strip()
-            ]
+            [host.strip() for host in self.server.host.split(",") if host.strip()]
             if isinstance(self.server.host, str)
             else []
         )
@@ -1886,9 +1872,7 @@ class GlobalSettings:
 
         # Cache validation
         if self.cache.gdn_ssd_split_enabled is True and self.cache.hot_cache_only:
-            errors.append(
-                "gdn_ssd_split_enabled cannot be used with hot_cache_only"
-            )
+            errors.append("gdn_ssd_split_enabled cannot be used with hot_cache_only")
 
         try:
             gdn_pending_size = parse_size(self.cache.gdn_ssd_pending_max_size)
@@ -1914,8 +1898,7 @@ class GlobalSettings:
             or self.cache.gdn_ssd_split_enabled is False
         ):
             errors.append(
-                "gdn_snapshot_storage must be one of: "
-                "auto, ssd_sidecar, embedded"
+                "gdn_snapshot_storage must be one of: auto, ssd_sidecar, embedded"
             )
 
         if self.cache.ssd_cache_max_size.lower() != "auto":
@@ -2082,9 +2065,7 @@ class GlobalSettings:
             hot_cache_max_size=self.cache.get_hot_cache_max_size_bytes(),
             hot_cache_write_through=self.cache.hot_cache_write_through,
             gdn_ssd_split_enabled=self.cache.get_gdn_ssd_split_enabled(),
-            gdn_ssd_pending_max_bytes=parse_size(
-                self.cache.gdn_ssd_pending_max_size
-            ),
+            gdn_ssd_pending_max_bytes=parse_size(self.cache.gdn_ssd_pending_max_size),
             gdn_sidecar_state_dtype=self.cache.gdn_sidecar_state_dtype,
         )
 

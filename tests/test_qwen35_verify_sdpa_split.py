@@ -13,8 +13,8 @@ import mlx.core as mx
 import pytest
 from mlx_lm.models.cache import BatchKVCache, KVCache
 
-from omlx.patches.mlx_vlm_mtp.qwen35_verify_attention import verify_attention
 from omlx.patches import qwen35_verify_sdpa_split as vs
+from omlx.patches.mlx_vlm_mtp.qwen35_verify_attention import verify_attention
 from omlx.patches.qwen35_verify_sdpa_split import (
     _chunked_causal_sdpa,
     _eligible,
@@ -54,9 +54,7 @@ def test_chunked_causal_matches_per_row(q_len, kv_len):
     scale = HD**-0.5
     ref = _per_row_reference(q, k, v, scale)
     got = _chunked_causal_sdpa(q, k, v, scale, limit=32 // (HQ // HKV))
-    diff = mx.abs(
-        ref.astype(mx.float32) - got.astype(mx.float32)
-    ).max().item()
+    diff = mx.abs(ref.astype(mx.float32) - got.astype(mx.float32)).max().item()
     # Same kernel family; short KV is bit-exact, long KV differs only in
     # the 2-pass reduction split (bf16 tail ULP).
     assert diff <= 3e-4, f"q_len={q_len} kv_len={kv_len} diff={diff}"
@@ -510,7 +508,6 @@ def test_core_count_comes_from_the_hardware_with_an_m1_max_fallback(monkeypatch)
     assert vs._m1_gpu_cores() == 32
     assert vs._m1_gqa_chunk(27063, 2) == vs._m1_gqa_chunk(27063, 2, cores=32)
     vs._m1_gpu_cores.cache_clear()
-
 
 
 def test_tensor_unit_gpus_under_40_cores_size_long_splits_by_cores(monkeypatch):

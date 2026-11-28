@@ -24,7 +24,7 @@ def _nax_hardware() -> bool:
         from omlx.custom_kernels.nax import is_nax_available
 
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -49,7 +49,10 @@ def _inputs(length, offset, window, pooled_len, ratio, topk_count, trim=0, seed=
     # Temporally sorted distinct pooled rows per query, as the Indexer returns;
     # rows past the query's visible prefix sort last.
     rows = np.stack(
-        [np.sort(rng.choice(pooled_len, topk_count, replace=False)) for _ in range(length)]
+        [
+            np.sort(rng.choice(pooled_len, topk_count, replace=False))
+            for _ in range(length)
+        ]
     )
     topk = mx.array(rows[None].astype(np.uint32))
     mx.eval(q, kv, pooled, sinks, topk)
@@ -164,10 +167,21 @@ def test_unsupported_inputs_stay_native(nax):
         32, 1000, 128, 600, 4, 512
     )
     call = nax_attn.sparse_topk_attention_nax
-    assert call(q[:, :, :4], kv, pooled, topk[:, :4], sinks, scale, offset, window, ratio) is None
-    assert call(q[:, :48], kv, pooled, topk, sinks[:48], scale, offset, window, ratio) is None
-    assert call(q, kv, pooled, topk.astype(mx.int32), sinks, scale, offset, window, ratio) is None
     assert (
-        call(q.astype(mx.float16), kv, pooled, topk, sinks, scale, offset, window, ratio)
+        call(q[:, :, :4], kv, pooled, topk[:, :4], sinks, scale, offset, window, ratio)
+        is None
+    )
+    assert (
+        call(q[:, :48], kv, pooled, topk, sinks[:48], scale, offset, window, ratio)
+        is None
+    )
+    assert (
+        call(q, kv, pooled, topk.astype(mx.int32), sinks, scale, offset, window, ratio)
+        is None
+    )
+    assert (
+        call(
+            q.astype(mx.float16), kv, pooled, topk, sinks, scale, offset, window, ratio
+        )
         is None
     )

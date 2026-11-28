@@ -279,8 +279,7 @@ class TestBailingHybridOutputParserSession:
         assert factory.kind == "bailing_hybrid"
         session = factory.create_session(tokenizer)
         results = [
-            session.process_token(token_id)
-            for token_id in (1, 157152, 2, 157151)
+            session.process_token(token_id) for token_id in (1, 157152, 2, 157151)
         ]
         final = session.finalize()
 
@@ -405,6 +404,7 @@ class TestBailingHybridOutputParserSession:
         assert final.tool_calls == []
         assert final.finish_reason is None
 
+
 class TestCohere2MoeOutputParserSession:
     def test_detects_cohere2_moe_from_model_config(self, monkeypatch):
         _install_fake_melody(monkeypatch)
@@ -500,7 +500,8 @@ class TestCohere2MoeOutputParserSession:
             def flush_partials(self):
                 return SimpleNamespace(content=None, reasoning=None, tool_calls=[])
 
-        import types, json as _json
+        import json as _json
+        import types
 
         module = types.ModuleType("cohere_melody")
         module.PyFilter = _FakeMelodyFilterLiteralNewline
@@ -1470,7 +1471,7 @@ class TestMuseGlimmerOutputParserSession:
             2: "<|message|>",
             3: (
                 '<atem:function_calls>\n<atem:invoke name="bash">\n'
-                "<atem:parameter name=\"command\">ls -la /tmp/reports"
+                '<atem:parameter name="command">ls -la /tmp/reports'
                 "</atem:parameter>\n</atem:invoke>\n</atem:function_calls>"
             ),
             4: "<|eot|>",

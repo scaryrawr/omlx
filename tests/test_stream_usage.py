@@ -3,8 +3,6 @@
 
 import json
 
-import pytest
-
 from omlx.api.openai_models import (
     ChatCompletionChunk,
     ChatCompletionRequest,

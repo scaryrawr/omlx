@@ -48,7 +48,7 @@ def _loaded_entry(clear_hot_cache_mock, executor, stream="engine-stream"):
     )
 
 
-class _reclaim_env:
+class _ReclaimEnv:
     """Patch the MLX reclaim dependencies the route imports lazily."""
 
     def __init__(self, footprint_before=1000, footprint_after=400):
@@ -84,21 +84,26 @@ class TestHotCacheClear:
         so the retained Metal pool is returned to the OS.
         """
         pool = _pool(models=[])
-        with _reclaim_env() as env, patch.object(
-            admin_routes, "_get_engine_pool", return_value=pool
+        with (
+            _ReclaimEnv() as env,
+            patch.object(admin_routes, "_get_engine_pool", return_value=pool),
         ):
             result = _run_clear()
 
         assert result["total_cleared"] == 0
         assert env.get_mlx_executor.called
-        assert env.clear_cache.called, "mx.clear_cache must run even with no model loaded"
-        assert env.synchronize.called, "synchronize() barrier must precede clear_cache()"
+        assert env.clear_cache.called, (
+            "mx.clear_cache must run even with no model loaded"
+        )
+        assert env.synchronize.called, (
+            "synchronize() barrier must precede clear_cache()"
+        )
         assert result["bytes_reclaimed"] == 600
 
     def test_clears_loaded_model_then_reclaims(self):
         """Loaded model: its hot cache dict is cleared and buffers reclaimed."""
         clear_mock = MagicMock(return_value=7)
-        with _reclaim_env() as env:
+        with _ReclaimEnv() as env:
             entry = _loaded_entry(clear_mock, env._executor, stream="loaded-stream")
             pool = _pool(
                 models=[{"id": MODEL_ID, "loaded": True}],
@@ -115,8 +120,9 @@ class TestHotCacheClear:
 
     def test_response_shape(self):
         pool = _pool(models=[])
-        with _reclaim_env(), patch.object(
-            admin_routes, "_get_engine_pool", return_value=pool
+        with (
+            _ReclaimEnv(),
+            patch.object(admin_routes, "_get_engine_pool", return_value=pool),
         ):
             result = _run_clear()
 
@@ -138,8 +144,9 @@ class TestClearReachesOrphans:
         pool._scheduler_config = SimpleNamespace(
             hot_cache_budget=SimpleNamespace(clear_all_owners=orphan_clear)
         )
-        with _reclaim_env(), patch.object(
-            admin_routes, "_get_engine_pool", return_value=pool
+        with (
+            _ReclaimEnv(),
+            patch.object(admin_routes, "_get_engine_pool", return_value=pool),
         ):
             result = _run_clear()
 
@@ -149,8 +156,9 @@ class TestClearReachesOrphans:
     def test_no_budget_is_tolerated(self):
         pool = _pool(models=[])
         pool._scheduler_config = SimpleNamespace(hot_cache_budget=None)
-        with _reclaim_env(), patch.object(
-            admin_routes, "_get_engine_pool", return_value=pool
+        with (
+            _ReclaimEnv(),
+            patch.object(admin_routes, "_get_engine_pool", return_value=pool),
         ):
             result = _run_clear()
 
@@ -168,7 +176,7 @@ class TestClearReclaimBranches:
         """
         dead = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         dead.shutdown(wait=True)
-        with _reclaim_env() as env:
+        with _ReclaimEnv() as env:
             entry = _loaded_entry(MagicMock(return_value=0), dead, stream="dead-stream")
             pool = _pool(
                 models=[{"id": MODEL_ID, "loaded": True}],
@@ -190,22 +198,30 @@ class TestClearReclaimBranches:
             models=[{"id": MODEL_ID, "loaded": True}],
             entries={MODEL_ID: entry},
         )
-        with _reclaim_env() as env, patch.object(
-            admin_routes, "_get_engine_pool", return_value=pool
-        ), pytest.raises(RuntimeError, match="boom"):
+        with (
+            _ReclaimEnv() as env,
+            patch.object(admin_routes, "_get_engine_pool", return_value=pool),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
             _run_clear()
-        assert not env.get_mlx_executor.called, "must not fall back on a non-shutdown error"
+        assert not env.get_mlx_executor.called, (
+            "must not fall back on a non-shutdown error"
+        )
 
     def test_mixed_loaded_and_orphan_no_double_count(self):
         """Loaded model and a separate orphan owner are both counted, once each."""
-        with _reclaim_env() as env:
-            entry = _loaded_entry(MagicMock(return_value=7), env._executor, stream="mixed-stream")
+        with _ReclaimEnv() as env:
+            entry = _loaded_entry(
+                MagicMock(return_value=7), env._executor, stream="mixed-stream"
+            )
             pool = _pool(
                 models=[{"id": MODEL_ID, "loaded": True}],
                 entries={MODEL_ID: entry},
             )
             pool._scheduler_config = SimpleNamespace(
-                hot_cache_budget=SimpleNamespace(clear_all_owners=MagicMock(return_value=5))
+                hot_cache_budget=SimpleNamespace(
+                    clear_all_owners=MagicMock(return_value=5)
+                )
             )
             with patch.object(admin_routes, "_get_engine_pool", return_value=pool):
                 result = _run_clear()
@@ -216,9 +232,13 @@ class TestClearReclaimBranches:
 
     def test_two_loaded_engines_sync_each_stream(self):
         """Each loaded engine is synchronized on its own stream; no global fallback."""
-        with _reclaim_env() as env:
-            e1 = _loaded_entry(MagicMock(return_value=1), env._executor, stream="stream-a")
-            e2 = _loaded_entry(MagicMock(return_value=1), env._executor, stream="stream-b")
+        with _ReclaimEnv() as env:
+            e1 = _loaded_entry(
+                MagicMock(return_value=1), env._executor, stream="stream-a"
+            )
+            e2 = _loaded_entry(
+                MagicMock(return_value=1), env._executor, stream="stream-b"
+            )
             pool = _pool(
                 models=[{"id": "m1", "loaded": True}, {"id": "m2", "loaded": True}],
                 entries={"m1": e1, "m2": e2},

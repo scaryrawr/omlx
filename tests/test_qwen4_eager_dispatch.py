@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Per-layer eager dispatch in Qwen4ExpModel: fires for decode/verify rows only and never changes outputs."""
+
 from __future__ import annotations
 
 import sys
@@ -8,12 +9,12 @@ import mlx.core as mx
 import pytest
 
 from omlx.patches import mlx_vlm_qwen4_exp_compat as compat
+from tests.test_mlx_vlm_qwen4_exp_compat import _tiny_config
 
 
 @pytest.fixture(autouse=True)
 def _vendored_qwen4():
     compat.apply_mlx_vlm_qwen4_exp_compat_patch()
-from tests.test_mlx_vlm_qwen4_exp_compat import _tiny_config
 
 
 def _model():
@@ -46,7 +47,9 @@ def _count_dispatches(monkeypatch, language, rows: int):
     return len(calls), out
 
 
-@pytest.mark.parametrize("rows,expected", [(1, True), (4, True), (64, True), (65, False), (200, False)])
+@pytest.mark.parametrize(
+    "rows,expected", [(1, True), (4, True), (64, True), (65, False), (200, False)]
+)
 @pytest.mark.parametrize("every,warmup", [(1, 1), (3, 1), (3, 2), (2, 0)])
 def test_dispatches_warmup_layers_then_every_nth_layer_for_small_row_counts(
     monkeypatch, rows, expected, every, warmup
@@ -75,5 +78,7 @@ def test_kill_switch_and_bitwise_equality(monkeypatch, every, warmup):
     monkeypatch.setattr(language, "_EAGER_DISPATCH_WARMUP", warmup)
     on_count, on = _count_dispatches(monkeypatch, language, 4)
     assert off_count == 0 and on_count > 0
-    assert mx.array_equal(on.view(mx.uint32) if on.dtype == mx.float32 else on.view(mx.uint16),
-                          off.view(mx.uint32) if off.dtype == mx.float32 else off.view(mx.uint16)).item()
+    assert mx.array_equal(
+        on.view(mx.uint32) if on.dtype == mx.float32 else on.view(mx.uint16),
+        off.view(mx.uint32) if off.dtype == mx.float32 else off.view(mx.uint16),
+    ).item()

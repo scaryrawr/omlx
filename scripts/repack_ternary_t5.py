@@ -71,7 +71,9 @@ def _suggest_output_name(src: Path) -> Path:
     Falls back to appending '-1.585bit' if no bit descriptor is found.
     """
     bpw_str = f"{_T5_BPW:.3f}bit"
-    new_name = re.sub(r"\d+(?:\.\d+)?-?bit", bpw_str, src.name, count=1, flags=re.IGNORECASE)
+    new_name = re.sub(
+        r"\d+(?:\.\d+)?-?bit", bpw_str, src.name, count=1, flags=re.IGNORECASE
+    )
     if new_name == src.name:
         new_name = src.name + f"-{bpw_str}"
     return src.parent / new_name
@@ -80,6 +82,7 @@ def _suggest_output_name(src: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Core packing / unpacking
 # ---------------------------------------------------------------------------
+
 
 def pack_t5(quants: np.ndarray, group_size: int) -> np.ndarray:
     """Pack uint8 quants (values 0,1,2) into t5 bytes.
@@ -109,11 +112,13 @@ def pack_t5(quants: np.ndarray, group_size: int) -> np.ndarray:
 
     # Expose groups of 5 trits, then base-3 encode — fully vectorized, no Python loops
     q = q.reshape(N, n_groups, bytes_per_group, 5)
-    v = (q[:, :, :, 0].astype(np.uint32)
-         + q[:, :, :, 1] * 3
-         + q[:, :, :, 2] * 9
-         + q[:, :, :, 3] * 27
-         + q[:, :, :, 4] * 81).astype(np.uint8)
+    v = (
+        q[:, :, :, 0].astype(np.uint32)
+        + q[:, :, :, 1] * 3
+        + q[:, :, :, 2] * 9
+        + q[:, :, :, 3] * 27
+        + q[:, :, :, 4] * 81
+    ).astype(np.uint8)
     return v.reshape(N, n_groups * bytes_per_group)
 
 
@@ -142,12 +147,15 @@ def unpack_t5(t5w: np.ndarray, group_size: int, K: int) -> np.ndarray:
         v //= 3
 
     # Flatten bytes×trits axis, drop padding, reshape to (N, K)
-    return trits.reshape(N, n_groups, bytes_per_group * 5)[:, :, :group_size].reshape(N, K)
+    return trits.reshape(N, n_groups, bytes_per_group * 5)[:, :, :group_size].reshape(
+        N, K
+    )
 
 
 # ---------------------------------------------------------------------------
 # MLX 2-bit unpack helpers
 # ---------------------------------------------------------------------------
+
 
 def unpack_mlx_2bit(w_uint32: np.ndarray, K: int) -> np.ndarray:
     """Unpack MLX standard 2-bit weights (16 values per uint32) to uint8 quants.
@@ -176,35 +184,44 @@ def dequantize_group(quants: np.ndarray, scale: float, bias: float) -> np.ndarra
 # Checkpoint repack
 # ---------------------------------------------------------------------------
 
+
 def _load_safetensors_numpy(path: Path) -> dict[str, np.ndarray]:
     """Load a safetensors file as a dict of numpy arrays."""
     try:
         import safetensors.numpy as st_np
+
         return dict(st_np.load_file(str(path)))
     except ImportError:
         pass
     # Fallback: use mlx
     try:
         import mlx.core as mx
+
         data = mx.load(str(path))
         return {k: np.array(v) for k, v in data.items()}
     except Exception as e:
-        raise RuntimeError(f"Cannot load {path}: {e}. Install safetensors or mlx.") from e
+        raise RuntimeError(
+            f"Cannot load {path}: {e}. Install safetensors or mlx."
+        ) from e
 
 
 def _save_safetensors_numpy(data: dict[str, np.ndarray], path: Path) -> None:
     try:
         import safetensors.numpy as st_np
+
         st_np.save_file(data, str(path))
         return
     except ImportError:
         pass
     try:
         import mlx.core as mx
+
         mx_data = {k: mx.array(v) for k, v in data.items()}
         mx.save_safetensors(str(path), mx_data)
     except Exception as e:
-        raise RuntimeError(f"Cannot save {path}: {e}. Install safetensors or mlx.") from e
+        raise RuntimeError(
+            f"Cannot save {path}: {e}. Install safetensors or mlx."
+        ) from e
 
 
 def repack_shard(
@@ -227,13 +244,17 @@ def repack_shard(
             out[key] = arr
             continue
 
-        prefix = key[:-len(".weight")]
+        prefix = key[: -len(".weight")]
         scales_key = prefix + ".scales"
         biases_key = prefix + ".biases"
 
         # Only repack if 2-bit uint32 weight with matching scales/biases
-        if (arr.dtype != np.uint32 or arr.ndim != 2 or
-                scales_key not in tensors or biases_key not in tensors):
+        if (
+            arr.dtype != np.uint32
+            or arr.ndim != 2
+            or scales_key not in tensors
+            or biases_key not in tensors
+        ):
             out[key] = arr
             continue
 
@@ -280,12 +301,14 @@ def repack_shard(
         if verbose:
             old_bytes = arr.nbytes
             new_bytes = t5w.nbytes
-            print(f"  {key}: ({N}, {K_packed}) uint32 → ({t5w.shape[0]}, {t5w.shape[1]}) uint8  "
-                  f"({old_bytes/1e6:.1f} MB → {new_bytes/1e6:.1f} MB, "
-                  f"{100*(1-new_bytes/old_bytes):.1f}% saved)")
+            print(
+                f"  {key}: ({N}, {K_packed}) uint32 → ({t5w.shape[0]}, {t5w.shape[1]}) uint8  "
+                f"({old_bytes / 1e6:.1f} MB → {new_bytes / 1e6:.1f} MB, "
+                f"{100 * (1 - new_bytes / old_bytes):.1f}% saved)"
+            )
 
         out[key] = t5w
-        out[scales_key] = scales   # keep scales unchanged
+        out[scales_key] = scales  # keep scales unchanged
         # biases are kept: mlx-lm strict load requires them; t5 decode path ignores them
 
     return out
@@ -334,7 +357,10 @@ def repack_model(src: Path, dst: Path, group_size: int, verbose: bool = True) ->
 
     # Copy non-weight files
     for f in src.iterdir():
-        if f.suffix not in (".safetensors",) and f.name != "model.safetensors.index.json":
+        if (
+            f.suffix not in (".safetensors",)
+            and f.name != "model.safetensors.index.json"
+        ):
             dst_f = dst / f.name
             if f.is_file():
                 shutil.copy2(f, dst_f)
@@ -365,6 +391,7 @@ def repack_model(src: Path, dst: Path, group_size: int, verbose: bool = True) ->
 # Verification
 # ---------------------------------------------------------------------------
 
+
 def verify_models(
     src: Path,
     t5: Path,
@@ -376,18 +403,20 @@ def verify_models(
     ok = True
     for shard in sorted(src.glob("*.safetensors")):
         src_tensors = _load_safetensors_numpy(shard)
-        t5_tensors  = _load_safetensors_numpy(t5 / shard.name)
+        t5_tensors = _load_safetensors_numpy(t5 / shard.name)
 
         for key, arr in src_tensors.items():
             if not key.endswith(".weight"):
                 continue
-            prefix = key[:-len(".weight")]
+            prefix = key[: -len(".weight")]
             scales_key = prefix + ".scales"
             biases_key = prefix + ".biases"
 
-            if (arr.dtype != np.uint32 or
-                    scales_key not in src_tensors or
-                    biases_key not in src_tensors):
+            if (
+                arr.dtype != np.uint32
+                or scales_key not in src_tensors
+                or biases_key not in src_tensors
+            ):
                 continue
 
             if key not in t5_tensors:
@@ -405,13 +434,13 @@ def verify_models(
             q_src = unpack_mlx_2bit(arr, K)
 
             q_t5w = t5_tensors[key]
-            q_t5  = unpack_t5(q_t5w, group_size, K)
+            q_t5 = unpack_t5(q_t5w, group_size, K)
 
             # Vectorized dequant: broadcast scales/biases over group_size axis
             s = scales.reshape(N, n_groups, 1)
             b = biases.reshape(N, n_groups, 1)
             dq_src = (s * q_src.reshape(N, n_groups, group_size) + b).reshape(N, K)
-            dq_t5  = (s * q_t5.reshape(N,  n_groups, group_size) + b).reshape(N, K)
+            dq_t5 = (s * q_t5.reshape(N, n_groups, group_size) + b).reshape(N, K)
 
             if not np.allclose(dq_src, dq_t5, atol=atol):
                 max_diff = np.abs(dq_src - dq_t5).max()
@@ -427,25 +456,50 @@ def verify_models(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model",      required=True, type=Path,
-                   help="Source 2-bit MLX model directory")
-    p.add_argument("--output",     type=Path, default=None,
-                   help="Output t5 model directory (required unless --verify)")
-    p.add_argument("--group-size", type=int, default=None,
-                   help="Group size (default: auto-detect from config.json)")
-    p.add_argument("--verbose",    action="store_true", default=True,
-                   help="Print per-tensor progress (default: on)")
-    p.add_argument("--quiet",      action="store_true",
-                   help="Suppress per-tensor output")
-    p.add_argument("--verify",     action="store_true",
-                   help="Verify dequantized weights match (requires --t5-model)")
-    p.add_argument("--t5-model",   type=Path, default=None,
-                   help="t5 model path to verify against (used with --verify)")
-    p.add_argument("--atol",       type=float, default=1e-4,
-                   help="Absolute tolerance for verification (default: 1e-4)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--model", required=True, type=Path, help="Source 2-bit MLX model directory"
+    )
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output t5 model directory (required unless --verify)",
+    )
+    p.add_argument(
+        "--group-size",
+        type=int,
+        default=None,
+        help="Group size (default: auto-detect from config.json)",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        default=True,
+        help="Print per-tensor progress (default: on)",
+    )
+    p.add_argument("--quiet", action="store_true", help="Suppress per-tensor output")
+    p.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify dequantized weights match (requires --t5-model)",
+    )
+    p.add_argument(
+        "--t5-model",
+        type=Path,
+        default=None,
+        help="t5 model path to verify against (used with --verify)",
+    )
+    p.add_argument(
+        "--atol",
+        type=float,
+        default=1e-4,
+        help="Absolute tolerance for verification (default: 1e-4)",
+    )
     return p.parse_args()
 
 

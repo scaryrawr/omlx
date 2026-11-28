@@ -5,10 +5,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-import omlx.server  # noqa: F401 — ensure server module is imported first
 import omlx.admin.routes as admin_routes
+import omlx.server
 
 
 def _setup_mocks(
@@ -61,19 +59,21 @@ class TestReloadModels:
         mock_server_state.settings_manager = settings_manager
 
         try:
-            with patch.object(omlx.server, "_server_state", mock_server_state):
-                with patch(
+            with (
+                patch.object(omlx.server, "_server_state", mock_server_state),
+                patch(
                     "omlx.admin.routes._apply_model_dirs_runtime",
                     new_callable=AsyncMock,
                     return_value=(True, "Re-discovered 5 models from 1 directory"),
-                ) as mock_apply:
-                    success, msg = asyncio.run(admin_routes._reload_models())
+                ) as mock_apply,
+            ):
+                success, msg = asyncio.run(admin_routes._reload_models())
 
-                    assert success is True
-                    assert "5 models" in msg
-                    settings_manager._load.assert_called_once()
-                    mock_apply.assert_called_once_with(["/path/to/models"])
-                    pool.preload_pinned_models.assert_called_once()
+                assert success is True
+                assert "5 models" in msg
+                settings_manager._load.assert_called_once()
+                mock_apply.assert_called_once_with(["/path/to/models"])
+                pool.preload_pinned_models.assert_called_once()
         finally:
             _restore_mocks(originals)
 
@@ -136,16 +136,18 @@ class TestReloadModels:
         mock_server_state.engine_pool = pool
 
         try:
-            with patch.object(omlx.server, "_server_state", mock_server_state):
-                with patch(
+            with (
+                patch.object(omlx.server, "_server_state", mock_server_state),
+                patch(
                     "omlx.admin.routes._apply_model_dirs_runtime",
                     new_callable=AsyncMock,
                     return_value=(False, "Model directory does not exist: /bad/path"),
-                ):
-                    success, msg = asyncio.run(admin_routes._reload_models())
-                    assert success is False
-                    assert "does not exist" in msg
-                    pool.preload_pinned_models.assert_not_called()
+                ),
+            ):
+                success, msg = asyncio.run(admin_routes._reload_models())
+                assert success is False
+                assert "does not exist" in msg
+                pool.preload_pinned_models.assert_not_called()
         finally:
             _restore_mocks(originals)
 
@@ -170,15 +172,17 @@ class TestReloadModels:
         mock_server_state.engine_pool = pool
 
         try:
-            with patch.object(omlx.server, "_server_state", mock_server_state):
-                with patch(
+            with (
+                patch.object(omlx.server, "_server_state", mock_server_state),
+                patch(
                     "omlx.admin.routes._apply_model_dirs_runtime",
                     new_callable=AsyncMock,
                     return_value=(True, "Re-discovered 3 models from 1 directory"),
-                ) as mock_apply:
-                    success, msg = asyncio.run(admin_routes._reload_models())
-                    assert success is True
-                    mock_apply.assert_called_once_with(["/fallback/path"])
+                ) as mock_apply,
+            ):
+                success, msg = asyncio.run(admin_routes._reload_models())
+                assert success is True
+                mock_apply.assert_called_once_with(["/fallback/path"])
         finally:
             _restore_mocks(originals)
 
@@ -242,9 +246,7 @@ class TestApplyModelDirsRuntime:
 
         with patch.object(omlx.server, "_server_state", mock_server_state):
             success, msg = asyncio.run(
-                admin_routes._apply_model_dirs_runtime(
-                    [str(primary), str(secondary)]
-                )
+                admin_routes._apply_model_dirs_runtime([str(primary), str(secondary)])
             )
 
         assert success is True

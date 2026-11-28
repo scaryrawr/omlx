@@ -187,20 +187,20 @@ class TestMTPProcessingSampler:
 
     def test_missing_positions_fails_closed(self, caplog):
         _, sampler, _ = self._fresh(budget=4)
-        with caplog.at_level(
-            logging.ERROR, logger="omlx.speculative.processing_sampler"
+        with (
+            caplog.at_level(
+                logging.ERROR, logger="omlx.speculative.processing_sampler"
+            ),
+            pytest.raises(MTPProcessorContractError),
         ):
-            with pytest.raises(MTPProcessorContractError):
-                sampler.sample_target(_positioned_logprobs(2))
+            sampler.sample_target(_positioned_logprobs(2))
         assert sampler._degraded
         assert "continuing would bypass" in caplog.text
 
         # A caller cannot catch the first error and silently reuse the
         # degraded sampler without its processors.
         with pytest.raises(MTPProcessorContractError):
-            sampler.sample_target(
-                _positioned_logprobs(1), row_ids=[0], positions=[1]
-            )
+            sampler.sample_target(_positioned_logprobs(1), row_ids=[0], positions=[1])
 
 
 # ---------------------------------------------------------------------------
@@ -524,9 +524,7 @@ class TestPositionedHookVisibility:
     @pytest.mark.parametrize("mrope", [False, True])
     @pytest.mark.parametrize("adapter_hook", [False, True])
     @pytest.mark.parametrize("lm_hook", [False, True])
-    def test_helper_matches_real_proxy_resolution(
-        self, mrope, adapter_hook, lm_hook
-    ):
+    def test_helper_matches_real_proxy_resolution(self, mrope, adapter_hook, lm_hook):
         """vlm_mtp_positioned_sampling_available == what the round loop
         resolves through the real proxy, for every combination."""
         adapter, lm = _make_adapter(
@@ -535,31 +533,21 @@ class TestPositionedHookVisibility:
         proxy = _VLMAdapterMTPProxy(adapter, lm)
         # mlx-vlm's resolution (mtp.py): lm = model.language_model if
         # present else model; positioned path gated on the hook's presence.
-        loop_lm = (
-            proxy.language_model
-            if hasattr(proxy, "language_model")
-            else proxy
-        )
+        loop_lm = proxy.language_model if hasattr(proxy, "language_model") else proxy
         loop_sees_hook = hasattr(loop_lm, "speculative_logits_from_hidden")
-        assert (
-            vlm_mtp_positioned_sampling_available(adapter) == loop_sees_hook
-        )
+        assert vlm_mtp_positioned_sampling_available(adapter) == loop_sees_hook
 
     def test_mrope_hides_inner_hook(self):
         """The maintainer-reported case: inner LM has the hook, adapter is
         mRoPE — the proxy hides it, so availability must be False."""
-        adapter, lm = _make_adapter(
-            mrope=True, adapter_hook=False, lm_hook=True
-        )
+        adapter, lm = _make_adapter(mrope=True, adapter_hook=False, lm_hook=True)
         assert hasattr(lm, "speculative_logits_from_hidden")  # naive check
         assert not vlm_mtp_positioned_sampling_available(adapter)
 
     def test_adapter_level_hook_survives_mrope(self):
         """An mRoPE-safe hook implemented on the adapter itself is visible
         to the loop and keeps the vlm_mtp route open."""
-        adapter, _ = _make_adapter(
-            mrope=True, adapter_hook=True, lm_hook=False
-        )
+        adapter, _ = _make_adapter(mrope=True, adapter_hook=True, lm_hook=False)
         assert vlm_mtp_positioned_sampling_available(adapter)
 
     def test_no_adapter_falls_back_to_model_probe(self):
@@ -571,9 +559,7 @@ class TestPositionedHookVisibility:
         """Regression for the silent-drop report on Qwen VLM targets: the
         gate must decline (falling back to BatchGenerator) even though the
         inner language model carries the hook."""
-        adapter, _ = _make_adapter(
-            mrope=True, adapter_hook=False, lm_hook=True
-        )
+        adapter, _ = _make_adapter(mrope=True, adapter_hook=False, lm_hook=True)
         sched = SimpleNamespace(
             _vlm_mtp_drafter=object(),
             _vlm_mtp_active={},
@@ -597,9 +583,7 @@ class TestPositionedHookVisibility:
         the gate passes; routing then declines on the empty last_tokens —
         the check immediately after the positioned gate — proving the
         positioned gate itself let the request through."""
-        adapter, _ = _make_adapter(
-            mrope=False, adapter_hook=False, lm_hook=True
-        )
+        adapter, _ = _make_adapter(mrope=False, adapter_hook=False, lm_hook=True)
         sched = SimpleNamespace(
             _vlm_mtp_drafter=object(),
             _vlm_mtp_active={},

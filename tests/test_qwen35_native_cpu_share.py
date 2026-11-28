@@ -19,12 +19,8 @@ def test_native_shared_cluster_cpu_matmul():
     cpu_outputs = gpu_outputs = 64
     x = mx.ones((1, rows, input_dim), dtype=mx.float16)
     cpu_weight = mx.ones((cpu_outputs, input_dim), dtype=mx.float16)
-    gpu_weight = mx.zeros(
-        (gpu_outputs, input_dim * 4 // 32), dtype=mx.uint32
-    )
-    gpu_scales = mx.zeros(
-        (gpu_outputs, input_dim // 128), dtype=mx.float16
-    )
+    gpu_weight = mx.zeros((gpu_outputs, input_dim * 4 // 32), dtype=mx.uint32)
+    gpu_scales = mx.zeros((gpu_outputs, input_dim // 128), dtype=mx.float16)
     gpu_biases = mx.zeros_like(gpu_scales)
 
     result = fast.cpu_fp16_affine_qmm_t(
@@ -40,9 +36,7 @@ def test_native_shared_cluster_cpu_matmul():
     )
     mx.eval(result)
 
-    expected = mx.full(
-        (1, rows, cpu_outputs), input_dim, dtype=mx.float16
-    )
+    expected = mx.full((1, rows, cpu_outputs), input_dim, dtype=mx.float16)
     assert result.shape == (1, rows, cpu_outputs + gpu_outputs)
     assert bool(mx.all(mx.isfinite(result)).item())
     assert float(mx.max(mx.abs(result[..., :cpu_outputs] - expected)).item()) == 0

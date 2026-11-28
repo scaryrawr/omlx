@@ -19,8 +19,13 @@ from mlx_vlm.models.qwen3_5.speculative_verifier import Qwen3_5BatchInvariantFor
 from mlx_vlm.speculative.cache_state import start_speculative_cache
 from mlx_vlm.speculative.ops import linear as linear_ops
 
-
 from omlx.patches import qwen35_gdn_prework as prework_mod
+from omlx.patches.qwen35_gdn_prework import (
+    gdn_prework_fused,
+    qwen4_decode_norm_gate_fused,
+    qwen4_decode_prework_fused,
+)
+from omlx.patches.qwen35_q4_mlp import _VLMQuantizedPrefillLinear
 
 
 @pytest.fixture(autouse=True)
@@ -37,13 +42,6 @@ def restore_hooks(monkeypatch):
     )
     prework_mod.apply_qwen35_vlm_qk_norm_patch()
 
-
-from omlx.patches.qwen35_gdn_prework import (
-    gdn_prework_fused,
-    qwen4_decode_norm_gate_fused,
-    qwen4_decode_prework_fused,
-)
-from omlx.patches.qwen35_q4_mlp import _VLMQuantizedPrefillLinear
 
 HK, HV, DK, DV = 16, 48, 128, 128
 C = 2 * HK * DK + HV * DV
@@ -368,16 +366,37 @@ def test_qwen4_verify_prework_rows_equal_serial_decode_steps(seq):
     q_scale = mx.array(DK**-0.5, dtype=mx.bfloat16)
 
     verify = gdn_prework_fused(
-        qkv, state, conv_w, q_scale, mx.array(1.0, dtype=mx.bfloat16), HK, HV, DK, DV, l2=True
+        qkv,
+        state,
+        conv_w,
+        q_scale,
+        mx.array(1.0, dtype=mx.bfloat16),
+        HK,
+        HV,
+        DK,
+        DV,
+        l2=True,
     )
     serial_state = state
     for row in range(seq):
         q, k, v, serial_state, _, _ = qwen4_decode_prework_fused(
-            qkv[:, row : row + 1], serial_state, conv_w, q_scale, b, a, A_log, dt_bias,
-            HK, HV, DK, DV,
+            qkv[:, row : row + 1],
+            serial_state,
+            conv_w,
+            q_scale,
+            b,
+            a,
+            A_log,
+            dt_bias,
+            HK,
+            HV,
+            DK,
+            DV,
         )
         for name, step, window in zip(("q", "k", "v"), (q, k, v), verify[:3]):
-            assert mx.array_equal(step[:, 0], window[:, row]).item(), f"{name} row {row}"
+            assert mx.array_equal(step[:, 0], window[:, row]).item(), (
+                f"{name} row {row}"
+            )
     assert mx.array_equal(serial_state, verify[3]).item()
 
 
@@ -437,8 +456,22 @@ def test_qwen4_decode_step_kernel_equals_its_three_launches(dtype):
         y, state_ref = prework_mod._qwen4_decode_recurrence(q, k, v, g, beta, state_ref)
         gated_ref = prework_mod._qwen4_norm_gate(y, z, norm_w, eps, HV, DV)
         conv_new, state_new, gated_new = prework_mod.qwen4_decode_step_fused(
-            qkv, z, b, a, conv_new, conv_w, q_scale, A_log, dt_bias, state_new, norm_w,
-            eps, HK, HV, DK, DV,
+            qkv,
+            z,
+            b,
+            a,
+            conv_new,
+            conv_w,
+            q_scale,
+            A_log,
+            dt_bias,
+            state_new,
+            norm_w,
+            eps,
+            HK,
+            HV,
+            DK,
+            DV,
         )
         for name, expected, observed in (
             ("conv_state", conv_ref, conv_new),
@@ -481,13 +514,10 @@ def test_qwen4_prefill_route_is_bit_exact_across_chunks(monkeypatch, dtype):
         hidden_act="silu",
     )
     module = Qwen4ExpGatedDeltaNet(config)
-    module.update(
-        tree_map(lambda p: (p * 0.2).astype(dtype), module.parameters())
-    )
+    module.update(tree_map(lambda p: (p * 0.2).astype(dtype), module.parameters()))
     module.eval()
     chunks = [
-        (mx.random.normal((1, rows, 2560)) * 0.5).astype(dtype)
-        for rows in (80, 67)
+        (mx.random.normal((1, rows, 2560)) * 0.5).astype(dtype) for rows in (80, 67)
     ]
 
     def run(fused):
@@ -750,7 +780,7 @@ def test_qwen4_decode_wide_projections_are_bit_exact_either_way():
 def test_qwen4_decode_wide_allow_list_matches_the_quantizer():
     from omlx import oq
 
-    assert prework_mod._ALLOWED_GROUPS == frozenset(oq._AFFINE_GROUP_SIZES)
+    assert frozenset(oq._AFFINE_GROUP_SIZES) == prework_mod._ALLOWED_GROUPS
     for bits in sorted(prework_mod._ALLOWED_BITS):
         mx.quantize(mx.zeros((64, 2560)), group_size=64, bits=bits, mode="affine")
     for group in sorted(prework_mod._ALLOWED_GROUPS):
@@ -1079,6 +1109,7 @@ def test_fused_verify_replays_committed_rows_in_the_next_block(
         return kernel(main, replay)
 
     monkeypatch.setattr(fused_mod, "_kernel", record)
+
     def same(actual, reference):
         if dtype == mx.bfloat16:
             return mx.array_equal(actual, reference).item()
@@ -1098,9 +1129,7 @@ def test_fused_verify_replays_committed_rows_in_the_next_block(
 @pytest.mark.parametrize(
     "seq,retained", [(8, [8, 8, 8]), (8, [1, 8, 5]), (16, [3, 16, 11])]
 )
-def test_qwen4_verify_records_replay_rows_instead_of_states(
-    monkeypatch, seq, retained
-):
+def test_qwen4_verify_records_replay_rows_instead_of_states(monkeypatch, seq, retained):
     """The L2 verify keeps the stock output kernel but records the block rows,
     so a batched transaction holds no state per position. Outputs and
     committed states stay bit-exact to the stock recording across two blocks."""
@@ -1419,7 +1448,9 @@ def _verify_block(module, inputs, conv_state, recurrent_state, *, row_exact=True
     try:
         # The compat vendor's verifier, or upstream mlx-vlm's when a test
         # earlier in the session imported that first (as the patch resolves).
-        verifier = (getattr(q4, "_Qwen4Verifier", None) or q4.Qwen4ExpBatchInvariantForward)()
+        verifier = (
+            getattr(q4, "_Qwen4Verifier", None) or q4.Qwen4ExpBatchInvariantForward
+        )()
         out = verifier._gated_delta(module, inputs, None, cache)
     finally:
         qwen35_verify_qmm.set_verify_qmm_armed(False)
@@ -1475,7 +1506,9 @@ def test_qwen4_fused_verify_equals_per_op_verify_and_rollback(
     monkeypatch.setattr(
         prework_mod.qwen35_gdn_verify_fused, "replay_eligible", lambda *args: False
     )
-    want, want_cache, want_tx = _verify_block(module, inputs, conv_state, recurrent_state)
+    want, want_cache, want_tx = _verify_block(
+        module, inputs, conv_state, recurrent_state
+    )
     assert qwen4_verify == []
     monkeypatch.setattr(prework_mod.qwen35_gdn_verify_fused, "replay_eligible", replay)
     monkeypatch.setattr(prework_mod, "_QWEN4_VERIFY_FUSED", True)
@@ -1645,8 +1678,19 @@ def test_qwen4_batched_decode_step_equals_one_row_steps(rows):
     for r in range(rows):
         row = slice(r, r + 1)
         want = prework_mod.qwen4_decode_step_fused(
-            qkv[row], z[row], b[row], a[row], conv_state[row], *operands, state[row],
-            norm_w, eps, HK, HV, DK, DV,
+            qkv[row],
+            z[row],
+            b[row],
+            a[row],
+            conv_state[row],
+            *operands,
+            state[row],
+            norm_w,
+            eps,
+            HK,
+            HV,
+            DK,
+            DV,
         )
         for have, expected in zip((conv_out[row], state_out[row], out[row]), want):
             assert _same(expected, have), r
@@ -1680,16 +1724,44 @@ def test_qwen4_verify_step_kernel_equals_chained_decode_step_kernels(dtype, rows
     proj = (mx.random.normal((1, rows, P)) * 0.8).astype(dtype)
 
     conv_out, window, history, final, out = prework_mod.qwen4_verify_step_fused(
-        proj, conv_state, conv_w, q_scale, A_log, dt_bias, state, norm_w, eps, HK, HV, DK, DV
+        proj,
+        conv_state,
+        conv_w,
+        q_scale,
+        A_log,
+        dt_bias,
+        state,
+        norm_w,
+        eps,
+        HK,
+        HV,
+        DK,
+        DV,
     )
     assert (history is None) == (rows == 1)
     assert _same(mx.concatenate([conv_state, proj[..., :C]], axis=1), window)
     conv, recurrent = conv_state, state
     for t in range(rows):
-        qkv, z, b, a = mx.split(proj[:, t : t + 1], [C, C + HV * DV, C + HV * DV + HV], axis=-1)
+        qkv, z, b, a = mx.split(
+            proj[:, t : t + 1], [C, C + HV * DV, C + HV * DV + HV], axis=-1
+        )
         conv, recurrent, gated = prework_mod.qwen4_decode_step_fused(
-            qkv, z, b, a, conv, conv_w, q_scale, A_log, dt_bias, recurrent, norm_w, eps,
-            HK, HV, DK, DV,
+            qkv,
+            z,
+            b,
+            a,
+            conv,
+            conv_w,
+            q_scale,
+            A_log,
+            dt_bias,
+            recurrent,
+            norm_w,
+            eps,
+            HK,
+            HV,
+            DK,
+            DV,
         )
         assert _same(gated[:, 0], out[:, t]), t
         if t < rows - 1:

@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Decode SDPA (decode_fast) matches mx.fast.scaled_dot_product_attention."""
 
-import pytest
 import mlx.core as mx
+import pytest
 
 fast = pytest.importorskip("omlx.custom_kernels.attention.fast")
 
-@pytest.mark.skipif(
-    not fast.NATIVE_AVAILABLE, reason="native extension not built"
-)
+
+@pytest.mark.skipif(not fast.NATIVE_AVAILABLE, reason="native extension not built")
 @pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16, mx.float16])
 @pytest.mark.parametrize(
     "B,H,Hkv,qL,kL,D,V",
@@ -32,7 +31,7 @@ def test_matches_mx_fast(dtype, B, H, Hkv, qL, kL, D, V):
     q = mx.random.normal((B, H, qL, D)).astype(dtype)
     k = mx.random.normal((B, Hkv, kL, D)).astype(dtype)
     v = mx.random.normal((B, Hkv, kL, V)).astype(dtype)
-    scale = 1.0 / (D ** 0.5)
+    scale = 1.0 / (D**0.5)
     causal = qL > 1
     assert fast._ext.sdpa_decode_supported(q, k, v)
     out = fast._ext.sdpa_decode(q, k, v, scale, causal)

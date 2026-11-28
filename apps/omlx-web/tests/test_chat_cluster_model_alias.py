@@ -3,10 +3,7 @@
 
 from pathlib import Path
 
-
-CHAT_TEMPLATE = (
-    Path(__file__).parents[1] / "omlx_web" / "templates" / "chat.html"
-)
+CHAT_TEMPLATE = Path(__file__).parents[1] / "omlx_web" / "templates" / "chat.html"
 
 
 def test_chat_maps_active_deployment_ids_to_public_model_ids():

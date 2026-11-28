@@ -29,7 +29,7 @@ See [Development](../README.md#development) for the other `make` targets and app
 - If you haven't had a PR merged here before, open an issue or discussion before sending a PR with over 1,000 changed lines or a new subsystem, so I can check the approach before you put in the work. I move such PRs to draft until that discussion happens.
 - Keep each PR focused on one problem or coherent feature. Include the settings, API, and UI integration it needs, but separate unrelated changes. For stacked PRs, explain the dependency and merge order.
 - Fix the underlying problem and reuse existing code paths. Preserve supported behavior; explain any compatibility changes or performance tradeoffs.
-- Format the lines you change with Black and follow the Ruff configuration. Keep unrelated formatting and development artifacts out of the diff. Preserve third-party license notices and use Apache-2.0 SPDX headers for new original code.
+- Format the code you change with Ruff and follow its lint configuration. Keep unrelated formatting and development artifacts out of the diff. Preserve third-party license notices and use Apache-2.0 SPDX headers for new original code.
 
 ## Test Your Change
 
@@ -43,6 +43,29 @@ python -m pytest                      # Excludes slow and integration tests
 ```
 
 See [TESTING.md](TESTING.md) for additional checks. For inference or cache changes, include a representative real-model check when possible, covering affected features such as prefix reuse, streaming, or concurrent requests. State what you ran and what remains untested; CI or mocked tests do not replace hardware validation.
+
+Ruff is the single Python formatter and linter. Its version and Python 3.11
+target are fixed in `pyproject.toml`; CI checks the entire first-party Python
+tree, including tests and scripts. Run these from the repository root:
+
+```bash
+uv run ruff check .           # Lint without modifying files
+uv run ruff format --check .  # Check formatting without modifying files
+uv run ruff check --fix .     # Apply safe lint fixes
+uv run ruff format .          # Format Python files
+```
+
+`make lint` runs both checks; `make format` runs the formatter. For lint-only
+environments, use `uv sync --only-group lint --no-install-project` and
+`uv run --only-group lint ruff ...`.
+
+Vendored upstream code under `omlx/patches/*/vendor` is excluded even when
+passed explicitly. Do not use `--unsafe-fixes` indiscriminately. `SIM118`
+is disabled because safetensors handles and other `.keys()` protocols are
+not necessarily iterable. `UP042` is disabled because replacing string enums
+with `StrEnum` changes `str(member)`. Tensor dimensions, checkpoint parameter
+names, patched special methods, and optional-dependency test imports have
+narrow, documented exceptions in the configuration.
 
 UI and UX changes, in the admin dashboard or the macOS app, must include before and after screenshots of the actual screen in the PR description. Use a short screen recording when the change is about interaction. UI PRs are reviewed once screenshots are attached. Run relevant JavaScript tests and build the macOS app (`make app`) when those components change. The web UI lives in `apps/omlx-web/omlx_web/` and its tests in `apps/omlx-web/tests/`. After editing its templates, JavaScript, or translation keys (`apps/omlx-web/omlx_web/i18n/en.json` is the source), rebuild the CSS and normalize the catalogs:
 

@@ -322,7 +322,10 @@ class DistributedBatchedEngine(BatchedEngine):
     def runtime_failed_reason(self) -> str | None:
         """Terminal worker failure observed by the coordinator, if any."""
 
-        if self._runtime_failed_reason is None and getattr(self, "_supervisor", None) is not None:
+        if (
+            self._runtime_failed_reason is None
+            and getattr(self, "_supervisor", None) is not None
+        ):
             status = self._supervisor.status()
             reason = status.failure_reason
             if reason is None and status.returncode is not None:
@@ -1983,7 +1986,7 @@ raise SystemExit(2)
                             deployment_id=self.deployment.deployment_id,
                             require_heartbeat=True,
                         )
-                    except Exception as exc:  # noqa: BLE001 - probe plumbing
+                    except Exception as exc:
                         # A broken probe must not take down a serving
                         # cluster; the supervisor checks above still catch
                         # hard failures.
@@ -2023,7 +2026,7 @@ raise SystemExit(2)
                     }
                     try:
                         health = await asyncio.to_thread(check_peers, hosts_by_rank)
-                    except Exception as exc:  # noqa: BLE001 - probe plumbing
+                    except Exception as exc:
                         logger.warning("peer reachability probe failed: %s", exc)
                         reachable = True
                     else:

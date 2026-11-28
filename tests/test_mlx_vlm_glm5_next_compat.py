@@ -18,9 +18,9 @@ from types import SimpleNamespace
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.utils import tree_flatten
 import numpy as np
 import pytest
+from mlx.utils import tree_flatten
 from PIL import Image
 
 from omlx.memory_monitor import estimate_mla_kv_bytes_per_token
@@ -31,8 +31,8 @@ from omlx.oq import (
     universal_quant_predicate,
 )
 from omlx.patches import mlx_vlm_glm5_next_compat as compat
-from omlx.patches.glm_moe_dsa import indexer_nax, sparse_mla, sparse_mla_nax
 from omlx.patches import qwen35_verify_qmm
+from omlx.patches.glm_moe_dsa import indexer_nax, sparse_mla, sparse_mla_nax
 from omlx.patches.mlx_vlm_glm5_next_compat import decode_kernels as dk
 from omlx.utils.layer_pipeline import LayerPipeline
 
@@ -578,7 +578,9 @@ def test_sanitize_remaps_quantized_forget_gate_sidecars():
 
 
 @pytest.mark.parametrize("text_only,preserve_mtp", [(False, False), (True, True)])
-def test_oq_roundtrip_with_nextn_weights(tmp_path, monkeypatch, text_only, preserve_mtp):
+def test_oq_roundtrip_with_nextn_weights(
+    tmp_path, monkeypatch, text_only, preserve_mtp
+):
     from mlx.utils import tree_flatten
     from mlx_vlm.models import glm5_next
     from mlx_vlm.utils import load_model
@@ -1004,9 +1006,7 @@ def test_q8_vup_flat_gates_dtype_mismatch_and_preserves_projection_contract():
     assert out.dtype == mx.float32
 
     # Matching FP16 scales must still use the fused kernel.
-    proj16 = QuantizedMultiLinear(
-        512, 256, 64, group_size=64, bits=8, mode="affine"
-    )
+    proj16 = QuantizedMultiLinear(512, 256, 64, group_size=64, bits=8, mode="affine")
     proj16.scales = proj16.scales.astype(mx.float16)
     proj16.biases = proj16.biases.astype(mx.float16)
     mx.eval(proj16.scales, proj16.biases)
@@ -1113,7 +1113,9 @@ def test_prefill_leaves_the_last_layer_output_lazy():
     text = _tiny_config().text_config
     lm = lang.LanguageModel(text)
     mx.eval(lm.parameters())
-    ids = mx.array([[(7 * i + 3) % text.vocab_size for i in range(256)]], dtype=mx.int32)
+    ids = mx.array(
+        [[(7 * i + 3) % text.vocab_size for i in range(256)]], dtype=mx.int32
+    )
 
     def flat_state(cache):
         arrays = []
@@ -1378,6 +1380,7 @@ def test_kda_prework_kernel_matches_stock(seq):
 
 def test_kda_norm_gate_kernel_matches_o_norm():
     from mlx_vlm.models.glm5_next.language import Glm5NextRMSNormGated
+
     from omlx.patches.glm53_kda_prework import kda_norm_gate_fused
 
     mx.random.seed(42)
@@ -1394,7 +1397,6 @@ def test_kda_norm_gate_kernel_matches_o_norm():
 
 
 def _kda_tiny_config():
-    from mlx_vlm.models import glm5_next
 
     config = _tiny_config()
     text = config.text_config
@@ -1478,6 +1480,7 @@ def test_kda_fused_chunked_prefill_matches_single_pass(monkeypatch):
 
 def test_kda_prefill_eligibility_gating(monkeypatch):
     from mlx_vlm.models.glm5_next import language
+
     from omlx.patches.glm53_kda_prework import (
         glm53_kda_prefill,
         glm53_kda_prefill_eligible,
@@ -1494,9 +1497,7 @@ def test_kda_prefill_eligibility_gating(monkeypatch):
         layer, inputs, mx.ones((1, 70), dtype=mx.bool_), cache
     )
     assert not glm53_kda_prefill_eligible(layer, inputs[:, :63], None, cache)
-    assert not glm53_kda_prefill_eligible(
-        layer, inputs.astype(mx.float32), None, cache
-    )
+    assert not glm53_kda_prefill_eligible(layer, inputs.astype(mx.float32), None, cache)
     padded = model.make_cache()[0]
     padded.lengths = mx.array([70])
     assert not glm53_kda_prefill_eligible(layer, inputs, None, padded)
@@ -1523,6 +1524,7 @@ def test_kda_fused_prefill_survives_mtp_runtime_patch(monkeypatch):
     prefill for every later forward.
     """
     from mlx_vlm.models.glm5_next import language
+
     from omlx.patches import glm53_kda_prework as kda
     from omlx.patches.mlx_vlm_mtp import glm5_next_vlm_runtime
 
@@ -1568,7 +1570,9 @@ def test_dense_prefix_row_blocks_bitwise(monkeypatch, past_len):
     heads = attention.num_heads
     rows = 2100  # rows // 256 = 8: exercises 2, 3, 4 and 8 blocks
     q = mx.random.normal((1, heads, rows, attention.q_head_dim)).astype(mx.bfloat16)
-    kv = mx.random.normal((1, 1, past_len + rows, attention.kv_lora_rank)).astype(mx.bfloat16)
+    kv = mx.random.normal((1, 1, past_len + rows, attention.kv_lora_rank)).astype(
+        mx.bfloat16
+    )
     total = past_len + rows
     # The engine passes a boolean causal mask sliced out of a larger one.
     full = mx.tril(mx.ones((total + 64, total + 64), dtype=mx.bool_), k=0)
@@ -2097,7 +2101,11 @@ def test_percore_recurrence_falls_back_to_blocked(monkeypatch):
     real = R._blocked
     for args in [(q, k, v), tuple(x.astype(mx.float32) for x in (q, k, v))]:
         launched = []
-        monkeypatch.setattr(R, "_blocked", lambda *xs: launched.append(1) or real(*xs))
+        monkeypatch.setattr(
+            R,
+            "_blocked",
+            lambda *xs, launched=launched: launched.append(1) or real(*xs),
+        )
         y, s = R.kda_recurrence(*args, a, beta, a_log, dt_bias, -5.0, state)
         y_b, s_b = real(*args, a, beta, a_log, dt_bias, -5.0, state, R.DEFAULT_CONFIG)
         mx.eval(y, s, y_b, s_b)
@@ -2607,6 +2615,7 @@ def test_topk_differences_are_threshold_near_ties():
     scores differ only by pools whose native scores sit within one bf16 ulp
     of that row's top-k threshold (fp32 summation order at a near-tie)."""
     from mlx_vlm.models.glm5_next import language
+
     from omlx.custom_kernels.sparse_index import fast as index_fast
 
     if not index_fast.has_symbol("dsa_topk_indices"):
@@ -3330,9 +3339,9 @@ def test_decode_hc_pre_is_bitwise_reference(hidden, batch, length, bf16_fn):
     hc, norm = _hyper_connection(hidden, seed=length, bf16_fn=bf16_fn)
     assert (dk.mix_weights(hc).dtype == mx.bfloat16) == bf16_fn
     for trial in range(3):
-        x = (
-            mx.random.normal((batch, length, 4, hidden)) * (1 + 2 * trial)
-        ).astype(mx.bfloat16)
+        x = (mx.random.normal((batch, length, 4, hidden)) * (1 + 2 * trial)).astype(
+            mx.bfloat16
+        )
         fused = language._decode_hc_pre(hc, norm, x)
         assert fused is not None
         normalized, fused_post, fused_comb = fused
@@ -3346,9 +3355,7 @@ def test_decode_hc_pre_is_bitwise_reference(hidden, batch, length, bf16_fn):
         # Each batch or verify row equals the one-token decode of that row.
         for b in range(batch):
             for row in range(length):
-                single = language._decode_hc_pre(
-                    hc, norm, x[b : b + 1, row : row + 1]
-                )
+                single = language._decode_hc_pre(hc, norm, x[b : b + 1, row : row + 1])
                 at = (slice(b, b + 1), slice(row, row + 1))
                 assert _mismatches(single[0], normalized[at]) == 0
                 assert _mismatches(single[2], fused_comb[at]) == 0
@@ -3387,13 +3394,13 @@ def _run_with_tf32(snippet: str) -> str:
     """
     here = Path(__file__).resolve().parent
     code = (
-        "import sys; sys.path[:0] = [%r, %r]\n"
+        f"import sys; sys.path[:0] = [{str(here)!r}, {str(here.parent)!r}]\n"
         "from omlx.patches import mlx_vlm_glm5_next_compat as compat\n"
         "compat.apply_mlx_vlm_glm5_next_compat_patch()\n"
         "import test_mlx_vlm_glm5_next_compat as t\n"
         "t.dk.moe_router = t._stock_verify_router(t.dk.moe_router)\n"
         "import conftest, pytest\n"
-        "conftest.use_qmv_wide_reference(pytest.MonkeyPatch())\n" % (str(here), str(here.parent))
+        "conftest.use_qmv_wide_reference(pytest.MonkeyPatch())\n"
     ) + snippet
     env = dict(os.environ, MLX_ENABLE_TF32="1")
     done = subprocess.run(
@@ -4124,7 +4131,9 @@ def _indexer(hidden=256, seed=0):
 def _native_indexer_available():
     from omlx.custom_kernels.sparse_index import fast as index_fast
 
-    return index_fast.has_symbol("dsa_indexer_scores") and index_fast.has_symbol("dsa_topk_indices")
+    return index_fast.has_symbol("dsa_indexer_scores") and index_fast.has_symbol(
+        "dsa_topk_indices"
+    )
 
 
 @pytest.mark.usefixtures("glm5_fused_decode")
@@ -4437,7 +4446,7 @@ def test_small_model_decode_and_verify_logits_are_bitwise_reference(monkeypatch)
 @pytest.mark.usefixtures("glm5_fused_decode")
 def test_small_model_dense_attention_is_bitwise_reference():
     used = _check_small_model(seed=43, prompt_len=300)
-    assert _CORE_FUSED <= used, used
+    assert used >= _CORE_FUSED, used
 
 
 @pytest.mark.usefixtures("glm5_fused_decode")
@@ -4456,7 +4465,7 @@ def test_small_model_bitwise_reference_with_nax_tf32():
         "print(sorted(t._check_small_model() | t._check_small_model(43, 300)))\n"
     )
     used = set(eval(out.strip().splitlines()[-1]))
-    assert _CORE_FUSED <= used, used
+    assert used >= _CORE_FUSED, used
     for family in ("hc_expand", "hc_pre_fused", "hc_post_mm"):
         if family in used:
             continue
@@ -5279,7 +5288,7 @@ def test_upstream_kda_prefill_then_fused_decode_is_bitwise_reference(monkeypatch
     monkeypatch.setattr(prework, "_GLM53_KDA_ENGAGED_LOGGED", False)
     used = _check_small_model() | _check_small_model(43, 300)
     assert prework._GLM53_KDA_ENGAGED_LOGGED
-    assert _CORE_FUSED <= used, used
+    assert used >= _CORE_FUSED, used
 
 
 @pytest.mark.usefixtures("glm5_fused_decode")

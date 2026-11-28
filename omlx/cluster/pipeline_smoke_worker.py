@@ -48,9 +48,7 @@ def main() -> int:
         # catches both activation transport and Nemotron-H's sparse cache index
         # mapping without downloading any model weights.
         layer_count = group.size() * 2
-        pattern = (["M", "-", "*", "-"] * ((layer_count + 3) // 4))[
-            :layer_count
-        ]
+        pattern = (["M", "-", "*", "-"] * ((layer_count + 3) // 4))[:layer_count]
         args = ModelArgs(
             model_type="nemotron_h",
             vocab_size=32,

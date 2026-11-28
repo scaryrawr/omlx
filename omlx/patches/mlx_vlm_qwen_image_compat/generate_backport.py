@@ -80,7 +80,9 @@ def pinned_pipeline_target(base: str, pinned: str, native: str) -> str:
         raise ValueError("Pinned pipeline differs beyond the expected eager evaluation")
     anchor = pinned[: pinned.index(EAGER_EVAL)].splitlines(keepends=True)[-1]
     if native.count(anchor) != 1:
-        raise ValueError("Native pipeline does not have a unique eager evaluation anchor")
+        raise ValueError(
+            "Native pipeline does not have a unique eager evaluation anchor"
+        )
     return native.replace(anchor, anchor + EAGER_EVAL, 1)
 
 
@@ -176,7 +178,9 @@ def main() -> None:
     patched = _prepare_sources(pinned_sources, profiles)
     if set(patched) != set(MODULES):
         raise ValueError("Expected the complete pinned-to-native backport")
-    if _prepare_sources(native_sources, profiles) or _prepare_sources(patched, profiles):
+    if _prepare_sources(native_sources, profiles) or _prepare_sources(
+        patched, profiles
+    ):
         raise ValueError("Expected both complete native source profiles to be no-ops")
 
     output = Path(__file__).with_name("_backport.py")
@@ -184,9 +188,7 @@ def main() -> None:
     if args.verify_from_base:
         if output.read_text() != rendered:
             raise ValueError("Generated backport does not match the verified sources")
-        print(
-            "Legacy and pinned backports and generated data verified from local base"
-        )
+        print("Legacy and pinned backports and generated data verified from local base")
     else:
         output.write_text(rendered)
         print(f"Wrote {output}")

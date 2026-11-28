@@ -35,7 +35,7 @@ BonjourSpawner = Callable[[Sequence[str]], _BonjourProcess]
 
 
 def _spawn_bonjour(args: Sequence[str]) -> _BonjourProcess:
-    return subprocess.Popen(  # noqa: S603 - fixed dns-sd executable and arguments
+    return subprocess.Popen(
         tuple(args),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -161,7 +161,7 @@ from pathlib import Path  # noqa: E402
 
 from .._version import __version__ as _omlx_version  # noqa: E402
 
-logger = logging.getLogger(__name__)  # noqa: E402
+logger = logging.getLogger(__name__)
 _probe_diagnostics = threading.local()
 
 MDNS_SERVICE_TYPE = "_omlx._tcp.local."
@@ -328,7 +328,7 @@ def _rdma_fabric_caps(
     ):
         return
     try:
-        status = runner(  # noqa: S603 - fixed system executable
+        status = runner(
             [rdma_ctl, "status"],
             capture_output=True,
             text=True,
@@ -340,7 +340,7 @@ def _rdma_fabric_caps(
             and status.stdout.strip().splitlines()
             and status.stdout.strip().splitlines()[0].strip().lower() == "enabled"
         )
-        devices = runner(  # noqa: S603 - fixed system executable
+        devices = runner(
             [ibv_devices], capture_output=True, text=True, timeout=5.0, check=False
         )
         # Same shape as probe.py's _RDMA_DEVICE_RE: device lines are
@@ -366,7 +366,7 @@ def local_caps() -> PeerCaps:
     caps = PeerCaps()
     try:
         if sys.platform == "darwin":
-            chip = subprocess.run(  # noqa: S603 - fixed system executable
+            chip = subprocess.run(
                 ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
                 capture_output=True,
                 text=True,
@@ -375,7 +375,7 @@ def local_caps() -> PeerCaps:
             )
             if chip.returncode == 0:
                 caps.chip = chip.stdout.strip()[:128]
-            mem = subprocess.run(  # noqa: S603 - fixed system executable
+            mem = subprocess.run(
                 ["/usr/sbin/sysctl", "-n", "hw.memsize"],
                 capture_output=True,
                 text=True,
@@ -493,7 +493,7 @@ def _default_interface_lister() -> list[str]:
     names: list[str] = []
     if sys.platform == "darwin":
         try:
-            result = subprocess.run(  # noqa: S603 - fixed system executable
+            result = subprocess.run(
                 ["/sbin/ifconfig", "-a"],
                 capture_output=True,
                 text=True,
@@ -533,7 +533,7 @@ def local_addr_dicts() -> list[dict[str, str]]:
     addrs: list[dict[str, str]] = []
     if sys.platform == "darwin":
         try:
-            result = subprocess.run(  # noqa: S603 - fixed system executable
+            result = subprocess.run(
                 ["/sbin/ifconfig", "-a"],
                 capture_output=True,
                 text=True,
@@ -581,7 +581,7 @@ def _http_probe_node_id(ip: str, port: int, timeout: float) -> dict[str, Any] | 
     url = f"http://{host}:{port}/api/cluster/node_id"
     _probe_diagnostics.value = {"transport": "direct", "error": ""}
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - cluster LAN probe of an announced address
+        with urllib.request.urlopen(url, timeout=timeout) as response:
             payload = json.loads(response.read(65536).decode("utf-8"))
     except ValueError as exc:
         _probe_diagnostics.value = {
@@ -700,7 +700,7 @@ def _local_ports() -> tuple[frozenset[str], frozenset[str]]:
         if _port_cache[1] is not None and now - _port_cache[0] < _LINK_CACHE_S:
             return _port_cache[1]
     try:
-        output = subprocess.run(  # noqa: S603 - fixed system executable
+        output = subprocess.run(
             ["/usr/sbin/networksetup", "-listallhardwareports"],
             capture_output=True,
             text=True,
@@ -740,7 +740,7 @@ def interface_link(ip: str) -> PeerLink | None:
         if cached is not None and now - cached[0] < _LINK_CACHE_S:
             return cached[1]
     try:
-        output = subprocess.run(  # noqa: S603 - fixed system executable
+        output = subprocess.run(
             ["/sbin/route", "-n", "get", ip],
             capture_output=True,
             text=True,
@@ -1642,7 +1642,7 @@ class DiscoveryService:
         if executable is None:
             return None
         try:
-            result = subprocess.run(  # noqa: S603 - tailscale CLI lookup
+            result = subprocess.run(
                 [executable, "status", "--json"],
                 capture_output=True,
                 text=True,

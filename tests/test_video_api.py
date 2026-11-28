@@ -123,7 +123,9 @@ async def test_models_status_reports_video_runtime_readiness(video_client, monke
             tool: f"/bin/{tool}" for tool in ("ffmpeg", "ffprobe") if tool != missing
         }
         monkeypatch.setattr("omlx.utils.optional_deps.which", paths.get)
-        assert (await list_models_status())["video_generation_ready"] is (missing is None)
+        assert (await list_models_status())["video_generation_ready"] is (
+            missing is None
+        )
 
 
 async def test_create_poll_download_list_delete_and_recover(video_client):
@@ -238,7 +240,9 @@ async def test_failed_reference_save_removes_unsubmitted_job(video_client, monke
     assert list(jobs.directory.glob("video_*")) == []
 
 
-async def test_failed_job_persistence_removes_unsubmitted_job(video_client, monkeypatch):
+async def test_failed_job_persistence_removes_unsubmitted_job(
+    video_client, monkeypatch
+):
     import omlx.video_jobs as video_jobs
 
     client, jobs, _ = video_client
@@ -429,7 +433,9 @@ async def test_queued_job_rejects_a_changed_checkpoint(video_client, tmp_path):
     assert pool.engine.plan.prompt == "First"
 
 
-async def test_shutdown_stops_dispatch_after_teardown_failure(video_client, monkeypatch, caplog):
+async def test_shutdown_stops_dispatch_after_teardown_failure(
+    video_client, monkeypatch, caplog
+):
     client, jobs, pool = video_client
 
     async def fail_on_cancel(plan, directory, owner_fd):

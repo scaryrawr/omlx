@@ -167,9 +167,7 @@ def _patch_vlm_exact_verifier() -> None:
     except ImportError:
         return
 
-    verifier = q35.LanguageModel.__call__.__globals__.get(
-        "_EXACT_SPECULATIVE_VERIFIER"
-    )
+    verifier = q35.LanguageModel.__call__.__globals__.get("_EXACT_SPECULATIVE_VERIFIER")
     if verifier is None:
         return
     verifier_cls = type(verifier)

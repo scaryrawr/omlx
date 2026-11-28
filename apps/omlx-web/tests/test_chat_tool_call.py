@@ -26,7 +26,9 @@ def test_limit_is_checked_before_executing_an_extra_tool_round(stream_response_s
     assert "MAX_TOOL_DEPTH" not in stream_response_source
 
 
-def test_final_answer_is_still_allowed_after_the_last_tool_round(stream_response_source):
+def test_final_answer_is_still_allowed_after_the_last_tool_round(
+    stream_response_source,
+):
     assert stream_response_source.index(
         "if (toolCalls.length > 0) {"
     ) < stream_response_source.index("if (depth >= maxToolRounds)")
@@ -36,7 +38,9 @@ def test_root_request_owns_timing_and_stream_cleanup(stream_response_source):
     assert "context._requestStartedAt = Date.now();" in stream_response_source
     assert "Date.now() - context._requestStartedAt" in stream_response_source
     assert stream_response_source.count("this.resetStreamSession(stream") == 2
-    finally_body = stream_response_source[stream_response_source.rindex("} finally {") :]
+    finally_body = stream_response_source[
+        stream_response_source.rindex("} finally {") :
+    ]
     assert finally_body.index("if (depth === 0) {") < finally_body.index(
         "this.resetStreamSession(stream, { preserveFinalContent: true });"
     )

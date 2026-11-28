@@ -12,9 +12,7 @@ from omlx.model_settings import ModelSettings
 class TestGetMaxContextWindow:
     """Tests for get_max_context_window() priority logic."""
 
-    def _make_server_state(
-        self, global_max_ctx=32768, policy_cap=None
-    ):
+    def _make_server_state(self, global_max_ctx=32768, policy_cap=None):
         """Create a mock server state with given global
         ``max_context_window`` fallback and optional
         ``max_context_window_policy`` cap."""
@@ -71,15 +69,11 @@ class TestGetMaxContextWindow:
             result = get_max_context_window(None)
             assert result == 16384
 
-    def _mount_native_and_policy(
-        self, native_ctx: int | None, policy_cap: int | None
-    ):
+    def _mount_native_and_policy(self, native_ctx: int | None, policy_cap: int | None):
         """Mount a server state with a model that has the given native
         context length, the policy field set to ``policy_cap``, and no
         per-model override."""
-        state = self._make_server_state(
-            global_max_ctx=32768, policy_cap=policy_cap
-        )
+        state = self._make_server_state(global_max_ctx=32768, policy_cap=policy_cap)
         mock_manager = MagicMock()
         mock_manager.get_settings_for_request.return_value = ModelSettings(
             max_context_window=None
@@ -120,9 +114,7 @@ class TestGetMaxContextWindow:
         exceed the policy."""
         from omlx.server import get_max_context_window
 
-        state = self._mount_native_and_policy(
-            native_ctx=100_000, policy_cap=64_000
-        )
+        state = self._mount_native_and_policy(native_ctx=100_000, policy_cap=64_000)
         # Add a per-model override above both native and policy
         state.settings_manager = MagicMock()
         state.settings_manager.get_settings_for_request.return_value = ModelSettings(
@@ -274,9 +266,7 @@ class TestGetRerankMaxLength:
         from omlx.server import get_rerank_max_length
 
         settings = ModelSettings(max_context_window=4096)
-        with patch(
-            "omlx.server.get_model_settings_for_request", return_value=settings
-        ):
+        with patch("omlx.server.get_model_settings_for_request", return_value=settings):
             assert get_rerank_max_length("m") == 4096
 
     def test_no_override_defers_to_model_default(self):

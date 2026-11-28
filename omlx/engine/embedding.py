@@ -197,7 +197,9 @@ class EmbeddingEngine(BaseNonStreamingEngine):
             # A batch pads every input to its longest member, so a batch of mixed lengths spends
             # most of its compute on padding. Group similar lengths together and restore the
             # caller's order before returning, which leaves the response contract unchanged.
-            order = sorted(range(len(input_items)), key=lambda i: _input_length(input_items[i]))
+            order = sorted(
+                range(len(input_items)), key=lambda i: _input_length(input_items[i])
+            )
             ordered_items = [input_items[i] for i in order]
 
             fairness = self._fairness
@@ -206,7 +208,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
                 # Limit each forward while another engine is decoding.
                 cap = fairness.chunk_cap()
                 size = batch_size if cap is None else max(1, min(batch_size, cap))
-                batch = ordered_items[index:index + size]
+                batch = ordered_items[index : index + size]
                 index += len(batch)
 
                 def _embed_sync(batch_inputs=batch):

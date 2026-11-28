@@ -256,7 +256,9 @@ def advance(batch, batch_state):
             per_forward = max(1, limit // (width + 1))
             for start in range(0, len(members), per_forward):
                 chunk = members[start : start + per_forward]
-                if len(chunk) > 1 and _verify_rows_together(batch, batch_state, host, chunk, replacements):
+                if len(chunk) > 1 and _verify_rows_together(
+                    batch, batch_state, host, chunk, replacements
+                ):
                     together.update(chunk)
     for index, uid in enumerate(batch.uids):
         state = batch_state.states[uid]
@@ -270,7 +272,7 @@ def advance(batch, batch_state):
             batch._token_context[index] = row._token_context[0]
             continue
         if state.next_main is None or state.drafts is None:
-            raise bg._MtpStepFallback(f"missing draft state for uid={uid}")
+            raise bg._MtpStepFallbackError(f"missing draft state for uid={uid}")
         groups[int(state.drafts.shape[0])].append((index, row, state))
 
     for depth, rows in groups.items():
@@ -299,7 +301,12 @@ def _verify_rows_together(batch, batch_state, host, indices, replacements):
     each request's own acceptance, rollback and next draft. False leaves them to the
     per-request path."""
     rows = [
-        (index, bg._make_row_batch(batch, index, state=batch_state.states[batch.uids[index]]))
+        (
+            index,
+            bg._make_row_batch(
+                batch, index, state=batch_state.states[batch.uids[index]]
+            ),
+        )
         for index in indices
     ]
     states = [batch_state.states[batch.uids[index]] for index in indices]
@@ -321,7 +328,12 @@ def _verify_rows_together(batch, batch_state, host, indices, replacements):
             row,
             state,
             # A verify-only cluster rank gets no hidden: it never drafts.
-            verify_result=(logits[i : i + 1], None if hidden is None else hidden[i : i + 1], None, None),
+            verify_result=(
+                logits[i : i + 1],
+                None if hidden is None else hidden[i : i + 1],
+                None,
+                None,
+            ),
             verify_ms=verify_ms,
             draft_jobs=jobs,
         )
@@ -426,7 +438,7 @@ def _advance_group(batch, depth, rows, replacements, *, cache=None):
         if accepted not in committed:
             view = copy.deepcopy(cache)
             if not bg._chain_rollback(batch.model, view, accepted, depth, gdn):
-                raise bg._MtpStepFallback("batched cache rejects scalar rollback")
+                raise bg._MtpStepFallbackError("batched cache rejects scalar rollback")
             committed[accepted] = view
         result = [layer.extract(row_index) for layer in committed[accepted]]
         bg._clear_rollback(result)

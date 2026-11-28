@@ -329,8 +329,7 @@ def apply_qwen35_fa256_attention_patch(min_kv_len: int | None = None) -> bool:
         # head-dim-256 causal prefills with at least 1024 queries. It beats
         # this pre-NAX steel kernel, so intercepting it would regress prefill.
         logger.info(
-            "Qwen FA-256 steel patch skipped: NAX GPU, MLX native fused SDPA "
-            "is faster"
+            "Qwen FA-256 steel patch skipped: NAX GPU, MLX native fused SDPA is faster"
         )
         return False
 
@@ -392,7 +391,9 @@ def apply_qwen35_fa256_attention_patch(min_kv_len: int | None = None) -> bool:
             mask: mx.array | None,
             sinks: mx.array | None = None,
         ) -> mx.array:
-            m1_out = _m1_d512_attention(queries, keys, values, cache, scale, mask, sinks)
+            m1_out = _m1_d512_attention(
+                queries, keys, values, cache, scale, mask, sinks
+            )
             if m1_out is not None:
                 return m1_out
             if _should_route(queries, keys, cache, mask, sinks, min_kv_len):

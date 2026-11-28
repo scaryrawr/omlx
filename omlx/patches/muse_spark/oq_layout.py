@@ -268,8 +268,7 @@ class UpstreamWriter:
                 spec = {**spec, "global_scale": True}
             if out.setdefault(name, spec) != spec:
                 raise ValueError(
-                    f"The parts of {name} need one quantization: "
-                    f"{out[name]} and {spec}"
+                    f"The parts of {name} need one quantization: {out[name]} and {spec}"
                 )
         return out
 

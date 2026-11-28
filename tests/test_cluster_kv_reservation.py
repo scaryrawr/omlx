@@ -21,8 +21,9 @@ from omlx.cluster.planner import (
 GIB = 1024**3
 
 
-def _model(layers=32, layer_gib=2, kv_per_token_per_layer=0, heads=48,
-           kv_replicated=False):
+def _model(
+    layers=32, layer_gib=2, kv_per_token_per_layer=0, heads=48, kv_replicated=False
+):
     return ModelLayout(
         source="test",
         fixed_weight_bytes=1 * GIB,
@@ -36,8 +37,12 @@ def _model(layers=32, layer_gib=2, kv_per_token_per_layer=0, heads=48,
 
 def _nodes(count, capacity_gib=64):
     return [
-        NodeBudget(node_id=f"n{i}", capacity_bytes=capacity_gib * GIB,
-                   reserve_bytes=2 * GIB, rank=i)
+        NodeBudget(
+            node_id=f"n{i}",
+            capacity_bytes=capacity_gib * GIB,
+            reserve_bytes=2 * GIB,
+            rank=i,
+        )
         for i in range(count)
     ]
 
@@ -93,12 +98,19 @@ def test_mla_models_are_not_over_counted():
     which would refuse plans that fit comfortably.
     """
 
-    mla = {"kv_lora_rank": 512, "qk_rope_head_dim": 64,
-           "num_attention_heads": 64, "num_key_value_heads": 64, "head_dim": 128}
+    mla = {
+        "kv_lora_rank": 512,
+        "qk_rope_head_dim": 64,
+        "num_attention_heads": 64,
+        "num_key_value_heads": 64,
+        "head_dim": 128,
+    }
     uniform = {"num_attention_heads": 64, "num_key_value_heads": 64, "head_dim": 128}
 
     assert _kv_bytes_per_token_per_layer(mla) == (512 + 64) * 2
-    assert _kv_bytes_per_token_per_layer(mla) < _kv_bytes_per_token_per_layer(uniform) / 10
+    assert (
+        _kv_bytes_per_token_per_layer(mla) < _kv_bytes_per_token_per_layer(uniform) / 10
+    )
     assert _kv_cache_replicated_across_tp(mla) is True
     assert _kv_cache_replicated_across_tp(uniform) is False
 
@@ -172,8 +184,12 @@ def test_a_node_reserves_only_for_the_layers_it_holds():
 
     model = _model(layers=32, layer_gib=1, kv_per_token_per_layer=64 * 1024)
     nodes = [
-        NodeBudget(node_id="small", capacity_bytes=20 * GIB, reserve_bytes=2 * GIB, rank=0),
-        NodeBudget(node_id="big", capacity_bytes=90 * GIB, reserve_bytes=2 * GIB, rank=1),
+        NodeBudget(
+            node_id="small", capacity_bytes=20 * GIB, reserve_bytes=2 * GIB, rank=0
+        ),
+        NodeBudget(
+            node_id="big", capacity_bytes=90 * GIB, reserve_bytes=2 * GIB, rank=1
+        ),
     ]
     plan = plan_unequal_pipeline(model, nodes, context_tokens=8192)
     by_id = {a.node_id: a for a in plan.assignments}
@@ -244,8 +260,12 @@ def test_tensor_and_pipeline_reserve_the_same_kv_per_node():
     """
 
     model = _model(layers=32, layer_gib=1, kv_per_token_per_layer=64 * 1024, heads=48)
-    pipelined = plan_hybrid(model, _nodes(2, 90), tensor_parallel_size=1, context_tokens=8192)
-    tensored = plan_hybrid(model, _nodes(2, 90), tensor_parallel_size=2, context_tokens=8192)
+    pipelined = plan_hybrid(
+        model, _nodes(2, 90), tensor_parallel_size=1, context_tokens=8192
+    )
+    tensored = plan_hybrid(
+        model, _nodes(2, 90), tensor_parallel_size=2, context_tokens=8192
+    )
 
     assert max(a.kv_cache_bytes for a in tensored.assignments) == max(
         a.kv_cache_bytes for a in pipelined.assignments
@@ -260,12 +280,19 @@ def test_an_mla_cache_is_reserved_whole_on_every_tp_member():
     where standard attention reserves the same bytes either way.
     """
 
-    model = _model(layers=32, layer_gib=1, kv_per_token_per_layer=1152,
-                   heads=64, kv_replicated=True)
-    pipelined = plan_hybrid(model, _nodes(2, 90), tensor_parallel_size=1,
-                            context_tokens=8192)
-    tensored = plan_hybrid(model, _nodes(2, 90), tensor_parallel_size=2,
-                           context_tokens=8192)
+    model = _model(
+        layers=32,
+        layer_gib=1,
+        kv_per_token_per_layer=1152,
+        heads=64,
+        kv_replicated=True,
+    )
+    pipelined = plan_hybrid(
+        model, _nodes(2, 90), tensor_parallel_size=1, context_tokens=8192
+    )
+    tensored = plan_hybrid(
+        model, _nodes(2, 90), tensor_parallel_size=2, context_tokens=8192
+    )
 
     assert max(a.kv_cache_bytes for a in tensored.assignments) == 2 * max(
         a.kv_cache_bytes for a in pipelined.assignments
@@ -294,11 +321,13 @@ def test_a_replicated_cache_that_only_fits_divided_is_refused():
     fits_divided = small_layers(False)
     replicated = small_layers(True)
 
-    assert plan_hybrid(fits_divided, _nodes(2, 14), tensor_parallel_size=2,
-                       context_tokens=8192)
+    assert plan_hybrid(
+        fits_divided, _nodes(2, 14), tensor_parallel_size=2, context_tokens=8192
+    )
     with pytest.raises(PlanningError):
-        plan_hybrid(replicated, _nodes(2, 14), tensor_parallel_size=2,
-                    context_tokens=8192)
+        plan_hybrid(
+            replicated, _nodes(2, 14), tensor_parallel_size=2, context_tokens=8192
+        )
 
 
 def test_kv_replication_survives_the_wire():

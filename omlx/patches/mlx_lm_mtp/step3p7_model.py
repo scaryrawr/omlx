@@ -250,7 +250,6 @@ def _patch_step3p5_model(step3p5: Any) -> None:
     if init_wrapped and call_owned:
         return
 
-    import mlx.core as mx
     from mlx_lm.models.base import create_attention_mask
     from mlx_lm.models.cache import KVCache, RotatingKVCache
 

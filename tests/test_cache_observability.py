@@ -53,7 +53,6 @@ def _make_counters(
 
 
 class TestCacheRateTrackerSnapshot:
-
     def test_empty_tracker_returns_empty_rates(self):
         tracker = CacheRateTracker()
         result = tracker.get_rates()
@@ -82,7 +81,6 @@ class TestCacheRateTrackerSnapshot:
 
 
 class TestCacheRateTrackerRates:
-
     def _tracker_with_two_snapshots(self, old_counters, new_counters, elapsed=60.0):
         tracker = CacheRateTracker(min_interval=0.0)
         fake_time = [1000.0]
@@ -184,7 +182,6 @@ class TestCacheRateTrackerRates:
 
 
 class TestCacheRateTrackerSnapshotAndGetRates:
-
     def test_combines_snapshot_and_rates(self):
         tracker = CacheRateTracker(min_interval=0.0)
 
@@ -201,7 +198,6 @@ class TestCacheRateTrackerSnapshotAndGetRates:
 
 
 class TestCacheRateTrackerThreadSafety:
-
     def test_concurrent_snapshot_and_read(self):
         tracker = CacheRateTracker(min_interval=0.0)
         errors = []
@@ -243,7 +239,6 @@ class TestCacheRateTrackerThreadSafety:
 
 
 class TestCacheRateTrackerClear:
-
     def test_clear_resets_state(self):
         tracker = CacheRateTracker(min_interval=0.0)
         tracker.maybe_snapshot(_make_counters(prefix_hits=100))

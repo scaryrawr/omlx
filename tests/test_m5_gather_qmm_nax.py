@@ -35,7 +35,7 @@ def _on_nax() -> bool:
         from omlx.custom_kernels.nax import is_nax_available
 
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -63,9 +63,9 @@ def _quantized(E, N, K, mode, bits, gs, dtype, seed=0):
 
 def _rows(counts, K, dtype, seed=1):
     idx = mx.array(np.repeat(np.arange(len(counts)), counts).astype(np.uint32))
-    x = (mx.random.normal((int(idx.shape[0]), 1, K), key=mx.random.key(seed)) * 0.5).astype(
-        dtype
-    )
+    x = (
+        mx.random.normal((int(idx.shape[0]), 1, K), key=mx.random.key(seed)) * 0.5
+    ).astype(dtype)
     return x, idx
 
 
@@ -127,8 +127,16 @@ def test_supports_gating():
     s32u8 = mx.zeros((E, N, K // 32), dtype=mx.uint8)
 
     assert nax.supports(x, w4, s64, s64, idx, 64, 4, "affine")
-    assert nax.supports(x.astype(mx.float16), w4, s64.astype(mx.float16),
-                        s64.astype(mx.float16), idx, 64, 4, "affine")
+    assert nax.supports(
+        x.astype(mx.float16),
+        w4,
+        s64.astype(mx.float16),
+        s64.astype(mx.float16),
+        idx,
+        64,
+        4,
+        "affine",
+    )
     assert nax.supports(x, w4, s32u8, None, idx, 32, 4, "mxfp4")
     s16u8 = mx.zeros((E, N, K // 16), dtype=mx.uint8)
     assert nax.supports(x, w4, s16u8, None, idx, 16, 4, "nvfp4")
@@ -275,8 +283,12 @@ def test_ragged_k_tail_never_reads_past_the_row():
     E, N, K = 4, 64, 96
     wq, scales, biases, wd = _quantized(E, N, K, "affine", 4, 32, mx.bfloat16)
     nan = mx.full((64,), float("nan"), dtype=mx.bfloat16)
-    s_view = mx.concatenate([scales.reshape(-1), nan])[: scales.size].reshape(scales.shape)
-    b_view = mx.concatenate([biases.reshape(-1), nan])[: biases.size].reshape(biases.shape)
+    s_view = mx.concatenate([scales.reshape(-1), nan])[: scales.size].reshape(
+        scales.shape
+    )
+    b_view = mx.concatenate([biases.reshape(-1), nan])[: biases.size].reshape(
+        biases.shape
+    )
     x, idx = _rows((0, 0, 0, 40), K, mx.bfloat16)
     out = _nax(x, wq, s_view, b_view, idx, "affine", 4, 32)
     assert not mx.any(mx.isnan(out)).item()
@@ -443,7 +455,14 @@ def test_wrapper_routes_sorted_calls_to_nax(installed, monkeypatch):
     wq, scales, biases, wd = _quantized(E, N, K, "affine", 4, 32, mx.bfloat16)
     x, idx = _rows((20, 0, 50, 7, 64, 1, 30, 9), K, mx.bfloat16)
     out = mx.gather_qmm(
-        x, wq, scales, biases, rhs_indices=idx, transpose=True, group_size=32, bits=4,
+        x,
+        wq,
+        scales,
+        biases,
+        rhs_indices=idx,
+        transpose=True,
+        group_size=32,
+        bits=4,
         sorted_indices=True,
     )
     assert calls == [True]
@@ -466,8 +485,13 @@ def test_wrapper_routes_sorted_calls_to_nax(installed, monkeypatch):
     # Unsorted calls and lhs gathers never take the route.
     mx.gather_qmm(x, wq, scales, biases, rhs_indices=idx, group_size=64, bits=4)
     mx.gather_qmm(
-        x, wq, scales, biases, lhs_indices=mx.arange(x.shape[0]).astype(mx.uint32),
-        rhs_indices=idx, sorted_indices=True,
+        x,
+        wq,
+        scales,
+        biases,
+        lhs_indices=mx.arange(x.shape[0]).astype(mx.uint32),
+        rhs_indices=idx,
+        sorted_indices=True,
     )
     assert calls == [True, True]
 
@@ -483,7 +507,14 @@ def test_failed_self_test_falls_back(installed, monkeypatch):
         nax.sorted_gather_qmm(x, wq, scales, biases, idx, group_size=64, bits=4) is None
     )
     out = mx.gather_qmm(
-        x, wq, scales, biases, rhs_indices=idx, group_size=64, bits=4, sorted_indices=True
+        x,
+        wq,
+        scales,
+        biases,
+        rhs_indices=idx,
+        group_size=64,
+        bits=4,
+        sorted_indices=True,
     )
     ref = _stock_sorted(x, wq, scales, biases, idx, "affine", 4, 64)
     assert mx.array_equal(out, ref).item()
@@ -554,8 +585,16 @@ def _unfused(x, wq, scales, biases, idx, mode, bits, gs, limit, plan=None):
 
 def _fused(x, wq, scales, biases, idx, mode, bits, gs, limit, plan=None):
     out = nax.sorted_gather_qmm_swiglu(
-        x, wq, scales, biases, idx, group_size=gs, bits=bits, mode=mode,
-        limit=limit, plan=plan,
+        x,
+        wq,
+        scales,
+        biases,
+        idx,
+        group_size=gs,
+        bits=bits,
+        mode=mode,
+        limit=limit,
+        plan=plan,
     )
     assert out is not None
     return out
@@ -919,9 +958,9 @@ def test_sort_routes_matches_mlx_lm_gather_sort(tokens):
     from mlx_lm.models.switch_layers import _gather_sort
 
     h = mx.random.normal((2, tokens, 1, 1, 32)).astype(mx.bfloat16)
-    inds = mx.argpartition(
-        -mx.random.uniform(shape=(2, tokens, 16)), kth=5, axis=-1
-    )[..., :6]
+    inds = mx.argpartition(-mx.random.uniform(shape=(2, tokens, 16)), kth=5, axis=-1)[
+        ..., :6
+    ]
     x_tok, row_map, idx, inv = sort_routes(h, inds)
     x_ref, idx_ref, inv_ref = _gather_sort(h, inds)
     assert x_tok.shape == (2 * tokens, 1, 32) and row_map.dtype == mx.uint32
@@ -1041,8 +1080,19 @@ def _oai_unfused(x, gate, up, scales, idx, mode, gs, consts, plan=None):
 def _oai_fused(x, gate, up, scales, idx, mode, gs, consts, plan=None, row_map=None):
     alpha, limit, beta = consts
     return nax.sorted_gather_qmm_swiglu_oai(
-        x, gate, up, idx, group_size=gs, bits=4, mode=mode, alpha=alpha,
-        limit=limit, beta=beta, expert_scales=scales, plan=plan, row_map=row_map,
+        x,
+        gate,
+        up,
+        idx,
+        group_size=gs,
+        bits=4,
+        mode=mode,
+        alpha=alpha,
+        limit=limit,
+        beta=beta,
+        expert_scales=scales,
+        plan=plan,
+        row_map=row_map,
     )
 
 
@@ -1083,8 +1133,18 @@ def test_split_swiglu_oai_unsupported_calls_return_none():
             return w, mx.zeros((E, rows, K // gs), dtype=mx.uint8)
 
         return nax.sorted_gather_qmm_swiglu_oai(
-            x, operand(n), operand(n_up), idx, group_size=gs, bits=4, mode=mode,
-            alpha=1.702, limit=7.0, beta=1.0, expert_scales=scales, verify=False,
+            x,
+            operand(n),
+            operand(n_up),
+            idx,
+            group_size=gs,
+            bits=4,
+            mode=mode,
+            alpha=1.702,
+            limit=7.0,
+            beta=1.0,
+            expert_scales=scales,
+            verify=False,
         )
 
     # Affine operands, mismatched gate and up, a scale per row.
@@ -1326,7 +1386,9 @@ def test_glm_dsa_switch_glu_row_map(installed, launches, monkeypatch, quant):
             glu.inverse_scatter = inverse_scatter
             for weighted in (False, True):
                 _check_row_map_on_off(
-                    lambda: glu(x, inds, scores=scores, weighted_sum=weighted),
+                    lambda inds=inds, scores=scores, weighted=weighted, x=x: glu(
+                        x, inds, scores=scores, weighted_sum=weighted
+                    ),
                     launches,
                     monkeypatch,
                 )
@@ -1343,7 +1405,9 @@ def test_deepseek_v4_switch_glu_row_map(installed, launches, monkeypatch):
         x, inds, scores = _inputs(tokens)
         for weighted in (False, True):
             _check_row_map_on_off(
-                lambda: glu(x, inds, scores=scores, weighted_sum=weighted),
+                lambda inds=inds, scores=scores, weighted=weighted, x=x: glu(
+                    x, inds, scores=scores, weighted_sum=weighted
+                ),
                 launches,
                 monkeypatch,
             )
@@ -1453,7 +1517,9 @@ def test_qwen_weighted_sum_prefill_row_map(
     for tokens in (96, 300):
         x, inds, scores = _inputs(tokens)
         _check_row_map_on_off(
-            lambda: ws._native_switch_weighted_sum(glu, x, inds, scores, kernel),
+            lambda inds=inds, scores=scores, x=x: ws._native_switch_weighted_sum(
+                glu, x, inds, scores, kernel
+            ),
             launches,
             monkeypatch,
         )
@@ -1465,4 +1531,6 @@ def test_qwen_regrouped_call_row_map(installed, launches, monkeypatch, qwen_regr
     glu = _regrouped(qwen_regroup, _qwen_glu())
     for tokens in (96, 300):
         x, inds, _ = _inputs(tokens)
-        _check_row_map_on_off(lambda: glu(x, inds), launches, monkeypatch)
+        _check_row_map_on_off(
+            lambda inds=inds, x=x: glu(x, inds), launches, monkeypatch
+        )

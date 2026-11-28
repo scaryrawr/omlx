@@ -524,9 +524,7 @@ def oq_a8_decode_weights(
     in device memory.
     """
     if _ext is None or not hasattr(_ext, "oq_a8_decode_weights"):
-        raise RuntimeError(
-            "oq_a8_decode_weights native kernel is unavailable"
-        )
+        raise RuntimeError("oq_a8_decode_weights native kernel is unavailable")
     return _ext.oq_a8_decode_weights(
         weight,
         bits,
@@ -601,9 +599,7 @@ def mxfp4_gather_qmm_pair_blocks(
             variant,
             **_native_stream_kwargs(stream),
         )
-    raise RuntimeError(
-        "mxfp4_gather_qmm_pair_blocks native kernel is unavailable"
-    )
+    raise RuntimeError("mxfp4_gather_qmm_pair_blocks native kernel is unavailable")
 
 
 def mxfp4_gather_qmm_pair_concat_blocks(
@@ -618,9 +614,7 @@ def mxfp4_gather_qmm_pair_concat_blocks(
     *,
     stream=None,
 ) -> mx.array:
-    if _ext is not None and hasattr(
-        _ext, "mxfp4_gather_qmm_pair_concat_blocks"
-    ):
+    if _ext is not None and hasattr(_ext, "mxfp4_gather_qmm_pair_concat_blocks"):
         return _ext.mxfp4_gather_qmm_pair_concat_blocks(
             x,
             weight0,
@@ -682,9 +676,7 @@ def affine_gather_qmm_pair_concat_blocks(
     *,
     stream=None,
 ) -> mx.array:
-    if _ext is not None and hasattr(
-        _ext, "affine_gather_qmm_pair_concat_blocks"
-    ):
+    if _ext is not None and hasattr(_ext, "affine_gather_qmm_pair_concat_blocks"):
         return _ext.affine_gather_qmm_pair_concat_blocks(
             x,
             weight0,

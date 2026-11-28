@@ -993,9 +993,7 @@ def expert_gate_up(x, token, experts, gate, up, weights, limit, quantize):
         threadgroup=(_TILE_THREADS, 1, 1),
         output_shapes=[(routes, inner)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def expert_down(act, experts, down):
@@ -1023,9 +1021,7 @@ def expert_down(act, experts, down):
         threadgroup=(_TILE_THREADS, 1, 1),
         output_shapes=[(act.shape[0], out)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def mx_experts_fit(banks) -> bool:
@@ -1112,9 +1108,7 @@ def expert_down_mx(codes, scales, experts, down):
         threadgroup=(_TILE_THREADS, 1, 1),
         output_shapes=[(codes.shape[0], out)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]
 
 
 def index_tc_fits(q: mx.array) -> bool:
@@ -1138,9 +1132,7 @@ def _index_scores_tc(q, keys, weights, start, ratio):
         threadgroup=(256, 1, 1),
         output_shapes=[(rows, n)],
         output_dtypes=[mx.float32],
-    )[
-        0
-    ]
+    )[0]
 
 
 def index_topk(q, keys, weights, start, ratio, count, tensor_cores=False):
@@ -1274,9 +1266,7 @@ def hc_post(x, residual, post, comb):
         threadgroup=(256, 1, 1),
         output_shapes=[residual.shape],
         output_dtypes=[x.dtype],
-    )[
-        0
-    ]
+    )[0]
 
 
 def hc_pre_norm(x, pre, weight, eps):
@@ -1356,9 +1346,7 @@ def combine(routed, inverse, shared):
         threadgroup=(256, 1, 1),
         output_shapes=[shared.shape],
         output_dtypes=[shared.dtype],
-    )[
-        0
-    ]
+    )[0]
 
 
 def _slots(window, pooled, wi, ci):

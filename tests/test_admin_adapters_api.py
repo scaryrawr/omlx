@@ -200,7 +200,9 @@ async def set_base(base_id, adapter_id="tuned"):
     )
 
 
-@pytest.mark.parametrize("state", ["automatic", "pinned", "unresolved", "loaded", "loading"])
+@pytest.mark.parametrize(
+    "state", ["automatic", "pinned", "unresolved", "loaded", "loading"]
+)
 async def test_get_base_lists_explicit_choices_and_binding(admin, adapter, state):
     pool, settings, _ = admin
     if state == "pinned":

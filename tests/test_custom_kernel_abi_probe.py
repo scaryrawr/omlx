@@ -151,7 +151,11 @@ def test_pre_fold_build_keeps_historical_call_signature(monkeypatch):
         P = keys.shape[2]
         return mx.zeros((B, H, L, P), dtype=queries.dtype)
 
-    monkeypatch.setattr(index_fast, "_ext", type("E", (), {"dsa_indexer_scores": staticmethod(old_scores)})())
+    monkeypatch.setattr(
+        index_fast,
+        "_ext",
+        type("E", (), {"dsa_indexer_scores": staticmethod(old_scores)})(),
+    )
     monkeypatch.setattr(index_fast, "_EXT_MASK_FOLD", False)
 
     H, D, L, P = 64, 128, 64, 512
@@ -187,7 +191,11 @@ def test_fold_aware_build_receives_mask_kwargs(monkeypatch):
         P = keys.shape[2]
         return mx.zeros((B, H, L, P), dtype=queries.dtype)
 
-    monkeypatch.setattr(index_fast, "_ext", type("E", (), {"dsa_indexer_scores": staticmethod(new_scores)})())
+    monkeypatch.setattr(
+        index_fast,
+        "_ext",
+        type("E", (), {"dsa_indexer_scores": staticmethod(new_scores)})(),
+    )
     monkeypatch.setattr(index_fast, "_EXT_MASK_FOLD", True)
 
     H, D, L, P = 64, 128, 64, 512

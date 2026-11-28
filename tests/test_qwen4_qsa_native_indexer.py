@@ -14,15 +14,12 @@ from omlx.custom_kernels.attention import fast as attention_fast
 from omlx.custom_kernels.sparse_index import fast
 from omlx.patches import mlx_vlm_qwen4_exp_compat as compat
 
-
 compat.apply_mlx_vlm_qwen4_exp_compat_patch()
 qsa_fast = importlib.import_module("mlx_vlm.models.qwen4_exp.qsa_fast")
 
 
 def _native_available() -> bool:
-    return fast.is_native_available() and fast.has_symbol(
-        "qsa_indexer_scores"
-    )
+    return fast.is_native_available() and fast.has_symbol("qsa_indexer_scores")
 
 
 def _reference_scores(q, k, *, mask_ratio=4, mask_q_offset=2048):
@@ -30,9 +27,10 @@ def _reference_scores(q, k, *, mask_ratio=4, mask_q_offset=2048):
     q_bmhd = q.transpose(0, 2, 1, 3)
     scores = q_bmhd.astype(mx.float32) @ k.astype(mx.float32).swapaxes(-1, -2)
     scores = mx.sum(mx.maximum(scores, 0), axis=-2) / math.sqrt(q.shape[-1])
-    valid = mx.arange(k.shape[2])[None, None, :] < (
-        mask_q_offset + mx.arange(q.shape[2])[None, :, None] + 1
-    ) // mask_ratio
+    valid = (
+        mx.arange(k.shape[2])[None, None, :]
+        < (mask_q_offset + mx.arange(q.shape[2])[None, :, None] + 1) // mask_ratio
+    )
     return mx.where(valid, scores, mx.finfo(mx.float32).min)
 
 
@@ -116,9 +114,10 @@ def test_gathered_qsa_native_score_hook_matches_portable_path(monkeypatch):
         offset = kwargs["mask_q_offset"]
         seen_offsets.append(offset)
         scores = qsa_fast._portable_indexer_scores(q, k, 128)
-        valid = mx.arange(k.shape[1])[None, None, :] < (
-            offset + mx.arange(q.shape[1])[None, :, None] + 1
-        ) // 4
+        valid = (
+            mx.arange(k.shape[1])[None, None, :]
+            < (offset + mx.arange(q.shape[1])[None, :, None] + 1) // 4
+        )
         return mx.where(valid, scores, mx.finfo(mx.float32).min)
 
     kwargs = dict(
@@ -205,9 +204,9 @@ def test_qwen4_qsa_native_fuses_exact_float32_pooled_causal_sentinel():
     )
     mx.eval(actual)
 
-    valid = mx.arange(11)[None, None, :] < (
-        offset + mx.arange(5)[None, :, None] + 1
-    ) // 4
+    valid = (
+        mx.arange(11)[None, None, :] < (offset + mx.arange(5)[None, :, None] + 1) // 4
+    )
     invalid_values = mx.where(valid, mx.finfo(mx.float32).min, actual)
     assert mx.array_equal(
         invalid_values,
@@ -285,7 +284,9 @@ def fake_native_topk(monkeypatch):
 
 
 def _topk_rows(rows):
-    return qsa_fast._native_topk_indices(mx.zeros((1, rows, 4096), dtype=mx.float32), 512)
+    return qsa_fast._native_topk_indices(
+        mx.zeros((1, rows, 4096), dtype=mx.float32), 512
+    )
 
 
 @pytest.mark.parametrize("rows", [1, 4])
@@ -329,13 +330,17 @@ def _attention_rows(rows):
 
 
 @pytest.mark.parametrize("rows", [4, 8, 16])
-def test_native_sparse_attention_yields_to_gathered_sdpa_for_verify_rows(fake_native_sparse_attention, rows):
+def test_native_sparse_attention_yields_to_gathered_sdpa_for_verify_rows(
+    fake_native_sparse_attention, rows
+):
     assert _attention_rows(rows) is None
     assert fake_native_sparse_attention == []
     assert qsa_fast._NATIVE_QSA_MAIN_DISABLED is False
 
 
 @pytest.mark.parametrize("rows", [24, 64, 2048])
-def test_native_sparse_attention_keeps_native_for_prefill_rows(fake_native_sparse_attention, rows):
+def test_native_sparse_attention_keeps_native_for_prefill_rows(
+    fake_native_sparse_attention, rows
+):
     assert _attention_rows(rows) is not None
     assert fake_native_sparse_attention == [(1, 24, rows, 256)]

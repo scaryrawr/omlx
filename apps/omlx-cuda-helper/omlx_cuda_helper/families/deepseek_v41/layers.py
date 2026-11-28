@@ -311,8 +311,9 @@ class Block:
         def projection(name, wide_input=False):
             return Projection(weights, base + name, c, wide_input)
 
-        self.attn_norm, self.ffn_norm = tensor("attn_norm.weight"), tensor(
-            "ffn_norm.weight"
+        self.attn_norm, self.ffn_norm = (
+            tensor("attn_norm.weight"),
+            tensor("ffn_norm.weight"),
         )
         self.hc = {
             kind: (
@@ -325,8 +326,9 @@ class Block:
         self.sink = tensor("attn.attn_sink").astype(mx.float32)
         self.wq_a, self.wq_b = projection("attn.wq_a"), projection("attn.wq_b")
         self.wkv, self.wo_b = projection("attn.wkv"), projection("attn.wo_b")
-        self.q_norm, self.kv_norm = tensor("attn.q_norm.weight"), tensor(
-            "attn.kv_norm.weight"
+        self.q_norm, self.kv_norm = (
+            tensor("attn.q_norm.weight"),
+            tensor("attn.kv_norm.weight"),
         )
         wo_a = tensor("attn.wo_a.weight").reshape(c.o_groups, c.o_lora_rank, -1)
         self.wo_a_t = mx.contiguous(wo_a.swapaxes(1, 2))

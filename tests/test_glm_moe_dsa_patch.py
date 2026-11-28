@@ -354,9 +354,7 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
     tokens, dims = 8, 64
     for topk in (8, 6):
         x_sorted = mx.random.normal((tokens * topk, 1, dims), dtype=mx.float16)
-        inv_order = mx.array(
-            list(range(tokens * topk - 1, -1, -1)), dtype=mx.uint32
-        )
+        inv_order = mx.array(list(range(tokens * topk - 1, -1, -1)), dtype=mx.uint32)
         scores = mx.softmax(
             mx.random.normal((tokens, topk), dtype=mx.float32),
             axis=-1,
@@ -365,9 +363,7 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
         x_ref = mx.squeeze(x_sorted, -2)
         x_ref = mx.take(x_ref, inv_order, axis=0)
         x_ref = mx.reshape(x_ref, scores.shape + (dims,))
-        y_ref = mx.sum(x_ref * mx.expand_dims(scores, -1), axis=-2).astype(
-            mx.float16
-        )
+        y_ref = mx.sum(x_ref * mx.expand_dims(scores, -1), axis=-2).astype(mx.float16)
         mx.eval(y_native, y_ref)
         assert float(mx.max(mx.abs(y_native - y_ref)).item()) == 0.0
 
@@ -404,12 +400,8 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
             q_base = mx.random.normal(
                 (batch, heads, q_length + 2, dims), dtype=mx.float16
             )
-            k_base = mx.random.normal(
-                (batch, 1, k_length + 2, dims), dtype=mx.float16
-            )
-            w_base = mx.random.normal(
-                (batch, q_length + 2, heads), dtype=mx.float16
-            )
+            k_base = mx.random.normal((batch, 1, k_length + 2, dims), dtype=mx.float16)
+            w_base = mx.random.normal((batch, q_length + 2, heads), dtype=mx.float16)
             q = q_base[:, :, 1 : q_length + 1, :]
             k = k_base[:, :, 1 : k_length + 1, :]
             w = w_base[:, 1 : q_length + 1, :]
@@ -436,9 +428,7 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
         )
         mx.eval(y_native, y_ref)
         valid = mx.isfinite(y_ref)
-        future_finite = mx.sum(
-            mx.where(~valid, mx.isfinite(y_native), mx.array(False))
-        )
+        future_finite = mx.sum(mx.where(~valid, mx.isfinite(y_native), mx.array(False)))
         diff = mx.max(
             mx.where(
                 valid,
@@ -540,9 +530,7 @@ def test_glm_native_fused_kernels_match_reference(monkeypatch):
         axis=3,
     )
     mx.eval(y_native, y_ref)
-    subset_diff = mx.max(
-        mx.abs(y_native.astype(mx.float32) - y_ref.astype(mx.float32))
-    )
+    subset_diff = mx.max(mx.abs(y_native.astype(mx.float32) - y_ref.astype(mx.float32)))
     assert float(subset_diff.item()) <= 0.02
 
     batch, heads, q_len, k_len, latent, pe, topk = 1, 64, 32, 64, 512, 64, 16
@@ -1317,6 +1305,7 @@ def _decode_only_batch_generator(stream) -> SimpleNamespace:
             return ["generation"]
 
     from mlx_lm.generate import BatchCounters
+
     from omlx.patches.glm_moe_dsa.generate_patch import _AdaptivePrefillConfig
 
     return SimpleNamespace(

@@ -64,9 +64,7 @@ class OpenClawIntegration(Integration):
                     model_entry["contextWindow"] = ctx.context_window
                 if ctx.max_tokens:
                     model_entry["maxTokens"] = ctx.max_tokens
-                provider_config["models"] = [
-                    model_entry
-                ]
+                provider_config["models"] = [model_entry]
             config["models"]["providers"]["omlx"] = provider_config
 
             # Set as default model

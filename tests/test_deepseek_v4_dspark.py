@@ -481,6 +481,7 @@ def test_dspark_head_gemv_matches_promoted_fp32_projection(rows):
 @pytest.mark.parametrize("rows", [2, 3, 6])
 def test_verify_exact_multi_qmv_matches_decode_rows(rows):
     from mlx_lm.models.mla import MultiLinear
+
     from omlx.patches.deepseek_v4.verify_qmv import exact_verify_multi_qmv
 
     mx.random.seed(59 + rows)
@@ -859,6 +860,7 @@ def test_vectorized_verify_ring_snapshots_match_m1_updates(dsv4, batch_cache):
 @pytest.mark.parametrize("batch_cache", [False, True])
 def test_vectorized_verify_ring_rollback_matches_accepted_prefix(dsv4, batch_cache):
     from mlx_lm.models.cache import BatchRotatingKVCache
+
     from omlx.patches.mlx_lm_mtp.cache_rollback import set_undo_armed
 
     def make_cache():
@@ -927,17 +929,17 @@ def test_exact_verify_host_covers_lightning_deepseek_v4(dsv4):
     not only an embedded DSpark host; models of other families stay on the stock path."""
     from omlx.patches.mlx_lm_mtp import batch_generator as bg
 
-    Host = type("Host", (), {})
-    Host.__module__ = dsv4.__name__  # module ships set_dspark_verify_armed
-    lightning = Host()
+    host_cls = type("Host", (), {})
+    host_cls.__module__ = dsv4.__name__  # module ships set_dspark_verify_armed
+    lightning = host_cls()
     lightning._omlx_mtp_decode_enabled = True
     assert bg._exact_verify_host(lightning) is lightning
 
-    off = Host()
+    off = host_cls()
     off._omlx_mtp_decode_enabled = False
     assert bg._exact_verify_host(off) is None
 
-    dspark = Host()
+    dspark = host_cls()
     dspark._omlx_dspark_decode_enabled = True
     assert bg._exact_verify_host(dspark) is dspark
 
@@ -970,12 +972,22 @@ def test_lightning_hosts_get_decode_consistent_attention(dsv4, monkeypatch):
     attention module decode-consistent, so one-row decode and the exact verify agree."""
     from omlx.patches import mlx_lm_mtp
 
-    config = dsv4.ModelArgs.from_dict({
-        "model_type": "deepseek_v4", "hidden_size": 256, "num_hidden_layers": 2,
-        "num_attention_heads": 4, "num_key_value_heads": 1, "head_dim": 64,
-        "vocab_size": 512, "n_routed_experts": 4, "num_experts_per_tok": 2,
-        "moe_intermediate_size": 64, "compress_ratios": [0, 4], "num_nextn_predict_layers": 1,
-    })
+    config = dsv4.ModelArgs.from_dict(
+        {
+            "model_type": "deepseek_v4",
+            "hidden_size": 256,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 1,
+            "head_dim": 64,
+            "vocab_size": 512,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "moe_intermediate_size": 64,
+            "compress_ratios": [0, 4],
+            "num_nextn_predict_layers": 1,
+        }
+    )
     assert not dsv4._is_dspark_model(config)
     monkeypatch.setattr(mlx_lm_mtp, "_MTP_ACTIVE", False)
     assert dsv4._lightning_decode_consistent(config) is False
@@ -985,6 +997,8 @@ def test_lightning_hosts_get_decode_consistent_attention(dsv4, monkeypatch):
     assert attn.decode_consistent is True and attn.dspark is False
     monkeypatch.setattr(dsv4, "_LIGHTNING_DECODE_CONSISTENT", False)
     assert dsv4.LocalAttention(config, 0).decode_consistent is False
-    no_head = dsv4.ModelArgs.from_dict({**config.__dict__, "num_nextn_predict_layers": 0})
+    no_head = dsv4.ModelArgs.from_dict(
+        {**config.__dict__, "num_nextn_predict_layers": 0}
+    )
     monkeypatch.setattr(dsv4, "_LIGHTNING_DECODE_CONSISTENT", True)
     assert dsv4._lightning_decode_consistent(no_head) is False

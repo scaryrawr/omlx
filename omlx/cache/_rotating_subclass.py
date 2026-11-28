@@ -17,6 +17,7 @@ softmax dilution that surfaces as infinite loops or empty content
 This subclass clamps ``size()`` to the actual buffer length so merge is
 always well-defined without any zero-padding trick on omlx's side.
 """
+
 from __future__ import annotations
 
 from mlx_lm.models.cache import RotatingKVCache

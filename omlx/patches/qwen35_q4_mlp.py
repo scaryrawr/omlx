@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: N806
 """Qwen3.5/3.6 quantized prefill matmul patch.
 
 This replaces eligible affine, MXFP4, and MXFP8
@@ -552,10 +551,9 @@ def apply_qwen35_vlm_gdn_projection_hook():
             cache=cache,
         )
 
-        if cache is not None:
-            if hasattr(cache, "advance"):
-                cache.advance(S)
-                language._qwen3_5_advance_lengths_info(cache, S)
+        if cache is not None and hasattr(cache, "advance"):
+            cache.advance(S)
+            language._qwen3_5_advance_lengths_info(cache, S)
 
         out = self.norm(out, z)
         return self.out_proj(out.reshape(B, S, -1))

@@ -173,9 +173,7 @@ def test_batch_tq_merge_rejects_mixed_bit_depths():
         BatchTurboQuantKVCache.merge([c4, c3])
 
     with pytest.raises(ValueError, match="mixed quantization"):
-        BatchTurboQuantKVCache.merge(
-            [c4, TurboQuantKVCache(bits=4.0, seed=1)]
-        )
+        BatchTurboQuantKVCache.merge([c4, TurboQuantKVCache(bits=4.0, seed=1)])
 
 
 def test_batch_tq_merge_preserves_empty_rows():
@@ -295,8 +293,8 @@ def test_batch_make_mask_matches_fp16_left_padding():
     got = bt.make_mask(1, return_array=True)
     assert mx.array_equal(ref, got).item(), (
         "B>1 make_mask diverges from BatchKVCache for left-padding "
-        f"(member masks: BK={ref[:,0,0,:].sum(-1).tolist()} "
-        f"TQ={got[:,0,0,:].sum(-1).tolist()})"
+        f"(member masks: BK={ref[:, 0, 0, :].sum(-1).tolist()} "
+        f"TQ={got[:, 0, 0, :].sum(-1).tolist()})"
     )
 
 
@@ -572,9 +570,7 @@ def test_attention_patch_keeps_short_prefill_fast_path(monkeypatch):
         return mx.zeros_like(queries)
 
     monkeypatch.setattr(TurboQuantKVCache, "prefill_attention", fake_prefill)
-    monkeypatch.setattr(
-        TurboQuantKVCache, "quantized_attention", fake_quantized
-    )
+    monkeypatch.setattr(TurboQuantKVCache, "quantized_attention", fake_quantized)
 
     queries = mx.random.normal((1, 4, 2, 32))
     result = mlx_base.scaled_dot_product_attention(
@@ -1031,9 +1027,7 @@ def test_fused_multirow_kernel_respects_token_floor(monkeypatch):
     def fail_fused(*args, **kwargs):
         raise AssertionError("fused kernel must not run below the token floor")
 
-    monkeypatch.setattr(
-        tq_attention, "_fused_multirow_mse_attention", fail_fused
-    )
+    monkeypatch.setattr(tq_attention, "_fused_multirow_mse_attention", fail_fused)
     monkeypatch.setattr(tq_attention, "_mma_mse_attention", lambda *a, **k: None)
     out = tq_attention._decode_multirow_attention(tq, queries, ks, vs, D**-0.5)
     assert out is not None
@@ -1100,8 +1094,11 @@ def test_attention_patch_multirow_ignores_non_causal_masks():
     assert out.shape == queries.shape
     dk, dv = tq.dequantize()
     ref = mx.fast.scaled_dot_product_attention(
-        queries, dk.astype(queries.dtype), dv.astype(queries.dtype),
-        scale=32**-0.5, mask=None,
+        queries,
+        dk.astype(queries.dtype),
+        dv.astype(queries.dtype),
+        scale=32**-0.5,
+        mask=None,
     )
     assert mx.abs(out - ref).max().item() < 5e-2
 
@@ -1540,9 +1537,9 @@ def test_batch_masked_decode_is_accurate():
     rel = mx.mean(mx.abs(out - ref)).item() / mx.mean(mx.abs(ref)).item()
     # 8-bit quantized masked decode vs dequantize+SDPA over the same states.
     # Broken RHT kernels give ~140%; the fix brings it into quantization noise.
-    assert (
-        rel < 0.05
-    ), f"B>1 masked decode inaccurate (err {rel:.1%}) — RHT fix missing from pinned mlx-vlm?"
+    assert rel < 0.05, (
+        f"B>1 masked decode inaccurate (err {rel:.1%}) — RHT fix missing from pinned mlx-vlm?"
+    )
 
 
 def _make_ragged_batch(bits=8.0, t_long=48, t_short=32, nkv=2, d=32, seed=5):
@@ -1633,8 +1630,7 @@ def test_batch_tq_filter_compacts_left_padding_like_batch_kv():
         f"BK={dense.left_padding.tolist()}"
     )
     assert tq._phys_end == dense._idx, (
-        f"physical end diverges after filter: TQ={tq._phys_end} "
-        f"BK={dense._idx}"
+        f"physical end diverges after filter: TQ={tq._phys_end} BK={dense._idx}"
     )
 
     # Next decode step: shared mask width vs dense layer keys width.
@@ -1685,6 +1681,7 @@ def test_batch_tq_append_growth_keeps_content_and_geometry():
 
     ks, _ = batch.state
     from omlx.turboquant_kv import _state_length as _sl
+
     assert _sl(getattr(ks, "_state", ks)) == 49, (
         f".state exposes {_sl(getattr(ks, '_state', ks))} columns, expected 49"
     )
@@ -1692,7 +1689,11 @@ def test_batch_tq_append_growth_keeps_content_and_geometry():
     got = dk[0, :, :48, :].astype(mx.float32)
     err = mx.abs(got - k1[0].astype(mx.float32)).max().item()
     assert err < 0.2, f"row0 content shifted/corrupted after growth ({err:.3f})"
-    err_new = mx.abs(dk[0, :, 48, :].astype(mx.float32) - nk[0, :, 0, :].astype(mx.float32)).max().item()
+    err_new = (
+        mx.abs(dk[0, :, 48, :].astype(mx.float32) - nk[0, :, 0, :].astype(mx.float32))
+        .max()
+        .item()
+    )
     assert err_new < 0.2, f"appended token not at written end ({err_new:.3f})"
 
 
@@ -1712,8 +1713,7 @@ def test_batch_tq_state_restore_resets_phys_end():
     assert isinstance(batch.offset, int) and batch.offset == 20
     batch._ensure_array_offset()
     assert batch._phys_end == 20, (
-        f"stale batch-mode _phys_end leaked through restore "
-        f"({batch._phys_end} != 20)"
+        f"stale batch-mode _phys_end leaked through restore ({batch._phys_end} != 20)"
     )
 
 

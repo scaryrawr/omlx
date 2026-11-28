@@ -125,7 +125,9 @@ def test_live_chat_logprobs(live_server, stream):
     for entry in entries:
         assert isinstance(entry["token"], str)
         assert math.isfinite(entry["logprob"]) and entry["logprob"] <= 0
-        assert all(isinstance(byte, int) and 0 <= byte <= 255 for byte in entry["bytes"])
+        assert all(
+            isinstance(byte, int) and 0 <= byte <= 255 for byte in entry["bytes"]
+        )
         assert len(entry["top_logprobs"]) == 3
         for alternative in entry["top_logprobs"]:
             assert math.isfinite(alternative["logprob"])

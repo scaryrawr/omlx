@@ -34,7 +34,7 @@ def apply_mlx_vlm_muse_glimmer_compat_patch() -> bool:
         _register_prompt_format(prompt_utils)
         _patch_native_model()
         _patch_dflash_model()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Muse Glimmer mlx-vlm compat patch failed: %s", exc)
         return False
 

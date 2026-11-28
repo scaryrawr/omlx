@@ -31,7 +31,9 @@ from omlx.cluster.staging import (
 
 
 def _write_shard(directory, name, tensors, payload=b"\x00" * 32):
-    header = {t: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]} for t in tensors}
+    header = {
+        t: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]} for t in tensors
+    }
     blob = json.dumps(header).encode()
     (directory / name).write_bytes(struct.pack("<Q", len(blob)) + blob + payload)
 
@@ -117,7 +119,9 @@ def test_plan_reports_the_saving(tmp_path):
     assert plan.node_id == "mbp"
     assert plan.required_bytes < plan.total_model_bytes
     assert plan.saved_bytes > 0
-    assert plan.missing == plan.required, "nothing present yet, so everything is missing"
+    assert plan.missing == plan.required, (
+        "nothing present yet, so everything is missing"
+    )
     assert plan.to_dict()["ready"] is False
 
 
@@ -151,7 +155,9 @@ def test_a_truncated_file_is_resent(tmp_path):
     root = _model(tmp_path / "m", layers=8, per_file=2)
     present = {s.name: 1 for s in index_shards(root)}
 
-    plan = plan_staging(root, node_id="mbp", start_layer=6, end_layer=8, present=present)
+    plan = plan_staging(
+        root, node_id="mbp", start_layer=6, end_layer=8, present=present
+    )
     assert plan.missing, "wrong-sized files must be re-staged"
 
 
@@ -397,9 +403,7 @@ def test_manifest_reads_the_exact_model_path_on_local_and_remote(tmp_path, monke
     assert remote_calls == [("Studio.local", home_relative_model_path(str(root)))]
 
 
-def test_manifest_is_not_ready_when_a_remote_sidecar_is_missing(
-    tmp_path, monkeypatch
-):
+def test_manifest_is_not_ready_when_a_remote_sidecar_is_missing(tmp_path, monkeypatch):
     root = _model(tmp_path / "m", layers=2, per_file=1)
 
     class A:
@@ -644,9 +648,7 @@ def test_manifest_can_be_built_from_a_peer_shard_index(tmp_path, monkeypatch):
         "remote_model_staging_inventory",
         lambda _host, _path, **_kwargs: (shards, {"config.json": 2}),
     )
-    monkeypatch.setattr(
-        staging, "remote_model_dir", lambda _host, path: path
-    )
+    monkeypatch.setattr(staging, "remote_model_dir", lambda _host, path: path)
     monkeypatch.setattr(
         staging,
         "remote_file_sizes",
@@ -778,9 +780,7 @@ def test_stage_route_runs_a_model_by_node_job_with_live_progress(
         while job["status"] not in {"completed", "failed"}:
             assert time.monotonic() < deadline
             time.sleep(0.01)
-            job = client.get(
-                f"/admin/api/cluster/stage/{job['job_id']}"
-            ).json()
+            job = client.get(f"/admin/api/cluster/stage/{job['job_id']}").json()
 
     assert job["status"] == "completed", json.dumps(job, indent=2)
     assert job["ready"] is True

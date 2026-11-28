@@ -310,8 +310,10 @@ def test_batch_varied_appends_match_old_semantics(B):
             cache.prepare(lengths=[L] * B)
             r_kv, r_gate, _ = cache.accumulate_windows(kv, gate, 0)
             n_rows = r_kv.shape[1] // ratio
-            px = _rows(2000 + step, n_rows, 8, B) if n_rows else mx.zeros(
-                (B, 0, 8), dtype=mx.float32
+            px = (
+                _rows(2000 + step, n_rows, 8, B)
+                if n_rows
+                else mx.zeros((B, 0, 8), dtype=mx.float32)
             )
             # Reference bookkeeping mirrors the real cache's fields.
             ref["processed"] = list(cache._processed)

@@ -1139,9 +1139,11 @@ def test_drafter_kept_for_bf16_target_or_out_of_range_weights():
 def _as_dtype(drafter, dtype):
     drafter.model.update(
         nn.utils.tree_map(
-            lambda p: p.astype(dtype)
-            if isinstance(p, mx.array) and mx.issubdtype(p.dtype, mx.floating)
-            else p,
+            lambda p: (
+                p.astype(dtype)
+                if isinstance(p, mx.array) and mx.issubdtype(p.dtype, mx.floating)
+                else p
+            ),
             drafter.model.parameters(),
         )
     )

@@ -418,8 +418,13 @@ class _ExpertSlots:
         per field. Only layouts whose stored bytes are the slot's bytes qualify;
         anything that ``decode`` converts keeps the copying path.
         """
-        raw_dtypes = {"U32": mx.uint32, "U8": mx.uint8, "BF16": mx.bfloat16,
-                      "F16": mx.float16, "F32": mx.float32}
+        raw_dtypes = {
+            "U32": mx.uint32,
+            "U8": mx.uint8,
+            "BF16": mx.bfloat16,
+            "F16": mx.float16,
+            "F32": mx.float32,
+        }
         views = {}
         try:
             for proj in _PROJECTIONS:
@@ -430,7 +435,9 @@ class _ExpertSlots:
                     owner = lin[field]
                     if raw_dtypes.get(slab.dtype) != owner.dtype:
                         return None
-                    target = owner.view(mx.uint16) if owner.dtype == mx.bfloat16 else owner
+                    target = (
+                        owner.view(mx.uint16) if owner.dtype == mx.bfloat16 else owner
+                    )
                     mx.eval(target)
                     view = np.asarray(memoryview(target))
                     if view.shape[0] != self.capacity or view[0].nbytes != slab.nbytes:
@@ -541,9 +548,9 @@ class _ExpertSlots:
         compact = len(order) > capacity
         if compact:
             recent = {expert: i for i, expert in enumerate(order)}
-            keep = sorted(
-                order, key=lambda e: (-self._hotness(e, decay), -recent[e])
-            )[:capacity]
+            keep = sorted(order, key=lambda e: (-self._hotness(e, decay), -recent[e]))[
+                :capacity
+            ]
             keep.sort(key=recent.__getitem__)
         else:
             keep = order
@@ -748,7 +755,11 @@ class _ExpertSlots:
         protected = set(needed)
         placed = []
         for expert in misses:
-            slot = self.free.pop() if self.free else self.slot_of.pop(self._victim(protected))
+            slot = (
+                self.free.pop()
+                if self.free
+                else self.slot_of.pop(self._victim(protected))
+            )
             placed.append((expert, slot))
         mx.synchronize()
         reads, done, failure = {}, [], None
@@ -768,7 +779,10 @@ class _ExpertSlots:
                     for slab in self.plan.slabs(self.prefix, proj, expert):
                         view = fields[slab.key.rsplit(".", 1)[1]][2][slot]
                         reads[expert].append(
-                            (slab, _EXPERT_IO_POOL.submit(self.plan.read_into, slab, view))
+                            (
+                                slab,
+                                _EXPERT_IO_POOL.submit(self.plan.read_into, slab, view),
+                            )
                         )
             for expert, slot in placed:
                 try:
@@ -776,7 +790,7 @@ class _ExpertSlots:
                     for slab, future in reads[expert]:
                         future.result()
                         nbytes += slab.nbytes
-                except BaseException as exc:  # noqa: BLE001 - re-raised below
+                except BaseException as exc:
                     failure = failure or exc
                     continue
                 done.append((expert, slot, nbytes))
@@ -826,7 +840,7 @@ def _copied(future, view):
     try:
         data = np.frombuffer(future.result(), dtype=np.uint8)
         np.copyto(view.reshape(-1).view(np.uint8), data)
-    except BaseException as exc:  # noqa: BLE001 - reported through result()
+    except BaseException as exc:
         return _Done(error=exc)
     return _Done(len(data))
 
@@ -917,7 +931,9 @@ class OffloadedExpert(nn.Module):
             for k, group in enumerate(groups):
                 pos_np = np.flatnonzero(np.isin(flat, group))
                 pos = mx.array(pos_np.astype(np.int32))
-                slots = mx.array(self.slots.ensure_ids(flat[pos_np].tolist()), dtype=mx.int32)
+                slots = mx.array(
+                    self.slots.ensure_ids(flat[pos_np].tolist()), dtype=mx.int32
+                )
                 order = mx.argsort(slots)
                 inverse = mx.argsort(order)
                 out = self.slots.expert(

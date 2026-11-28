@@ -22,11 +22,20 @@ from omlx.patches.minimax_m3_mlx_lm import apply_minimax_m3_mlx_lm_patch
 CONFIG = {
     "model_type": "minimax_m3_vl",
     "text_config": {
-        "num_hidden_layers": 4, "hidden_size": 64, "num_attention_heads": 4,
-        "num_key_value_heads": 2, "head_dim": 16, "intermediate_size": 32,
-        "shared_intermediate_size": 32, "num_local_experts": 2,
-        "num_experts_per_tok": 1, "n_shared_experts": 1, "vocab_size": 128,
-        "rms_norm_eps": 1e-6, "rope_theta": 10000, "max_position_embeddings": 512,
+        "num_hidden_layers": 4,
+        "hidden_size": 64,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "head_dim": 16,
+        "intermediate_size": 32,
+        "shared_intermediate_size": 32,
+        "num_local_experts": 2,
+        "num_experts_per_tok": 1,
+        "n_shared_experts": 1,
+        "vocab_size": 128,
+        "rms_norm_eps": 1e-6,
+        "rope_theta": 10000,
+        "max_position_embeddings": 512,
     },
 }
 
@@ -212,11 +221,13 @@ def test_no_collective_is_attempted_on_one_node(monkeypatch):
 
     called = []
     monkeypatch.setattr(
-        mx.distributed, "send",
+        mx.distributed,
+        "send",
         lambda *a, **k: called.append("send"),
     )
     monkeypatch.setattr(
-        mx.distributed, "recv_like",
+        mx.distributed,
+        "recv_like",
         lambda *a, **k: called.append("recv"),
     )
     model = _model()

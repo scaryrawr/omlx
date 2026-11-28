@@ -119,7 +119,9 @@ def test_deepseek_v4_switch_glu_fused_is_bit_exact(quant, tokens):
     _assert_bit_exact(reference, fused, tokens)
 
 
-@pytest.mark.parametrize("quant", [(32, 4, "mxfp4"), (64, 2, "affine"), (64, 3, "affine")])
+@pytest.mark.parametrize(
+    "quant", [(32, 4, "mxfp4"), (64, 2, "affine"), (64, 3, "affine")]
+)
 def test_deepseek_v4_keeps_native_pair_kernel_formats(quant):
     glu = _make_glu(v4, quant)
     assert not fusion.can_fuse(glu)
@@ -135,7 +137,9 @@ def test_mismatched_gate_up_formats_stay_separate():
         group_size=64,
         bits=4,
         class_predicate=lambda p, m: (
-            {"group_size": 64, "bits": 8} if p.endswith("up_proj") else hasattr(m, "to_quantized")
+            {"group_size": 64, "bits": 8}
+            if p.endswith("up_proj")
+            else hasattr(m, "to_quantized")
         ),
     )
     glu = holder.layers[0]

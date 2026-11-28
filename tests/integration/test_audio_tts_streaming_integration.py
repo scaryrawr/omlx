@@ -64,7 +64,9 @@ async def test_live_tts_streaming_emits_multiple_http_chunks():
         pytest.skip("Set OMLX_TTS_MODEL to run live TTS streaming integration test")
 
     timeout = httpx.Timeout(connect=10.0, read=None, write=60.0, pool=60.0)
-    async with httpx.AsyncClient(base_url=BASE_URL, headers=_headers(), timeout=timeout) as client:
+    async with httpx.AsyncClient(
+        base_url=BASE_URL, headers=_headers(), timeout=timeout
+    ) as client:
         # Verify server is reachable and the target model is exposed.
         models_resp = await client.get("/v1/models")
         models_resp.raise_for_status()
@@ -106,8 +108,12 @@ async def test_live_tts_streaming_emits_multiple_http_chunks():
         # Basic WAV shape: one header at the beginning, audio bytes afterwards.
         assert first_chunk.startswith(b"RIFF"), first_chunk[:32]
         assert b"WAVE" in first_chunk[:64], first_chunk[:64]
-        assert len(full_body) > 4096, f"Unexpectedly small audio body: {len(full_body)} bytes"
-        assert full_body.count(b"RIFF") == 1, "Expected one WAV header for the streamed response"
+        assert len(full_body) > 4096, (
+            f"Unexpectedly small audio body: {len(full_body)} bytes"
+        )
+        assert full_body.count(b"RIFF") == 1, (
+            "Expected one WAV header for the streamed response"
+        )
 
         # Real transport assertions: we expect multiple received chunks and earlier first audio than total completion.
         assert len(raw_chunks) >= 2, (

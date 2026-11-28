@@ -159,7 +159,15 @@ class TestUtilsPatch:
             is True
         )
 
-    @pytest.mark.parametrize("location", ["quantization", "quantization_config", "text_quantization", "text_quantization_config"])
+    @pytest.mark.parametrize(
+        "location",
+        [
+            "quantization",
+            "quantization_config",
+            "text_quantization",
+            "text_quantization_config",
+        ],
+    )
     @pytest.mark.parametrize("bits", [2, 3, 3.5])
     def test_nested_sub4_override_disables_native_attention(self, location, bits):
         from omlx.patches.deepseek_v4.utils_patch import (
@@ -180,7 +188,10 @@ class TestUtilsPatch:
             _native_ratio128_attention_enabled,
         )
 
-        config = {"model_type": "deepseek_v4", "quantization": {"layers": {"bits": bits}}}
+        config = {
+            "model_type": "deepseek_v4",
+            "quantization": {"layers": {"bits": bits}},
+        }
         assert _native_ratio128_attention_enabled(config) is True
         config = {"model_type": "qwen3", "quantization": {"bits": 2}}
         assert _native_ratio128_attention_enabled(config) is True
@@ -268,9 +279,9 @@ class TestBatchCacheConversion:
     """Model-owned caches retain batch conversion with upstream cache creation."""
 
     def test_pooling_cache_conversion(self, applied_patch):
-        from omlx.scheduler import _patched_merge_caches
-
         from mlx_lm.models.cache import BatchPoolingCache, PoolingCache
+
+        from omlx.scheduler import _patched_merge_caches
 
         class FakeModel:
             def __init__(self):
@@ -665,7 +676,7 @@ class TestChatTemplateV4:
         )
 
         assert prompt == (
-            "<｜begin▁of▁sentence｜>Be helpful." "<｜User｜>Hello<｜Assistant｜><think>"
+            "<｜begin▁of▁sentence｜>Be helpful.<｜User｜>Hello<｜Assistant｜><think>"
         )
 
     def test_official_latest_reminder_before_user(self, applied_patch):
@@ -1045,9 +1056,9 @@ class TestVlmTokenizerProtocol:
         assert render(user, add_generation_prompt=True).endswith(
             "<｜deepseek_image｜>what?<｜Assistant｜></think>"
         )
-        assert render(
-            user, add_generation_prompt=True, enable_thinking=True
-        ).endswith("<｜Assistant｜><think>")
+        assert render(user, add_generation_prompt=True, enable_thinking=True).endswith(
+            "<｜Assistant｜><think>"
+        )
         partial_turn = [*user, {"role": "assistant", "content": "Sure"}]
         assert render(partial_turn, continue_final_message=True).endswith("Sure")
 
@@ -1060,7 +1071,6 @@ class TestVlmTokenizerProtocol:
         assert prompt == render(text, tools=tools)
         assert copied.has_tool_calling
         assert copied.tool_call_start == "<｜DSML｜tool_calls>"
-
 
 
 class TestDSV4CanonicalChatEncoder:
@@ -1084,8 +1094,7 @@ class TestDSV4CanonicalChatEncoder:
         from omlx.patches.deepseek_v4 import dsv4_chat_encoder as enc
 
         assert (
-            enc._resolve_mode_and_effort(enable_thinking, reasoning_effort)
-            == expected
+            enc._resolve_mode_and_effort(enable_thinking, reasoning_effort) == expected
         )
 
     def test_apply_chat_template_passes_canonical_kwargs(self, monkeypatch):
@@ -1105,9 +1114,7 @@ class TestDSV4CanonicalChatEncoder:
 
         fake = FakeEncoding()
         monkeypatch.setattr(enc, "_encoding_cache", {})
-        monkeypatch.setattr(
-            enc, "_load_encoding_dsv4_module", lambda **kwargs: fake
-        )
+        monkeypatch.setattr(enc, "_load_encoding_dsv4_module", lambda **kwargs: fake)
 
         messages = [
             {"role": "user", "content": "Weather?"},
@@ -1169,9 +1176,7 @@ class TestDSV4CanonicalChatEncoder:
         fake = FakeEncoding()
         tokenizer = DummyTokenizer()
         monkeypatch.setattr(enc, "_encoding_cache", {})
-        monkeypatch.setattr(
-            enc, "_load_encoding_dsv4_module", lambda **kwargs: fake
-        )
+        monkeypatch.setattr(enc, "_load_encoding_dsv4_module", lambda **kwargs: fake)
 
         assert enc.install_canonical_chat_template(tokenizer, "/models/dsv4") is True
         installed = tokenizer._chat_template
@@ -1180,10 +1185,13 @@ class TestDSV4CanonicalChatEncoder:
         assert tokenizer._omlx_dsv4_chat_template_orig is DummyTokenizer._chat_template
         assert tokenizer.has_chat_template is True
 
-        assert tokenizer._chat_template(
-            [{"role": "user", "content": "Hi"}],
-            enable_thinking=False,
-        ) == "canonical"
+        assert (
+            tokenizer._chat_template(
+                [{"role": "user", "content": "Hi"}],
+                enable_thinking=False,
+            )
+            == "canonical"
+        )
         assert fake.calls[-1]["thinking_mode"] == "chat"
         assert fake.calls[-1]["reasoning_effort"] is None
 
@@ -2643,9 +2651,9 @@ class TestIndexerFallbackTiling:
             k = min(topk, pool_count)
             ia = mx.sort(mx.argpartition(-a, k - 1, axis=-1)[..., :k], axis=-1)
             ib = mx.sort(mx.argpartition(-b, k - 1, axis=-1)[..., :k], axis=-1)
-            assert (
-                int((ia != ib).sum()) == 0
-            ), f"top-k differs at pool_count={pool_count}"
+            assert int((ia != ib).sum()) == 0, (
+                f"top-k differs at pool_count={pool_count}"
+            )
 
     def test_tile_stays_under_int32_index_limit(self, applied_patch):
         # The prefill chunk is 512 and index heads are 64; the tiled matmul
@@ -2659,9 +2667,9 @@ class TestAffineBlockRouteThreshold:
     """Affine blocks require enough routes to amortize their setup cost."""
 
     def _linear(self):
-        from omlx.patches.deepseek_v4 import switch_layers as sl
-
         import mlx.core as mx
+
+        from omlx.patches.deepseek_v4 import switch_layers as sl
 
         linear = sl.QuantizedSwitchLinear(
             64, 64, num_experts=2, bias=False, group_size=64, bits=2

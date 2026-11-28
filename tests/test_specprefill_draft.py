@@ -421,9 +421,9 @@ def test_restored_cache_is_released_before_the_clear():
 
     assert draft_cache.reconstruct_calls == 1
     assert observed["hit"] is True, "the restored cache must reach score_tokens"
-    assert (
-        observed["alive_at_clear"] is False
-    ), "something still names the restored draft cache at the clear point"
+    assert observed["alive_at_clear"] is False, (
+        "something still names the restored draft cache at the clear point"
+    )
     assert draft_cache.stores, "a cache hit must not skip the store"
 
 
@@ -578,9 +578,7 @@ class TestDraftCacheReuse:
                 for a, b in zip(g.cache, w.cache):
                     assert mx.array_equal(a, b).item()
 
-    @pytest.mark.parametrize(
-        "stored,n,restored", [(768, 768, 512), (898, 960, 768)]
-    )
+    @pytest.mark.parametrize("stored,n,restored", [(768, 768, 512), (898, 960, 768)])
     def test_disk_reuse_matches_cold_scoring(self, tmp_path, stored, n, restored):
         model = self._model()
         tokens = [(i * 37 + 11) % 256 for i in range(max(stored, n))]

@@ -22,7 +22,7 @@ def apply_deepseek_v41_mlx_lm_patch() -> bool:
 
     try:
         from . import model
-    except Exception as exc:  # noqa: BLE001 - a missing dependency must not abort
+    except Exception as exc:
         logger.warning("Could not register %s: %s", _QUALNAME, exc)
         return False
     # Replaces mlx-lm's module even when a capability probe imported it first.

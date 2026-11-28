@@ -212,8 +212,11 @@ console.log(JSON.stringify({stored: stored.map(c => c.id),
                             exported: chats.map(c => c.id),
                             sessions: Object.keys(app.chatSessions)}));
 """)
-    assert result == {"stored": ["chat_old"], "exported": ["chat_old"],
-                      "sessions": ["chat_old"]}
+    assert result == {
+        "stored": ["chat_old"],
+        "exported": ["chat_old"],
+        "sessions": ["chat_old"],
+    }
 
 
 def test_export_keeps_the_current_chat_when_another_chat_is_pinned():

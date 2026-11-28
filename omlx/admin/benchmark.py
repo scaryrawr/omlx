@@ -147,9 +147,7 @@ class BenchmarkRequest(BaseModel):
     @classmethod
     def validate_generation_length(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError(
-                f"Generation length ({v}) must be higher than 0"
-            )
+            raise ValueError(f"Generation length ({v}) must be higher than 0")
         return v
 
     @field_validator("batch_sizes")
@@ -288,7 +286,7 @@ def _sample_window(run: "BenchmarkRun", window_start: float) -> dict | None:
         return None
     try:
         return run.sampler.window(window_start, time.monotonic())
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"Benchmark: system metrics unavailable: {e}")
         return None
 
@@ -332,9 +330,7 @@ def _derive_feature_flags(model_settings: Any) -> list[dict]:
             continue
         key, label = spec.key, spec.label
         if spec.attr == "turboquant_kv_enabled":
-            scheme = getattr(
-                model_settings, "turboquant_kv_scheme", "turboquant"
-            )
+            scheme = getattr(model_settings, "turboquant_kv_scheme", "turboquant")
             if scheme in ("affine4", "affine8"):
                 key, label = f"{scheme}_kv", f"Affine{scheme[-1]} KV"
         if spec.detail_attr:
@@ -460,7 +456,7 @@ def _filter_uploaded_settings(
         return None
     try:
         raw = to_dict()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"Benchmark: failed to serialize model settings: {e}")
         return None
 
@@ -621,9 +617,7 @@ def get_active_run() -> BenchmarkRun | None:
     return None
 
 
-def create_run(
-    request: BenchmarkRequest, queue_id: str | None = None
-) -> BenchmarkRun:
+def create_run(request: BenchmarkRequest, queue_id: str | None = None) -> BenchmarkRun:
     """Create and register a new benchmark run."""
     bench_id = f"bench-{uuid.uuid4().hex[:12]}"
     run = BenchmarkRun(bench_id=bench_id, request=request, queue_id=queue_id)
@@ -698,7 +692,7 @@ async def run_queue(
         while True:
             try:
                 await run_benchmark(run, engine_pool)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error(
                     f"Benchmark queue: run {run.bench_id} raised: {e}", exc_info=True
                 )
@@ -975,7 +969,7 @@ async def _restore_concurrency(
         return
     try:
         await engine_pool.apply_max_concurrent_requests(previous)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"Benchmark: max concurrent requests restore failed: {e}")
 
 
@@ -1244,9 +1238,13 @@ def _log_ane_benchmark_trace(
         counts: dict[int, int] = {}
         for value in values:
             counts[value] = counts.get(value, 0) + 1
-        return ",".join(
-            f"{width}x{count}" for width, count in sorted(counts.items(), reverse=True)
-        ) or "none"
+        return (
+            ",".join(
+                f"{width}x{count}"
+                for width, count in sorted(counts.items(), reverse=True)
+            )
+            or "none"
+        )
 
     logger.info(
         "[benchmark-ane-summary] pp=%d prefill_tokens=%d sequence_length=%d "
@@ -1290,14 +1288,10 @@ def _log_ane_benchmark_trace(
         operations = int(values.get("operations", 0) or 0)
         configured_layers = int(config.get(layer_key, 0) or 0)
         compiled_value = config.get(compiled_key)
-        compiled_layers = (
-            None if compiled_value is None else int(compiled_value)
-        )
+        compiled_layers = None if compiled_value is None else int(compiled_value)
         # Expectations follow what the patch actually compiled; the settings
         # value is only the fallback when the runtime state is unknown.
-        layers = (
-            compiled_layers if compiled_layers is not None else configured_layers
-        )
+        layers = compiled_layers if compiled_layers is not None else configured_layers
         observed_shapes = operations / layers if layers > 0 else 0.0
         expected_operations = full_shapes * layers
         per_op = max(operations, 1)
@@ -1438,10 +1432,8 @@ async def _run_batch_test(
     # Submit all requests concurrently. Nothing else generates during the
     # gather, so the process-global peak counter belongs to this batch.
     if HAS_MLX:
-        try:
+        with suppress(Exception):
             mx.reset_peak_memory()
-        except Exception:
-            pass
     wall_start = time.perf_counter()
     results = await asyncio.gather(
         *[_single_request(prompts[i]) for i in range(batch_size)]
@@ -1781,7 +1773,7 @@ def _upload_model_repo(
             source_repo_id=getattr(entry, "source_repo_id", None),
             source_path=getattr(entry, "source_path", None),
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"Benchmark: repo derivation failed: {e}")
         return None
     if not isinstance(derived, str) or derived == model_id or "/" not in derived:
@@ -2340,7 +2332,7 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         try:
             run.sampler = SystemSampler()
             run.sampler.start()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"Benchmark: host sampling unavailable: {e}")
             run.sampler = None
 
@@ -2349,20 +2341,14 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         if model_settings is not None and getattr(
             model_settings, "qwen35_ane_prefill_enabled", False
         ):
-            gdn_enabled = bool(
-                getattr(model_settings, "qwen35_ane_prefill_gdn", False)
-            )
+            gdn_enabled = bool(getattr(model_settings, "qwen35_ane_prefill_gdn", False))
             # The settings flag only records intent. The load-time patch stores
             # what it actually compiled on the model, so the trace and the
             # uploaded metadata reflect the runtime state (the patch can find
             # no eligible layers or drop layers at the program budget).
             loaded_model = getattr(engine, "_model", None)
-            compiled_mlp = getattr(
-                loaded_model, "_omlx_ane_mlp_prefill_count", None
-            )
-            compiled_gdn = getattr(
-                loaded_model, "_omlx_ane_gdn_prefill_count", None
-            )
+            compiled_mlp = getattr(loaded_model, "_omlx_ane_mlp_prefill_count", None)
+            compiled_gdn = getattr(loaded_model, "_omlx_ane_gdn_prefill_count", None)
             ane_active = bool(compiled_mlp or compiled_gdn)
             ane_trace_config = {
                 "sequence_length": int(
@@ -2699,12 +2685,12 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         if chat is not None:
             try:
                 await chat.aclose()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(f"Benchmark: client close failed: {e}")
         if run.sampler is not None:
             try:
                 run.sampler.stop()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(f"Benchmark: sampler stop failed: {e}")
         _restore_speed_priority(engine_pool, previous_speed_priority)
         _restore_prefill_first(engine_pool, previous_decode_fairness)

@@ -476,13 +476,17 @@ class TestExtractImagesFromMessages:
         assert text_msgs[0]["content"] == "Describe this clip"
 
     def test_input_video_base64_data_is_normalized(self):
-        messages = [{
-            "role": "user",
-            "content": [{
-                "type": "input_video",
-                "input_video": {"data": "cmVjb3JkaW5n", "format": "mp4"},
-            }],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_video",
+                        "input_video": {"data": "cmVjb3JkaW5n", "format": "mp4"},
+                    }
+                ],
+            }
+        ]
         _, _, _, videos = extract_media_from_messages(messages)
         assert videos == ["data:video/mp4;base64,cmVjb3JkaW5n"]
 
@@ -971,7 +975,9 @@ class TestImageSizeAndDownscaling:
         b64 = _image_to_base64(img)
         uri = f"data:image/png;base64,{b64}"
 
-        with pytest.raises(InvalidRequestError, match="exceeds the maximum allowed limit"):
+        with pytest.raises(
+            InvalidRequestError, match="exceeds the maximum allowed limit"
+        ):
             load_image(uri)
 
     def test_rejects_oversized_encoded_length_early(self, monkeypatch):
@@ -982,7 +988,9 @@ class TestImageSizeAndDownscaling:
         fake_b64 = "A" * 2000
         uri = f"data:image/png;base64,{fake_b64}"
 
-        with pytest.raises(InvalidRequestError, match="exceeds the maximum allowed limit"):
+        with pytest.raises(
+            InvalidRequestError, match="exceeds the maximum allowed limit"
+        ):
             load_image(uri)
 
     @pytest.mark.parametrize(
@@ -994,9 +1002,7 @@ class TestImageSizeAndDownscaling:
             pytest.param(
                 (1024, 2048), "green", 1024, (512, 1024), id="tall-preserves-aspect"
             ),
-            pytest.param(
-                (800, 600), "yellow", 2048, (800, 600), id="within-limit"
-            ),
+            pytest.param((800, 600), "yellow", 2048, (800, 600), id="within-limit"),
             pytest.param(
                 (3000, 1500), "purple", 0, (3000, 1500), id="downscaling-disabled"
             ),
@@ -1201,7 +1207,9 @@ class TestImageSizeAndDownscaling:
             }
         ]
 
-        with pytest.raises(InvalidRequestError, match="exceeds the maximum allowed limit"):
+        with pytest.raises(
+            InvalidRequestError, match="exceeds the maximum allowed limit"
+        ):
             extract_images_from_messages(messages)
 
     def test_cache_stores_downscaled_image_and_accounts_accurately(self, monkeypatch):

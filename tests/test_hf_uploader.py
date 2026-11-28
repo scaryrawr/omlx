@@ -5,10 +5,9 @@ import asyncio
 import json
 import os
 import struct
-import time
 from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import mlx.core as mx
 import pytest
@@ -63,9 +62,7 @@ class TestIsOqModel:
         # Suffixes longer than 3 chars after 'oQ' must still be detected.
         assert _is_oq_model("Qwen3.6-27B-oQ3.5e") is True
         assert (
-            _is_oq_model(
-                "Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-oQ3.5e"
-            )
+            _is_oq_model("Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled-oQ3.5e")
             is True
         )
 
@@ -354,20 +351,28 @@ def model_dirs(tmp_path):
     # oQ model
     oq_model = model_dir / "Llama-3B-oQ4"
     oq_model.mkdir()
-    (oq_model / "config.json").write_text(json.dumps({
-        "model_type": "llama",
-        "quantization": {"bits": 4, "group_size": 64},
-    }))
+    (oq_model / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "llama",
+                "quantization": {"bits": 4, "group_size": 64},
+            }
+        )
+    )
     # Create a fake safetensors file
     _write_safetensors_stub(oq_model / "model.safetensors", 1024)
 
     # Another oQ model
     oq_model2 = model_dir / "Qwen-7B-oQ3"
     oq_model2.mkdir()
-    (oq_model2 / "config.json").write_text(json.dumps({
-        "model_type": "qwen2",
-        "quantization": {"bits": 3, "group_size": 64},
-    }))
+    (oq_model2 / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen2",
+                "quantization": {"bits": 3, "group_size": 64},
+            }
+        )
+    )
     _write_safetensors_stub(oq_model2 / "model.safetensors", 2048)
 
     # Non-oQ model (has README)
@@ -438,10 +443,14 @@ class TestHFUploaderListModels:
         extra_dir.mkdir()
         extra_model = extra_dir / "Phi-3B-oQ4"
         extra_model.mkdir()
-        (extra_model / "config.json").write_text(json.dumps({
-            "model_type": "phi",
-            "quantization": {"bits": 4, "group_size": 64},
-        }))
+        (extra_model / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "phi",
+                    "quantization": {"bits": 4, "group_size": 64},
+                }
+            )
+        )
         _write_safetensors_stub(extra_model / "model.safetensors", 1024)
 
         uploader.update_model_dirs(model_dirs + [str(extra_dir)])
@@ -460,8 +469,8 @@ class TestHFUploaderValidateToken:
             "orgs": [{"name": "myorg"}],
             "auth": {"accessToken": {"role": "write"}},
         }
-        with patch("huggingface_hub.HfApi") as MockApi:
-            MockApi.return_value.whoami.return_value = mock_info
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api_cls.return_value.whoami.return_value = mock_info
             result = await HFUploader.validate_token("hf_valid_token")
         assert result["username"] == "testuser"
         assert len(result["orgs"]) == 1
@@ -474,15 +483,15 @@ class TestHFUploaderValidateToken:
             "orgs": [],
             "auth": {"accessToken": {"role": "read"}},
         }
-        with patch("huggingface_hub.HfApi") as MockApi:
-            MockApi.return_value.whoami.return_value = mock_info
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api_cls.return_value.whoami.return_value = mock_info
             with pytest.raises(ValueError, match="read-only"):
                 await HFUploader.validate_token("hf_read_token")
 
     @pytest.mark.asyncio
     async def test_invalid_token(self):
-        with patch("huggingface_hub.HfApi") as MockApi:
-            MockApi.return_value.whoami.side_effect = Exception("Unauthorized")
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api_cls.return_value.whoami.side_effect = Exception("Unauthorized")
             with pytest.raises(ValueError, match="Invalid token"):
                 await HFUploader.validate_token("bad_token")
 
@@ -516,8 +525,8 @@ class TestHFUploaderTaskLifecycle:
         oq_path = str(Path(model_dirs[0]) / "Llama-3B-oQ4")
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
             mock_api.upload_folder.return_value = None
 
@@ -542,8 +551,8 @@ class TestHFUploaderTaskLifecycle:
         uploader = HFUploader(model_dirs=model_dirs)
 
         # Patch to prevent actual upload
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             # Make upload_folder block
             mock_api.create_repo.return_value = None
             future = asyncio.get_event_loop().create_future()
@@ -568,8 +577,8 @@ class TestHFUploaderTaskLifecycle:
         oq_path = str(Path(model_dirs[0]) / "Llama-3B-oQ4")
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
             future = asyncio.get_event_loop().create_future()
             mock_api.upload_folder.side_effect = lambda **kwargs: future
@@ -591,8 +600,8 @@ class TestHFUploaderTaskLifecycle:
         oq_path = str(Path(model_dirs[0]) / "Llama-3B-oQ4")
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
             mock_api.upload_folder.return_value = None
 
@@ -610,8 +619,8 @@ class TestHFUploaderTaskLifecycle:
         oq_path = str(Path(model_dirs[0]) / "Llama-3B-oQ4")
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
             future = asyncio.get_event_loop().create_future()
             mock_api.upload_folder.side_effect = lambda **kwargs: future
@@ -630,8 +639,8 @@ class TestHFUploaderTaskLifecycle:
         oq_path1 = str(Path(model_dirs[0]) / "Llama-3B-oQ4")
         oq_path2 = str(Path(model_dirs[0]) / "Qwen-7B-oQ3")
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
             mock_api.upload_folder.return_value = None
 
@@ -662,12 +671,13 @@ class TestHFUploaderReadme:
         oq_path = Path(model_dirs[0]) / "Llama-3B-oQ4"
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
 
             # Capture what upload_folder receives
             uploaded_files = []
+
             def fake_upload(**kwargs):
                 folder = Path(kwargs["folder_path"])
                 uploaded_files.extend([f.name for f in folder.iterdir()])
@@ -694,11 +704,12 @@ class TestHFUploaderReadme:
         source_path = str(Path(model_dirs[0]) / "Llama-3B-Instruct")
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
 
             readme_contents = []
+
             def fake_upload(**kwargs):
                 folder = Path(kwargs["folder_path"])
                 readme = folder / "README.md"
@@ -729,11 +740,12 @@ class TestHFUploaderReadme:
         (oq_path / "README.md").write_text(original_readme)
         uploader = HFUploader(model_dirs=model_dirs)
 
-        with patch("huggingface_hub.HfApi") as MockApi:
-            mock_api = MockApi.return_value
+        with patch("huggingface_hub.HfApi") as mock_api_cls:
+            mock_api = mock_api_cls.return_value
             mock_api.create_repo.return_value = None
 
             readme_contents = []
+
             def fake_upload(**kwargs):
                 folder = Path(kwargs["folder_path"])
                 readme = folder / "README.md"

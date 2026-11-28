@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 from .types import MCPConfig, MCPServerConfig
 
@@ -26,7 +26,7 @@ CONFIG_SEARCH_PATHS = [
 CONFIG_ENV_VAR = "OMLX_MCP_CONFIG"
 
 
-def load_mcp_config(path: Optional[Union[str, Path]] = None) -> MCPConfig:
+def load_mcp_config(path: str | Path | None = None) -> MCPConfig:
     """
     Load MCP configuration from file.
 
@@ -62,16 +62,19 @@ def load_mcp_config(path: Optional[Union[str, Path]] = None) -> MCPConfig:
     if config_path.suffix in (".yaml", ".yml"):
         try:
             import yaml
+
             data = yaml.safe_load(content)
-        except ImportError:
-            raise ImportError("PyYAML required for .yaml config files: pip install pyyaml")
+        except ImportError as _cause:
+            raise ImportError(
+                "PyYAML required for .yaml config files: pip install pyyaml"
+            ) from _cause
     else:
         data = json.loads(content)
 
     return validate_config(data)
 
 
-def _find_config_file(explicit_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
+def _find_config_file(explicit_path: str | Path | None = None) -> Path | None:
     """Find the config file to use."""
     # 1. Explicit path
     if explicit_path:
@@ -97,7 +100,7 @@ def _find_config_file(explicit_path: Optional[Union[str, Path]] = None) -> Optio
     return None
 
 
-def validate_config(data: Dict[str, Any]) -> MCPConfig:
+def validate_config(data: dict[str, Any]) -> MCPConfig:
     """
     Validate and parse configuration dictionary.
 
@@ -130,7 +133,7 @@ def validate_config(data: Dict[str, Any]) -> MCPConfig:
             else:
                 raise ValueError(f"Server '{name}' config must be a dictionary")
         except TypeError as e:
-            raise ValueError(f"Invalid config for server '{name}': {e}")
+            raise ValueError(f"Invalid config for server '{name}': {e}") from e
 
     # Validate other fields
     max_tool_calls = data.get("max_tool_calls", 10)
@@ -162,22 +165,22 @@ def create_example_config() -> str:
                 "command": "npx",
                 "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
                 "enabled": True,
-                "timeout": 30
+                "timeout": 30,
             },
             "web-search": {
                 "transport": "sse",
                 "url": "http://localhost:3001/sse",
                 "enabled": True,
-                "timeout": 60
+                "timeout": 60,
             },
             "sqlite": {
                 "transport": "stdio",
                 "command": "uvx",
                 "args": ["mcp-server-sqlite", "--db-path", "data.db"],
-                "enabled": True
-            }
+                "enabled": True,
+            },
         },
         "max_tool_calls": 10,
-        "default_timeout": 30.0
+        "default_timeout": 30.0,
     }
     return json.dumps(example, indent=2)

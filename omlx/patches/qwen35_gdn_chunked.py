@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: N803, N806
 """Route Qwen3.5/3.6 Gated DeltaNet prefill to an optimized Metal kernel.
 
 Default route: ``gated_delta_pipelined`` — the exact sequential recurrence

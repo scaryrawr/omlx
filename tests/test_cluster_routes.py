@@ -1437,6 +1437,7 @@ def test_forget_member_preserves_other_pairings_or_leaves_cluster(monkeypatch, n
 @pytest.mark.parametrize("status", [409, 503])
 def test_forget_member_does_not_unpair_when_local_teardown_fails(monkeypatch, status):
     from fastapi import HTTPException
+
     from omlx.cluster import pairing_routes
 
     removed = []

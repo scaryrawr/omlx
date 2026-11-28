@@ -348,8 +348,9 @@ def load_inkling2_dspark_model(model_path: str | Path) -> Inkling2DSparkModel:
     nn.quantize(
         model,
         **_DRAFT_QUANT,
-        class_predicate=lambda p, m: isinstance(m, nn.Linear)
-        and p.startswith("layers."),
+        class_predicate=lambda p, m: (
+            isinstance(m, nn.Linear) and p.startswith("layers.")
+        ),
     )
     mx.eval(model.parameters())
     return model

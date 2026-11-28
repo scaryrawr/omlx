@@ -80,9 +80,7 @@ def apply() -> bool:
             key = base_layout_key(key)
             if "model" in key:
                 if "model.language_model" in key:
-                    key = key.replace(
-                        "model.language_model", "language_model.model"
-                    )
+                    key = key.replace("model.language_model", "language_model.model")
                 elif "model.visual" in key:
                     key = key.replace("model.visual", "vision_tower")
             elif "lm_head" in key:
@@ -97,7 +95,7 @@ def apply() -> bool:
                 key = "language_model." + key
 
             if key.startswith("language_model.model.visual."):
-                key = "vision_tower." + key[len("language_model.model.visual."):]
+                key = "vision_tower." + key[len("language_model.model.visual.") :]
 
             if "conv1d.weight" in key and value.shape[-1] != 1:
                 value = value.moveaxis(2, 1)

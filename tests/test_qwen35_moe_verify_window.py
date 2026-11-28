@@ -133,7 +133,9 @@ def _block(
                 getattr(shared, name), shared_group, shared_bits
             ),
         )
-    block.shared_expert_gate = nn.QuantizedLinear.from_linear(block.shared_expert_gate, 64, 8)
+    block.shared_expert_gate = nn.QuantizedLinear.from_linear(
+        block.shared_expert_gate, 64, 8
+    )
     if router_bits:
         block.gate = nn.QuantizedLinear.from_linear(block.gate, 64, router_bits)
     block.eval()
@@ -147,7 +149,10 @@ def _block(
 
 
 def _same_bits(a, b):
-    return a.shape == b.shape and mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
+    return (
+        a.shape == b.shape
+        and mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
+    )
 
 
 def _serial(block, x):
@@ -171,6 +176,7 @@ def _verify(block, x, window, row_exact=True):
         routed.routed_verify_window = fused
     mx.eval(out)
     return out
+
 
 def _check(block, x, engaged, row_exact=True):
     """Window rows == one-token rows == the row-exact composed verifier's
@@ -360,7 +366,11 @@ def test_fp32_window_kernels_equal_one_token_kernels(bits):
     window_rps, token_rps = routed._down_rows(rows), routed._down_rows(1)
     mx.random.seed(60 + bits)
     fmt = routed._Format
-    routed_gu, shared_gu, gate_fmt = fmt(bits, 64, True), fmt(8, 128, True), fmt(8, 64, False)
+    routed_gu, shared_gu, gate_fmt = (
+        fmt(bits, 64, True),
+        fmt(8, 128, True),
+        fmt(8, 64, False),
+    )
     routed_d, shared_d = fmt(bits, 64, False), fmt(8, 128, False)
     experts_gate_up = _quantized((experts, 2 * INTER, HIDDEN), 64, bits)
     experts_down = _quantized((experts, HIDDEN, INTER), 64, bits)
@@ -379,7 +389,12 @@ def test_fp32_window_kernels_equal_one_token_kernels(bits):
     x = mx.random.normal((rows, HIDDEN))
     scores = mx.softmax(mx.random.normal((rows, top_k)), axis=-1)
     gate_up_template = [
-        ("T", f32), ("K", HIDDEN), ("NI", INTER), ("RPS", 2), ("NSG", 2), ("NS", INTER),
+        ("T", f32),
+        ("K", HIDDEN),
+        ("NI", INTER),
+        ("RPS", 2),
+        ("NSG", 2),
+        ("NS", INTER),
         ("TOPK", top_k),
     ]
     blocks = 1 + INTER // 4 + top_k * INTER // 4
@@ -393,7 +408,11 @@ def test_fp32_window_kernels_equal_one_token_kernels(bits):
         output_dtypes=[f32],
     )[0]
     down_template = [
-        ("T", f32), ("K", INTER), ("N", HIDDEN), ("KS", INTER), ("NPART", top_k + 1),
+        ("T", f32),
+        ("K", INTER),
+        ("N", HIDDEN),
+        ("KS", INTER),
+        ("NPART", top_k + 1),
         ("TOPK", top_k),
     ]
     y = routed._down_window_kernel(routed_d, shared_d)(
@@ -439,7 +458,13 @@ def test_fp32_window_router_equals_one_row_router():
     def gemv(x, rows):
         return router._GEMV_KERNEL(
             inputs=[x, weight],
-            template=[("T", f32), ("K", HIDDEN), ("N", EXPERTS), ("M", rows), ("NSG", 4)],
+            template=[
+                ("T", f32),
+                ("K", HIDDEN),
+                ("N", EXPERTS),
+                ("M", rows),
+                ("NSG", 4),
+            ],
             grid=(32, EXPERTS * rows, 1),
             threadgroup=(32, 4, 1),
             output_shapes=[(rows, EXPERTS)],
@@ -468,6 +493,10 @@ def test_fp32_window_router_equals_one_row_router():
             output_shapes=[(10,), (10,)],
             output_dtypes=[mx.uint32, f32],
         )
-        assert mx.array_equal(logits[r].view(mx.uint32), logits_r.view(mx.uint32)).item()
+        assert mx.array_equal(
+            logits[r].view(mx.uint32), logits_r.view(mx.uint32)
+        ).item()
         assert mx.array_equal(inds[r], inds_r).item()
-        assert mx.array_equal(scores[r].view(mx.uint32), scores_r.view(mx.uint32)).item()
+        assert mx.array_equal(
+            scores[r].view(mx.uint32), scores_r.view(mx.uint32)
+        ).item()

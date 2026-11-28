@@ -7,8 +7,8 @@ integrating with vLLM's model execution system.
 """
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 from ..api.utils import detect_and_strip_partial
 from ..utils.tokenizer import get_tokenizer_config
@@ -112,11 +112,10 @@ class MLXLanguageModel:
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 
-        except ImportError:
+        except ImportError as _cause:
             raise ImportError(
-                "mlx-lm is required for LLM inference. "
-                "Install with: pip install mlx-lm"
-            )
+                "mlx-lm is required for LLM inference. Install with: pip install mlx-lm"
+            ) from _cause
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -221,14 +220,16 @@ class MLXLanguageModel:
         token_count = 0
         accumulated_text = ""
 
-        for response in stream_generate(
-            self.model,
-            self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            sampler=sampler,
+        for token_count, response in enumerate(
+            stream_generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=sampler,
+            ),
+            start=1,
         ):
-            token_count += 1
             # response.text is the new token text (not accumulated)
             new_text = response.text
             accumulated_text += new_text

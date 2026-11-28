@@ -143,6 +143,7 @@ def realtime_voice_capabilities(config: dict) -> dict:
         "tools": backend_class.supports_tools,
     }
 
+
 # OCR model types that require special handling.
 # unlimited-ocr keeps its dashed config model_type (mlx-vlm resolves it to the
 # unlimited_ocr package via MODEL_REMAPPING), so key it in the dashed form to
@@ -230,9 +231,7 @@ def _report_native_vlm_mtp_readiness(
         or getattr(adapter, "_omlx_mtp_decode_enabled", False)
     )
     adapter_ready = callable(getattr(adapter, "mtp_forward", None))
-    ready = bool(
-        has_mtp_weights and has_mtp_head and decode_enabled and adapter_ready
-    )
+    ready = bool(has_mtp_weights and has_mtp_head and decode_enabled and adapter_ready)
     if ready:
         if getattr(adapter, "_omlx_native_mtp_full_prompt", False):
             logger.info(
@@ -508,8 +507,7 @@ def _load_text_model_with_tokenizer_fallback(
         )
     except Exception as exc:
         logger.debug(
-            "mlx-vlm processor load failed for %s; "
-            "falling back to AutoTokenizer: %s",
+            "mlx-vlm processor load failed for %s; falling back to AutoTokenizer: %s",
             model_name,
             exc,
         )
@@ -680,7 +678,7 @@ def _has_audio_weights(model_dir: Path) -> bool:
         try:
             with safetensors.safe_open(str(sf), framework="np") as f:
                 # safetensors.safe_open exposes keys() but is not a Mapping.
-                if any(_is_audio_weight_key(k) for k in f.keys()):  # noqa: SIM118
+                if any(_is_audio_weight_key(k) for k in f.keys()):
                     return True
         except Exception:
             # Corrupt or unreadable shard — treat as no audio info, let
@@ -719,7 +717,7 @@ def _has_vision_tower_weights(model_dir: Path) -> bool:
     for sf in weight_files:
         with safetensors.safe_open(str(sf), framework="np") as f:
             # safetensors.safe_open exposes keys() but is not a Mapping.
-            if any(_is_vision_tower_key(k) for k in f.keys()):  # noqa: SIM118
+            if any(_is_vision_tower_key(k) for k in f.keys()):
                 return True
     return False
 
@@ -827,9 +825,7 @@ def _strip_vision_config_if_orphaned(model_dir: Path):
             model_config, model_class, config, modules
         )
         # Clear the deserialized config; the raw dict must stay valid for quantization.
-        if hasattr(model_config, "vision_config") and not config.get(
-            "vision_config"
-        ):
+        if hasattr(model_config, "vision_config") and not config.get("vision_config"):
             model_config.vision_config = None
         return model_config
 
@@ -850,8 +846,7 @@ def _strip_vision_config_if_orphaned(model_dir: Path):
         if dropped and not warned:
             warned = True
             logger.warning(
-                "vision_tower weights missing for %s; loading without "
-                "vision support",
+                "vision_tower weights missing for %s; loading without vision support",
                 model_dir.name,
             )
         return original_load_weights(self, kept, *args, **kwargs)
@@ -918,9 +913,7 @@ def _load_optiq_vision_sidecar_on_load(model_dir: Path):
         duplicates = model_keys.intersection(sidecar_weights)
         if duplicates:
             sample = ", ".join(sorted(duplicates)[:3])
-            raise ValueError(
-                f"OptiQ vision sidecar duplicates model weights: {sample}"
-            )
+            raise ValueError(f"OptiQ vision sidecar duplicates model weights: {sample}")
 
         injected = True
         result = original_load_weights(
@@ -1129,8 +1122,7 @@ def _transpose_qwen35_mlx_vision_patch_embed_on_load(model_dir: Path):
         _vu._load_safetensors = original_load_safetensors
         if transposed:
             logger.info(
-                "Transposed Qwen3.5 vision patch embedding to MLX Conv3d "
-                "layout for %s",
+                "Transposed Qwen3.5 vision patch embedding to MLX Conv3d layout for %s",
                 model_dir.name,
             )
 
@@ -1515,9 +1507,7 @@ def _grid_image_token_starts(
 ) -> list[int]:
     """Locate each grid image in the final, expanded processor token sequence."""
     grid = (
-        image_grid_thw.tolist()
-        if hasattr(image_grid_thw, "tolist")
-        else image_grid_thw
+        image_grid_thw.tolist() if hasattr(image_grid_thw, "tolist") else image_grid_thw
     )
     counts = []
     for t, h, w in grid:
@@ -1851,9 +1841,7 @@ def wire_moe_offload_slot_hooks(scheduler, model) -> bool:
     )
 
     banks = [*moe_offload_caches(model), *slots]
-    scheduler.moe_offload_release = functools.partial(
-        release_moe_offload_slots, banks
-    )
+    scheduler.moe_offload_release = functools.partial(release_moe_offload_slots, banks)
     scheduler.moe_offload_restore = functools.partial(restore_moe_offload_slots, banks)
     scheduler.moe_offload_releasable = functools.partial(
         releasable_moe_offload_bytes, banks
@@ -2109,9 +2097,8 @@ class VLMBatchedEngine(BaseEngine):
         from mlx_vlm.generate.diffusion import is_diffusion_model
 
         config = getattr(self._vlm_model, "config", None)
-        if (
-            getattr(config, "canvas_length", None) is not None
-            and is_diffusion_model(self._vlm_model)
+        if getattr(config, "canvas_length", None) is not None and is_diffusion_model(
+            self._vlm_model
         ):
             return "block"
         return None
@@ -2284,9 +2271,7 @@ class VLMBatchedEngine(BaseEngine):
                         self._model_name,
                         trust_remote_code=self._trust_remote_code,
                     )
-                with _load_optiq_vision_sidecar_on_load(
-                    Path(self._model_name)
-                ):
+                with _load_optiq_vision_sidecar_on_load(Path(self._model_name)):
                     load_kwargs = {
                         "trust_remote_code": self._trust_remote_code,
                     }
@@ -2454,9 +2439,7 @@ class VLMBatchedEngine(BaseEngine):
                 get_mlx_executor(), free_t5_biases, self._vlm_model
             )
             if freed > 0:
-                logger.info(
-                    "t5 bias tensors freed: %.0f MB recovered", freed / 1e6
-                )
+                logger.info("t5 bias tensors freed: %.0f MB recovered", freed / 1e6)
         except Exception:
             logger.debug("t5 bias free skipped", exc_info=True)
 
@@ -2913,9 +2896,7 @@ class VLMBatchedEngine(BaseEngine):
 
             apply_qwen35_verify_sdpa_split_patch()
         except Exception:
-            logger.debug(
-                "Qwen verify-split attention patch not applied", exc_info=True
-            )
+            logger.debug("Qwen verify-split attention patch not applied", exc_info=True)
 
         # Qwen3.5/3.6 Gated DeltaNet prefill -> optimized Metal kernel.
         # Decode and masked paths keep the original mlx-vlm kernel.
@@ -3075,9 +3056,7 @@ class VLMBatchedEngine(BaseEngine):
 
                 apply_qwen35_moe_weighted_sum_patch()
             except Exception:
-                logger.debug(
-                    "Qwen MoE weighted-sum patch not applied", exc_info=True
-                )
+                logger.debug("Qwen MoE weighted-sum patch not applied", exc_info=True)
 
         if (
             getattr(self._model_settings, "qwen35_ragged_decode_fallback_enabled", True)
@@ -3101,7 +3080,9 @@ class VLMBatchedEngine(BaseEngine):
 
             apply_qwen35_padded_row_attention_patch()
         except Exception:
-            logger.debug("qwen3_5 padded-row attention patch not applied", exc_info=True)
+            logger.debug(
+                "qwen3_5 padded-row attention patch not applied", exc_info=True
+            )
 
         try:
             from ..patches.qwen35_compiled_mlp import CompiledMLPBlocks
@@ -3480,7 +3461,9 @@ class VLMBatchedEngine(BaseEngine):
                 formatted_messages.append(formatted)
             missing = []
             for kind, expected in (
-                ("image", num_images), ("audio", num_audios), ("video", num_videos)
+                ("image", num_images),
+                ("audio", num_audios),
+                ("video", num_videos),
             ):
                 if media_counts[kind] not in (0, expected):
                     raise InvalidRequestError(
@@ -3844,7 +3827,6 @@ class VLMBatchedEngine(BaseEngine):
 
         return formatted_messages, image_message_ranges
 
-
     def _compute_vision_features(
         self, pixel_values: Any, extra_model_inputs: dict
     ) -> mx.array | None:
@@ -3891,8 +3873,7 @@ class VLMBatchedEngine(BaseEngine):
                         )
                     except TypeError:
                         logger.debug(
-                            "encode_image rejected image metadata; "
-                            "retrying without it",
+                            "encode_image rejected image metadata; retrying without it",
                             exc_info=True,
                         )
                 else:
@@ -4154,9 +4135,7 @@ class VLMBatchedEngine(BaseEngine):
                 miss_grid = miss_inputs.get("image_grid_thw")
                 if miss_pv is None or miss_grid is None:
                     return None
-                miss_grids = [
-                    _grid_row(miss_grid, k) for k in range(len(miss_idx))
-                ]
+                miss_grids = [_grid_row(miss_grid, k) for k in range(len(miss_idx))]
                 if any(g is None for g in miss_grids):
                     return None
                 miss_kw = {"image_grid_thw": mx.array(miss_grids)}
@@ -4196,9 +4175,7 @@ class VLMBatchedEngine(BaseEngine):
             if pad_total != combined.shape[0]:
                 return None
 
-            pixel_values = (
-                miss_pv if miss_idx else mx.zeros((0, 1), dtype=mx.float32)
-            )
+            pixel_values = miss_pv if miss_idx else mx.zeros((0, 1), dtype=mx.float32)
             return {
                 "input_ids": mx.array([token_ids]),
                 "attention_mask": mx.ones((1, len(token_ids)), dtype=mx.int32),
@@ -4233,12 +4210,11 @@ class VLMBatchedEngine(BaseEngine):
             grid = extra_model_inputs["image_grid_hw"].tolist()
             ratio = self._vlm_model.config.vision_downsample_ratio
             counts = [
-                ((h + ratio - 1) // ratio) * ((w + ratio - 1) // ratio)
-                for h, w in grid
+                ((h + ratio - 1) // ratio) * ((w + ratio - 1) // ratio) for h, w in grid
             ]
             if len(counts) != num_images or sum(counts) != features.shape[0]:
                 raise ValueError("DeepSeek V4 cached features do not match image grids")
-            offsets = [sum(counts[:i + 1]) for i in range(len(counts))]
+            offsets = [sum(counts[: i + 1]) for i in range(len(counts))]
             return list(mx.split(features, offsets[:-1], axis=0))
 
         if num_images <= 1:
@@ -4369,7 +4345,6 @@ class VLMBatchedEngine(BaseEngine):
         except Exception:
             logger.debug("Failed to count VLM image tokens", exc_info=True)
             return None
-
 
     def _cached_video_features(
         self, video_identity: str, input_ids: Any, extra_model_inputs: dict
@@ -4536,9 +4511,7 @@ class VLMBatchedEngine(BaseEngine):
                 "MiniCPM-V 4.7 supports text, image and video input, not audio.",
                 field="messages",
             )
-        if model_type == COHERE2_MOE_MODEL_TYPE and (
-            num_images > 0 or num_audios > 0
-        ):
+        if model_type == COHERE2_MOE_MODEL_TYPE and (num_images > 0 or num_audios > 0):
             raise InvalidRequestError(
                 "Cohere2 MoE is a text-only model and does not support "
                 "image or audio input.",
@@ -4894,7 +4867,8 @@ class VLMBatchedEngine(BaseEngine):
         extra_model_inputs = {
             k: v
             for k, v in inputs.items()
-            if k not in (
+            if k
+            not in (
                 "input_ids",
                 "attention_mask",
                 "pixel_values",
@@ -5010,16 +4984,17 @@ class VLMBatchedEngine(BaseEngine):
                             "Vision feature cache hit (per-image): all %d images cached",
                             num_images,
                         )
-                elif cached_whole is not None:
-                    if self._vision_features_match_image_tokens(
+                elif (cached_whole is not None) and (
+                    self._vision_features_match_image_tokens(
                         cached_whole, image_token_count
-                    ):
-                        call_kwargs["cached_image_features"] = cached_whole
-                        used_cached_features = True
-                        logger.debug(
-                            "Vision feature cache hit (whole-request): %s",
-                            image_hash[:16],
-                        )
+                    )
+                ):
+                    call_kwargs["cached_image_features"] = cached_whole
+                    used_cached_features = True
+                    logger.debug(
+                        "Vision feature cache hit (whole-request): %s",
+                        image_hash[:16],
+                    )
 
                 if not used_cached_features:
                     # Partial hit: encode only the uncached images when the
@@ -5227,7 +5202,6 @@ class VLMBatchedEngine(BaseEngine):
         else:
             # Text-only (no images in this message)
             return token_ids, None, None, None, 0, []
-
 
     def _apply_chat_template(
         self,
@@ -5845,7 +5819,9 @@ class VLMBatchedEngine(BaseEngine):
             num_tokens = await asyncio.get_running_loop().run_in_executor(
                 self._engine._mlx_executor, count
             )
-            scheduler = getattr(getattr(self._engine, "engine", None), "scheduler", None)
+            scheduler = getattr(
+                getattr(self._engine, "engine", None), "scheduler", None
+            )
             if scheduler is None:
                 _warn_scheduler_unreachable_once(self, "preflight_chat")
                 return
@@ -5929,7 +5905,6 @@ class VLMBatchedEngine(BaseEngine):
             num_prompt_tokens=num_tokens,
             request_id=request_id,
         )
-
 
     async def preflight_completion(
         self,
@@ -6222,7 +6197,9 @@ class VLMBatchedEngine(BaseEngine):
                 video_files.append(write_video_data_uri(uri))
                 # Rejects undecodable or degenerate clips with a 400 before
                 # mlx-vlm samples them.
-                if self.model_type == "minicpmv4_7" or is_nemotron_omni(self.model_type):
+                if self.model_type == "minicpmv4_7" or is_nemotron_omni(
+                    self.model_type
+                ):
                     probe_video(video_files[-1][0])
                 else:
                     native_video_token_count(
@@ -6278,7 +6255,6 @@ class VLMBatchedEngine(BaseEngine):
             image_cache_key_start,
             image_cache_key_ranges,
         )
-
 
     def _validate_diffusion_request(
         self,

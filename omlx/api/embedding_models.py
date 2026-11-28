@@ -6,9 +6,7 @@ These models define the request and response schemas for:
 - /v1/embeddings endpoint
 """
 
-import time
-import uuid
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -16,13 +14,13 @@ from pydantic import BaseModel, Field, model_validator
 class EmbeddingInputItem(BaseModel):
     """Structured input item for multimodal embeddings."""
 
-    text: Optional[str] = None
+    text: str | None = None
     # Image values are request-facing and must be inline data URIs. Remote URLs
     # and filesystem paths are rejected before processor-specific preparation.
-    image: Optional[str] = None
+    image: str | None = None
     # Audio values follow the chat input_audio rule: a base64 data URI or bare
     # base64, never a URL or filesystem path.
-    audio: Optional[str] = None
+    audio: str | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -41,7 +39,7 @@ class EmbeddingRequest(BaseModel):
     OpenAI-compatible request format for the /v1/embeddings endpoint.
     """
 
-    input: Optional[Union[str, List[Union[str, Dict[str, Any]]]]] = None
+    input: str | list[str | dict[str, Any]] | None = None
     """Input text(s) to embed.
 
     Accepts a single string, a list of strings, or OpenAI-style multimodal
@@ -50,7 +48,7 @@ class EmbeddingRequest(BaseModel):
     are folded into the same internal shape as ``items``.
     """
 
-    items: Optional[List[EmbeddingInputItem]] = None
+    items: list[EmbeddingInputItem] | None = None
     """Structured embedding items for multimodal inputs."""
 
     model: str
@@ -63,7 +61,7 @@ class EmbeddingRequest(BaseModel):
     - "base64": Returns a base64-encoded string of little-endian floats
     """
 
-    dimensions: Optional[int] = Field(default=None, gt=0)
+    dimensions: int | None = Field(default=None, gt=0)
     """
     The number of dimensions the output embeddings should have.
     Only supported by some models. If not supported, returns full dimensions.
@@ -71,7 +69,7 @@ class EmbeddingRequest(BaseModel):
     values truncated from the end instead of being rejected.
     """
 
-    max_length: Optional[int] = Field(default=None, gt=0)
+    max_length: int | None = Field(default=None, gt=0)
     """
     Optional maximum token length for each input text. When omitted, the
     server uses the model's effective context window.
@@ -103,7 +101,7 @@ class EmbeddingData(BaseModel):
     index: int
     """The index of the embedding in the input list."""
 
-    embedding: Union[List[float], str]
+    embedding: list[float] | str
     """
     The embedding vector.
     - List[float] when encoding_format="float"
@@ -131,7 +129,7 @@ class EmbeddingResponse(BaseModel):
     object: str = "list"
     """The object type, always "list"."""
 
-    data: List[EmbeddingData]
+    data: list[EmbeddingData]
     """List of embedding objects."""
 
     model: str

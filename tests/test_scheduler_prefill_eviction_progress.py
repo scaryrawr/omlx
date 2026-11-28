@@ -8,7 +8,7 @@ import pytest
 from mlx_lm.models.cache import KVCache
 
 from omlx.request import Request, RequestStatus, SamplingParams
-from omlx.scheduler import Scheduler, SchedulerConfig, _PrefillEvictionNeeded
+from omlx.scheduler import Scheduler, SchedulerConfig, _PrefillEvictionNeededError
 from omlx.server import _usage_timing_fields
 
 
@@ -86,7 +86,7 @@ def test_external_prefill_resumes_without_replaying_tokens(
     monkeypatch.setattr(scheduler, "_guard_prefill_chunk", guard)
 
     for _ in range(2):
-        with pytest.raises(_PrefillEvictionNeeded) as exc:
+        with pytest.raises(_PrefillEvictionNeededError) as exc:
             scheduler._do_external_prefill(
                 request, request.remaining_tokens, request.prompt_cache
             )

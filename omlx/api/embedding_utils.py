@@ -11,13 +11,14 @@ Provides:
 import base64
 import math
 import struct
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 from ..exceptions import InvalidRequestError
 from .embedding_models import EmbeddingInputItem
 
 
-def encode_embedding_base64(embedding: List[float]) -> str:
+def encode_embedding_base64(embedding: list[float]) -> str:
     """
     Encode embedding vector as base64 string.
 
@@ -33,7 +34,7 @@ def encode_embedding_base64(embedding: List[float]) -> str:
     return base64.b64encode(packed).decode("ascii")
 
 
-def find_non_finite_embeddings(embeddings: Sequence[Sequence[float]]) -> List[int]:
+def find_non_finite_embeddings(embeddings: Sequence[Sequence[float]]) -> list[int]:
     """
     Return the indices of embeddings that contain NaN or infinite values.
 
@@ -48,7 +49,7 @@ def find_non_finite_embeddings(embeddings: Sequence[Sequence[float]]) -> List[in
     Returns:
         Indices of the items whose vector is not entirely finite.
     """
-    bad: List[int] = []
+    bad: list[int] = []
     for index, embedding in enumerate(embeddings):
         try:
             if not all(math.isfinite(float(value)) for value in embedding):
@@ -58,7 +59,7 @@ def find_non_finite_embeddings(embeddings: Sequence[Sequence[float]]) -> List[in
     return bad
 
 
-def truncate_embedding(embedding: List[float], dimensions: int) -> List[float]:
+def truncate_embedding(embedding: list[float], dimensions: int) -> list[float]:
     """
     Truncate embedding to specified dimensions and renormalize.
 
@@ -86,7 +87,7 @@ def truncate_embedding(embedding: List[float], dimensions: int) -> List[float]:
     return truncated
 
 
-def count_tokens(processor: Any, texts: List[str]) -> int:
+def count_tokens(processor: Any, texts: list[str]) -> int:
     """
     Count total tokens in input texts.
 
@@ -128,8 +129,8 @@ def count_tokens(processor: Any, texts: List[str]) -> int:
 
 
 def normalize_input(
-    input_data: Union[str, List[Any]],
-) -> List[Union[str, Dict[str, str]]]:
+    input_data: str | list[Any],
+) -> list[str | dict[str, str]]:
     """
     Normalize the request ``input`` field into engine-ready items.
 
@@ -165,7 +166,7 @@ def normalize_input(
     return [_item_from_content_parts(items)]
 
 
-def _content_part_url(part: Dict[str, Any], field: str) -> str:
+def _content_part_url(part: dict[str, Any], field: str) -> str:
     """Extract a media reference from a part whose value is a str or {"url": str}."""
     payload = part.get(field)
     if isinstance(payload, str) and payload:
@@ -174,10 +175,12 @@ def _content_part_url(part: Dict[str, Any], field: str) -> str:
         url = payload.get("url")
         if isinstance(url, str) and url:
             return url
-    raise InvalidRequestError(f"Embedding content part '{field}' requires a non-empty url")
+    raise InvalidRequestError(
+        f"Embedding content part '{field}' requires a non-empty url"
+    )
 
 
-def _input_audio_part_to_data_uri(part: Dict[str, Any]) -> str:
+def _input_audio_part_to_data_uri(part: dict[str, Any]) -> str:
     """Fold an OpenAI ``input_audio`` part into the data-URI form engines take."""
     payload = part.get("input_audio")
     if isinstance(payload, str) and payload:
@@ -189,14 +192,16 @@ def _input_audio_part_to_data_uri(part: Dict[str, Any]) -> str:
                 return data
             fmt = payload.get("format") or "wav"
             return f"data:audio/{fmt};base64,{data}"
-    raise InvalidRequestError("Embedding content part 'input_audio' requires base64 data")
+    raise InvalidRequestError(
+        "Embedding content part 'input_audio' requires base64 data"
+    )
 
 
-def _item_from_content_parts(parts: List[Any]) -> Dict[str, str]:
+def _item_from_content_parts(parts: list[Any]) -> dict[str, str]:
     """Collapse a list of OpenAI-style content parts into one structured item."""
-    texts: List[str] = []
-    image: Optional[str] = None
-    audio: Optional[str] = None
+    texts: list[str] = []
+    image: str | None = None
+    audio: str | None = None
 
     for part in parts:
         # A string here would be a batch entry; fusing it would return one vector.
@@ -233,7 +238,7 @@ def _item_from_content_parts(parts: List[Any]) -> Dict[str, str]:
                 f"Unsupported embedding content part type: {part_type!r}"
             )
 
-    item: Dict[str, str] = {}
+    item: dict[str, str] = {}
     joined = "\n".join(t for t in texts if t)
     if joined:
         item["text"] = joined
@@ -249,8 +254,8 @@ def _item_from_content_parts(parts: List[Any]) -> Dict[str, str]:
 
 
 def normalize_embedding_items(
-    items: List[Union[EmbeddingInputItem, Dict[str, Any]]]
-) -> List[Dict[str, str]]:
+    items: list[EmbeddingInputItem | dict[str, Any]],
+) -> list[dict[str, str]]:
     """
     Normalize structured embedding items into plain dicts.
 
@@ -260,7 +265,7 @@ def normalize_embedding_items(
     Returns:
         List of normalized item dicts with only supported keys
     """
-    normalized: List[Dict[str, str]] = []
+    normalized: list[dict[str, str]] = []
 
     for item in items:
         if hasattr(item, "model_dump"):
@@ -274,7 +279,7 @@ def normalize_embedding_items(
         image = payload.get("image")
         audio = payload.get("audio")
 
-        normalized_item: Dict[str, str] = {}
+        normalized_item: dict[str, str] = {}
         if text is not None:
             normalized_item["text"] = text
         if image is not None:
@@ -285,5 +290,3 @@ def normalize_embedding_items(
         normalized.append(normalized_item)
 
     return normalized
-
-

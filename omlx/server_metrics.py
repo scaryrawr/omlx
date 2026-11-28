@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .usage_history import UsageHistory
@@ -36,7 +36,7 @@ class ServerMetrics:
     - "alltime": persisted across restarts via stats_path JSON file
     """
 
-    def __init__(self, stats_path: Optional[Path] = None):
+    def __init__(self, stats_path: Path | None = None):
         self._lock = threading.Lock()
         self._stats_path = stats_path
         self.usage_history: UsageHistory | None = None
@@ -49,7 +49,7 @@ class ServerMetrics:
         self.total_requests: int = 0
         self.total_prefill_duration: float = 0.0
         self.total_generation_duration: float = 0.0
-        self._per_model: Dict[str, Dict[str, Any]] = {}
+        self._per_model: dict[str, dict[str, Any]] = {}
 
         # Preflight rejections — split by reason so operators can tell
         # "user fed an oversize prompt" (hard_limit) apart from "system
@@ -57,7 +57,7 @@ class ServerMetrics:
         # This is the only operator-visible signal for the prefill-peak
         # memory guard; the guard was previously dead and shipping it
         # without telemetry repeats that mistake.
-        self.preflight_rejections: Dict[str, int] = {
+        self.preflight_rejections: dict[str, int] = {
             "hard_limit": 0,
             "admission_paused": 0,
         }
@@ -69,7 +69,7 @@ class ServerMetrics:
         self._alltime_requests: int = 0
         self._alltime_prefill_duration: float = 0.0
         self._alltime_generation_duration: float = 0.0
-        self._alltime_per_model: Dict[str, Dict[str, Any]] = {}
+        self._alltime_per_model: dict[str, dict[str, Any]] = {}
 
         self._start_time = time.time()
         self._last_save_time = time.time()
@@ -79,7 +79,7 @@ class ServerMetrics:
             self._load_alltime()
 
     @staticmethod
-    def _new_model_counters() -> Dict[str, Any]:
+    def _new_model_counters() -> dict[str, Any]:
         return {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -122,7 +122,9 @@ class ServerMetrics:
                 }
             logger.info("Loaded all-time stats from %s", self._stats_path)
         except (json.JSONDecodeError, TypeError, KeyError, ValueError, OSError) as e:
-            logger.warning("Failed to load all-time stats from %s: %s", self._stats_path, e)
+            logger.warning(
+                "Failed to load all-time stats from %s: %s", self._stats_path, e
+            )
 
     def save_alltime(self) -> None:
         """Save all-time stats to disk. Thread-safe."""
@@ -146,7 +148,9 @@ class ServerMetrics:
                 json.dump(data, f, indent=2)
             tmp_path.replace(self._stats_path)
         except OSError as e:
-            logger.warning("Failed to save all-time stats to %s: %s", self._stats_path, e)
+            logger.warning(
+                "Failed to save all-time stats to %s: %s", self._stats_path, e
+            )
 
     def _maybe_save_alltime(self) -> None:
         """Save all-time stats if enough time has passed. Called within lock."""
@@ -259,12 +263,10 @@ class ServerMetrics:
         prefill_dur: float,
         gen_dur: float,
         uptime: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build a metrics snapshot dict from raw values."""
         actual_processed = prompt - cached
-        avg_prefill_tps = (
-            actual_processed / prefill_dur if prefill_dur > 0 else 0.0
-        )
+        avg_prefill_tps = actual_processed / prefill_dur if prefill_dur > 0 else 0.0
         avg_generation_tps = completion / gen_dur if gen_dur > 0 else 0.0
         cache_efficiency = (cached / prompt * 100) if prompt > 0 else 0.0
 
@@ -282,7 +284,7 @@ class ServerMetrics:
 
     def get_snapshot(
         self, model_id: str = "", scope: str = "session"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get current metrics snapshot. Thread-safe.
 
         Args:
@@ -374,7 +376,7 @@ class ServerMetrics:
 
 
 # Global singleton
-_server_metrics: Optional[ServerMetrics] = None
+_server_metrics: ServerMetrics | None = None
 
 
 def get_server_metrics() -> ServerMetrics:
@@ -386,7 +388,7 @@ def get_server_metrics() -> ServerMetrics:
 
 
 def reset_server_metrics(
-    stats_path: Optional[Path] = None, *, usage_history_enabled: bool = True
+    stats_path: Path | None = None, *, usage_history_enabled: bool = True
 ) -> None:
     """Reset metrics (called on server start).
 

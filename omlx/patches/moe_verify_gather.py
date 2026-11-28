@@ -398,8 +398,9 @@ def supported(linear, dtype) -> bool:
         return False
     if getattr(linear, "mode", "affine") != "affine":
         return False
-    bits, group_size = getattr(linear, "bits", None), getattr(
-        linear, "group_size", None
+    bits, group_size = (
+        getattr(linear, "bits", None),
+        getattr(linear, "group_size", None),
     )
     if bits not in _BITS or group_size not in _GROUP_SIZES:
         return False

@@ -222,9 +222,7 @@ def test_batched_decode_prefill_and_target_verify_stay_eager(monkeypatch):
 def test_exact_verifier_unwraps_compiled_vlm_block(monkeypatch):
     from mlx_vlm.models.qwen3_5 import language as q35
 
-    verifier = q35.LanguageModel.__call__.__globals__.get(
-        "_EXACT_SPECULATIVE_VERIFIER"
-    )
+    verifier = q35.LanguageModel.__call__.__globals__.get("_EXACT_SPECULATIVE_VERIFIER")
     if verifier is None:
         pytest.skip("mlx-vlm exact verifier not available")
 

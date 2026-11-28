@@ -11,6 +11,7 @@ ml_dtypes and sympy (imported by the reference engram.py).
       check: act_quant(o) removed, i.e. the df42c109 model (the 1017 Indexer owns_k guard
       equals the republish workaround used for that recording); compares with <old.npz>.
 """
+
 import sys
 import types
 import zlib
@@ -32,14 +33,22 @@ def _round_scale(amax, inv):
 
 
 def _np_cast(x, dt):
-    return torch.from_numpy(x.detach().cpu().numpy().astype(np.float32).astype(dt).astype(np.float32))
+    return torch.from_numpy(
+        x.detach().cpu().numpy().astype(np.float32).astype(dt).astype(np.float32)
+    )
 
 
-def act_quant(x, block_size=128, scale_fmt=None, scale_dtype=torch.float32, inplace=False):
+def act_quant(
+    x, block_size=128, scale_fmt=None, scale_dtype=torch.float32, inplace=False
+):
     n = x.size(-1)
     xf = x.float().unflatten(-1, (n // block_size, block_size))
     amax = xf.abs().amax(-1).clamp_min(1e-4)
-    s = _round_scale(amax, 1 / 448.0) if scale_fmt is not None else amax * torch.tensor(1 / 448.0, dtype=torch.float32)
+    s = (
+        _round_scale(amax, 1 / 448.0)
+        if scale_fmt is not None
+        else amax * torch.tensor(1 / 448.0, dtype=torch.float32)
+    )
     q = _np_cast((xf / s.unsqueeze(-1)).clamp(-448.0, 448.0), ml_dtypes.float8_e4m3fn)
     if inplace:
         x.copy_((q * s.unsqueeze(-1)).flatten(-2).to(x.dtype))
@@ -76,11 +85,13 @@ def sparse_attn(q, kv, attn_sink, topk_idxs, softmax_scale):
             se = torch.zeros(h)
             mx_ = torch.full((h,), -1e30)
             for t in range(0, topk, 64):
-                idx = topk_idxs[bi, mi, t:t + 64]
+                idx = topk_idxs[bi, mi, t : t + 64]
                 if idx.numel() < 64:
                     idx = torch.cat([idx, idx.new_full((64 - idx.numel(),), -1)])
                 valid = idx != -1
-                kvb = torch.where(valid[:, None], kv[bi, idx.clamp_min(0)].float(), torch.zeros(()))
+                kvb = torch.where(
+                    valid[:, None], kv[bi, idx.clamp_min(0)].float(), torch.zeros(())
+                )
                 s = qf @ kvb.T
                 s = torch.where(valid[None], s, torch.tensor(-float("inf")))
                 s = s * softmax_scale
@@ -99,8 +110,8 @@ def hc_split_sinkhorn(mixes, hc_scale, hc_base, hc_mult=4, sinkhorn_iters=20, ep
     hc = hc_mult
     m = mixes.float()
     pre = torch.sigmoid(m[..., :hc] * hc_scale[0] + hc_base[:hc]) + eps
-    post = 2 * torch.sigmoid(m[..., hc:2 * hc] * hc_scale[1] + hc_base[hc:2 * hc])
-    comb = (m[..., 2 * hc:] * hc_scale[2] + hc_base[2 * hc:]).unflatten(-1, (hc, hc))
+    post = 2 * torch.sigmoid(m[..., hc : 2 * hc] * hc_scale[1] + hc_base[hc : 2 * hc])
+    comb = (m[..., 2 * hc :] * hc_scale[2] + hc_base[2 * hc :]).unflatten(-1, (hc, hc))
     comb = torch.exp(comb - comb.amax(-1, keepdim=True))
     comb = comb / comb.sum(-1, keepdim=True) + eps
     comb = comb / (comb.sum(-2, keepdim=True) + eps)
@@ -115,13 +126,27 @@ def _unused(*a, **k):
 
 
 kernel = types.ModuleType("kernel")
-kernel.act_quant, kernel.fp4_act_quant, kernel.sparse_attn = act_quant, fp4_act_quant, sparse_attn
-kernel.hc_split_sinkhorn, kernel.fp8_gemm, kernel.fp4_gemm = hc_split_sinkhorn, _unused, _unused
+kernel.act_quant, kernel.fp4_act_quant, kernel.sparse_attn = (
+    act_quant,
+    fp4_act_quant,
+    sparse_attn,
+)
+kernel.hc_split_sinkhorn, kernel.fp8_gemm, kernel.fp4_gemm = (
+    hc_split_sinkhorn,
+    _unused,
+    _unused,
+)
 sys.modules["kernel"] = kernel
 sys.path.insert(0, REF)
-source = open(f"{REF}/model.py").read()
+with open(f"{REF}/model.py") as source_file:
+    source = source_file.read()
 if MODE == "check":
-    lines = [l for l in source.splitlines() if l.strip() != "act_quant(o, fp8_block_size, scale_fmt, scale_dtype, True)"]
+    lines = [
+        layer_index
+        for layer_index in source.splitlines()
+        if layer_index.strip()
+        != "act_quant(o, fp8_block_size, scale_fmt, scale_dtype, True)"
+    ]
     assert len(lines) == len(source.splitlines()) - 2, "expected two act_quant(o) lines"
     source = "\n".join(lines)
 model_mod = types.ModuleType("model")
@@ -132,12 +157,34 @@ M = model_mod
 
 
 def tiny(**kwargs):
-    values = dict(vocab_size=64, dim=32, moe_inter_dim=32, n_layers=5, n_heads=2, q_lora_rank=32,
-                  head_dim=32, rope_head_dim=8, o_groups=2, o_lora_rank=16, index_n_heads=8,
-                  index_head_dim=32, index_topk=3, n_routed_experts=4, n_activated_experts=2,
-                  window_size=4, dtype="bf16", expert_dtype=None, n_mtp_layers=0, max_seq_len=64,
-                  max_batch_size=2, hc_sinkhorn_iters=3, candidate_source_layer=3,
-                  candidate_block_size=2, candidate_topk_blocks=2, index_source_layers=(1, 3, 4))
+    values = dict(
+        vocab_size=64,
+        dim=32,
+        moe_inter_dim=32,
+        n_layers=5,
+        n_heads=2,
+        q_lora_rank=32,
+        head_dim=32,
+        rope_head_dim=8,
+        o_groups=2,
+        o_lora_rank=16,
+        index_n_heads=8,
+        index_head_dim=32,
+        index_topk=3,
+        n_routed_experts=4,
+        n_activated_experts=2,
+        window_size=4,
+        dtype="bf16",
+        expert_dtype=None,
+        n_mtp_layers=0,
+        max_seq_len=64,
+        max_batch_size=2,
+        hc_sinkhorn_iters=3,
+        candidate_source_layer=3,
+        candidate_block_size=2,
+        candidate_topk_blocks=2,
+        index_source_layers=(1, 3, 4),
+    )
     values.update(kwargs)
     return M.ModelArgs(**values)
 
@@ -164,15 +211,27 @@ IDS_SEED = 5 if MODE == "check" else 16
 out = {}
 for length in (1, 3, 8, 17):
     model = build(tiny())
-    ids = torch.from_numpy(np.random.default_rng(IDS_SEED).integers(3, 60, (1, length + 3), dtype=np.int32).astype(np.int64))
+    ids = torch.from_numpy(
+        np.random.default_rng(IDS_SEED)
+        .integers(3, 60, (1, length + 3), dtype=np.int32)
+        .astype(np.int64)
+    )
     _, logits, _ = model(ids[:, :length], 0)
     out[f"prefill{length}_0"] = logits.float().numpy()
     for index, position in enumerate(range(length, length + 3), 1):
-        _, logits, _ = model(ids[:, position:position + 1], position)
+        _, logits, _ = model(ids[:, position : position + 1], position)
         out[f"prefill{length}_{index}"] = logits.float().numpy()
-args = tiny(n_mtp_layers=3, dspark_block_size=3, dspark_noise_token_id=2, dspark_target_layer_ids=(2, 3, 4),
-            dspark_n_routed_experts=2, dspark_n_activated_experts=1, dspark_markov_rank=32,
-            compress_ratios=(0, 2, 2, 1, 1, 0, 0, 0), temperature=0)
+args = tiny(
+    n_mtp_layers=3,
+    dspark_block_size=3,
+    dspark_noise_token_id=2,
+    dspark_target_layer_ids=(2, 3, 4),
+    dspark_n_routed_experts=2,
+    dspark_n_activated_experts=1,
+    dspark_markov_rank=32,
+    compress_ratios=(0, 2, 2, 1, 1, 0, 0, 0),
+    temperature=0,
+)
 model = build(args)
 index = 0
 for start, ids in [(0, [3, 4, 5, 6, 7]), (5, [8]), (6, [9])]:
@@ -192,10 +251,13 @@ if MODE == "check":
     for k in sorted(out):
         a, e = out[k], old[k]
         if a.shape != e.shape:
-            print(f"{k:12} SHAPE {a.shape} vs {e.shape}"); continue
+            print(f"{k:12} SHAPE {a.shape} vs {e.shape}")
+            continue
         d = np.abs(a.astype(np.float64) - e)
-        print(f"{k:12} max|d| {d.max():.3e}  max rel {(d / np.maximum(np.abs(e), 1e-6)).max():.3e}  "
-              f"allclose(2e-5, 2e-4) {np.allclose(a, e, atol=2e-5, rtol=2e-4)}")
+        print(
+            f"{k:12} max|d| {d.max():.3e}  max rel {(d / np.maximum(np.abs(e), 1e-6)).max():.3e}  "
+            f"allclose(2e-5, 2e-4) {np.allclose(a, e, atol=2e-5, rtol=2e-4)}"
+        )
 else:
     np.savez(sys.argv[3], **out)
     print("recorded", len(out), "arrays to", sys.argv[3])

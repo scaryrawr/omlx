@@ -22,9 +22,10 @@ difference via a small adapter (see ``batch_generator._slice_hidden``).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from . import deepseek_v4_dspark, prompt_priming
 
@@ -129,8 +130,8 @@ def _register_mtp_block(dsv4: Any) -> None:
     import mlx.core as mx
     import mlx.nn as nn
 
-    DeepseekV4Block = dsv4.DeepseekV4Block
-    HyperHead = dsv4.HyperHead
+    deepseek_v4_block_cls = dsv4.DeepseekV4Block
+    hyper_head_cls = dsv4.HyperHead
 
     class MTPBlock(nn.Module):
         """One MTP layer in DeepSeek-V4's stack.
@@ -146,13 +147,13 @@ def _register_mtp_block(dsv4: Any) -> None:
         def __init__(self, config, layer_idx: int):
             super().__init__()
             dim = config.hidden_size
-            self.block = DeepseekV4Block(config, layer_idx)
+            self.block = deepseek_v4_block_cls(config, layer_idx)
             self.e_proj = nn.Linear(dim, dim, bias=False)
             self.h_proj = nn.Linear(dim, dim, bias=False)
             self.enorm = nn.RMSNorm(dim, eps=config.rms_norm_eps)
             self.hnorm = nn.RMSNorm(dim, eps=config.rms_norm_eps)
             self.norm = nn.RMSNorm(dim, eps=config.rms_norm_eps)
-            self.hc_head = HyperHead(config)
+            self.hc_head = hyper_head_cls(config)
 
         def __call__(
             self,
@@ -188,7 +189,7 @@ def _patch_deepseek_v4_model_call(dsv4: Any) -> None:
     import mlx.core as mx
     from mlx_lm.models.base import create_attention_mask
 
-    CacheList = dsv4.CacheList
+    cache_list_cls = dsv4.CacheList
     _materialize_cache_arrays = dsv4._materialize_cache_arrays
 
     def __call__(
@@ -213,7 +214,7 @@ def _patch_deepseek_v4_model_call(dsv4: Any) -> None:
 
         first_cache = cache[0]
         mask_cache = (
-            first_cache[0] if isinstance(first_cache, CacheList) else first_cache
+            first_cache[0] if isinstance(first_cache, cache_list_cls) else first_cache
         )
         mask = create_attention_mask(
             h[:, :, 0, :],
@@ -240,7 +241,7 @@ def _patch_deepseek_v4_model_call(dsv4: Any) -> None:
         if pipeline_rank != 0:
             h = mx.distributed.send(h, (pipeline_rank - 1) % pipeline_size)
             cache_item = cache[-1]
-            if isinstance(cache_item, CacheList):
+            if isinstance(cache_item, cache_list_cls):
                 cache_item = cache_item[0]
             if cache_item is not None:
                 cache_item.keys = mx.depends(cache_item.keys, h)
@@ -288,10 +289,10 @@ def _patch_model(dsv4: Any) -> None:
     # ``DeepseekV4Cache`` wrapper. The make_mtp_cache + mtp_forward bodies
     # below use the oMLX-side cache layout to stay compatible with the
     # already-patched DeepseekV4Model.__call__ above.
-    CacheList = dsv4.CacheList
-    PoolingCache = dsv4.PoolingCache
-    RotatingKVCache = dsv4.RotatingKVCache
-    SparseCompressedAttention = getattr(dsv4, "SparseCompressedAttention", None)
+    cache_list_cls = dsv4.CacheList
+    pooling_cache_cls = dsv4.PoolingCache
+    rotating_k_v_cache_cls = dsv4.RotatingKVCache
+    sparse_compressed_attention_cls = getattr(dsv4, "SparseCompressedAttention", None)
     materialize_cache_arrays = dsv4._materialize_cache_arrays
 
     original_init = cls.__init__
@@ -430,22 +431,22 @@ def _patch_model(dsv4: Any) -> None:
             attn = mtp_block.block.attn
             ratio = getattr(attn, "compress_ratio", 0)
             if ratio == 0:
-                caches.append(RotatingKVCache(max_size=sw))
-            elif SparseCompressedAttention is not None and isinstance(
-                attn, SparseCompressedAttention
+                caches.append(rotating_k_v_cache_cls(max_size=sw))
+            elif sparse_compressed_attention_cls is not None and isinstance(
+                attn, sparse_compressed_attention_cls
             ):
                 caches.append(
-                    CacheList(
-                        RotatingKVCache(max_size=sw),
-                        PoolingCache(ratio),
-                        PoolingCache(ratio),
+                    cache_list_cls(
+                        rotating_k_v_cache_cls(max_size=sw),
+                        pooling_cache_cls(ratio),
+                        pooling_cache_cls(ratio),
                     )
                 )
             else:
                 caches.append(
-                    CacheList(
-                        RotatingKVCache(max_size=sw),
-                        PoolingCache(ratio),
+                    cache_list_cls(
+                        rotating_k_v_cache_cls(max_size=sw),
+                        pooling_cache_cls(ratio),
                     )
                 )
         return caches
@@ -598,7 +599,7 @@ def _patch_model(dsv4: Any) -> None:
 
         first_cache = cache[0]
         mask_cache = (
-            first_cache[0] if isinstance(first_cache, CacheList) else first_cache
+            first_cache[0] if isinstance(first_cache, cache_list_cls) else first_cache
         )
         mask_input = h[:, :, 0, :] if h.ndim == 4 else h
         mask = create_attention_mask(
@@ -634,7 +635,7 @@ def _patch_model(dsv4: Any) -> None:
         exact undo feasibility; rotating caches accept the trim while the
         armed undo (or an unrotated buffer) covers it.
         """
-        if isinstance(c, CacheList):
+        if isinstance(c, cache_list_cls):
             return all(_cache_can_trim(sub, n) for sub in c.caches)
         remainder = getattr(c, "remainder", None)
         if remainder is not None:  # PoolingCache / BatchPoolingCache
@@ -684,7 +685,7 @@ def _patch_model(dsv4: Any) -> None:
                 return False
         return True
 
-    def sanitize(self, weights: Dict[str, Any]) -> Dict[str, Any]:
+    def sanitize(self, weights: dict[str, Any]) -> dict[str, Any]:
         """Combined oMLX-base + PR 15 sanitize.
 
         oMLX's stock sanitize strips ``mtp.*`` and remaps the FP4 expert
@@ -700,15 +701,13 @@ def _patch_model(dsv4: Any) -> None:
         # Disable MTP module if weights are absent (e.g. quantized checkpoints
         # that stripped them). Mirrors PR 15's graceful fallback.
         if has_mtp and not has_mtp_weights:
-            try:
+            with contextlib.suppress(AttributeError):
                 del self.mtp
-            except AttributeError:
-                pass
             has_mtp = False
             self._omlx_mtp_decode_enabled = False
             self._omlx_dspark_decode_enabled = False
 
-        new_weights: Dict[str, Any] = {}
+        new_weights: dict[str, Any] = {}
         for k, v in weights.items():
             if k.startswith("mtp."):
                 if not has_mtp:

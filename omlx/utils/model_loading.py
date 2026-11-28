@@ -52,6 +52,7 @@ _REMOTE_CODE_METADATA_PATTERNS = [
     "*.jinja",
 ]
 
+
 def ensure_model_code_trusted(
     config: dict[str, Any],
     *,
@@ -164,6 +165,7 @@ def lm_load_compat(path_or_repo: str, *, trust_remote_code: bool = False, **kwar
         trust_remote_code=trust_remote_code,
     )
     from mlx_lm import load
+
     return load(path_or_repo, trust_remote_code=trust_remote_code, **kwargs)
 
 
@@ -272,7 +274,12 @@ def expand_per_layer_quant_keys(cfg: dict) -> dict:
                     fg = cand.replace(".hc_ffn_", ".ffn_hc.")
                 elif ".self_attn." in cand:
                     head, tail = cand.split(".self_attn.", 1)
-                    if tail.split(".", 1)[0] in ("f_a_proj", "f_b_proj", "A_log", "dt_bias"):
+                    if tail.split(".", 1)[0] in (
+                        "f_a_proj",
+                        "f_b_proj",
+                        "A_log",
+                        "dt_bias",
+                    ):
                         fg = f"{head}.self_attn.forget_gate.{tail}"
                 if fg and fg not in quant and fg not in extras:
                     extras[fg] = val
@@ -1063,8 +1070,11 @@ def maybe_apply_pre_load_patches(
         else:
             sidecar_depth = _qwen4_mtp_sidecar_draft_depth(model_name)
             set_mtp_depth(
-                int(depth) if depth is not None
-                else sidecar_depth if sidecar_depth is not None else 3
+                int(depth)
+                if depth is not None
+                else sidecar_depth
+                if sidecar_depth is not None
+                else 3
             )
         if mtp_active and not apply_mlx_lm_mtp_patch():
             logger.warning(
@@ -1080,7 +1090,9 @@ def maybe_apply_pre_load_patches(
                 "mmap"
                 if model_settings is not None
                 and getattr(model_settings, "qwen4_ple_ssd_offload", False)
-                else "resident" if model_settings is not None else None
+                else "resident"
+                if model_settings is not None
+                else None
             ),
             mtp_enabled=mtp_active,
         )
@@ -1175,8 +1187,11 @@ def maybe_apply_pre_load_patches(
             elif model_type.startswith(("qwen3_5", "qwen3_6")):
                 sidecar_depth = _qwen35_mtp_sidecar_draft_depth(model_name)
                 set_mtp_depth(
-                    sidecar_depth if sidecar_depth is not None
-                    else 4 if model_type == "qwen3_5" and _nax_available() else 3
+                    sidecar_depth
+                    if sidecar_depth is not None
+                    else 4
+                    if model_type == "qwen3_5" and _nax_available()
+                    else 3
                 )
             elif model_type.startswith("nemotron_h"):
                 # The stock nemotron_h head is depth-1 trained; the adaptive
@@ -1194,9 +1209,7 @@ def maybe_apply_pre_load_patches(
                 # The checkpoint ships one MTP block per draft depth; cap
                 # the chain at the shipped depth (8 on Inkling Small).
                 mtp_cfg = config.get("mtp_config") or {}
-                set_mtp_depth(
-                    int(mtp_cfg.get("num_nextn_predict_layers", 0) or 0) or 3
-                )
+                set_mtp_depth(int(mtp_cfg.get("num_nextn_predict_layers", 0) or 0) or 3)
             elif model_type == "deepseek_v41":
                 # DSpark drafts a whole dspark_block_size block per cycle.
                 block = (text_config or config).get("dspark_block_size")
@@ -1411,9 +1424,7 @@ def _has_mtp_heads(config: dict) -> bool:
         return True
     # Inkling nests the head declaration under a top-level mtp_config.
     mtp_cfg = config.get("mtp_config") or {}
-    if int(mtp_cfg.get("num_nextn_predict_layers", 0) or 0) > 0:
-        return True
-    return False
+    return int(mtp_cfg.get("num_nextn_predict_layers", 0) or 0) > 0
 
 
 _MTP_WEIGHT_PREFIXES = (

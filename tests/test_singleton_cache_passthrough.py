@@ -7,7 +7,7 @@ from mlx_lm.generate import PromptProcessingBatch, StopSequences
 from mlx_lm.models.cache import ArraysCache, BatchKVCache, CacheList, KVCache
 from mlx_vlm.turboquant import TurboQuantKVCache
 
-import omlx.scheduler  # noqa: F401  (applies BatchGenerator cache patches)
+import omlx.scheduler
 from omlx.turboquant_kv import BatchTurboQuantKVCache
 
 

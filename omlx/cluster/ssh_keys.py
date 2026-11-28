@@ -253,13 +253,13 @@ def pin_enrolled_host_key(
     matching_hosts = [
         line.strip()
         for line in existing_lines
-        if line.strip() and not line.lstrip().startswith("#")
+        if line.strip()
+        and not line.lstrip().startswith("#")
         and line.split(maxsplit=1)[0] == hostname
     ]
     if matching_hosts:
         if any(
-            len(line.split()) >= 3
-            and " ".join(line.split()[1:3]) == normalized_key
+            len(line.split()) >= 3 and " ".join(line.split()[1:3]) == normalized_key
             for line in matching_hosts
         ):
             return False
@@ -273,5 +273,3 @@ def pin_enrolled_host_key(
         stream.write(f"{hostname} {normalized_key}\n")
     os.chmod(known_hosts_path, 0o600)
     return True
-
-

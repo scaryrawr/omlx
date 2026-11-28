@@ -137,7 +137,9 @@ class TestCustomKernelBuild:
 
     def test_metal_toolchain_checked_before_kernel_build(self, formula):
         block = formula.index('if build.with?("custom-kernel")')
-        guard = formula.index('quiet_system("/usr/bin/xcrun", "metal", "--version")', block)
+        guard = formula.index(
+            'quiet_system("/usr/bin/xcrun", "metal", "--version")', block
+        )
         assert guard < formula.index('ENV["OMLX_WITH_CUSTOM_KERNEL"]', block)
 
     def test_metal_guard_executes_the_compiler(self, formula):

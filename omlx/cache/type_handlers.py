@@ -1394,7 +1394,7 @@ class MiniMaxM3KVCacheHandler(_MiniMaxM3CacheHandlerBase):
             apply_mlx_vlm_minimax_m3_compat_patch()
 
             from mlx_vlm.models.minimax_m3_vl.language import MiniMaxM3KVCache
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("mlx-vlm MiniMaxM3KVCache unavailable: %s", e)
             return None
 
@@ -1480,7 +1480,7 @@ class MiniMaxM3BatchKVCacheHandler(_MiniMaxM3CacheHandlerBase):
             apply_mlx_vlm_minimax_m3_compat_patch()
 
             from mlx_vlm.models.minimax_m3_vl.language import MiniMaxM3BatchKVCache
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("mlx-vlm MiniMaxM3BatchKVCache unavailable: %s", e)
             return None
 
@@ -1522,7 +1522,7 @@ def _serialize_qsa_positions(position_ids: Any) -> Any:
     if position_ids.ndim == 3:
         return position_ids.transpose(1, 0, 2)
     raise ValueError(
-        "QSA position IDs must be [B, S] or [3, B, S], got " f"{position_ids.shape}."
+        f"QSA position IDs must be [B, S] or [3, B, S], got {position_ids.shape}."
     )
 
 
@@ -1532,8 +1532,7 @@ def _deserialize_qsa_positions(position_ids: Any) -> Any:
         return position_ids
     if position_ids.ndim != 3:
         raise ValueError(
-            "Serialized QSA position IDs must be [B, C, S], got "
-            f"{position_ids.shape}."
+            f"Serialized QSA position IDs must be [B, C, S], got {position_ids.shape}."
         )
     channels = int(position_ids.shape[1])
     if channels not in (1, 3):
@@ -1565,7 +1564,7 @@ def _normalize_qsa_position_states(position_states: list[Any]) -> list[Any]:
         if not hasattr(position_state, "ndim") or position_state.ndim != 3:
             shape = getattr(position_state, "shape", None)
             raise ValueError(
-                "Serialized QSA position IDs must be [B, C, S], " f"got {shape}."
+                f"Serialized QSA position IDs must be [B, C, S], got {shape}."
             )
         current_batch, current_channels, _ = position_state.shape
         if current_channels not in (1, 3):
@@ -1641,7 +1640,7 @@ class Qwen4QSAKVCacheHandler(CacheTypeHandler):
             raise ValueError("Serialized QSA cache state must contain tensors")
         if len(shapes[3]) != 3:
             raise ValueError(
-                "Serialized QSA position IDs must be [B, C, S], got " f"{shapes[3]}."
+                f"Serialized QSA position IDs must be [B, C, S], got {shapes[3]}."
             )
         if len(shapes[0]) != 4 or len(shapes[1]) != 4 or len(shapes[2]) != 3:
             raise ValueError(
@@ -1791,7 +1790,7 @@ class Qwen4QSAKVCacheHandler(CacheTypeHandler):
 
             apply_mlx_vlm_qwen4_exp_compat_patch()
             from mlx_vlm.models.qwen4_exp.language import QSAKVCache
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("Qwen4 QSAKVCache unavailable: %s", exc)
             return None
 
@@ -1913,7 +1912,7 @@ class Qwen4BatchQSAKVCacheHandler(CacheTypeHandler):
 
             apply_mlx_vlm_qwen4_exp_compat_patch()
             from mlx_vlm.models.qwen4_exp.language import BatchQSAKVCache
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("Qwen4 BatchQSAKVCache unavailable: %s", exc)
             return None
 

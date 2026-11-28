@@ -226,9 +226,7 @@ def apply_qwen35_moe_weighted_sum_patch() -> bool:
     patched |= _patch_class(
         "mlx_lm.models.qwen3_moe", "Qwen3MoeSparseMoeBlock", min_tokens
     )
-    patched |= _patch_class(
-        "mlx_lm.models.qwen3_5", "SparseMoeBlock", min_tokens
-    )
+    patched |= _patch_class("mlx_lm.models.qwen3_5", "SparseMoeBlock", min_tokens)
 
     _PATCHED = patched
     if patched:

@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -144,10 +144,10 @@ class _InklingMTPCacheList(list):
 class _InklingPrimeCtx:
     """Sliding-window prompt capture (no head forwards until activation)."""
 
-    tok_chunks: List[Any] = field(default_factory=list)  # (1, s) each
-    hid_chunks: List[Any] = field(default_factory=list)  # (1, s, H) each
+    tok_chunks: list[Any] = field(default_factory=list)  # (1, s) each
+    hid_chunks: list[Any] = field(default_factory=list)  # (1, s, H) each
     total: int = 0
-    pending_hidden: Optional[Any] = None
+    pending_hidden: Any | None = None
     expected_offset: int = 0
     valid: bool = True
 
@@ -220,7 +220,8 @@ def _mtp_sanitize_hook(key: str, value: mx.array) -> dict:
             if sub.startswith("transformer_block."):
                 tb = sub[len("transformer_block.") :]
                 return {
-                    base + nk: nv for nk, nv in _map_transformer_block(tb, value).items()
+                    base + nk: nv
+                    for nk, nv in _map_transformer_block(tb, value).items()
                 }
             return {base + sub: value}
     return {}
@@ -343,7 +344,7 @@ def _register_mtp_classes(inkling_lang: Any) -> None:
 
     from dataclasses import replace
 
-    InklingDecoderLayer = inkling_lang.InklingDecoderLayer
+    inkling_decoder_layer_cls = inkling_lang.InklingDecoderLayer
     qkvr_fusion_enabled = inkling_lang.qkvr_fusion_enabled
 
     class InklingMTPBlock(nn.Module):
@@ -354,7 +355,7 @@ def _register_mtp_classes(inkling_lang: Any) -> None:
             self.input_proj = nn.Linear(
                 2 * config.hidden_size, config.hidden_size, bias=False
             )
-            self.transformer_block = InklingDecoderLayer(
+            self.transformer_block = inkling_decoder_layer_cls(
                 config, layer_idx, qkvr_fused=qkvr_fused
             )
 
@@ -419,8 +420,8 @@ def _patch_language_model(inkling_lang: Any) -> None:
     original_call = cls.__call__
 
     def __init__(self, config):
-        from . import is_mtp_attach_enabled
         from ..mlx_lm_mtp import is_mtp_active
+        from . import is_mtp_attach_enabled
 
         original_init(self, config)
         n_mtp = int(getattr(config, "mtp_num_hidden_layers", 0) or 0)
@@ -483,9 +484,7 @@ def _patch_language_model(inkling_lang: Any) -> None:
         # then the block's own embed_norm. Raw embeddings collapse
         # depth-0 agreement 0.87 -> 0.58.
         emb = self.model.embed(tok_win)
-        x = mx.concatenate(
-            [block.hidden_norm(hid_win), block.embed_norm(emb)], axis=-1
-        )
+        x = mx.concatenate([block.hidden_norm(hid_win), block.embed_norm(emb)], axis=-1)
         x = block.input_proj(x)
         return block.transformer_block(x, cache=block_cache)
 
@@ -567,8 +566,7 @@ def _patch_language_model(inkling_lang: Any) -> None:
         reach = max(1, min(int(cache.active_max), len(cache)))
         if reach > 1 and cache.frontier > 0 and cache.ring_tok is not None:
             lag = max(
-                (cache.frontier - 1 - j) - cache.valid_rows[j]
-                for j in range(reach)
+                (cache.frontier - 1 - j) - cache.valid_rows[j] for j in range(reach)
             )
             if lag >= _KEEPALIVE_LAG:
                 self._mtp_keepalive(cache, reach)
@@ -579,9 +577,7 @@ def _patch_language_model(inkling_lang: Any) -> None:
             cache.ring_hid = hidden_states
         else:
             cache.ring_tok = mx.concatenate([cache.ring_tok, tok_row], axis=1)
-            cache.ring_hid = mx.concatenate(
-                [cache.ring_hid, hidden_states], axis=1
-            )
+            cache.ring_hid = mx.concatenate([cache.ring_hid, hidden_states], axis=1)
         if cache.ring_tok.shape[1] > _RING:
             cache.ring_tok = cache.ring_tok[:, -_RING:]
             cache.ring_hid = cache.ring_hid[:, -_RING:]
@@ -605,9 +601,7 @@ def _patch_language_model(inkling_lang: Any) -> None:
             # provisional rows. Draft quality only — verify stays exact.
             # Rare with keepalive bounding the lags.
             if not cache.clamp_logged:
-                logger.debug(
-                    "inkling MTP fold clamped: w0 %d -> %d", w0, floor
-                )
+                logger.debug("inkling MTP fold clamped: w0 %d -> %d", w0, floor)
                 cache.clamp_logged = True
             w0 = floor
         for j in range(active):
@@ -782,8 +776,7 @@ def _patch_language_model(inkling_lang: Any) -> None:
             head_cache.frontier = f
             head_cache.base = [f - w_eff] * len(head_cache)
             head_cache.valid_rows = [
-                max(0, f - 1 - j) if j < active else 0
-                for j in range(len(head_cache))
+                max(0, f - 1 - j) if j < active else 0 for j in range(len(head_cache))
             ]
             r = min(_RING, w_eff)
             head_cache.ring_tok = tok[:, -r:]
@@ -856,9 +849,7 @@ def _inkling_prime_capture(host, inputs, hidden, cache) -> None:
 
     if ctx.pending_hidden is not None:
         if seq_len > 1:
-            hid_chunk = mx.concatenate(
-                [ctx.pending_hidden, hidden[:, :-1]], axis=1
-            )
+            hid_chunk = mx.concatenate([ctx.pending_hidden, hidden[:, :-1]], axis=1)
         else:
             hid_chunk = ctx.pending_hidden
         tok_chunk = inputs

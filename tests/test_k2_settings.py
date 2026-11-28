@@ -184,9 +184,14 @@ def test_k2_ane_profile_persists_without_becoming_a_global_template(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model_type,forced,backend",
-    [("k2_horizon", True, "k2"), ("qwen3_5", False, "qwen"),
-     ("qwen3-6_moe", False, "qwen"), ("qwen3_8", False, "qwen"),
-     ("llama", False, None), ("unknown", False, None)],
+    [
+        ("k2_horizon", True, "k2"),
+        ("qwen3_5", False, "qwen"),
+        ("qwen3-6_moe", False, "qwen"),
+        ("qwen3_8", False, "qwen"),
+        ("llama", False, None),
+        ("unknown", False, None),
+    ],
 )
 async def test_admin_model_response_describes_controls(
     tmp_path, monkeypatch, model_type, forced, backend
@@ -196,7 +201,9 @@ async def test_admin_model_response_describes_controls(
     from omlx.admin import routes
 
     pool = MagicMock()
-    pool.get_status.return_value = {"models": [{"id": "model", "config_model_type": model_type}]}
+    pool.get_status.return_value = {
+        "models": [{"id": "model", "config_model_type": model_type}]
+    }
     manager = ModelSettingsManager(tmp_path)
     monkeypatch.setattr(routes, "_get_engine_pool", lambda: pool)
     monkeypatch.setattr(routes, "_get_settings_manager", lambda: manager)
@@ -208,7 +215,9 @@ async def test_admin_model_response_describes_controls(
         ["auto", "on_limit"] if forced else ["auto", "on_unlimit", "on_limit", "off"]
     )
     assert model["reasoning_effort_options"] == (
-        ["low", "medium", "high"] if forced else ["low", "medium", "high", "xhigh", "max"]
+        ["low", "medium", "high"]
+        if forced
+        else ["low", "medium", "high", "xhigh", "max"]
     )
     assert model["reasoning_effort_default"] == ("high" if forced else "low")
     assert model["reasoning_effort_custom"] is not forced
@@ -220,9 +229,12 @@ async def test_admin_model_response_describes_controls(
 def test_helper_model_does_not_offer_k2_ane():
     from omlx.admin.routes import _model_options
 
-    assert _model_options(
-        {"config_model_type": "k2_horizon", "is_helper": True}, None
-    )["ane_prefill_backend"] is None
+    assert (
+        _model_options({"config_model_type": "k2_horizon", "is_helper": True}, None)[
+            "ane_prefill_backend"
+        ]
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -254,7 +266,10 @@ def test_shared_ane_signature_uses_only_effective_backend_controls(
     pool = EnginePool()
     pool.discover_models(str(tmp_path))
     settings = ModelSettings(qwen35_ane_prefill_enabled=enabled)
-    signature = lambda value: pool._engine_runtime_signature(models.name, value)
+
+    def signature(value):
+        return pool._engine_runtime_signature(models.name, value)
+
     original = signature(settings)
     assert (
         signature(
@@ -289,6 +304,7 @@ async def test_shared_ane_manual_enable_and_profile_validation(
     models, tmp_path, monkeypatch, model_type, width, fraction
 ):
     from fastapi import HTTPException
+
     from omlx.admin import routes
 
     pool = EnginePool()

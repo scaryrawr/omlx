@@ -25,7 +25,6 @@ The processor supports two usage modes:
 """
 
 import logging
-from typing import List, Optional
 
 import mlx.core as mx
 import numpy as np
@@ -45,6 +44,7 @@ def create_grammar_compiler(
     Returns None if vocab_size cannot be determined.
     """
     from .._torch_stub import install as _install_torch_stub
+
     _install_torch_stub()
     import xgrammar as xgr
 
@@ -94,6 +94,7 @@ class GrammarConstraintProcessor:
 
     def __init__(self, compiled_grammar, vocab_size: int):
         from .._torch_stub import install as _install_torch_stub
+
         _install_torch_stub()
         import xgrammar as xgr
         from xgrammar.kernels.apply_token_bitmask_mlx import apply_token_bitmask_mlx

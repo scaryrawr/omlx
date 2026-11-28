@@ -539,7 +539,9 @@ class TestChatCompletionRequest:
     def test_matching_thinking_alias_preserves_input(self, enabled):
         template_kwargs = {"enable_thinking": enabled, "custom": "value"}
         request = ChatCompletionRequest(
-            model="test", messages=[], enable_thinking=enabled,
+            model="test",
+            messages=[],
+            enable_thinking=enabled,
             chat_template_kwargs=template_kwargs,
         )
         assert request.chat_template_kwargs == template_kwargs

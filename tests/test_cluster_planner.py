@@ -524,9 +524,10 @@ def test_the_planner_puts_each_nodes_memory_tier_on_its_own_assignment():
         plan_unequal_pipeline(model, nodes),
         plan_hybrid(model, nodes, tensor_parallel_size=1),
     ):
-        assert {
-            item.node_id: item.memory_guard_tier for item in plan.assignments
-        } == {"studio": "aggressive", "macbook": "safe"}
+        assert {item.node_id: item.memory_guard_tier for item in plan.assignments} == {
+            "studio": "aggressive",
+            "macbook": "safe",
+        }
 
 
 def test_a_memory_tier_changes_the_plan_hash_and_typos_are_refused():
@@ -576,7 +577,9 @@ def test_a_node_role_changes_the_plan_hash():
             model,
             [
                 NodeBudget(node_id="studio", capacity_bytes=256 * GIB, rank=0),
-                NodeBudget(node_id="macbook", capacity_bytes=200 * GIB, rank=1, role=role),
+                NodeBudget(
+                    node_id="macbook", capacity_bytes=200 * GIB, rank=1, role=role
+                ),
             ],
         )
 
@@ -624,9 +627,12 @@ def test_a_misspelled_role_is_refused_rather_than_quietly_made_headless():
             role="laptop",
         )
     # Case and padding are the UI's business, not a reason to refuse a launch.
-    assert NodeBudget(
-        node_id="macbook", capacity_bytes=100 * GIB, role=" WorkStation "
-    ).role == "workstation"
+    assert (
+        NodeBudget(
+            node_id="macbook", capacity_bytes=100 * GIB, role=" WorkStation "
+        ).role
+        == "workstation"
+    )
 
 
 def test_nemotron_h_quant_group_divisors_cap_tp_degree():
@@ -900,9 +906,7 @@ def test_complete_model_layout_cache_invalidates_on_shard_overwrite(
     from omlx.cluster import planner
 
     (tmp_path / "config.json").write_text(json.dumps({"num_hidden_layers": 1}))
-    _write_safetensors(
-        tmp_path / "model.safetensors", [("model.layers.0.weight", 100)]
-    )
+    _write_safetensors(tmp_path / "model.safetensors", [("model.layers.0.weight", 100)])
 
     calls = []
     real_inspect = planner.inspect_safetensors_layout
@@ -917,9 +921,7 @@ def test_complete_model_layout_cache_invalidates_on_shard_overwrite(
     planner.complete_model_layout(tmp_path)
     assert len(calls) == 1  # second read served from the cache
 
-    _write_safetensors(
-        tmp_path / "model.safetensors", [("model.layers.0.weight", 200)]
-    )
+    _write_safetensors(tmp_path / "model.safetensors", [("model.layers.0.weight", 200)])
     layout = planner.complete_model_layout(tmp_path)
     assert len(calls) == 2  # overwrite invalidated the cached entry
     assert layout.layer_weight_bytes == (200,)

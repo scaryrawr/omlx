@@ -12,7 +12,6 @@ import pytest
 
 from omlx.patches import mlx_vlm_qwen4_exp_compat as compat
 
-
 compat.apply_mlx_vlm_qwen4_exp_compat_patch()
 language = importlib.import_module("mlx_vlm.models.qwen4_exp.language")
 qsa_fast = importlib.import_module("mlx_vlm.models.qwen4_exp.qsa_fast")
@@ -175,9 +174,7 @@ def test_qsa_ephemeral_pool_rebuilds_after_restore_extract_and_trim():
     cache = language.QSAKVCache()
     raw = mx.sin(mx.arange(13 * 8, dtype=mx.float32)).reshape(1, 13, 8)
     _append(cache, raw, 0, 13)
-    pooled = cache.pooled_indexer_keys(
-        4, lambda x: x, _identity_rope, cache_tag=cache
-    )
+    pooled = cache.pooled_indexer_keys(4, lambda x: x, _identity_rope, cache_tag=cache)
     mx.eval(pooled)
     assert cache._pooled_index_offset == 3
     assert len(cache.state) == 4
@@ -205,9 +202,7 @@ def test_qsa_ephemeral_pool_rebuilds_after_restore_extract_and_trim():
     assert cache._pooled_index_offset == 2
     replacement = mx.cos(mx.arange(3 * 8, dtype=mx.float32)).reshape(1, 3, 8)
     _append(cache, mx.concatenate([raw[:, :10], replacement], axis=1), 10, 13)
-    rebuilt = cache.pooled_indexer_keys(
-        4, lambda x: x, _identity_rope, cache_tag=cache
-    )
+    rebuilt = cache.pooled_indexer_keys(4, lambda x: x, _identity_rope, cache_tag=cache)
     expected = qsa_fast.pool_completed_index_keys(
         cache.index_keys,
         cache.index_position_ids,

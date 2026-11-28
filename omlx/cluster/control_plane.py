@@ -136,7 +136,9 @@ class RankControlPlane(AbstractContextManager["RankControlPlane"]):
         self._listener = listener
         logger.info(
             "[ControlPlane R0] listening on %s:%d (world_size=%d)",
-            self.host, self.port, self.world_size,
+            self.host,
+            self.port,
+            self.world_size,
         )
         deadline = time.monotonic() + self._connect_timeout
         while len(self._peers) < self.world_size - 1:
@@ -150,7 +152,8 @@ class RankControlPlane(AbstractContextManager["RankControlPlane"]):
             stream.settimeout(min(30.0, remaining))
             try:
                 logger.debug(
-                    "[ControlPlane R0] accepted connection from %s", _address,
+                    "[ControlPlane R0] accepted connection from %s",
+                    _address,
                 )
                 challenge = secrets.token_bytes(32)
                 stream.sendall(
@@ -179,7 +182,10 @@ class RankControlPlane(AbstractContextManager["RankControlPlane"]):
                     logger.warning(
                         "[ControlPlane R0] handshake rejected from %s"
                         " (magic=%r version=%d rank=%d dup=%s hmac_ok=%s)",
-                        _address, magic, version, rank,
+                        _address,
+                        magic,
+                        version,
+                        rank,
                         rank in self._peers,
                         hmac.compare_digest(observed_tag, expected_tag),
                     )
@@ -200,12 +206,15 @@ class RankControlPlane(AbstractContextManager["RankControlPlane"]):
                 self._peers[rank] = stream
                 logger.info(
                     "[ControlPlane R0] rank %d authenticated (%d/%d peers)",
-                    rank, len(self._peers), self.world_size - 1,
+                    rank,
+                    len(self._peers),
+                    self.world_size - 1,
                 )
             except (OSError, TimeoutError, ConnectionError, struct.error) as exc:
                 logger.debug(
                     "[ControlPlane R0] handshake failed from %s: %s",
-                    _address, exc,
+                    _address,
+                    exc,
                 )
                 stream.close()
                 continue
@@ -220,7 +229,8 @@ class RankControlPlane(AbstractContextManager["RankControlPlane"]):
         ):
             raise RuntimeError("rank-control challenge is invalid")
         logger.debug(
-            "[ControlPlane R%d] received challenge, sending response", self.rank,
+            "[ControlPlane R%d] received challenge, sending response",
+            self.rank,
         )
         stream.sendall(
             _HANDSHAKE.pack(

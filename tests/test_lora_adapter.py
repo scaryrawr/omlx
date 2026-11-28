@@ -739,8 +739,9 @@ class TestMatchBases:
         assert match_bases(base_ref, odd) == ()
 
     def test_input_order_is_kept(self):
-        later, earlier = base_candidate("qwen3.8-27b-b"), base_candidate(
-            "qwen3.8-27b-a"
+        later, earlier = (
+            base_candidate("qwen3.8-27b-b"),
+            base_candidate("qwen3.8-27b-a"),
         )
 
         assert match_bases(QWEN, [later, earlier]) == (later, earlier)
@@ -776,8 +777,9 @@ class TestResolveAdapters:
         assert QWEN in issue.detail
 
     def test_several_matches_are_never_guessed(self):
-        first, second = base_candidate("qwen3.8-27b-mlx"), base_candidate(
-            "qwen3.8-27b-q4"
+        first, second = (
+            base_candidate("qwen3.8-27b-mlx"),
+            base_candidate("qwen3.8-27b-q4"),
         )
 
         bindings, issues = resolve([adapter_source("pi")], [first, second])
@@ -790,8 +792,9 @@ class TestResolveAdapters:
 
     @pytest.mark.parametrize("base_ref", [QWEN, "Other/Unrelated-Model"])
     def test_a_valid_override_wins(self, base_ref):
-        first, second = base_candidate("qwen3.8-27b-mlx"), base_candidate(
-            "qwen3.8-27b-q4"
+        first, second = (
+            base_candidate("qwen3.8-27b-mlx"),
+            base_candidate("qwen3.8-27b-q4"),
         )
         overrides = {"pi": "qwen3.8-27b-q4", "someone-else": "ghost"}
 

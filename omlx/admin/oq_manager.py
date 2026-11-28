@@ -12,9 +12,9 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
 
 try:
     import mlx.core as mx
@@ -25,12 +25,14 @@ try:
 except ImportError:
     HAS_MLX = False
 
+import contextlib
+
 from ..model_discovery import _decode_hf_cache_model_id, _has_vision_subconfig
 
 logger = logging.getLogger(__name__)
 
 
-class _QuantCancelled(Exception):
+class _QuantCancelledError(Exception):
     """Raised by progress callback when task is cancelled."""
 
     pass
@@ -173,7 +175,7 @@ class OQManager:
     def __init__(
         self,
         model_dirs: list[str],
-        on_complete: Optional[Callable] = None,
+        on_complete: Callable | None = None,
     ):
         self._model_dirs = [Path(d) for d in model_dirs]
         self._output_dir = self._model_dirs[0] if self._model_dirs else Path(".")
@@ -303,10 +305,12 @@ class OQManager:
                                     "num_local_experts", 0
                                 ) or tc.get("n_routed_experts", 0)
                                 if is_v41:
-                                    info_full["num_layers"] = (
-                                        info_full["num_layers"] or tc.get("n_layers", 0)
+                                    info_full["num_layers"] = info_full[
+                                        "num_layers"
+                                    ] or tc.get("n_layers", 0)
+                                    info_full["num_experts"] = tc.get(
+                                        "n_routed_experts", 0
                                     )
-                                    info_full["num_experts"] = tc.get("n_routed_experts", 0)
                                 info_full["memory_streaming"] = estimate_memory(size)
                                 source_models.append(info_full)
                         except Exception:
@@ -385,8 +389,7 @@ class OQManager:
             _validate_v41_oq_settings(oq_level, dtype, group_size)
         elif preserve_ngram_table:
             raise ValueError(
-                "Keeping the original Engram tables is only available for "
-                "DeepSeek V4.1"
+                "Keeping the original Engram tables is only available for DeepSeek V4.1"
             )
         _validate_oq_dtype_for_model(config, dtype)
 
@@ -406,8 +409,7 @@ class OQManager:
 
         if preserve_mtp and mtp_assistant_model_path:
             raise ValueError(
-                "Choose either 'Preserve MTP weights' or 'Combine MTP head', "
-                "not both"
+                "Choose either 'Preserve MTP weights' or 'Combine MTP head', not both"
             )
         if mtp_assistant_model_path:
             assistant = Path(mtp_assistant_model_path)
@@ -553,7 +555,7 @@ class OQManager:
         # asyncio wrapper and causes the await to return immediately while
         # the OS thread continues running Metal commands. Instead, rely on
         # cooperative cancellation: the progress callback raises
-        # _QuantCancelled when it sees the flag, terminating quantize_oq
+        # _QuantCancelledError when it sees the flag, terminating quantize_oq
         # at the next callback point (per-layer in GPTQ, per-tensor in
         # streaming).
         if active_task and not active_task.done():
@@ -562,7 +564,7 @@ class OQManager:
                     asyncio.shield(active_task),
                     timeout=30.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Thread didn't exit cooperatively (e.g. stuck in long GPTQ
                 # block). Force-cancel as last resort and wait a bit for
                 # Metal to settle.
@@ -570,10 +572,8 @@ class OQManager:
                     "oQ cancel: cooperative exit timed out, force-cancelling"
                 )
                 active_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await active_task
-                except (asyncio.CancelledError, Exception):
-                    pass
                 await asyncio.sleep(2.0)
             except (asyncio.CancelledError, Exception):
                 pass
@@ -648,7 +648,7 @@ class OQManager:
                     meta: dict | None = None,
                 ) -> None:
                     if task_id in self._cancelled:
-                        raise _QuantCancelled(f"Task {task_id} cancelled")
+                        raise _QuantCancelledError(f"Task {task_id} cancelled")
                     base_phase = phase.split("|", 1)[0]
                     if base_phase.startswith("quantizing") or base_phase == "refine":
                         task.status = QuantStatus.QUANTIZING
@@ -735,7 +735,7 @@ class OQManager:
         except asyncio.CancelledError:
             if task.status not in (QuantStatus.CANCELLED, QuantStatus.FAILED):
                 task.status = QuantStatus.CANCELLED
-        except _QuantCancelled:
+        except _QuantCancelledError:
             if task.status != QuantStatus.CANCELLED:
                 task.status = QuantStatus.CANCELLED
         except Exception as e:

@@ -25,7 +25,7 @@ FastAPI TestClient, mirroring the mocking conventions used elsewhere in
 tests/integration/.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,13 +41,15 @@ class MockTokenizer:
     def __init__(self):
         self.eos_token_id = 2
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         return [100 + i for i, _ in enumerate(text.split())]
 
-    def decode(self, tokens: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
         return f"<decoded:{len(tokens)} tokens>"
 
-    def apply_chat_template(self, messages: List[Dict], tokenize: bool = False, **kwargs) -> str:
+    def apply_chat_template(
+        self, messages: list[dict], tokenize: bool = False, **kwargs
+    ) -> str:
         parts = [f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages]
         return "\n".join(parts)
 
@@ -59,7 +61,7 @@ class MockGenerationOutput:
         self.prompt_tokens = kwargs.get("prompt_tokens", 10)
         self.completion_tokens = kwargs.get("completion_tokens", 5)
         self.finish_reason = kwargs.get("finish_reason", "stop")
-        self.tool_calls = kwargs.get("tool_calls", None)
+        self.tool_calls = kwargs.get("tool_calls")
         self.cached_tokens = kwargs.get("cached_tokens", 0)
 
 
@@ -77,7 +79,7 @@ class RecordingEngine(BaseEngine):
         self._tokenizer = MockTokenizer()
         self._model_type = "llama"
         self._grammar_compiler = grammar_compiler
-        self.recorded_chat_kwargs: List[Dict[str, Any]] = []
+        self.recorded_chat_kwargs: list[dict[str, Any]] = []
         self.recorded_count_calls: list[dict[str, Any]] = []
         self.started = False
 
@@ -90,7 +92,7 @@ class RecordingEngine(BaseEngine):
         return self._tokenizer
 
     @property
-    def model_type(self) -> Optional[str]:
+    def model_type(self) -> str | None:
         return self._model_type
 
     @property
@@ -112,7 +114,9 @@ class RecordingEngine(BaseEngine):
     async def stream_generate(self, prompt, **kwargs):
         yield MockGenerationOutput(text="Hello world.")
 
-    def count_chat_tokens(self, messages, tools=None, chat_template_kwargs=None, **kwargs) -> int:
+    def count_chat_tokens(
+        self, messages, tools=None, chat_template_kwargs=None, **kwargs
+    ) -> int:
         self.recorded_count_calls.append(
             {
                 "messages": messages,
@@ -135,7 +139,7 @@ class RecordingEngine(BaseEngine):
     async def stream_chat(self, messages, **kwargs):
         yield MockGenerationOutput(text="Chat response.")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {}
 
     def get_cache_stats(self):
@@ -145,7 +149,9 @@ class RecordingEngine(BaseEngine):
 class MockEnginePool:
     def __init__(self, engine):
         self._engine = engine
-        self._models = [{"id": "test-model", "loaded": True, "pinned": False, "size": 1}]
+        self._models = [
+            {"id": "test-model", "loaded": True, "pinned": False, "size": 1}
+        ]
 
     @property
     def model_count(self):
@@ -199,7 +205,7 @@ class FakeMCPManager:
     under test are the genuine production logic, not a re-implementation.
     """
 
-    def __init__(self, mcp_tools: List[MCPTool]):
+    def __init__(self, mcp_tools: list[MCPTool]):
         self._mcp_tools = mcp_tools
 
     def get_merged_tools(self, user_tools=None):
@@ -230,7 +236,7 @@ def engine():
 @pytest.fixture()
 def client_with_mcp(engine):
     """TestClient with an MCP manager configured but the client sending no tools."""
-    from omlx.server import app, _server_state
+    from omlx.server import _server_state, app
 
     original_pool = _server_state.engine_pool
     original_default = _server_state.default_model
@@ -253,7 +259,9 @@ def client_with_mcp(engine):
 class TestMCPMergeOrderingChatCompletions:
     """/v1/chat/completions already merged unconditionally; guard against regression."""
 
-    def test_mcp_tools_reach_engine_even_without_client_tools(self, client_with_mcp, engine):
+    def test_mcp_tools_reach_engine_even_without_client_tools(
+        self, client_with_mcp, engine
+    ):
         resp = client_with_mcp.post(
             "/v1/chat/completions",
             json={
@@ -278,7 +286,9 @@ class TestMCPMergeOrderingResponses:
     /v1/chat/completions has always merged unconditionally.
     """
 
-    def test_mcp_tools_reach_engine_even_without_client_tools(self, client_with_mcp, engine):
+    def test_mcp_tools_reach_engine_even_without_client_tools(
+        self, client_with_mcp, engine
+    ):
         resp = client_with_mcp.post(
             "/v1/responses",
             json={
@@ -296,19 +306,23 @@ class TestMCPMergeOrderingResponses:
         names = {t["function"]["name"] for t in tools}
         assert "weather__get_weather" in names
 
-    def test_client_tools_still_override_mcp_on_name_conflict(self, client_with_mcp, engine):
+    def test_client_tools_still_override_mcp_on_name_conflict(
+        self, client_with_mcp, engine
+    ):
         """User tools win on name conflicts — merge_tools' documented contract."""
         resp = client_with_mcp.post(
             "/v1/responses",
             json={
                 "model": "test-model",
                 "input": "hi",
-                "tools": [{
-                    "type": "function",
-                    "name": "weather__get_weather",
-                    "description": "client override",
-                    "parameters": {"type": "object", "properties": {}},
-                }],
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "weather__get_weather",
+                        "description": "client override",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
             },
         )
         assert resp.status_code == 200
@@ -340,15 +354,17 @@ class TestToolChoiceNoneSuppressesTemplateExposure:
                 "model": "test-model",
                 "input": "What's the weather?",
                 "tool_choice": "none",
-                "tools": [{
-                    "type": "function",
-                    "name": "get_stock_price",
-                    "description": "Get the current stock price",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"ticker": {"type": "string"}},
-                    },
-                }],
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_stock_price",
+                        "description": "Get the current stock price",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"ticker": {"type": "string"}},
+                        },
+                    }
+                ],
             },
         )
         assert resp.status_code == 200
@@ -471,9 +487,8 @@ class TestAnthropicCountTokensMatchesMessages:
         messages_call, count_call = engine.recorded_count_calls
         assert count_call == messages_call
         if thinking is not None:
-            assert (
-                count_call["chat_template_kwargs"]["enable_thinking"]
-                is (thinking["type"] == "enabled")
+            assert count_call["chat_template_kwargs"]["enable_thinking"] is (
+                thinking["type"] == "enabled"
             )
 
     def test_reasoning_effort_reaches_both_prompts(self, client_with_mcp, engine):
@@ -491,8 +506,9 @@ class TestAnthropicCountTokensMatchesMessages:
         messages_call, count_call = engine.recorded_count_calls
         assert count_call == messages_call
         assert count_call["chat_template_kwargs"]["reasoning_effort"] == "high"
-        assert engine.recorded_chat_kwargs[-1]["chat_template_kwargs"] == (
-            count_call["chat_template_kwargs"]
+        assert (
+            engine.recorded_chat_kwargs[-1]["chat_template_kwargs"]
+            == (count_call["chat_template_kwargs"])
         )
 
     def test_multimodal_options_reach_both_prompts(self, client_with_mcp, engine):

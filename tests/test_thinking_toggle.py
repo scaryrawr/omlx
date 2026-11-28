@@ -110,7 +110,9 @@ class TestDetectThinkingDefault:
 
     def test_tokenizer_config_without_chat_template_key(self, tmp_path):
         """tokenizer_config.json without chat_template key returns None."""
-        (tmp_path / "tokenizer_config.json").write_text(json.dumps({"model_type": "llama"}))
+        (tmp_path / "tokenizer_config.json").write_text(
+            json.dumps({"model_type": "llama"})
+        )
         assert detect_thinking_default(tmp_path) is None
 
     def test_toggle_without_prompt_effect_returns_none(self, tmp_path):
@@ -202,7 +204,9 @@ class TestDetectPreserveThinking:
 
     def test_tokenizer_config_without_chat_template_key(self, tmp_path):
         """tokenizer_config.json without chat_template key returns None."""
-        (tmp_path / "tokenizer_config.json").write_text(json.dumps({"model_type": "llama"}))
+        (tmp_path / "tokenizer_config.json").write_text(
+            json.dumps({"model_type": "llama"})
+        )
         assert detect_preserve_thinking(tmp_path) is None
 
     def test_malformed_tokenizer_config_returns_none(self, tmp_path):

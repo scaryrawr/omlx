@@ -33,7 +33,7 @@ from omlx.models.vlm import VLMModelAdapter  # noqa: E402
 from omlx.patches.hy_v4 import (  # noqa: E402
     exact,
     indexing,
-    language,  # noqa: E402
+    language,
     layers,
     verify_dispatch,
 )
@@ -425,10 +425,12 @@ def _quantized_model(kind, bits, dfly=False, calm=False, dtype=mx.bfloat16):
             bits=8 if mxfp8 else bits,
             mode="mxfp8" if mxfp8 else "affine",
             # oQ keeps the compressed indexer's fp32 key pooling in float.
-            class_predicate=lambda path, m: hasattr(m, "to_quantized")
-            and not isinstance(m, nn.Embedding)
-            and "compressed_indexer.key_" not in path
-            and m.weight.shape[-1] % 64 == 0,
+            class_predicate=lambda path, m: (
+                hasattr(m, "to_quantized")
+                and not isinstance(m, nn.Embedding)
+                and "compressed_indexer.key_" not in path
+                and m.weight.shape[-1] % 64 == 0
+            ),
         )
     mx.eval(model.parameters())
     return model

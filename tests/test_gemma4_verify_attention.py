@@ -61,9 +61,7 @@ def test_mlx0322_native_fused_shapes_are_not_intercepted(
     head_dim, query_len, gqa_factor, expected
 ):
     assert (
-        gemma4_verify_attention._mlx0322_default_fused(
-            head_dim, query_len, gqa_factor
-        )
+        gemma4_verify_attention._mlx0322_default_fused(head_dim, query_len, gqa_factor)
         is expected
     )
 
@@ -115,9 +113,7 @@ def test_decomposed_matches_stock_logits(step_len):
         gemma4_verify_attention._MIN_L = old_min
 
     assert mx.allclose(got, ref, atol=2e-2, rtol=2e-2)
-    assert (
-        mx.argmax(got[0, -1]).item() == mx.argmax(ref[0, -1]).item()
-    )
+    assert mx.argmax(got[0, -1]).item() == mx.argmax(ref[0, -1]).item()
 
 
 def _count_single_token_updates(lm, prompt_len: int, step_len: int) -> int:
@@ -166,10 +162,7 @@ def test_l_gate_routes_only_small_steps():
     # (sliding layers by design; full layers as the kernel fallback since
     # head_dim 16 is not lane-splittable).
     n_layers = len(lm.make_cache())
-    assert (
-        _count_single_token_updates(lm, prompt_len=12, step_len=2)
-        == 2 * n_layers
-    )
+    assert _count_single_token_updates(lm, prompt_len=12, step_len=2) == 2 * n_layers
 
 
 # --- fused kernel route (head_dim % 32 == 0 -> global layers) ---------------
@@ -204,9 +197,7 @@ def _count_fused_calls(monkeypatch, lm, prompt_len: int, step_len: int) -> int:
 
 
 def _n_full_layers(lm) -> int:
-    return sum(
-        1 for layer in lm.model.layers if layer.layer_type == "full_attention"
-    )
+    return sum(1 for layer in lm.model.layers if layer.layer_type == "full_attention")
 
 
 def test_kernel_routes_global_layers(monkeypatch):

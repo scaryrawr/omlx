@@ -305,8 +305,9 @@ def test_targets_and_row_parallel_blocks():
         "layers.0.post",
         256,
     )
-    assert targets.QWEN.rotation("model.layers.0.self_attn.q_proj", 5120)[0] == (
-        targets.QWEN.rotation("model.layers.0.self_attn.v_proj", 5120)[0]
+    assert (
+        targets.QWEN.rotation("model.layers.0.self_attn.q_proj", 5120)[0]
+        == (targets.QWEN.rotation("model.layers.0.self_attn.v_proj", 5120)[0])
     )
 
 

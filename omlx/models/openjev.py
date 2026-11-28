@@ -290,8 +290,7 @@ class OpenJevModel:
             elif kind == "score":
                 if not isinstance(criteria, list) or len(criteria) < 2:
                     raise DecisionRequestError(
-                        "score criteria must be an ordered array of at least two "
-                        "levels"
+                        "score criteria must be an ordered array of at least two levels"
                     )
                 instructions += SCORE_SUFFIX
                 options = [

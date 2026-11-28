@@ -938,7 +938,6 @@ _DOWN_S_NB_MMA = r"""
 """
 
 
-
 # Batched FP8 GEMVs run on simdgroup matrices from MMA_MIN_BATCH vectors: a request's result
 # then agrees with decoding it alone within fp32 summation rounding (see fp8_mma8), an order
 # the reference leaves free. Fewer vectors run the fp8_rows_nb kernels, bit for bit per
@@ -961,8 +960,11 @@ def weight_format(p):
     if p is None or not getattr(p, "quantize_input", True):
         return None
     if "rscale" in p and "oqh_signs" in p:
-        ok = p.bits in (2, 3, 4, 5, 6, 8) and p.rscale.dtype in (mx.bfloat16, mx.float16)
-        return ("oqh", p.bits, 0) if ok else None   # one group per row
+        ok = p.bits in (2, 3, 4, 5, 6, 8) and p.rscale.dtype in (
+            mx.bfloat16,
+            mx.float16,
+        )
+        return ("oqh", p.bits, 0) if ok else None  # one group per row
     if mode in ("mxfp8", "mxfp4"):
         fmt = MXFP8 if mode == "mxfp8" else MXFP4
         return fmt if p.group_size == 32 and "biases" not in p else None
@@ -997,18 +999,20 @@ def format_macros(roles):
             rows = "fp8_rows<K_, R_>(w_, s_, r0_, x_, l_, acc_)"
             nb = "fp8_rows_nb<K_, R_, NB_>(w_, s_, r0_, x_, xs_, l_, acc_)"
             mma = "fp8_mma8<K_, KS_, NB_>(w_, s_, r0_, x_, xs_, l_, ks_, red_, tile_)"
-            mma16 = "fp8_mma16<K_, KS_, NB_>(w_, s_, r0_, x_, xs_, l_, ks_, red_, t0_, t1_)"
+            mma16 = (
+                "fp8_mma16<K_, KS_, NB_>(w_, s_, r0_, x_, xs_, l_, ks_, red_, t0_, t1_)"
+            )
         elif mode == "oqh":
             helper = "aff16" if bits in (3, 5) else "aff8"
             wpr, spr = f"((K_) * {bits} / 32)", "1"
             rows = f"{helper}_rows<K_, R_, {bits}, K_>(w_, s_, oqh_biases<{bits}>(s_), r0_, x_, l_, acc_)"
-            nb = "static_assert(false, \"oQh only as routed experts\")"
+            nb = 'static_assert(false, "oQh only as routed experts")'
             mma = mma16 = nb
         else:
             wpr, spr = "((K_) / 8)", "((K_) / 32)"
             rows = "fp4_rows<K_, R_>(w_, s_, r0_, x_, l_, acc_)"
-            nb = "static_assert(false, \"no MXFP4 multi-vector rows\")"
-            mma = "static_assert(false, \"no MXFP4 matrix rows\")"
+            nb = 'static_assert(false, "no MXFP4 multi-vector rows")'
+            mma = 'static_assert(false, "no MXFP4 matrix rows")'
             mma16 = mma
         lines += [
             f"#define {role}_WPR(K_) {wpr}",
@@ -1043,7 +1047,9 @@ def _parts(p):
 
 def _formats(moe):
     e, s = moe.experts, moe.shared_experts
-    return tuple(weight_format(getattr(m, n, None)) for m in (e, s) for n in ("w1", "w3", "w2"))
+    return tuple(
+        weight_format(getattr(m, n, None)) for m in (e, s) for n in ("w1", "w3", "w2")
+    )
 
 
 _ROLES = ("R1", "R3", "R2", "S1", "S3", "S2")
@@ -1056,8 +1062,13 @@ def _oqh_io(formats):
 
 @cache
 def _gate_kernel():
-    return mx.fast.metal_kernel(name="v41_decode_moe_gate", input_names=["x", "w", "temp"],
-                                output_names=["scores", "xq"], source=_GATE, header=_HEADER)
+    return mx.fast.metal_kernel(
+        name="v41_decode_moe_gate",
+        input_names=["x", "w", "temp"],
+        output_names=["scores", "xq"],
+        source=_GATE,
+        header=_HEADER,
+    )
 
 
 def _gate(moe, x, config):
@@ -1069,10 +1080,19 @@ def _gate(moe, x, config):
     n_tg = (ne + rows - 1) // rows
     return _gate_kernel()(
         inputs=[x, moe.gate.weight, _const((getattr(config, "gate_temp", 1.0),))],
-        template=[("NE", ne), ("DIM", dim), ("TPG", tpg), ("KS", ks), ("NGROUPS_STRIDE", n_tg * (tpg // 32)),
-                  ("NB", nb)],
-        grid=(n_tg * tpg, 1, 1), threadgroup=(tpg, 1, 1),
-        output_shapes=[(nb * ne,), (nb * dim,)], output_dtypes=[mx.float32, mx.float32])
+        template=[
+            ("NE", ne),
+            ("DIM", dim),
+            ("TPG", tpg),
+            ("KS", ks),
+            ("NGROUPS_STRIDE", n_tg * (tpg // 32)),
+            ("NB", nb),
+        ],
+        grid=(n_tg * tpg, 1, 1),
+        threadgroup=(tpg, 1, 1),
+        output_shapes=[(nb * ne,), (nb * dim,)],
+        output_dtypes=[mx.float32, mx.float32],
+    )
 
 
 @cache
@@ -1080,25 +1100,62 @@ def _kernels_nb(mma, formats):
     header = format_macros(zip(_ROLES, formats)) + _HEADER
     tag = format_tag(formats)
     rot_x, rot_h = _oqh_io(formats)
-    up_inputs = ["scores", "bias", "route_scale", "limit", "xq", "w1", "s1p", "b1p", "w3", "s3p", "b3p",
-                 "sw1", "ss1", "sb1", "sw3", "ss3", "sb3"] + ["xr"] * rot_x
+    up_inputs = [
+        "scores",
+        "bias",
+        "route_scale",
+        "limit",
+        "xq",
+        "w1",
+        "s1p",
+        "b1p",
+        "w3",
+        "s3p",
+        "b3p",
+        "sw1",
+        "ss1",
+        "sb1",
+        "sw3",
+        "ss3",
+        "sb3",
+    ] + ["xr"] * rot_x
     up_outputs = ["hq", "hqs", "out_idx", "out_w"] + ["hb"] * rot_h
     up = mx.fast.metal_kernel(
-        name=f"v41_decode_moe_up_nb_{tag}", input_names=up_inputs,
-        output_names=up_outputs, source=_UP_NB, header=header)
-    down_r = mx.fast.metal_kernel(name=f"v41_decode_moe_down_routed_nb_{tag}",
-                                  input_names=["hq", "idx", "w2", "s2p", "b2p"] + ["hr"] * rot_h,
-                                  output_names=["partial"], source=_DOWN_R_NB, header=header)
-    down_s = mx.fast.metal_kernel(name=f"v41_decode_moe_down_shared_nb_{tag}",
-                                  input_names=["hqs", "partial", "sw2", "ss2", "sb2"],
-                                  output_names=["out"], source=_DOWN_S_NB, header=header)
+        name=f"v41_decode_moe_up_nb_{tag}",
+        input_names=up_inputs,
+        output_names=up_outputs,
+        source=_UP_NB,
+        header=header,
+    )
+    down_r = mx.fast.metal_kernel(
+        name=f"v41_decode_moe_down_routed_nb_{tag}",
+        input_names=["hq", "idx", "w2", "s2p", "b2p"] + ["hr"] * rot_h,
+        output_names=["partial"],
+        source=_DOWN_R_NB,
+        header=header,
+    )
+    down_s = mx.fast.metal_kernel(
+        name=f"v41_decode_moe_down_shared_nb_{tag}",
+        input_names=["hqs", "partial", "sw2", "ss2", "sb2"],
+        output_names=["out"],
+        source=_DOWN_S_NB,
+        header=header,
+    )
     if mma:
         up = mx.fast.metal_kernel(
-            name=f"v41_decode_moe_up_nb_mma_{tag}", input_names=up_inputs,
-            output_names=up_outputs, source=_UP_NB_MMA, header=header)
-        down_s = mx.fast.metal_kernel(name=f"v41_decode_moe_down_shared_nb_mma_{tag}",
-                                      input_names=["hqs", "partial", "sw2", "ss2", "sb2"],
-                                      output_names=["out"], source=_DOWN_S_NB_MMA, header=header)
+            name=f"v41_decode_moe_up_nb_mma_{tag}",
+            input_names=up_inputs,
+            output_names=up_outputs,
+            source=_UP_NB_MMA,
+            header=header,
+        )
+        down_s = mx.fast.metal_kernel(
+            name=f"v41_decode_moe_down_shared_nb_mma_{tag}",
+            input_names=["hqs", "partial", "sw2", "ss2", "sb2"],
+            output_names=["out"],
+            source=_DOWN_S_NB_MMA,
+            header=header,
+        )
     return up, down_r, down_s
 
 
@@ -1109,30 +1166,63 @@ def fused_decode_moe_nb(moe, x, config, mma=None):
     Matrix tiles (MXFP8 or affine shared experts) give a token the same result for any NB."""
     nb = x.shape[0]
     formats = _formats(moe)
-    mma = (use_mma(nb) if mma is None else mma) and all(f[0] in ("mxfp8", "affine") for f in formats[3:])
+    mma = (use_mma(nb) if mma is None else mma) and all(
+        f[0] in ("mxfp8", "affine") for f in formats[3:]
+    )
     up_k, down_r, down_s = _kernels_nb(mma, formats)
-    dim, inter, ne, topk = config.dim, config.moe_inter_dim, config.n_routed_experts, config.n_activated_experts
+    dim, inter, ne, topk = (
+        config.dim,
+        config.moe_inter_dim,
+        config.n_routed_experts,
+        config.n_activated_experts,
+    )
     scores, xq = _gate(moe, x, config)
     e, s = moe.experts, moe.shared_experts
     rot_x, rot_h = _oqh_io(formats)
     hq, hqs, idx, w, *hb = up_k(
-        inputs=[scores, moe.gate.bias, _const((config.route_scale,)), _const((config.swiglu_limit,)), xq,
-                *_parts(e.w1), *_parts(e.w3), *_parts(s.w1), *_parts(s.w3)] + ([e.w1.rotate(x)] if rot_x else []),
-        template=[("NE", ne), ("TOPK", topk), ("DIM", dim), ("INTER", inter), ("NB", nb)],
-        grid=((nb * topk + 1) * 256, inter // 32, 1), threadgroup=(256, 1, 1),
+        inputs=[
+            scores,
+            moe.gate.bias,
+            _const((config.route_scale,)),
+            _const((config.swiglu_limit,)),
+            xq,
+            *_parts(e.w1),
+            *_parts(e.w3),
+            *_parts(s.w1),
+            *_parts(s.w3),
+        ]
+        + ([e.w1.rotate(x)] if rot_x else []),
+        template=[
+            ("NE", ne),
+            ("TOPK", topk),
+            ("DIM", dim),
+            ("INTER", inter),
+            ("NB", nb),
+        ],
+        grid=((nb * topk + 1) * 256, inter // 32, 1),
+        threadgroup=(256, 1, 1),
         output_shapes=[(nb * topk * inter,), (nb * inter,), (nb * topk,), (nb * topk,)]
         + [(nb * topk * inter,)] * rot_h,
-        output_dtypes=[mx.float32, mx.float32, mx.int32, mx.float32] + [mx.bfloat16] * rot_h)
+        output_dtypes=[mx.float32, mx.float32, mx.int32, mx.float32]
+        + [mx.bfloat16] * rot_h,
+    )
     partial = down_r(
-        inputs=[hq, idx, *_parts(e.w2)] + [e.w2.rotate(h.reshape(nb * topk, inter)) for h in hb],
+        inputs=[hq, idx, *_parts(e.w2)]
+        + [e.w2.rotate(h.reshape(nb * topk, inter)) for h in hb],
         template=[("TOPK", topk), ("DIM", dim), ("INTER", inter)],
-        grid=(nb * topk * 32, dim // 4, 1), threadgroup=(topk * 32, 1, 1),
-        output_shapes=[(nb * dim,)], output_dtypes=[mx.float32])[0]
+        grid=(nb * topk * 32, dim // 4, 1),
+        threadgroup=(topk * 32, 1, 1),
+        output_shapes=[(nb * dim,)],
+        output_dtypes=[mx.float32],
+    )[0]
     out = down_s(
         inputs=[hqs, partial, *_parts(s.w2)],
         template=[("DIM", dim), ("INTER", inter), ("NB", nb)],
-        grid=(dim // 8 * 64, 1, 1), threadgroup=(64, 1, 1),
-        output_shapes=[(nb * dim,)], output_dtypes=[mx.bfloat16])[0]
+        grid=(dim // 8 * 64, 1, 1),
+        threadgroup=(64, 1, 1),
+        output_shapes=[(nb * dim,)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
     return out.reshape(nb, dim), idx.reshape(nb, topk), w.reshape(nb, topk)
 
 
@@ -1151,13 +1241,38 @@ def _kernels(formats):
     rot_x, rot_h = _oqh_io(formats)
     up = mx.fast.metal_kernel(
         name=f"v41_decode_moe_up_{tag}",
-        input_names=["scores", "bias", "route_scale", "limit", "xq", "w1", "s1p", "b1p", "w3", "s3p", "b3p",
-                     "sw1", "ss1", "sb1", "sw3", "ss3", "sb3"] + ["xr"] * rot_x,
-        output_names=["hq", "out_idx", "out_w"] + ["hb"] * rot_h, source=_UP, header=header)
+        input_names=[
+            "scores",
+            "bias",
+            "route_scale",
+            "limit",
+            "xq",
+            "w1",
+            "s1p",
+            "b1p",
+            "w3",
+            "s3p",
+            "b3p",
+            "sw1",
+            "ss1",
+            "sb1",
+            "sw3",
+            "ss3",
+            "sb3",
+        ]
+        + ["xr"] * rot_x,
+        output_names=["hq", "out_idx", "out_w"] + ["hb"] * rot_h,
+        source=_UP,
+        header=header,
+    )
     down = mx.fast.metal_kernel(
         name=f"v41_decode_moe_down_{tag}",
-        input_names=["hq", "idx", "w2", "s2p", "b2p", "sw2", "ss2", "sb2"] + ["hr"] * rot_h,
-        output_names=["out"], source=_DOWN, header=header)
+        input_names=["hq", "idx", "w2", "s2p", "b2p", "sw2", "ss2", "sb2"]
+        + ["hr"] * rot_h,
+        output_names=["out"],
+        source=_DOWN,
+        header=header,
+    )
     return up, down
 
 
@@ -1169,7 +1284,9 @@ def supported(moe, x, config):
         and x.dtype == mx.bfloat16
         and getattr(config, "score_func", "sqrtsoftplus") == "sqrtsoftplus"
         and all(f is not None for f in formats)
-        and formats[3] != MXFP4 and formats[4] != MXFP4 and formats[5] != MXFP4
+        and formats[3] != MXFP4
+        and formats[4] != MXFP4
+        and formats[5] != MXFP4
         # w1 and w3 read one input; shared experts are never oQh.
         and (formats[0][0] == "oqh") == (formats[1][0] == "oqh")
         and all(f[0] != "oqh" for f in formats[3:])
@@ -1184,22 +1301,42 @@ def fused_decode_moe(moe, x, config):
     """x: [1, 1, dim] bf16 (ffn_norm output). Returns ([1, 1, dim] bf16, idx, weights)."""
     formats = _formats(moe)
     up_k, down_k = _kernels(formats)
-    dim, inter, ne, topk = config.dim, config.moe_inter_dim, config.n_routed_experts, config.n_activated_experts
+    dim, inter, ne, topk = (
+        config.dim,
+        config.moe_inter_dim,
+        config.n_routed_experts,
+        config.n_activated_experts,
+    )
     scores, xq = _gate(moe, x.reshape(1, -1), config)
     e, s = moe.experts, moe.shared_experts
     rot_x, rot_h = _oqh_io(formats)
     hq, idx, w, *hb = up_k(
-        inputs=[scores, moe.gate.bias, _const((config.route_scale,)),
-                _const((config.swiglu_limit,)), xq,
-                *_parts(e.w1), *_parts(e.w3), *_parts(s.w1), *_parts(s.w3)]
+        inputs=[
+            scores,
+            moe.gate.bias,
+            _const((config.route_scale,)),
+            _const((config.swiglu_limit,)),
+            xq,
+            *_parts(e.w1),
+            *_parts(e.w3),
+            *_parts(s.w1),
+            *_parts(s.w3),
+        ]
         + ([e.w1.rotate(x.reshape(1, -1))] if rot_x else []),
         template=[("NE", ne), ("TOPK", topk), ("DIM", dim), ("INTER", inter)],
-        grid=(inter // 32 * 256, topk + 1, 1), threadgroup=(256, 1, 1),
-        output_shapes=[((topk + 1) * inter,), (topk,), (topk,)] + [(topk * inter,)] * rot_h,
-        output_dtypes=[mx.float32, mx.int32, mx.float32] + [mx.bfloat16] * rot_h)
+        grid=(inter // 32 * 256, topk + 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[((topk + 1) * inter,), (topk,), (topk,)]
+        + [(topk * inter,)] * rot_h,
+        output_dtypes=[mx.float32, mx.int32, mx.float32] + [mx.bfloat16] * rot_h,
+    )
     out = down_k(
-        inputs=[hq, idx, *_parts(e.w2), *_parts(s.w2)] + [e.w2.rotate(h.reshape(topk, inter)) for h in hb],
+        inputs=[hq, idx, *_parts(e.w2), *_parts(s.w2)]
+        + [e.w2.rotate(h.reshape(topk, inter)) for h in hb],
         template=[("TOPK", topk), ("DIM", dim), ("INTER", inter)],
-        grid=(dim // 4 * (topk + 1) * 32, 1, 1), threadgroup=((topk + 1) * 32, 1, 1),
-        output_shapes=[(dim,)], output_dtypes=[mx.bfloat16])[0]
+        grid=(dim // 4 * (topk + 1) * 32, 1, 1),
+        threadgroup=((topk + 1) * 32, 1, 1),
+        output_shapes=[(dim,)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
     return out.reshape(x.shape), idx, w

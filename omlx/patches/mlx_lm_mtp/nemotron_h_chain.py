@@ -110,10 +110,10 @@ _capture = _Capture()
 
 
 def _patch_mixer(nh):
-    Mixer = nh.NemotronHMamba2Mixer
-    if _is_ours(Mixer, "__call__"):
+    mixer_cls = nh.NemotronHMamba2Mixer
+    if _is_ours(mixer_cls, "__call__"):
         return
-    base_call = Mixer.__call__  # the base-patched version (two-chunk split)
+    base_call = mixer_cls.__call__  # the base-patched version (two-chunk split)
 
     def __call__(self, hidden_states, mask, cache=None, n_confirmed=0):
         S = hidden_states.shape[1]
@@ -148,9 +148,9 @@ def _patch_mixer(nh):
             return out
         return base_call(self, hidden_states, mask, cache)
 
-    __call__._omlx_nh_mtp = True   # base patch idempotency: don't re-wrap
+    __call__._omlx_nh_mtp = True  # base patch idempotency: don't re-wrap
     setattr(__call__, _MARKER, True)
-    Mixer.__call__ = __call__
+    mixer_cls.__call__ = __call__
 
 
 _ssm_seq_applied = False
@@ -218,8 +218,17 @@ def _patch_ssm_sequential():
             _capture.ssm = states
             return mx.concatenate(ys, axis=1), s
         return inner(
-            hidden_states, A_log, B, C, D, dt, dt_bias, state,
-            time_step_limit, mask, lengths,
+            hidden_states,
+            A_log,
+            B,
+            C,
+            D,
+            dt,
+            dt_bias,
+            state,
+            time_step_limit,
+            mask,
+            lengths,
         )
 
     setattr(ssm_update, _MARKER, True)
@@ -237,10 +246,10 @@ def _patch_conv_capture(nh):
     cache tails (last conv_kernel-1 columns of [prev_tail | window input])."""
     import mlx.core as mx
 
-    Mixer = nh.NemotronHMamba2Mixer
-    if getattr(Mixer.__dict__.get("_conv"), _MARKER, False):
+    mixer_cls = nh.NemotronHMamba2Mixer
+    if getattr(mixer_cls.__dict__.get("_conv"), _MARKER, False):
         return
-    orig_conv = Mixer._conv
+    orig_conv = mixer_cls._conv
 
     def _conv(self, conv_input, cache=None, mask=None):
         if (
@@ -266,15 +275,15 @@ def _patch_conv_capture(nh):
         return orig_conv(self, conv_input, cache, mask)
 
     setattr(_conv, _MARKER, True)
-    Mixer._conv = _conv
+    mixer_cls._conv = _conv
 
 
 # --------------------------------------------------------------------------- #
 # Model.mtp_forward: return_hidden / logits_keep (chain drafting interface)
 # --------------------------------------------------------------------------- #
 def _patch_mtp_forward(nh):
-    Model = nh.Model
-    if _is_ours(Model, "mtp_forward"):
+    model_cls = nh.Model
+    if _is_ours(model_cls, "mtp_forward"):
         return
 
     def mtp_forward(
@@ -289,15 +298,15 @@ def _patch_mtp_forward(nh):
 
     mtp_forward._omlx_nh_mtp = True
     setattr(mtp_forward, _MARKER, True)
-    Model.mtp_forward = mtp_forward
+    model_cls.mtp_forward = mtp_forward
 
 
 # --------------------------------------------------------------------------- #
 # Model.mtp_partial_rollback: trim KV, restore+replay Mamba state
 # --------------------------------------------------------------------------- #
 def _patch_partial_rollback(nh):
-    Model = nh.Model
-    if _is_ours(Model, "mtp_partial_rollback"):
+    model_cls = nh.Model
+    if _is_ours(model_cls, "mtp_partial_rollback"):
         return
 
     def mtp_partial_rollback(self, cache, accepted: int, num_drafts: int) -> bool:
@@ -327,9 +336,7 @@ def _patch_partial_rollback(nh):
                     return False
                 c = cache[cur]
                 cur += 1
-                if trim_n > 0 and not (
-                    hasattr(c, "is_trimmable") and c.is_trimmable()
-                ):
+                if trim_n > 0 and not (hasattr(c, "is_trimmable") and c.is_trimmable()):
                     return False
                 plan.append(("*", layer, c))
             # 'E' / '-' blocks are stateless: no cache entry.
@@ -376,17 +383,17 @@ def _patch_partial_rollback(nh):
         return True
 
     setattr(mtp_partial_rollback, _MARKER, True)
-    Model.mtp_partial_rollback = mtp_partial_rollback
+    model_cls.mtp_partial_rollback = mtp_partial_rollback
 
 
 # --------------------------------------------------------------------------- #
 # __init__ wrap: stamp chain markers on MTP-bearing instances
 # --------------------------------------------------------------------------- #
 def _patch_init_markers(nh):
-    Model = nh.Model
-    if getattr(Model, "_omlx_nh_chain_init", False):
+    model_cls = nh.Model
+    if getattr(model_cls, "_omlx_nh_chain_init", False):
         return
-    orig_init = Model.__init__
+    orig_init = model_cls.__init__
 
     def __init__(self, args):
         orig_init(self, args)
@@ -400,5 +407,5 @@ def _patch_init_markers(nh):
             # trunk-norm hook must be identity for this model.
             self._omlx_mtp_head_hidden_normed = True
 
-    Model.__init__ = __init__
-    Model._omlx_nh_chain_init = True
+    model_cls.__init__ = __init__
+    model_cls._omlx_nh_chain_init = True

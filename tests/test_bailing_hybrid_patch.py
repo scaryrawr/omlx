@@ -157,9 +157,7 @@ def test_mixed_global_and_linear_attention_cache_forward():
     from mlx_lm.generate import BatchGenerator
     from mlx_lm.models.cache import ArraysCache, KVCache
 
-    model = bailing_hybrid.Model(
-        bailing_hybrid.ModelArgs.from_dict(_minimal_config())
-    )
+    model = bailing_hybrid.Model(bailing_hybrid.ModelArgs.from_dict(_minimal_config()))
     cache = model.make_cache()
 
     assert type(cache[0]) is ArraysCache
@@ -312,9 +310,7 @@ def test_fused_kda_matches_reference(safe_gate):
         k_t = k_t / mx.sqrt(mx.sum(k_t * k_t, axis=-1, keepdims=True) + 1e-6)
         gate_input = g[:, token_idx] + dt_bias.reshape(heads, head_dim)
         if safe_gate:
-            log_decay = -5.0 * mx.sigmoid(
-                mx.exp(a_log)[None, :, None] * gate_input
-            )
+            log_decay = -5.0 * mx.sigmoid(mx.exp(a_log)[None, :, None] * gate_input)
         else:
             log_decay = -mx.exp(a_log)[None, :, None] * mx.logaddexp(
                 gate_input,
@@ -354,9 +350,7 @@ def test_external_prefill_upgrades_legacy_one_slot_cache():
     from omlx.request import Request, SamplingParams
     from omlx.scheduler import Scheduler
 
-    model = bailing_hybrid.Model(
-        bailing_hybrid.ModelArgs.from_dict(_minimal_config())
-    )
+    model = bailing_hybrid.Model(bailing_hybrid.ModelArgs.from_dict(_minimal_config()))
     source_cache = model.make_cache()
     prefix_logits = model(
         mx.array([[1, 2]], dtype=mx.int32),
@@ -399,9 +393,7 @@ def test_scheduler_rejects_legacy_zero_slot_cache():
 
     from omlx.scheduler import Scheduler
 
-    model = bailing_hybrid.Model(
-        bailing_hybrid.ModelArgs.from_dict(_minimal_config())
-    )
+    model = bailing_hybrid.Model(bailing_hybrid.ModelArgs.from_dict(_minimal_config()))
     source_cache = model.make_cache()
     logits = model(mx.array([[1, 2]], dtype=mx.int32), cache=source_cache)
     mx.eval(logits)
@@ -419,9 +411,7 @@ def test_scheduler_rejects_legacy_zero_slot_cache():
 
 def test_sanitize_remaps_moe_and_mla_weights():
     bailing_hybrid = _load_patch_module()
-    model = bailing_hybrid.Model(
-        bailing_hybrid.ModelArgs.from_dict(_minimal_config())
-    )
+    model = bailing_hybrid.Model(bailing_hybrid.ModelArgs.from_dict(_minimal_config()))
 
     weights = {
         "model.layers.1.mlp.gate.weight": mx.ones((2, 32)),
@@ -759,9 +749,7 @@ def test_mixed_fp4_checkpoint_loads_strictly(tmp_path):
                 bits=4,
                 mode="mxfp4",
             )
-            checkpoint_prefix = (
-                f"model.layers.1.mlp.experts.{expert}.{projection}"
-            )
+            checkpoint_prefix = f"model.layers.1.mlp.experts.{expert}.{projection}"
             weights[f"{checkpoint_prefix}.weight"] = packed.view(mx.int8)
             weights[f"{checkpoint_prefix}.weight_scale_inv"] = scales
 
@@ -779,9 +767,7 @@ def test_mixed_fp4_checkpoint_loads_strictly(tmp_path):
 
     quantization = loaded_config["quantization"]
     expected = {"group_size": 32, "bits": 4, "mode": "mxfp4"}
-    assert (
-        quantization["model.layers.1.mlp.switch_mlp.gate_proj"] == expected
-    )
+    assert quantization["model.layers.1.mlp.switch_mlp.gate_proj"] == expected
     assert isinstance(
         loaded.model.layers[1].mlp.switch_mlp.gate_proj,
         QuantizedSwitchLinear,
@@ -845,9 +831,7 @@ def mtp_active():
 
 
 def _mtp_config(**overrides):
-    return _minimal_config(
-        num_hidden_layers=4, num_nextn_predict_layers=1, **overrides
-    )
+    return _minimal_config(num_hidden_layers=4, num_nextn_predict_layers=1, **overrides)
 
 
 def _checkpoint_weights(model, config):

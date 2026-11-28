@@ -15,10 +15,8 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from starlette.requests import HTTPConnection
 
@@ -224,10 +222,7 @@ def verify_any_api_key(api_key: str, main_key: str, sub_keys: list) -> bool:
     if main_key and compare_keys(api_key, main_key):
         return True
     # Check sub keys
-    for sk in sub_keys:
-        if sk.key and compare_keys(api_key, sk.key):
-            return True
-    return False
+    return any(sk.key and compare_keys(api_key, sk.key) for sk in sub_keys)
 
 
 # Wrong API keys allowed per remote client before each lockout.
@@ -375,7 +370,7 @@ def verify_session(request: Request) -> bool:
     return verify_session_token(token)
 
 
-def _bearer_token(request: Request) -> Optional[str]:
+def _bearer_token(request: Request) -> str | None:
     """Return the Bearer token from the Authorization header, if any."""
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer":
@@ -440,7 +435,7 @@ async def require_admin(request: Request) -> bool:
     # Browser requests (Accept: text/html) get redirected to login page
     accept = request.headers.get("accept", "")
     if "text/html" in accept and _web_ui_enabled:
-        raise _RedirectToLogin()
+        raise _RedirectToLoginError()
     raise HTTPException(
         status_code=401,
         detail="Admin authentication required",
@@ -448,6 +443,7 @@ async def require_admin(request: Request) -> bool:
     )
 
 
-class _RedirectToLogin(Exception):
+class _RedirectToLoginError(Exception):
     """Raised to trigger a redirect to the admin login page."""
+
     pass

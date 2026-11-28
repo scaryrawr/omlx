@@ -554,8 +554,8 @@ class TestApplyAndForward:
         ns = {
             k: v for k, v in vars(real).items() if k not in ("__dict__", "__weakref__")
         }
-        VlmSwitchGLU = type("SwitchGLU", (nn.Module,), ns)
-        glu = VlmSwitchGLU.__new__(VlmSwitchGLU)
+        vlm_switch_g_l_u_cls = type("SwitchGLU", (nn.Module,), ns)
+        glu = vlm_switch_g_l_u_cls.__new__(vlm_switch_g_l_u_cls)
         glu.__dict__.update(base.__dict__)
         dict.update(glu, base)
         assert not isinstance(glu, real) and type(glu).__name__ == "SwitchGLU"
@@ -1440,7 +1440,7 @@ def test_capacity_uses_checkpoint_routing_top_k(tmp_path):
     _save_checkpoint(tmp_path, _glu_tensors(glu, "layers.0.experts.switch_glu"))
     (tmp_path / "config.json").write_text(json.dumps({"num_experts_per_tok": 10}))
     model = _MiniMoE([glu])
-    apply_moe_expert_offload(model, tmp_path, .125)
+    apply_moe_expert_offload(model, tmp_path, 0.125)
     wrapped = model.layers[0].experts.switch_glu
     assert wrapped.cache.capacity == 10
     x = mx.random.normal((1, 1, D))

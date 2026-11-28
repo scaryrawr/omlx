@@ -764,9 +764,7 @@ class BatchedEngine(BaseEngine):
                     get_mlx_executor(),
                     _enable_ane_prefill,
                 )
-                if ane_count or getattr(
-                    self._model, "_omlx_ane_gdn_prefill_count", 0
-                ):
+                if ane_count or getattr(self._model, "_omlx_ane_gdn_prefill_count", 0):
                     ane_prefill_sequence_length = requested_ane_sequence_length
             except Exception:
                 logger.warning("Qwen ANE prefill not enabled", exc_info=True)

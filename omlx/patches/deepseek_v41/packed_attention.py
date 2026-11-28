@@ -327,7 +327,9 @@ def rounded_packed_attention(q, window, pooled, wi, ci, sink, scale):
     large = heads >= 8 and dim <= 512 and window_slots + pooled_slots >= 512
     if large and fused_attention.supported(q):
         # Matrix kernels in one dispatch (fused_attention.py).
-        return fused_attention.fused_mma_attention(q, window, pooled, wi, ci, sink, scale)
+        return fused_attention.fused_mma_attention(
+            q, window, pooled, wi, ci, sink, scale
+        )
     if window_slots + pooled_slots <= 2048:
         return _fused_attention(q, window, pooled, wi, ci, sink, scale)
     blocks = max(1, (wi.shape[-1] + ci.shape[-1] + 15) // 16)

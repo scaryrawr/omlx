@@ -111,7 +111,7 @@ class _CPUReader:
             self._libc = libc
             self._host = libc.mach_host_self()
             self._task = libc.mach_task_self()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"CPU sampling unavailable: {e}")
             self._libc = None
 
@@ -215,7 +215,7 @@ def _cluster_map_from_ioreg() -> tuple[bool, ...] | None:
             text=True,
             timeout=10,
         ).stdout
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"ioreg cluster probe failed: {e}")
         return None
 
@@ -250,7 +250,7 @@ def _sysctl_int(name: str) -> int | None:
             timeout=5,
         )
         return int(out.stdout.strip())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -310,7 +310,7 @@ class _GPUReader:
             self._k_stats = self._cfstr("PerformanceStatistics")
             self._k_util = self._cfstr("Device Utilization %")
             self._ok = True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"GPU sampling unavailable: {e}")
             self._ok = False
 
@@ -334,7 +334,7 @@ class _GPUReader:
             if not self._cf.CFNumberGetValue(num, 4, ctypes.byref(out)):
                 return None
             return max(0.0, min(1.0, out.value / 100.0))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         finally:
             if stats:
@@ -383,7 +383,7 @@ class _ThermalReader:
             if libc.notify_register_check(name, ctypes.byref(self._token)) != 0:
                 return
             self._libc = libc
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"Thermal sampling unavailable: {e}")
             self._libc = None
 
@@ -452,7 +452,7 @@ class SystemSampler:
         while not self._stop.wait(self.interval_s):
             try:
                 sample = self._collect()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(f"System sample failed: {e}")
                 continue
             with self._lock:
@@ -469,7 +469,7 @@ class SystemSampler:
                 # would zero the benchmark's own peak mid-test.
                 mlx_active = int(mx.get_active_memory())
                 mlx_cache = int(mx.get_cache_memory())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         sys_used = 0
         sys_wired = 0
@@ -531,9 +531,7 @@ def aggregate(samples: list[_Sample], interval_s: float) -> dict | None:
         return None
 
     def present(attr: str) -> list[float]:
-        return [
-            getattr(s, attr) for s in samples if getattr(s, attr) is not None
-        ]
+        return [getattr(s, attr) for s in samples if getattr(s, attr) is not None]
 
     cpu_total = present("cpu_total")
     cpu_p = present("cpu_p")

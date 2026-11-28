@@ -635,7 +635,7 @@ class TestSchedulerAddRequest:
         """Rotating cache exact hit should fallback to full prefill."""
         from omlx.cache.paged_cache import BlockTable
 
-        RotatingCacheWithTrim = type(
+        rotating_cache_with_trim_cls = type(
             "RotatingKVCache",
             (),
             {"trim": lambda self, n: n},
@@ -648,7 +648,7 @@ class TestSchedulerAddRequest:
         block_table = BlockTable(request_id="req-rotating", block_ids=[9], num_tokens=4)
         scheduler.block_aware_cache.fetch_cache.return_value = (block_table, [])
         scheduler.block_aware_cache.reconstruct_cache.return_value = [
-            RotatingCacheWithTrim()
+            rotating_cache_with_trim_cls()
         ]
 
         request = Request(
@@ -673,8 +673,8 @@ class TestSchedulerAddRequest:
         """Reject unknown cache classes before a partial hit loses their state."""
         from omlx.cache.paged_cache import BlockTable
 
-        RingSlidingKVCache = type("RingSlidingKVCache", (), {})
-        mock_model.make_cache = lambda: [RingSlidingKVCache()]
+        ring_sliding_k_v_cache_cls = type("RingSlidingKVCache", (), {})
+        mock_model.make_cache = lambda: [ring_sliding_k_v_cache_cls()]
 
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         scheduler.block_aware_cache = MagicMock()
@@ -706,8 +706,8 @@ class TestSchedulerAddRequest:
         """The guard must not disable prefix reuse for ordinary KVCache models."""
         from omlx.cache.paged_cache import BlockTable
 
-        KVCache = type("KVCache", (), {})
-        mock_model.make_cache = lambda: [KVCache()]
+        k_v_cache_cls = type("KVCache", (), {})
+        mock_model.make_cache = lambda: [k_v_cache_cls()]
 
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         scheduler.block_aware_cache = MagicMock()
@@ -779,7 +779,12 @@ class TestSchedulerAddRequest:
         cache_list = type(
             "CacheList",
             (),
-            {"caches": (type("KVCache", (), {})(), type("RingSlidingKVCache", (), {})())},
+            {
+                "caches": (
+                    type("KVCache", (), {})(),
+                    type("RingSlidingKVCache", (), {})(),
+                )
+            },
         )
         mock_model.make_cache = lambda: [cache_list()]
 
@@ -1920,9 +1925,7 @@ class TestSchedulerAbortRequest:
 
         future = concurrent.futures.Future()
         scheduler._inflight_store_futures[request.request_id] = future
-        scheduler._pending_async_removes.append(
-            (123, request.request_id, future)
-        )
+        scheduler._pending_async_removes.append((123, request.request_id, future))
         snapshot_store = MagicMock()
         scheduler._boundary_snapshot_store = snapshot_store
         scheduler.block_aware_cache = MagicMock()
@@ -1990,13 +1993,15 @@ class TestPrefillAbortInterrupt:
         scheduler.uid_to_request_id[uid] = request.request_id
         scheduler._pending_abort_ids.add(request.request_id)
 
-        with patch.object(scheduler_module, "_sync_and_clear_cache") as clear_cache:
-            with pytest.raises(_PrefillAbortedError):
-                scheduler._do_external_prefill(
-                    request,
-                    request.prompt_token_ids,
-                    cache,
-                )
+        with (
+            patch.object(scheduler_module, "_sync_and_clear_cache") as clear_cache,
+            pytest.raises(_PrefillAbortedError),
+        ):
+            scheduler._do_external_prefill(
+                request,
+                request.prompt_token_ids,
+                cache,
+            )
 
         assert clear_cache.call_args_list == [
             call(scheduler._stream),
@@ -2057,7 +2062,7 @@ class TestPrefillAbortInterrupt:
         scheduler.running["req-prefill"] = request
         scheduler.requests["req-prefill"] = request
 
-        output = scheduler.step()
+        scheduler.step()
 
         # batch_generator should be reset
         assert scheduler.batch_generator is None
@@ -2579,9 +2584,7 @@ class TestSchedulerReset:
         future = executor.submit(blocked_store_worker)
         assert worker_started.wait(timeout=2)
         scheduler._inflight_store_futures[request.request_id] = future
-        scheduler._pending_async_removes.append(
-            (321, request.request_id, future)
-        )
+        scheduler._pending_async_removes.append((321, request.request_id, future))
 
         snapshot_store = MagicMock()
         snapshot_store.cleanup_request.side_effect = lambda _rid: order.append(
@@ -2702,9 +2705,7 @@ class TestSchedulerReset:
         )
         fake_executor.shutdown.assert_called_once_with(wait=False)
 
-    def test_shutdown_closes_boundary_snapshot_store(
-        self, mock_model, mock_tokenizer
-    ):
+    def test_shutdown_closes_boundary_snapshot_store(self, mock_model, mock_tokenizer):
         """shutdown() must stop the boundary snapshot writer thread.
 
         cleanup_all() only clears the store contents. If shutdown() is skipped,
@@ -3181,9 +3182,9 @@ class TestStoreCacheWorkerSync:
             sched_mod._safe_sync_stream()
 
         assert len(calls) == 1
-        assert (
-            calls[0] and calls[0][0] is sched_mod._default_generation_stream
-        ), f"Worker sync must target _default_generation_stream, got: {calls}"
+        assert calls[0] and calls[0][0] is sched_mod._default_generation_stream, (
+            f"Worker sync must target _default_generation_stream, got: {calls}"
+        )
 
     def test_safe_sync_swallows_no_stream_runtime_error(self):
         """A 'no Stream' RuntimeError from cross-thread sync must be
@@ -3210,9 +3211,11 @@ class TestStoreCacheWorkerSync:
         def fake_sync(*args, **kwargs):
             raise RuntimeError("Metal command buffer execution failed")
 
-        with patch.object(sched_mod.mx, "synchronize", side_effect=fake_sync):
-            with pytest.raises(RuntimeError, match="command buffer execution failed"):
-                sched_mod._safe_sync_stream()
+        with (
+            patch.object(sched_mod.mx, "synchronize", side_effect=fake_sync),
+            pytest.raises(RuntimeError, match="command buffer execution failed"),
+        ):
+            sched_mod._safe_sync_stream()
 
 
 class TestSchedulerFormatBytes:
@@ -3567,9 +3570,7 @@ class TestSchedulerBoundarySnapshots:
     ):
         config = SchedulerConfig(paged_cache_block_size=4)
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer, config=config)
-        scheduler._cache_probe_seqs.append(
-            ("stored-a", [1, 2, 3, 4, 5, 6, 7, 8])
-        )
+        scheduler._cache_probe_seqs.append(("stored-a", [1, 2, 3, 4, 5, 6, 7, 8]))
         request = Request(
             request_id="lookup-a",
             prompt="hello",
@@ -3891,9 +3892,11 @@ class TestSchedulerBoundarySnapshots:
         assert override((4, 6, 7), list(range(9))) == (7, 7, True)
         assert override((4, 6, 7), list(range(6)), system_tail=True) == (6, 6, False)
         # A requeue store before the marker keeps the aligned prefix only.
-        assert override(
-            (4, 6), list(range(9)), stop_at_generation_prompt=False
-        ) == (4, None, False)
+        assert override((4, 6), list(range(9)), stop_at_generation_prompt=False) == (
+            4,
+            None,
+            False,
+        )
 
     def test_boundary_override_prefers_aligned_snapshot_past_tail(
         self, mock_model, mock_tokenizer
@@ -4082,8 +4085,8 @@ class TestSchedulerBoundarySnapshots:
         scheduler.requests[request.request_id] = request
         scheduler.running[request.request_id] = request
 
-        RotatingStub = type("RotatingKVCache", (), {})
-        snapshot_cache = [RotatingStub()]
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        snapshot_cache = [rotating_stub_cls()]
 
         scheduler._on_prefill_boundary_snapshot(request.request_id, snapshot_cache, 4)
 
@@ -4099,8 +4102,8 @@ class TestSchedulerBoundarySnapshots:
     ):
         """A prompt shorter than a block meets its first boundary mid-decode, so the
         MTP commit alignment must be armed at admission, not at the first capture."""
-        RotatingStub = type("RotatingKVCache", (), {})
-        mock_model.make_cache = lambda: [RotatingStub()]
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        mock_model.make_cache = lambda: [rotating_stub_cls()]
         scheduler = Scheduler(
             model=mock_model,
             tokenizer=mock_tokenizer,
@@ -4137,8 +4140,10 @@ class TestSchedulerBoundarySnapshots:
         scheduler.requests[request.request_id] = request
         scheduler.running[request.request_id] = request
 
-        RotatingStub = type("RotatingKVCache", (), {})
-        scheduler._on_prefill_boundary_snapshot(request.request_id, [RotatingStub()], 3)
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        scheduler._on_prefill_boundary_snapshot(
+            request.request_id, [rotating_stub_cls()], 3
+        )
 
         assert request.request_id not in scheduler._boundary_cache_snapshots
 
@@ -4161,17 +4166,17 @@ class TestSchedulerBoundarySnapshots:
         scheduler.requests[request.request_id] = request
         scheduler.running[request.request_id] = request
 
-        RotatingStub = type("RotatingKVCache", (), {})
-        snapshot_cache = [RotatingStub()]
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        snapshot_cache = [rotating_stub_cls()]
         with patch("omlx.scheduler._mtp_priming.capture_tail_boundary") as capture:
             scheduler._emit_prefill_tail_snapshot(request, snapshot_cache, 3)
         capture.assert_called_once_with(mock_model, request.request_id, 3)
         # Other sources stay on the grid.
         scheduler._on_prefill_boundary_snapshot(
-            request.request_id, [RotatingStub()], 5, source="completion"
+            request.request_id, [rotating_stub_cls()], 5, source="completion"
         )
         scheduler._on_prefill_boundary_snapshot(
-            request.request_id, [RotatingStub()], 6, source="prefill"
+            request.request_id, [rotating_stub_cls()], 6, source="prefill"
         )
 
         recorded = scheduler._boundary_cache_snapshots[request.request_id]
@@ -4282,8 +4287,8 @@ class TestSchedulerBoundarySnapshots:
         # time _emit_prefill_boundary_snapshot fires.
         assert request.request_id not in scheduler.request_id_to_uid
 
-        RotatingStub = type("RotatingKVCache", (), {})
-        prompt_cache = [RotatingStub()]
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        prompt_cache = [rotating_stub_cls()]
 
         scheduler._emit_prefill_boundary_snapshot(request, prompt_cache, 4)
 
@@ -4295,7 +4300,7 @@ class TestSchedulerRotatingBlockAlignment:
     """Tests for rotating window/block-size alignment."""
 
     def test_aligns_block_size_to_rotating_window(self, mock_tokenizer):
-        RotatingStub = type("RotatingKVCache", (), {})
+        rotating_stub_cls = type("RotatingKVCache", (), {})
 
         class RotatingModel:
             def __init__(self):
@@ -4303,7 +4308,7 @@ class TestSchedulerRotatingBlockAlignment:
                 self.config.num_hidden_layers = 1
 
             def make_cache(self):
-                cache = RotatingStub()
+                cache = rotating_stub_cls()
                 cache.max_size = 128
                 return [cache]
 
@@ -4320,9 +4325,9 @@ class TestSchedulerRotatingBlockAlignment:
         assert scheduler.config.paged_cache_block_size == 512
 
     def test_pooling_cache_model_aligns_block_size_to_2048(self, mock_tokenizer):
-        RotatingStub = type("RotatingKVCache", (), {})
-        PoolingStub = type("PoolingCache", (), {})
-        CacheListStub = type("CacheList", (), {})
+        rotating_stub_cls = type("RotatingKVCache", (), {})
+        pooling_stub_cls = type("PoolingCache", (), {})
+        cache_list_stub_cls = type("CacheList", (), {})
 
         class PoolingModel:
             def __init__(self):
@@ -4330,12 +4335,12 @@ class TestSchedulerRotatingBlockAlignment:
                 self.config.num_hidden_layers = 2
 
             def make_cache(self):
-                rotating = RotatingStub()
+                rotating = rotating_stub_cls()
                 rotating.max_size = 128
-                sparse = CacheListStub()
-                inner_rotating = RotatingStub()
+                sparse = cache_list_stub_cls()
+                inner_rotating = rotating_stub_cls()
                 inner_rotating.max_size = 128
-                sparse.caches = [inner_rotating, PoolingStub(), PoolingStub()]
+                sparse.caches = [inner_rotating, pooling_stub_cls(), pooling_stub_cls()]
                 return [rotating, sparse]
 
         scheduler = Scheduler(
@@ -4352,7 +4357,7 @@ class TestSchedulerRotatingBlockAlignment:
 
     @staticmethod
     def _mimo_scheduler(mock_tokenizer):
-        RotatingStub = type("RotatingKVCache", (), {})
+        rotating_stub_cls = type("RotatingKVCache", (), {})
 
         class MiMoModel:
             model_type = "mimo_v2"
@@ -4362,7 +4367,7 @@ class TestSchedulerRotatingBlockAlignment:
                 self.config.num_hidden_layers = 1
 
             def make_cache(self):
-                cache = RotatingStub()
+                cache = rotating_stub_cls()
                 cache.max_size = 128
                 return [cache]
 
@@ -4405,7 +4410,7 @@ class TestSchedulerRotatingBlockAlignment:
             assert scheduler._detect_qwen35_prefill_floor() == expected
 
     def test_multiple_rotating_window_sizes_raise(self, mock_tokenizer):
-        RotatingStub = type("RotatingKVCache", (), {})
+        rotating_stub_cls = type("RotatingKVCache", (), {})
 
         class MultiRotatingModel:
             def __init__(self):
@@ -4413,9 +4418,9 @@ class TestSchedulerRotatingBlockAlignment:
                 self.config.num_hidden_layers = 2
 
             def make_cache(self):
-                c1 = RotatingStub()
+                c1 = rotating_stub_cls()
                 c1.max_size = 128
-                c2 = RotatingStub()
+                c2 = rotating_stub_cls()
                 c2.max_size = 256
                 return [c1, c2]
 
@@ -4634,9 +4639,7 @@ class TestSchedulerArraysCacheBlockAlignment:
     ):
         model = self._hybrid_model(model_type="deepseek_v41")
         model.make_cache = lambda: [
-            CacheList(KVCache(), DeepseekV41Cache(4))
-            if nested
-            else DeepseekV41Cache(4)
+            CacheList(KVCache(), DeepseekV41Cache(4)) if nested else DeepseekV41Cache(4)
         ]
         scheduler = Scheduler(
             model=model,
@@ -4754,9 +4757,7 @@ class TestSchedulerArraysCacheBlockAlignment:
         tensor-unit sparse MLA path is available."""
         fake = SimpleNamespace(nax_sparse_mla_available=lambda: nax_sparse_mla)
         with (
-            patch.dict(
-                sys.modules, {"omlx.patches.glm_moe_dsa.sparse_mla_nax": fake}
-            ),
+            patch.dict(sys.modules, {"omlx.patches.glm_moe_dsa.sparse_mla_nax": fake}),
             patch(
                 "omlx.settings.get_system_memory",
                 return_value=memory_gb * 1024**3,
@@ -4949,9 +4950,7 @@ class TestSchedulerArraysCacheBlockAlignment:
         finally:
             scheduler.shutdown()
 
-    def test_non_qwen_arrays_cache_keeps_2048_block(
-        self, mock_tokenizer, tmp_path
-    ):
+    def test_non_qwen_arrays_cache_keeps_2048_block(self, mock_tokenizer, tmp_path):
         with patch("omlx.settings.get_system_memory", return_value=64 * 1024**3):
             scheduler = Scheduler(
                 model=self._hybrid_model(model_type="other_hybrid"),
@@ -5108,7 +5107,9 @@ class TestPeriodicClearGating:
         """One early-grown bank at a time: the next waits for the #435-delayed clear."""
         from omlx.patches import vlm_batch_kv_capacity as capacity
 
-        monkeypatch.setattr(capacity, "_early_growth", {"allowed": False, "grown": True})
+        monkeypatch.setattr(
+            capacity, "_early_growth", {"allowed": False, "grown": True}
+        )
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         scheduler._pace_early_kv_growth()
         assert scheduler._deferred_clear_at == (
@@ -5170,7 +5171,7 @@ class TestExtractCacheStatesCacheList:
         """Test CacheList extraction when HAS_CACHE_TYPE_HANDLERS=False."""
         # Use real stub classes so type(obj).__name__ returns the correct name
         # (needed because the fallback branch uses type().__name__ for detection)
-        KVCacheStub = type(
+        k_v_cache_stub_cls = type(
             "KVCache",
             (),
             {
@@ -5178,9 +5179,9 @@ class TestExtractCacheStatesCacheList:
                 "meta_state": (32,),
             },
         )
-        mock_kv_sub = KVCacheStub()
+        mock_kv_sub = k_v_cache_stub_cls()
 
-        CacheListStub = type(
+        cache_list_stub_cls = type(
             "CacheList",
             (),
             {
@@ -5189,7 +5190,7 @@ class TestExtractCacheStatesCacheList:
                 "meta_state": (["KVCache"], [(32,)]),
             },
         )
-        mock_cache_list = CacheListStub()
+        mock_cache_list = cache_list_stub_cls()
 
         raw_cache = [mock_cache_list]
 
@@ -5212,11 +5213,11 @@ class TestExtractCacheStatesRotatingNormalization:
         """Oversized rotating snapshot should be canonicalized to max_size."""
         mx = pytest.importorskip("mlx.core")
         cache_mod = pytest.importorskip("mlx_lm.models.cache")
-        RotatingKVCache = cache_mod.RotatingKVCache
+        rotating_k_v_cache_cls = cache_mod.RotatingKVCache
 
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
 
-        rotating = RotatingKVCache(max_size=128, keep=0)
+        rotating = rotating_k_v_cache_cls(max_size=128, keep=0)
         rotating.keys = mx.arange(255).reshape(1, 1, 255, 1)
         rotating.values = mx.arange(1000, 1255).reshape(1, 1, 255, 1)
         rotating.offset = 1280
@@ -5289,17 +5290,17 @@ class TestExtractCacheStatesRotatingNormalization:
         """CacheList sub-caches should receive the same rotating normalization."""
         mx = pytest.importorskip("mlx.core")
         cache_mod = pytest.importorskip("mlx_lm.models.cache")
-        CacheList = cache_mod.CacheList
-        RotatingKVCache = cache_mod.RotatingKVCache
+        cache_list_cls = cache_mod.CacheList
+        rotating_k_v_cache_cls = cache_mod.RotatingKVCache
 
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
 
-        rotating = RotatingKVCache(max_size=128, keep=0)
+        rotating = rotating_k_v_cache_cls(max_size=128, keep=0)
         rotating.keys = mx.arange(255).reshape(1, 1, 255, 1)
         rotating.values = mx.arange(1000, 1255).reshape(1, 1, 255, 1)
         rotating.offset = 1280
         rotating._idx = 255
-        cache_list = CacheList(rotating)
+        cache_list = cache_list_cls(rotating)
 
         expected_keys = rotating.keys[..., -128:, :]
         expected_values = rotating.values[..., -128:, :]
@@ -5545,9 +5546,7 @@ class TestSpecPrefillCaches:
             assert rejected == []
             assert scheduled == [request]
             assert request.prompt_cache is None
-            assert batch_generator.insert.call_args.kwargs["caches"] == [
-                restored_cache
-            ]
+            assert batch_generator.insert.call_args.kwargs["caches"] == [restored_cache]
         finally:
             scheduler.shutdown()
 
@@ -5599,9 +5598,7 @@ class TestSpecPrefillCaches:
         )
         scheduler._build_state_machine = MagicMock(return_value=MagicMock())
         scheduler._preflight_memory_check = MagicMock(return_value=None)
-        scheduler._do_external_prefill = MagicMock(
-            return_value=(fresh_cache, [4])
-        )
+        scheduler._do_external_prefill = MagicMock(return_value=(fresh_cache, [4]))
 
         try:
             with patch(
@@ -5620,9 +5617,7 @@ class TestSpecPrefillCaches:
             assert request.cached_tokens == 0
             assert request.remaining_tokens == [1, 2, 3, 4]
             assert request.specprefill_indices is None
-            assert batch_generator.insert.call_args.kwargs["caches"] == [
-                fresh_cache
-            ]
+            assert batch_generator.insert.call_args.kwargs["caches"] == [fresh_cache]
         finally:
             scheduler.shutdown()
 
@@ -5819,7 +5814,10 @@ class TestSpecPrefillCaches:
             assert target_manager._expected_layer_cache_types == target_types
             assert draft_manager._expected_model_name == "draft-model"
             assert draft_manager._expected_layer_cache_types == [
-                "ArraysCache", "ArraysCache", "ArraysCache", "KVCache"
+                "ArraysCache",
+                "ArraysCache",
+                "ArraysCache",
+                "KVCache",
             ]
             block_size = draft_cache.block_size
             arrays_state = (
@@ -6035,9 +6033,7 @@ class TestCacheCorruptionRecovery:
         scheduler.requests[request_id] = req
         return req
 
-    def test_corruption_reschedule_drains_prefilling(
-        self, mock_model, mock_tokenizer
-    ):
+    def test_corruption_reschedule_drains_prefilling(self, mock_model, mock_tokenizer):
         """Chunked prefills hold cache state and must be requeued (issue #2372)."""
         scheduler = self._make_scheduler(mock_model, mock_tokenizer)
         req = self._add_prefilling_request(scheduler)
@@ -7050,9 +7046,11 @@ class TestBatchGeneratorAllTokens:
         )
         scheduled = []
 
-        with patch("omlx.scheduler._materialize_cache_storage") as materialize:
-            with patch("omlx.scheduler._sync_and_clear_cache") as sync_clear:
-                scheduler._insert_prefilled_request(request, state, scheduled)
+        with (
+            patch("omlx.scheduler._materialize_cache_storage") as materialize,
+            patch("omlx.scheduler._sync_and_clear_cache") as sync_clear,
+        ):
+            scheduler._insert_prefilled_request(request, state, scheduled)
 
         call_kwargs = scheduler.batch_generator.insert.call_args.kwargs
         inserted_cache = call_kwargs["caches"][0][0]
@@ -7111,9 +7109,11 @@ class TestBatchGeneratorAllTokens:
         )
         scheduled = []
 
-        with patch("omlx.scheduler._materialize_cache_storage") as materialize:
-            with patch("omlx.scheduler._sync_and_clear_cache") as sync_clear:
-                scheduler._insert_prefilled_request(request, state, scheduled)
+        with (
+            patch("omlx.scheduler._materialize_cache_storage") as materialize,
+            patch("omlx.scheduler._sync_and_clear_cache") as sync_clear,
+        ):
+            scheduler._insert_prefilled_request(request, state, scheduled)
 
         call_kwargs = scheduler.batch_generator.insert.call_args.kwargs
         inserted_cache = call_kwargs["caches"][0]
@@ -9035,9 +9035,7 @@ class TestFailAllRequestsSnapshotCleanup:
 
     def _scheduler(self, mock_model, mock_tokenizer):
         config = SchedulerConfig(paged_cache_block_size=4)
-        return Scheduler(
-            model=mock_model, tokenizer=mock_tokenizer, config=config
-        )
+        return Scheduler(model=mock_model, tokenizer=mock_tokenizer, config=config)
 
     def test_fail_all_requests_drops_boundary_snapshots(
         self, mock_model, mock_tokenizer
@@ -9054,9 +9052,7 @@ class TestFailAllRequestsSnapshotCleanup:
         store = MagicMock()
         scheduler._boundary_snapshot_store = store
 
-        with patch.object(
-            scheduler, "_release_paged_cache_for_request"
-        ) as release:
+        with patch.object(scheduler, "_release_paged_cache_for_request") as release:
             failed = scheduler.fail_all_requests()
 
         assert failed == ["req-fail"]
@@ -9085,9 +9081,7 @@ class TestFailAllRequestsSnapshotCleanup:
         assert "req-storing" in scheduler._boundary_cache_snapshots
         store.cleanup_request.assert_not_called()
 
-    def test_drop_helper_tolerates_store_errors(
-        self, mock_model, mock_tokenizer
-    ):
+    def test_drop_helper_tolerates_store_errors(self, mock_model, mock_tokenizer):
         scheduler = self._scheduler(mock_model, mock_tokenizer)
         scheduler._boundary_cache_snapshots["req-x"] = {4: None}
         store = MagicMock()
@@ -9416,11 +9410,17 @@ def test_first_image_boundary_reached_during_decode(mock_model, mock_tokenizer, 
 
     apply_deepseek_v4_patch()
     mock_model.minimum_prefill_prefix = lambda tokens: 6
-    scheduler = Scheduler(mock_model, mock_tokenizer, SchedulerConfig(paged_cache_block_size=4))
+    scheduler = Scheduler(
+        mock_model, mock_tokenizer, SchedulerConfig(paged_cache_block_size=4)
+    )
     scheduler.block_aware_cache = MagicMock()
     scheduler._boundary_snapshot_required = True
     scheduler._model_has_unreconstructible_cache = lambda: False
-    request = Request(request_id="decode-image", prompt=list(range(7)), sampling_params=SamplingParams())
+    request = Request(
+        request_id="decode-image",
+        prompt=list(range(7)),
+        sampling_params=SamplingParams(),
+    )
     request.prompt_token_ids = list(range(7))
     request.num_prompt_tokens = 7
     request.output_token_ids = [2]
@@ -9428,13 +9428,17 @@ def test_first_image_boundary_reached_during_decode(mock_model, mock_tokenizer, 
     rotating.update_and_fetch(mx.ones((1, 1, 8, 8)), mx.ones((1, 1, 8, 8)))
     pool = PoolingCache(4)
     pool.state = (None, None, mx.ones((1, 2, 8)))
-    scheduler._extract_boundary_snapshot = MagicMock(return_value=[CacheList(rotating, pool)])
+    scheduler._extract_boundary_snapshot = MagicMock(
+        return_value=[CacheList(rotating, pool)]
+    )
     if on_ssd:
         scheduler._boundary_snapshot_store = MagicMock()
         scheduler._boundary_snapshot_store.save.return_value = True
     scheduler._maybe_capture_boundary_snapshot(request, 0)
     if on_ssd:
-        assert scheduler._boundary_snapshot_store.save.call_args.kwargs["block_size"] == 8
+        assert (
+            scheduler._boundary_snapshot_store.save.call_args.kwargs["block_size"] == 8
+        )
     else:
         _, layers = scheduler._boundary_cache_snapshots[request.request_id][8]
         assert layers[0]["pooling_delta_ranges"]["1"] == [0, 2]

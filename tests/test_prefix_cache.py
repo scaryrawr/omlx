@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+import omlx.cache.prefix_cache as prefix_cache_module
+from omlx.cache.hybrid_cache import ModelCacheConfig
 from omlx.cache.paged_cache import (
     BlockTable,
     PagedCacheManager,
@@ -22,8 +24,8 @@ from omlx.cache.paged_cache import (
 )
 from omlx.cache.paged_ssd_cache import PagedSSDCacheManager
 from omlx.cache.prefix_cache import BlockAwarePrefixCache, BlockCacheEntry
-from omlx.cache.hybrid_cache import ModelCacheConfig
 from omlx.cache.stats import PrefixCacheStats
+from omlx.cache.type_registry import CacheTypeRegistry
 
 try:
     import mlx.core as mx
@@ -39,8 +41,6 @@ except ImportError:
     HAS_MLX = False
 
 pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
-
-import omlx.cache.prefix_cache as prefix_cache_module
 
 # New in the bounded-restore change. On a checkout without it (e.g. running
 # this file against upstream main to show the fail-before state) fall back to
@@ -68,9 +68,6 @@ else:
             else:
                 out.append(item)
         return out
-
-
-from omlx.cache.type_registry import CacheTypeRegistry
 
 
 class MockModel:
@@ -858,9 +855,9 @@ class TestBlockAwarePrefixCacheWithSSD:
         self, prefix_cache_with_ssd, message, raises
     ):
         """A GPU reset must fail the request, not turn into a cache miss."""
-        type(prefix_cache_with_ssd.paged_ssd_cache)._expected_layer_cache_types = (
-            PropertyMock(side_effect=RuntimeError(message))
-        )
+        type(
+            prefix_cache_with_ssd.paged_ssd_cache
+        )._expected_layer_cache_types = PropertyMock(side_effect=RuntimeError(message))
         table = BlockTable(request_id="req-001", block_ids=[1, 2])
 
         if raises:
@@ -2298,9 +2295,11 @@ class TestArraysCacheLastBlockOnly:
                 return None
             return real_allocate()
 
-        with patch.object(paged_cache, "allocate_block", flaky_allocate):
-            with caplog.at_level(logging.WARNING):
-                result = cache.store_cache("req-out-of-blocks", tokens, cache_data)
+        with (
+            patch.object(paged_cache, "allocate_block", flaky_allocate),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = cache.store_cache("req-out-of-blocks", tokens, cache_data)
 
         assert result is not None
         assert len(result.block_ids) == 1
@@ -4115,9 +4114,9 @@ class TestPerBlockMetaStates:
         # Block 1: KVCache meta should fall back to shared meta (empty snapshot meta)
         block1_call = mock_ssd.save_block.call_args_list[0]
         block1_meta = block1_call.kwargs["layer_meta_states"]
-        assert block1_meta[0] == (
-            "8",
-        ), f"KVCache should fall back to shared meta, got {block1_meta[0]}"
+        assert block1_meta[0] == ("8",), (
+            f"KVCache should fall back to shared meta, got {block1_meta[0]}"
+        )
 
     def test_store_cache_no_snapshot_uses_shared_meta(self, mx):
         """Blocks without boundary snapshots should use shared meta (existing behavior)."""
@@ -4972,9 +4971,9 @@ class TestReconstructionSilentFallbackHardening:
         ]
 
         for type_name in ("RotatingKVCache", "ArraysCache", "CacheList"):
-            assert (
-                cache._fallback_reconstruct_layer(layer_states, type_name) is None
-            ), f"{type_name} must not fall back to a plain KVCache rebuild"
+            assert cache._fallback_reconstruct_layer(layer_states, type_name) is None, (
+                f"{type_name} must not fall back to a plain KVCache rebuild"
+            )
 
     def test_fallback_reconstruct_still_serves_kvcache(self, mx):
         """The fallback keeps working for the type it can actually rebuild."""

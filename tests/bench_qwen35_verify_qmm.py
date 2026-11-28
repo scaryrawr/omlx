@@ -45,9 +45,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=3)
     args = parser.parse_args()
 
-    inputs = mx.random.normal(
-        (args.rows, args.input_dims), dtype=mx.bfloat16
-    )
+    inputs = mx.random.normal((args.rows, args.input_dims), dtype=mx.bfloat16)
     for mode, bits, group_size in (
         ("affine", 4, 64),
         ("mxfp4", 4, 32),

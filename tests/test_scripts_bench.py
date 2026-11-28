@@ -83,9 +83,12 @@ def test_legacy_case_expansion_and_labels_are_unchanged(bench_module):
         False,
         True,
     ]
-    assert [
-        case.variant.model_settings.vlm_mtp_enabled for case in cases
-    ] == [False, False, False, False]
+    assert [case.variant.model_settings.vlm_mtp_enabled for case in cases] == [
+        False,
+        False,
+        False,
+        False,
+    ]
     assert [case.variant.model_settings for case in cases] == [
         bench_module.ModelSettings(mtp_enabled=False),
         bench_module.ModelSettings(mtp_enabled=True),
@@ -96,9 +99,7 @@ def test_legacy_case_expansion_and_labels_are_unchanged(bench_module):
         "baseline model-a",
         "native-mtp model-a",
     ]
-    on_cases = bench_module._expand_cases(
-        ["model-a"], bench_module.NativeMTPMode.ON
-    )
+    on_cases = bench_module._expand_cases(["model-a"], bench_module.NativeMTPMode.ON)
     assert len(on_cases) == 1
     assert on_cases[0].variant.model_settings.mtp_enabled is True
 
@@ -124,9 +125,10 @@ def test_ple_both_expands_resident_before_ssd_with_native_mtp_off(
         (False, "resident", False, False),
         (False, "ssd", False, True),
     ]
-    assert bench_module._allocate_labels(
-        cases, include_variant=False
-    ) == ["ple=resident model-a", "ple=ssd model-a"]
+    assert bench_module._allocate_labels(cases, include_variant=False) == [
+        "ple=resident model-a",
+        "ple=ssd model-a",
+    ]
 
 
 def test_native_mtp_and_ple_both_expand_in_cartesian_order(bench_module):
@@ -158,10 +160,9 @@ def test_native_mtp_and_ple_both_expand_in_cartesian_order(bench_module):
     ]
 
 
-def test_bench_model_passes_case_settings_and_stops_engine(
-    bench_module, monkeypatch
-):
+def test_bench_model_passes_case_settings_and_stops_engine(bench_module, monkeypatch):
     benchmark = ModuleType("omlx.admin.benchmark")
+
     def generate_prompt(tokenizer, pp):
         assert tokenizer is not None
         assert pp == 1

@@ -341,9 +341,10 @@ def test_auto_tuning_replans_from_the_budgets_the_user_approved(cluster, monkeyp
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["performance_probe"]["status"] == "placement_locked"
-    assert payload["plan"]["placement_signature"] == _preview(cluster)[
-        "placement_signature"
-    ]
+    assert (
+        payload["plan"]["placement_signature"]
+        == _preview(cluster)["placement_signature"]
+    )
 
     mbp = _by_node(payload["plan"])["mbp"]
     assert mbp["role"] == "workstation"
@@ -383,9 +384,7 @@ def test_auto_tuning_replans_from_the_budgets_the_user_approved(cluster, monkeyp
     assert mbp["planned_weight_bytes"] < dropped.planned_weight_bytes
 
 
-def test_a_replan_that_moves_layers_is_reported_and_not_applied(
-    cluster, monkeypatch
-):
+def test_a_replan_that_moves_layers_is_reported_and_not_applied(cluster, monkeypatch):
     """Tuning may re-plan. It may not do it behind the approval."""
 
     monkeypatch.setattr(
@@ -405,9 +404,9 @@ def test_a_replan_that_moves_layers_is_reported_and_not_applied(
     assert changes["changed"] is True
     assert changes["approved_signature"] == preview["placement_signature"]
     assert changes["launched_signature"] == preview["placement_signature"]
-    assert response.json()["plan"]["placement_signature"] == preview[
-        "placement_signature"
-    ]
+    assert (
+        response.json()["plan"]["placement_signature"] == preview["placement_signature"]
+    )
     assert response.json()["performance_probe"]["status"] == "placement_locked"
     moved = {item["node_id"] for item in changes["ranks"]}
     assert "mbp" in moved

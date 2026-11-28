@@ -38,7 +38,6 @@ from omlx.patches.bonsai_t5_load import (
 from omlx.utils.model_loading import maybe_apply_pre_load_patches
 from scripts.repack_ternary_t5 import pack_t5, unpack_mlx_2bit, unpack_t5
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -76,7 +75,7 @@ class TestT5Repack:
         q_rt = unpack_t5(t5w, group_size=64, K=64)
         np.testing.assert_array_equal(q, q_rt)
 
-    def test_pack_unpack_larger_K(self):
+    def test_pack_unpack_larger_k(self):
         rng = np.random.default_rng(2)
         K, gs = 7168, 128
         q = rng.integers(0, 3, size=(4, K), dtype=np.uint8)
@@ -105,7 +104,7 @@ class TestT5Repack:
         # 2-bit MLX pack: 16 values per uint32
         w2bit = np.zeros((N, K // 16), dtype=np.uint32)
         for i in range(16):
-            w2bit |= (q[:, i::16].astype(np.uint32) << (i * 2))
+            w2bit |= q[:, i::16].astype(np.uint32) << (i * 2)
 
         # Build matching scales and biases
         n_groups = K // gs
@@ -115,7 +114,7 @@ class TestT5Repack:
         # Dequantize from 2-bit
         q2 = unpack_mlx_2bit(w2bit, K)
         dq2 = sum(
-            (scales[:, g:g+1] * q2[:, g*gs:(g+1)*gs] + biases[:, g:g+1])
+            (scales[:, g : g + 1] * q2[:, g * gs : (g + 1) * gs] + biases[:, g : g + 1])
             for g in range(n_groups)
         )
 
@@ -123,7 +122,10 @@ class TestT5Repack:
         t5w = pack_t5(q, group_size=gs)
         qt5 = unpack_t5(t5w, group_size=gs, K=K)
         dqt5 = sum(
-            (scales[:, g:g+1] * qt5[:, g*gs:(g+1)*gs] + biases[:, g:g+1])
+            (
+                scales[:, g : g + 1] * qt5[:, g * gs : (g + 1) * gs]
+                + biases[:, g : g + 1]
+            )
             for g in range(n_groups)
         )
 
@@ -478,6 +480,7 @@ class TestT5QuantizedMatmulNativeRouting:
         out = _t5_quantized_matmul(x, w, scales, biases, transpose=True, bits=2)
         assert called["M"] == 32
         assert out.shape == (32, 4)
+
 
 # ---------------------------------------------------------------------------
 # apply / remove lifecycle

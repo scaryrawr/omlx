@@ -163,7 +163,11 @@ def test_stale_lock_is_broken_by_repeated_probes():
     c._warmup = []
     c.cur = 2
     c.p = [0.8, 0.3]
-    c.t = {0: 8.0, 1: 11.0, 2: 12.0}  # baseline measured, not competitive here  # stale-high t[1] hides depth 1's advantage
+    c.t = {
+        0: 8.0,
+        1: 11.0,
+        2: 12.0,
+    }  # baseline measured, not competitive here  # stale-high t[1] hides depth 1's advantage
     c.t_age = {0: 0.0, 1: 0.0, 2: 0.0}
     assert c._best() == 2  # locked on the stale estimate
     # Drive real cycles: depth 2 truly costs 12ms, depth 1 truly costs 10ms.
@@ -373,7 +377,6 @@ def test_high_accept_workload_never_parks():
     assert c._best() >= 1
 
 
-
 def test_losing_speculation_builds_exit_streak():
     # story/4k analog: best speculative score sits between 1.0x and
     # EXIT_MARGIN of the taxed baseline — locally "fine", globally losing
@@ -490,6 +493,7 @@ def test_std_tax_probe_measures_and_smooths(monkeypatch):
         _arm_std_tax_probe,
         _record_std_tax_sample,
     )
+
     # The process-wide prefill tracker may hold another test's prefill.
     monkeypatch.setattr(batch_generator, "_prefill_activity_recent", lambda: False)
     model = SimpleNamespace()

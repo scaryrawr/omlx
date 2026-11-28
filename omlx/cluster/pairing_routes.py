@@ -319,5 +319,3 @@ async def cluster_pair_deny(body: PairDenyBody):
     if not denied:
         raise HTTPException(status_code=404, detail="no pending join request")
     return {"ok": True, "node_id": body.node_id, "state": "denied"}
-
-

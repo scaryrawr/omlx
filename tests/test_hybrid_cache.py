@@ -6,10 +6,7 @@ This module tests the last-block-only storage strategy for RotatingKVCache
 layers and strict partial-prefix rejection for boundary-safe restore.
 """
 
-import math
-import time
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,18 +18,16 @@ except ImportError:
     HAS_MLX = False
     mx = None
 
+from omlx.cache._rotating_subclass import PrefillReadyRotatingKVCache
 from omlx.cache.hybrid_cache import (
-    LayerCacheConfig,
     ModelCacheConfig,
     create_default_kvcache_config,
 )
 from omlx.cache.paged_cache import (
-    BlockTable,
     PagedCacheManager,
     compute_block_hash,
 )
-from omlx.cache._rotating_subclass import PrefillReadyRotatingKVCache
-from omlx.cache.prefix_cache import BlockAwarePrefixCache, BlockCacheEntry
+from omlx.cache.prefix_cache import BlockAwarePrefixCache
 from omlx.cache.type_handlers import CacheType
 
 
@@ -177,9 +172,7 @@ class TestApplyWindowPadding:
     def test_rotating_window_padding(
         self, prefix_cache, matched_blocks, window_size, expected_blocks
     ):
-        config = ModelCacheConfig.from_type_list(
-            ["KVCache", "RotatingKVCache"]
-        )
+        config = ModelCacheConfig.from_type_list(["KVCache", "RotatingKVCache"])
         config._max_window_size = window_size
 
         result = prefix_cache._apply_window_padding(matched_blocks, config)
@@ -199,9 +192,7 @@ class TestApplyWindowPadding:
             paged_cache_manager=paged_cache,
         )
 
-        config = ModelCacheConfig.from_type_list(
-            ["KVCache", "RotatingKVCache"]
-        )
+        config = ModelCacheConfig.from_type_list(["KVCache", "RotatingKVCache"])
         config._max_window_size = 1024
 
         # ceil(1024/64) = 16 padding blocks
@@ -231,15 +222,15 @@ class TestExtractBlockTensorSliceLastBlock:
     def _make_kvcache_layer(self, seq_len=64):
         """Create a mock KVCache layer state."""
         return {
-            'state': (mx.zeros((1, 8, seq_len, 64)), mx.zeros((1, 8, seq_len, 64))),
-            'cache_type': 'KVCache',
+            "state": (mx.zeros((1, 8, seq_len, 64)), mx.zeros((1, 8, seq_len, 64))),
+            "cache_type": "KVCache",
         }
 
     def _make_rotating_layer(self, max_size=256):
         """Create a mock RotatingKVCache layer state."""
         return {
-            'state': (mx.zeros((1, 8, max_size, 64)), mx.zeros((1, 8, max_size, 64))),
-            'cache_type': 'RotatingKVCache',
+            "state": (mx.zeros((1, 8, max_size, 64)), mx.zeros((1, 8, max_size, 64))),
+            "cache_type": "RotatingKVCache",
         }
 
     def test_kvcache_only_slicing_unchanged(self, prefix_cache):
@@ -252,7 +243,7 @@ class TestExtractBlockTensorSliceLastBlock:
         )
         assert result_non_last is not None
         assert len(result_non_last) == 4
-        for keys, values in result_non_last:
+        for keys, _values in result_non_last:
             assert keys.shape == (1, 8, 4, 64)
 
         # Last block
@@ -261,7 +252,7 @@ class TestExtractBlockTensorSliceLastBlock:
         )
         assert result_last is not None
         assert len(result_last) == 4
-        for keys, values in result_last:
+        for keys, _values in result_last:
             assert keys.shape == (1, 8, 4, 64)
 
     def test_rotating_non_last_block_placeholder(self, prefix_cache):
@@ -420,7 +411,10 @@ class TestValidateBlockCacheDataPlaceholder:
         """Test full RotatingKVCache state passes validation."""
         cache_data = [
             (mx.zeros((1, 8, 4, 64)), mx.zeros((1, 8, 4, 64))),  # KVCache
-            (mx.zeros((1, 8, 256, 64)), mx.zeros((1, 8, 256, 64))),  # RotatingKVCache full
+            (
+                mx.zeros((1, 8, 256, 64)),
+                mx.zeros((1, 8, 256, 64)),
+            ),  # RotatingKVCache full
         ]
         layer_cache_types = ["KVCache", "RotatingKVCache"]
 
@@ -476,7 +470,9 @@ class TestDetectWindowPaddingFromBlocks:
         result = cache._detect_window_padding_from_blocks([1, 2, 3])
         assert result is None
 
-    def test_no_rotating_kvcache_in_metadata(self, prefix_cache, mock_ssd_cache, paged_cache):
+    def test_no_rotating_kvcache_in_metadata(
+        self, prefix_cache, mock_ssd_cache, paged_cache
+    ):
         """Test with KVCache-only metadata returns None."""
         # Allocate a block
         block = paged_cache.allocate_block()
@@ -485,9 +481,9 @@ class TestDetectWindowPaddingFromBlocks:
         mock_ssd_cache.load_block_with_metadata.return_value = (
             [(MagicMock(), MagicMock())],
             {
-                'layer_cache_types': ['KVCache', 'KVCache'],
-                'layer_meta_states': [(64,), (64,)],
-            }
+                "layer_cache_types": ["KVCache", "KVCache"],
+                "layer_meta_states": [(64,), (64,)],
+            },
         )
 
         result = prefix_cache._detect_window_padding_from_blocks([block.block_id])
@@ -501,12 +497,17 @@ class TestDetectWindowPaddingFromBlocks:
         mock_ssd_cache.load_block_with_metadata.return_value = (
             [(MagicMock(), MagicMock()), (MagicMock(), MagicMock())],
             {
-                'layer_cache_types': ['KVCache', 'RotatingKVCache'],
-                'layer_meta_states': [
+                "layer_cache_types": ["KVCache", "RotatingKVCache"],
+                "layer_meta_states": [
                     (64,),  # KVCache: (offset,)
-                    (4, 1024, 500, 100),  # RotatingKVCache: (keep, max_size, offset, _idx)
+                    (
+                        4,
+                        1024,
+                        500,
+                        100,
+                    ),  # RotatingKVCache: (keep, max_size, offset, _idx)
                 ],
-            }
+            },
         )
 
         result = prefix_cache._detect_window_padding_from_blocks([block.block_id])
@@ -525,13 +526,13 @@ class TestDetectWindowPaddingFromBlocks:
         mock_ssd_cache.load_block_with_metadata.return_value = (
             [(MagicMock(), MagicMock())] * 3,
             {
-                'layer_cache_types': ['RotatingKVCache', 'KVCache', 'RotatingKVCache'],
-                'layer_meta_states': [
+                "layer_cache_types": ["RotatingKVCache", "KVCache", "RotatingKVCache"],
+                "layer_meta_states": [
                     (4, 512, 500, 100),  # RotatingKVCache: max_size=512
                     (64,),  # KVCache
                     (4, 2048, 500, 100),  # RotatingKVCache: max_size=2048
                 ],
-            }
+            },
         )
 
         result = prefix_cache._detect_window_padding_from_blocks([block.block_id])
@@ -580,7 +581,9 @@ class TestFetchCachePrefixMatching:
         assert block_table is None
         assert remaining == tokens
 
-    def test_fetch_cache_hit_no_rotating(self, prefix_cache, paged_cache, mock_ssd_cache):
+    def test_fetch_cache_hit_no_rotating(
+        self, prefix_cache, paged_cache, mock_ssd_cache
+    ):
         """Test cache hit without RotatingKVCache doesn't apply padding."""
         # Set up blocks in paged cache for shared prefix
         tokens = list(range(256))
@@ -594,9 +597,9 @@ class TestFetchCachePrefixMatching:
         mock_ssd_cache.load_block_with_metadata.return_value = (
             [(MagicMock(), MagicMock())],
             {
-                'layer_cache_types': ['KVCache'],
-                'layer_meta_states': [(64,)],
-            }
+                "layer_cache_types": ["KVCache"],
+                "layer_meta_states": [(64,)],
+            },
         )
 
         # Extend tokens so there are remaining
@@ -621,12 +624,12 @@ class TestFetchCachePrefixMatching:
         mock_ssd_cache.load_block_with_metadata.return_value = (
             [(MagicMock(), MagicMock()), (MagicMock(), MagicMock())],
             {
-                'layer_cache_types': ['KVCache', 'RotatingKVCache'],
-                'layer_meta_states': [
+                "layer_cache_types": ["KVCache", "RotatingKVCache"],
+                "layer_meta_states": [
                     (64,),
                     (4, 1024, 500, 100),
                 ],
-            }
+            },
         )
 
         extended_tokens = tokens + list(range(256, 512))
@@ -683,7 +686,7 @@ class TestPrefillReadyMergeBehavior:
         empty keys, so merge now raises ValueError for this case.
         This confirms the _PrefillReadyRotatingKVCache fix is still needed.
         """
-        from mlx_lm.models.cache import RotatingKVCache, BatchRotatingKVCache
+        from mlx_lm.models.cache import BatchRotatingKVCache, RotatingKVCache
 
         # Create using standard RotatingKVCache (NOT our subclass)
         old_cache = RotatingKVCache(max_size=128, keep=0)
@@ -752,20 +755,23 @@ class TestReconstructCachePartialRestore:
         rot_placeholder = mx.zeros((1,))
 
         block_data = [
-            (kv_keys, kv_values),       # Layer 0: KVCache slice
+            (kv_keys, kv_values),  # Layer 0: KVCache slice
             (rot_placeholder, rot_placeholder),  # Layer 1: RotatingKVCache placeholder
         ]
         block_metadata = {
-            'layer_cache_types': ['KVCache', 'RotatingKVCache'],
-            'layer_meta_states': [
-                (256,),              # KVCache: (offset,)
-                (4, 1024, 500, 100), # RotatingKVCache: (keep, max_size, offset, _idx)
+            "layer_cache_types": ["KVCache", "RotatingKVCache"],
+            "layer_meta_states": [
+                (256,),  # KVCache: (offset,)
+                (4, 1024, 500, 100),  # RotatingKVCache: (keep, max_size, offset, _idx)
             ],
-            'model_name': 'test-model',
-            'num_layers': 2,
+            "model_name": "test-model",
+            "num_layers": 2,
         }
 
-        mock_ssd_cache.load_block_with_metadata.return_value = (block_data, block_metadata)
+        mock_ssd_cache.load_block_with_metadata.return_value = (
+            block_data,
+            block_metadata,
+        )
 
         result = prefix_cache.reconstruct_cache(block_table)
 
@@ -802,16 +808,19 @@ class TestReconstructCachePartialRestore:
             (rot_keys, rot_values),  # Layer 1: RotatingKVCache full state
         ]
         block_metadata = {
-            'layer_cache_types': ['KVCache', 'RotatingKVCache'],
-            'layer_meta_states': [
+            "layer_cache_types": ["KVCache", "RotatingKVCache"],
+            "layer_meta_states": [
                 (256,),
                 (4, 1024, 500, 100),
             ],
-            'model_name': 'test-model',
-            'num_layers': 2,
+            "model_name": "test-model",
+            "num_layers": 2,
         }
 
-        mock_ssd_cache.load_block_with_metadata.return_value = (block_data, block_metadata)
+        mock_ssd_cache.load_block_with_metadata.return_value = (
+            block_data,
+            block_metadata,
+        )
 
         result = prefix_cache.reconstruct_cache(block_table)
 
@@ -873,16 +882,19 @@ class TestReconstructCachePartialRestore:
             (rot_keys, rot_values),
         ]
         block_metadata = {
-            'layer_cache_types': ['KVCache', 'RotatingKVCache'],
-            'layer_meta_states': [
+            "layer_cache_types": ["KVCache", "RotatingKVCache"],
+            "layer_meta_states": [
                 (256,),
                 (0, 1024, 44225, 845),  # keep=0, max_size=1024, offset=44225, _idx=845
             ],
-            'model_name': 'test-model',
-            'num_layers': 2,
+            "model_name": "test-model",
+            "num_layers": 2,
         }
 
-        mock_ssd_cache.load_block_with_metadata.return_value = (block_data, block_metadata)
+        mock_ssd_cache.load_block_with_metadata.return_value = (
+            block_data,
+            block_metadata,
+        )
 
         result = prefix_cache.reconstruct_cache(block_table)
 
@@ -908,8 +920,6 @@ class TestModelCacheConfigCacheList:
 
     def test_from_cache_list_with_cache_list(self):
         """Test from_cache_list detects CacheList."""
-        from omlx.cache.type_handlers import CacheType
-        from omlx.cache.type_registry import CacheTypeRegistry
 
         # CacheList mock: has .caches attribute
         mock_cache_list = MagicMock(spec=[])
@@ -949,20 +959,27 @@ class TestModelCacheConfigCacheList:
 
     def test_get_meta_states_cache_list(self):
         """Test get_meta_states extracts composite meta_state for CacheList."""
-        from omlx.cache.type_handlers import CacheType
 
         # Use real thin classes so type(obj).__name__ returns the correct name
         # (MagicMock(spec=[]) with __class__ override does not affect type().__name__)
-        KVCacheStub = type("KVCache", (), {
-            "state": (MagicMock(), MagicMock()),
-            "meta_state": (32,),
-        })
-        mock_sub = KVCacheStub()
+        k_v_cache_stub_cls = type(
+            "KVCache",
+            (),
+            {
+                "state": (MagicMock(), MagicMock()),
+                "meta_state": (32,),
+            },
+        )
+        mock_sub = k_v_cache_stub_cls()
 
-        CacheListStub = type("CacheList", (), {
-            "caches": (mock_sub,),
-        })
-        mock_cache_list = CacheListStub()
+        cache_list_stub_cls = type(
+            "CacheList",
+            (),
+            {
+                "caches": (mock_sub,),
+            },
+        )
+        mock_cache_list = cache_list_stub_cls()
 
         config = ModelCacheConfig.from_cache_list([mock_cache_list])
         meta_states = config.get_meta_states([mock_cache_list])

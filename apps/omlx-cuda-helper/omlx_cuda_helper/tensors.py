@@ -158,8 +158,9 @@ class Linear:
             self.rotation = (signs, int(signs.shape[-1]))
             weight = unpack(weight, scales, biases, sizes, dtype or scales.dtype)
         elif f"{prefix}.scales" in weights:
-            scales, biases = weights[f"{prefix}.scales"], weights.get(
-                f"{prefix}.biases"
+            scales, biases = (
+                weights[f"{prefix}.scales"],
+                weights.get(f"{prefix}.biases"),
             )
             if dense:
                 weight = unpack(weight, scales, biases, quant, dtype)

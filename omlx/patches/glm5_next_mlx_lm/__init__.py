@@ -24,7 +24,7 @@ def apply_glm5_next_mlx_lm_patch() -> bool:
 
     try:
         from . import model
-    except Exception as exc:  # noqa: BLE001 - a missing vendor tree must not abort
+    except Exception as exc:
         logger.warning("Could not register %s: %s", _QUALNAME, exc)
         return False
     sys.modules[_QUALNAME] = model

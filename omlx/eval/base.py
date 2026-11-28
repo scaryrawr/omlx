@@ -6,8 +6,9 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 from omlx.api.thinking import normalize_think_tags
 
@@ -29,10 +30,10 @@ class QuestionResult:
     time_seconds: float
     question_text: str = ""
     raw_response: str = ""
-    category: Optional[str] = None
+    category: str | None = None
     # Populated only for external API evaluations.
-    status: Optional[str] = None
-    finish_reason: Optional[str] = None
+    status: str | None = None
+    finish_reason: str | None = None
     reasoning_fields_present: list[str] = field(default_factory=list)
     reasoning_fields_nonempty: list[str] = field(default_factory=list)
     prompt_tokens: int = 0
@@ -50,7 +51,7 @@ class BenchmarkResult:
     correct_count: int
     time_seconds: float
     question_results: list[QuestionResult] = field(default_factory=list)
-    category_scores: Optional[dict[str, float]] = None
+    category_scores: dict[str, float] | None = None
     thinking_used: bool = False
     # Per-question max_tokens under the final thinking mode.
     max_tokens: int = 0
@@ -63,13 +64,13 @@ class BaseBenchmark(ABC):
     quick_size: int = 100
     # Full dataset size, recorded by load_dataset before sampling. Uploaded to
     # omlx.ai so "300 of 14,042" reads correctly on the community leaderboard.
-    dataset_total: Optional[int] = None
+    dataset_total: int | None = None
     # run() probes the first questions for <think> tags and switches thinking
     # on when it finds them; code benchmarks keep the caller's setting.
     auto_detect_thinking: bool = True
     # Result rendering: fixed "expected" label and a cap on the predicted text.
-    expected_label: Optional[str] = None
-    predicted_max_chars: Optional[int] = None
+    expected_label: str | None = None
+    predicted_max_chars: int | None = None
     # Code execution blocks; keep it off the engine event loop.
     blocking_scoring: bool = False
 
@@ -108,7 +109,7 @@ class BaseBenchmark(ABC):
         """Max tokens to generate per question. Override for longer answers."""
         return 128
 
-    def get_category(self, item: dict) -> Optional[str]:
+    def get_category(self, item: dict) -> str | None:
         """Return category/subject for per-category scoring. None if N/A."""
         return None
 
@@ -220,7 +221,7 @@ class BaseBenchmark(ABC):
         response_text: str,
         item: dict,
         diagnostics: dict[str, Any],
-    ) -> tuple[str, bool, Optional[str]]:
+    ) -> tuple[str, bool, str | None]:
         """Score a response while preserving legacy local-evaluation behavior."""
         external_status = diagnostics.get("status")
         if external_status is None:
@@ -242,9 +243,7 @@ class BaseBenchmark(ABC):
         return {
             "status": diagnostics.get("status"),
             "finish_reason": diagnostics.get("finish_reason"),
-            "reasoning_fields_present": diagnostics.get(
-                "reasoning_fields_present", []
-            ),
+            "reasoning_fields_present": diagnostics.get("reasoning_fields_present", []),
             "reasoning_fields_nonempty": diagnostics.get(
                 "reasoning_fields_nonempty", []
             ),
@@ -273,8 +272,10 @@ class BaseBenchmark(ABC):
         }
 
     def _question_max_tokens(
-        self, engine: Any, enable_thinking: bool,
-        max_tokens_override: Optional[int] = None,
+        self,
+        engine: Any,
+        enable_thinking: bool,
+        max_tokens_override: int | None = None,
     ) -> int:
         # max_tokens is always benchmark-controlled - a model's small configured
         # limit must not truncate long answers and corrupt scores.
@@ -284,19 +285,20 @@ class BaseBenchmark(ABC):
         if getattr(engine, "model_type", None) == "gpt_oss":
             max_tokens = max(max_tokens * 4, 8192)
         elif enable_thinking:
-            max_tokens = min(
-                max(max_tokens, THINKING_MIN_TOKENS), THINKING_MAX_TOKENS
-            )
+            max_tokens = min(max(max_tokens, THINKING_MIN_TOKENS), THINKING_MAX_TOKENS)
         # Floor applied last, so it can also lift the thinking cap.
         if max_tokens_override is not None:
             max_tokens = max(max_tokens, max_tokens_override)
         return max_tokens
 
     async def _eval_single(
-        self, engine: Any, item: dict, index: int,
-        sampling_kwargs: Optional[dict] = None,
+        self,
+        engine: Any,
+        item: dict,
+        index: int,
+        sampling_kwargs: dict | None = None,
         enable_thinking: bool = False,
-        max_tokens_override: Optional[int] = None,
+        max_tokens_override: int | None = None,
     ) -> tuple[int, dict, str, str, str, dict[str, Any]]:
         """Evaluate a single item.
 
@@ -368,11 +370,11 @@ class BaseBenchmark(ABC):
         self,
         engine: Any,
         items: list[dict],
-        on_progress: Optional[Callable[[int, int], Any]] = None,
+        on_progress: Callable[[int, int], Any] | None = None,
         batch_size: int = 1,
-        sampling_kwargs: Optional[dict] = None,
+        sampling_kwargs: dict | None = None,
         enable_thinking: bool = False,
-        max_tokens_override: Optional[int] = None,
+        max_tokens_override: int | None = None,
     ) -> BenchmarkResult:
         """Run the benchmark on all items.
 
@@ -418,7 +420,11 @@ class BaseBenchmark(ABC):
                 started = time.time()
                 try:
                     outcome = await self._eval_single(
-                        engine, items[idx], idx, sampling_kwargs, thinking,
+                        engine,
+                        items[idx],
+                        idx,
+                        sampling_kwargs,
+                        thinking,
                         max_tokens_override,
                     )
                 except Exception as exc:
@@ -427,9 +433,7 @@ class BaseBenchmark(ABC):
                 done.put_nowait((thinking, time.time() - started, outcome))
 
         results: dict[int, QuestionResult] = {}
-        workers = [
-            asyncio.create_task(worker()) for _ in range(min(batch_size, total))
-        ]
+        workers = [asyncio.create_task(worker()) for _ in range(min(batch_size, total))]
         scoring_task: asyncio.Task[QuestionResult] | None = None
         try:
             while len(results) < total:
@@ -495,9 +499,7 @@ class BaseBenchmark(ABC):
                 continue
             category_total[r.category] = category_total.get(r.category, 0) + 1
             if r.correct:
-                category_correct[r.category] = (
-                    category_correct.get(r.category, 0) + 1
-                )
+                category_correct[r.category] = category_correct.get(r.category, 0) + 1
 
         cat_scores = None
         if category_total:

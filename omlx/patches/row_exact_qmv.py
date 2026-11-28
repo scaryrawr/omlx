@@ -362,7 +362,16 @@ def unrolled_tile_ok(bits: int, rps: int, rows_per_group: int) -> bool:
 _UNROLLED_VERDICTS: dict = {}
 
 
-def unrolled_tile_verified(shape: tuple, run, weights: list, bits: int, group_size: int, rows: int, k: int, dtype) -> bool:
+def unrolled_tile_verified(
+    shape: tuple,
+    run,
+    weights: list,
+    bits: int,
+    group_size: int,
+    rows: int,
+    k: int,
+    dtype,
+) -> bool:
     """Whether the unrolled launch ``shape`` (a hashable key of every template
     parameter) matches stock one-row ``quantized_matmul`` bit for bit.
     ``run(x)`` launches it on ``x`` [rows, k] and returns one output per
@@ -375,8 +384,13 @@ def unrolled_tile_verified(shape: tuple, run, weights: list, bits: int, group_si
             mx.concatenate(
                 [
                     mx.quantized_matmul(
-                        x[r : r + 1], w, scales=s, biases=b,
-                        transpose=True, group_size=group_size, bits=bits,
+                        x[r : r + 1],
+                        w,
+                        scales=s,
+                        biases=b,
+                        transpose=True,
+                        group_size=group_size,
+                        bits=bits,
                     )
                     for r in range(rows)
                 ]
@@ -398,19 +412,18 @@ def unrolled_tile_verified(shape: tuple, run, weights: list, bits: int, group_si
 
 def _header(bits: int, group_size: int, fast: bool, unrolled: bool = False) -> str:
     unroll = '_Pragma("clang loop unroll(full)")' if unrolled else ""
-    return (
-        f"#define ROW_EXACT_UNROLL {unroll}\n"
-        + (_HEADER + _DECODED_DOT + _TILE)
-        .replace("__BITS__", str(bits))
-        .replace("__GS__", str(group_size))
-        .replace("__FAST__", "1" if fast else "0")
+    return f"#define ROW_EXACT_UNROLL {unroll}\n" + (
+        _HEADER + _DECODED_DOT + _TILE
+    ).replace("__BITS__", str(bits)).replace("__GS__", str(group_size)).replace(
+        "__FAST__", "1" if fast else "0"
     )
 
 
 @cache
 def _kernel(bits: int, group_size: int, fast: bool, unrolled: bool = False):
     return mx.fast.metal_kernel(
-        name=f"omlx_row_exact_qmv_b{bits}_gs{group_size}_{int(fast)}" + ("_u" if unrolled else ""),
+        name=f"omlx_row_exact_qmv_b{bits}_gs{group_size}_{int(fast)}"
+        + ("_u" if unrolled else ""),
         input_names=["x", "w", "scales", "biases"],
         output_names=["y"],
         header=_header(bits, group_size, fast, unrolled),
@@ -419,7 +432,9 @@ def _kernel(bits: int, group_size: int, fast: bool, unrolled: bool = False):
 
 
 @cache
-def _group_kernel(bits: int, group_size: int, fast: bool, count: int, unrolled: bool = False):
+def _group_kernel(
+    bits: int, group_size: int, fast: bool, count: int, unrolled: bool = False
+):
     inputs = ["x"]
     for i in range(count):
         inputs += [f"w{i}", f"scales{i}", f"biases{i}"]
@@ -634,7 +649,13 @@ def _group_plan(linears, x: mx.array, rows: int, geometry=None) -> _GroupPlan | 
     if plans is None:
         plans = {}
         object.__setattr__(first, "_omlx_row_exact_plans", plans)
-    key = (tuple(id(linear) for linear in linears), rows, x.dtype, x.shape[-1], geometry)
+    key = (
+        tuple(id(linear) for linear in linears),
+        rows,
+        x.dtype,
+        x.shape[-1],
+        geometry,
+    )
     if key not in plans:
         k = int(x.shape[-1])
         fast = [
@@ -655,21 +676,39 @@ def _group_plan(linears, x: mx.array, rows: int, geometry=None) -> _GroupPlan | 
             and (
                 geometry is None
                 or rows % geometry[0] == 0
-                and (not geometry[2] or unrolled_tile_ok(first.bits, geometry[1], geometry[0]))
+                and (
+                    not geometry[2]
+                    or unrolled_tile_ok(first.bits, geometry[1], geometry[0])
+                )
             )
         )
         plan = _GroupPlan(linears, x, rows, geometry) if grouped else None
         if plan is not None and geometry is not None and geometry[2]:
             k = int(x.shape[-1])
             shape = (
-                "group", int(first.bits), int(first.group_size), fast[0], k,
+                "group",
+                int(first.bits),
+                int(first.group_size),
+                fast[0],
+                k,
                 tuple(int(linear.weight.shape[0]) for linear in linears),
-                rows, geometry[0], geometry[1], x.dtype,
+                rows,
+                geometry[0],
+                geometry[1],
+                x.dtype,
             )
-            weights = [(linear.weight, linear.scales, linear.biases) for linear in linears]
+            weights = [
+                (linear.weight, linear.scales, linear.biases) for linear in linears
+            ]
             if not unrolled_tile_verified(
-                shape, lambda probe: plan.launch(linears, probe), weights,
-                int(first.bits), int(first.group_size), rows, k, x.dtype,
+                shape,
+                lambda probe: plan.launch(linears, probe),
+                weights,
+                int(first.bits),
+                int(first.group_size),
+                rows,
+                k,
+                x.dtype,
             ):
                 plan = _GroupPlan(linears, x, rows, (geometry[0], geometry[1], False))
         plans[key] = plan
@@ -683,7 +722,7 @@ def quantized_linears(linears, x: mx.array) -> tuple:
     rows = 1
     for size in lead:
         rows *= size
-    plan = _group_plan(linears, x, rows) if 1 < rows and 1 < len(linears) <= 4 else None
+    plan = _group_plan(linears, x, rows) if rows > 1 and 1 < len(linears) <= 4 else None
     if plan is None:
         return tuple(quantized_linear(linear, x) for linear in linears)
     outputs = plan.launch(linears, x.reshape(rows, x.shape[-1]))
@@ -753,7 +792,9 @@ class OneRowQmv:
         )[0]
 
 
-def _qmv_fast_layout(weight, scales, biases, bits, group_size, mode, dtype, rps) -> bool:
+def _qmv_fast_layout(
+    weight, scales, biases, bits, group_size, mode, dtype, rps
+) -> bool:
     """Stock one-row ``quantized_matmul`` runs ``qmv_fast`` on this layout
     (``qmv_fast_layout``) and ``2 * rps`` divides N."""
     if (
@@ -795,9 +836,22 @@ class RowsQmv:
     ``unrolled_tile_ok`` that this GPU computes bit-exactly (checked once per
     tile shape), else the rolled tile."""
 
-    __slots__ = ("_kernel", "_weights", "_k", "_n", "_dtype", "_geometry", "_launch", "_bits", "_group_size", "_unrolled")
+    __slots__ = (
+        "_kernel",
+        "_weights",
+        "_k",
+        "_n",
+        "_dtype",
+        "_geometry",
+        "_launch",
+        "_bits",
+        "_group_size",
+        "_unrolled",
+    )
 
-    def __init__(self, weight, scales, biases, bits, group_size, dtype, geometry, unrolled=False):
+    def __init__(
+        self, weight, scales, biases, bits, group_size, dtype, geometry, unrolled=False
+    ):
         self._kernel = _kernel(bits, group_size, True, False)
         self._weights = (weight, scales, biases)
         self._k = int(scales.shape[-1]) * group_size
@@ -820,7 +874,9 @@ class RowsQmv:
                 or self._n % (2 * rps)
                 or (self._unrolled and not unrolled_tile_ok(self._bits, rps, per_group))
             ):
-                raise ValueError(f"no {rps}x{per_group} tile for {rows} rows of {self._n}")
+                raise ValueError(
+                    f"no {rps}x{per_group} tile for {rows} rows of {self._n}"
+                )
             template = [
                 ("T", self._dtype),
                 ("K_SIZE", self._k),
@@ -832,7 +888,17 @@ class RowsQmv:
             kernel = self._kernel
             if self._unrolled:
                 unrolled = _kernel(self._bits, self._group_size, True, True)
-                shape = ("rows", self._bits, self._group_size, self._k, self._n, rows, per_group, rps, self._dtype)
+                shape = (
+                    "rows",
+                    self._bits,
+                    self._group_size,
+                    self._k,
+                    self._n,
+                    rows,
+                    per_group,
+                    rps,
+                    self._dtype,
+                )
 
                 def run(probe):
                     return unrolled(
@@ -845,7 +911,14 @@ class RowsQmv:
                     )
 
                 if unrolled_tile_verified(
-                    shape, run, [self._weights], self._bits, self._group_size, rows, self._k, self._dtype
+                    shape,
+                    run,
+                    [self._weights],
+                    self._bits,
+                    self._group_size,
+                    rows,
+                    self._k,
+                    self._dtype,
                 ):
                     kernel = unrolled
             launch = self._launch[rows] = (kernel, template, grid)
@@ -860,7 +933,9 @@ class RowsQmv:
         )[0]
 
 
-def rows_qmv(weight, scales, biases, bits, group_size, mode, dtype, geometry, unrolled=False):
+def rows_qmv(
+    weight, scales, biases, bits, group_size, mode, dtype, geometry, unrolled=False
+):
     """A ``RowsQmv`` on a ``_qmv_fast_layout`` (checked at one column per
     simdgroup; ``__call__`` checks the tile ``geometry`` picks), else None."""
     if not _qmv_fast_layout(weight, scales, biases, bits, group_size, mode, dtype, 1):

@@ -100,7 +100,7 @@ class AGXPowerCap:
                 ctypes.c_char.in_dll(cf, "kCFTypeDictionaryValueCallBacks")
             )
             self.supported = self.read_mw() is not None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"GPU power cap unavailable: {e}")
             self.supported = False
 

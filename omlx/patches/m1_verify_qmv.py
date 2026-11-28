@@ -104,7 +104,7 @@ def _unpack_source(bits: int, vpt: int) -> str:
                 f"half(((w[{word}] >> {sh}u) | (w[{word + 1}] << {32 - sh}u)) & {mask}u)"
             )
     body = "\n".join(
-        f"  o[{i}] = half4({', '.join(vals[4 * i:4 * i + 4])});"
+        f"  o[{i}] = half4({', '.join(vals[4 * i : 4 * i + 4])});"
         for i in range(vpt // 4)
     )
     return (

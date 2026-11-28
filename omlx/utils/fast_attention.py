@@ -26,8 +26,7 @@ floating-point summation order).
 from __future__ import annotations
 
 import threading
-from functools import lru_cache
-from typing import Optional
+from functools import cache, lru_cache
 
 import mlx.core as mx
 
@@ -39,11 +38,11 @@ from omlx.utils.nax_attention import nax_mixed_head_dim_attention, uses_key_pass
 def _nax_available() -> bool:
     try:
         return bool(is_nax_available())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
-@lru_cache(maxsize=None)
+@cache
 def _native_mixed_dims_supported(qk_dim: int, v_dim: int) -> bool:
     """True when MLX's fused prefill kernel accepts ``qk_dim``/``v_dim`` directly."""
     try:
@@ -54,7 +53,7 @@ def _native_mixed_dims_supported(qk_dim: int, v_dim: int) -> bool:
         )
         mx.eval(out)
         return True
-    except Exception:  # noqa: BLE001 - older MLX raises ValueError
+    except Exception:
         return False
 
 
@@ -89,8 +88,8 @@ def mixed_head_dim_sdpa(
     *,
     scale: float,
     mask,
-    sinks: Optional[mx.array] = None,
-) -> Optional[mx.array]:
+    sinks: mx.array | None = None,
+) -> mx.array | None:
     """Fused SDPA for prefill with ``qk_dim > v_dim``; None when not applicable.
 
     Four exact routes, best first:
@@ -174,7 +173,7 @@ def _window_block_mask(
     block: int,
     window: int,
     lead: int,
-    user_mask: Optional[mx.array],
+    user_mask: mx.array | None,
     col_start: int,
     pad_q: int,
 ) -> mx.array:
@@ -239,11 +238,11 @@ def blocked_sliding_window_attention(
     *,
     scale: float,
     window: int,
-    sinks: Optional[mx.array] = None,
+    sinks: mx.array | None = None,
     mask=None,
     block: int = 128,
-    query_len: Optional[int] = None,
-) -> Optional[mx.array]:
+    query_len: int | None = None,
+) -> mx.array | None:
     """Causal sliding-window attention computed per query block.
 
     ``keys``/``values`` hold ``P >= 0`` prefix positions immediately preceding
@@ -272,7 +271,7 @@ def blocked_sliding_window_attention(
         B != 1
         or window <= 0
         or prefix < 0
-        or L < 2 * block
+        or 2 * block > L
         or Lq not in (L, L + (-L) % block)
         or keys.shape[2] != values.shape[2]
     ):

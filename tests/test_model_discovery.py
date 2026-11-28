@@ -38,24 +38,35 @@ from omlx.model_discovery import (
 
 
 class TestVideoDiscovery:
-    def test_converted_wan_is_video_and_raw_checkpoint_is_not_served(self, tmp_path, caplog):
+    def test_converted_wan_is_video_and_raw_checkpoint_is_not_served(
+        self, tmp_path, caplog
+    ):
         raw = tmp_path / "wan-original"
         raw.mkdir()
         (raw / "config.json").write_text(
             json.dumps(
-                {"_class_name": "WanModel", "model_type": "ti2v", "dim": 3072, "in_dim": 48}
+                {
+                    "_class_name": "WanModel",
+                    "model_type": "ti2v",
+                    "dim": 3072,
+                    "in_dim": 48,
+                }
             )
         )
         for index in range(1, 4):
-            (raw / f"diffusion_pytorch_model-{index:05d}-of-00003.safetensors").write_bytes(
-                b"weights"
-            )
+            (
+                raw / f"diffusion_pytorch_model-{index:05d}-of-00003.safetensors"
+            ).write_bytes(b"weights")
         model = tmp_path / "wan"
         model.mkdir()
         config = {
-            "model_type": "ti2v", "model_version": "2.2", "dual_model": False,
-            "vae_stride": [4, 16, 16], "sample_fps": 24,
-            "dim": 3072, "text_dim": 4096,
+            "model_type": "ti2v",
+            "model_version": "2.2",
+            "dual_model": False,
+            "vae_stride": [4, 16, 16],
+            "sample_fps": 24,
+            "dim": 3072,
+            "text_dim": 4096,
         }
         (model / "config.json").write_text(json.dumps(config))
         assert detect_model_type(model) == "video"
@@ -158,8 +169,12 @@ class TestAudioInputDiscovery:
             config["optiq_vision"] = {"sidecar": sidecar}
         assert _detect_audio_input(tmp_path, config, "vlm") is True
 
-    @pytest.mark.parametrize("model_type", ["llm", "audio_stt", "audio_tts", "audio_sts"])
-    def test_audio_input_is_only_detected_for_multimodal_chat(self, tmp_path, model_type):
+    @pytest.mark.parametrize(
+        "model_type", ["llm", "audio_stt", "audio_tts", "audio_sts"]
+    )
+    def test_audio_input_is_only_detected_for_multimodal_chat(
+        self, tmp_path, model_type
+    ):
         config = {"model_type": "gemma4", "audio_config": {"hidden_size": 16}}
         expected = False if model_type == "llm" else None
         assert _detect_audio_input(tmp_path, config, model_type) is expected
@@ -168,9 +183,12 @@ class TestAudioInputDiscovery:
     def test_missing_or_unreadable_weights_are_unknown(self, tmp_path, caplog, corrupt):
         if corrupt:
             (tmp_path / "model.safetensors").write_bytes(b"corrupt")
-        assert _detect_audio_input(
-            tmp_path, {"model_type": "gemma4", "audio_config": {}}, "vlm"
-        ) is None
+        assert (
+            _detect_audio_input(
+                tmp_path, {"model_type": "gemma4", "audio_config": {}}, "vlm"
+            )
+            is None
+        )
         if corrupt:
             assert "Cannot inspect audio input weights" in caplog.text
 
@@ -1025,7 +1043,9 @@ class TestDetectModelType:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert detect_model_type(tmp_path) == "llm"
 
-    def test_detect_gemma3_text_model_without_sentence_transformers_modules_is_llm(self, tmp_path):
+    def test_detect_gemma3_text_model_without_sentence_transformers_modules_is_llm(
+        self, tmp_path
+    ):
         """gemma3_text base transformer without sentence-transformers modules stays LLM."""
         config = {
             "model_type": "gemma3_text",
@@ -1490,9 +1510,7 @@ class TestDiscoverModels:
         assert "optiq-model" in models
         assert "incomplete model" not in caplog.text
 
-    def test_auxiliary_only_index_still_checks_numbered_files(
-        self, tmp_path, caplog
-    ):
+    def test_auxiliary_only_index_still_checks_numbered_files(self, tmp_path, caplog):
         """An index without numbered references still falls back to the
         filenames on disk, so an actual numbered shard gap remains hidden."""
         model_dir = tmp_path / "gapped-model"
@@ -1525,8 +1543,7 @@ class TestDiscoverModels:
         (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
         index = {
             "weight_map": {
-                f"layer.{i}": f"model-0000{i}-of-00004.safetensors"
-                for i in range(1, 5)
+                f"layer.{i}": f"model-0000{i}-of-00004.safetensors" for i in range(1, 5)
             }
         }
         (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
@@ -1560,9 +1577,7 @@ class TestDiscoverModels:
         assert models == {}
         assert "incomplete model 'no-weights'" in caplog.text
 
-    def test_discover_stale_index_partial_other_shards_skips(
-        self, tmp_path, caplog
-    ):
+    def test_discover_stale_index_partial_other_shards_skips(self, tmp_path, caplog):
         """Stale index AND the differently-numbered on-disk set has its own
         gap: skip, reporting against the shards actually present."""
         model_dir = tmp_path / "stale-partial"
@@ -1570,8 +1585,7 @@ class TestDiscoverModels:
         (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
         index = {
             "weight_map": {
-                f"layer.{i}": f"model-0000{i}-of-00004.safetensors"
-                for i in range(1, 5)
+                f"layer.{i}": f"model-0000{i}-of-00004.safetensors" for i in range(1, 5)
             }
         }
         (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
@@ -1758,10 +1772,12 @@ class TestDiscoverModels:
         reranker_dir = tmp_path / "bge-reranker"
         reranker_dir.mkdir()
         (reranker_dir / "config.json").write_text(
-            json.dumps({
-                "model_type": "modernbert",
-                "architectures": ["ModernBertForSequenceClassification"]
-            })
+            json.dumps(
+                {
+                    "model_type": "modernbert",
+                    "architectures": ["ModernBertForSequenceClassification"],
+                }
+            )
         )
         (reranker_dir / "model.safetensors").write_bytes(b"0" * 500)
 
@@ -2038,7 +2054,9 @@ class TestReadModelContextLength:
         if config is not None:
             (tmp_path / "config.json").write_text(json.dumps(config))
         if tokenizer_config is not None:
-            (tmp_path / "tokenizer_config.json").write_text(json.dumps(tokenizer_config))
+            (tmp_path / "tokenizer_config.json").write_text(
+                json.dumps(tokenizer_config)
+            )
 
     def test_max_position_embeddings_wins(self, tmp_path):
         self._write(tmp_path, config={"max_position_embeddings": 262144})
@@ -2052,25 +2070,36 @@ class TestReadModelContextLength:
             assert _read_model_context_length(sub) == 8192, key
 
     def test_top_level_takes_precedence_over_nested(self, tmp_path):
-        self._write(tmp_path, config={
-            "max_position_embeddings": 200000,
-            "text_config": {"max_position_embeddings": 32768},
-        })
+        self._write(
+            tmp_path,
+            config={
+                "max_position_embeddings": 200000,
+                "text_config": {"max_position_embeddings": 32768},
+            },
+        )
         assert _read_model_context_length(tmp_path) == 200000
 
     def test_text_config_fallback(self, tmp_path):
         """VLM wrappers stash the language head's ctx in text_config."""
-        self._write(tmp_path, config={"text_config": {"max_position_embeddings": 131072}})
+        self._write(
+            tmp_path, config={"text_config": {"max_position_embeddings": 131072}}
+        )
         assert _read_model_context_length(tmp_path) == 131072
 
     def test_language_config_fallback(self, tmp_path):
         """Some Qwen-style configs use language_config instead."""
-        self._write(tmp_path, config={"language_config": {"max_position_embeddings": 65536}})
+        self._write(
+            tmp_path, config={"language_config": {"max_position_embeddings": 65536}}
+        )
         assert _read_model_context_length(tmp_path) == 65536
 
     def test_tokenizer_max_length_fallback(self, tmp_path):
         """When config.json doesn't expose a length, tokenizer_config wins."""
-        self._write(tmp_path, config={"model_type": "llama"}, tokenizer_config={"model_max_length": 4096})
+        self._write(
+            tmp_path,
+            config={"model_type": "llama"},
+            tokenizer_config={"model_max_length": 4096},
+        )
         assert _read_model_context_length(tmp_path) == 4096
 
     def test_tokenizer_sentinel_rejected(self, tmp_path):
@@ -2258,9 +2287,7 @@ class TestUnsupportedModels:
             ("qwen3_5_mtp", None),
         ],
     )
-    def test_vlm_mtp_helpers_are_discovered(
-        self, tmp_path, model_type, architectures
-    ):
+    def test_vlm_mtp_helpers_are_discovered(self, tmp_path, model_type, architectures):
         """Assistant/MTP checkpoints must reach status and drafter selectors."""
         model_dir = tmp_path / model_type
         model_dir.mkdir()
@@ -2355,9 +2382,7 @@ class TestUnsupportedModels:
         # Create a TTS model
         tts_dir = tmp_path / "Qwen3-TTS"
         tts_dir.mkdir()
-        (tts_dir / "config.json").write_text(
-            json.dumps({"model_type": "qwen3_tts"})
-        )
+        (tts_dir / "config.json").write_text(json.dumps({"model_type": "qwen3_tts"}))
         (tts_dir / "model.safetensors").write_bytes(b"0" * 1500)
 
         models = discover_models(tmp_path)
@@ -2390,13 +2415,17 @@ class TestHfCacheDiscovery:
         snapshot.mkdir(parents=True)
         return entry, snapshot
 
-    def _make_hf_cache_model(self, parent: Path, org: str, name: str, model_type: str = "llama"):
+    def _make_hf_cache_model(
+        self, parent: Path, org: str, name: str, model_type: str = "llama"
+    ):
         """Helper to create an HF cache entry with a valid model in the snapshot."""
         _, snapshot = self._make_hf_cache_entry(parent, org, name)
         (snapshot / "config.json").write_text(json.dumps({"model_type": model_type}))
         (snapshot / "model.safetensors").write_bytes(b"0" * 1000)
 
-    def test_video_snapshots_are_discovered_and_include_component_weights(self, tmp_path):
+    def test_video_snapshots_are_discovered_and_include_component_weights(
+        self, tmp_path
+    ):
         from omlx.video_registry import load_video_spec
 
         _, ltx = self._make_hf_cache_entry(tmp_path, "example", "LTX-2-distilled")
@@ -2424,13 +2453,22 @@ class TestHfCacheDiscovery:
             path.write_bytes(b"x" * size)
 
         _, wan = self._make_hf_cache_entry(tmp_path, "example", "wan")
-        (wan / "config.json").write_text(json.dumps({
-            "model_type": "t2v", "model_version": "2.2", "dual_model": True,
-            "dim": 3072, "text_dim": 4096,
-        }))
+        (wan / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "t2v",
+                    "model_version": "2.2",
+                    "dual_model": True,
+                    "dim": 3072,
+                    "text_dim": 4096,
+                }
+            )
+        )
         for name in (
-            "low_noise_model.safetensors", "high_noise_model.safetensors",
-            "t5_encoder.safetensors", "vae.safetensors",
+            "low_noise_model.safetensors",
+            "high_noise_model.safetensors",
+            "t5_encoder.safetensors",
+            "vae.safetensors",
         ):
             (wan / name).write_bytes(b"weights")
 
@@ -2446,7 +2484,9 @@ class TestHfCacheDiscovery:
 
     def test_resolve_valid_entry(self, tmp_path):
         """Valid HF cache entry resolves to snapshot path and repo metadata."""
-        entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B-4bit")
+        entry, snapshot = self._make_hf_cache_entry(
+            tmp_path, "mlx-community", "Qwen3-8B-4bit"
+        )
 
         result = _resolve_hf_cache_entry(entry)
         assert result is not None
@@ -2489,7 +2529,9 @@ class TestHfCacheDiscovery:
 
     def test_resolve_strips_whitespace_from_refs(self, tmp_path):
         """Trailing newline in refs/main is stripped (matches real HF cache)."""
-        entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B")
+        entry, snapshot = self._make_hf_cache_entry(
+            tmp_path, "mlx-community", "Qwen3-8B"
+        )
         # Overwrite with trailing newline (like real HF cache)
         (entry / "refs" / "main").write_text(self.FAKE_COMMIT + "\n")
 
@@ -2504,7 +2546,9 @@ class TestHfCacheDiscovery:
         UnicodeDecodeError out of discovery; resolution must instead fall back
         and warn, naming the ref file.
         """
-        entry, snapshot = self._make_hf_cache_entry(tmp_path, "mlx-community", "Qwen3-8B")
+        entry, snapshot = self._make_hf_cache_entry(
+            tmp_path, "mlx-community", "Qwen3-8B"
+        )
         (entry / "refs" / "main").write_bytes(b"\xff")
 
         with caplog.at_level(logging.WARNING):
@@ -2544,7 +2588,10 @@ class TestHfCacheDiscovery:
 
         models = discover_models(tmp_path)
         assert models["mlx-community--Qwen3-8B-4bit"].model_path == str(
-            tmp_path / "models--mlx-community--Qwen3-8B-4bit" / "snapshots" / self.FAKE_COMMIT
+            tmp_path
+            / "models--mlx-community--Qwen3-8B-4bit"
+            / "snapshots"
+            / self.FAKE_COMMIT
         )
 
     def test_hf_cache_without_config_json_skipped(self, tmp_path):
@@ -2596,7 +2643,9 @@ class TestHfCacheDiscovery:
 
     def test_hf_cache_org_name_does_not_trigger_name_heuristics(self, tmp_path):
         """Only the repo part counts; an org name with 'embed' stays an LLM."""
-        _, snapshot = self._make_hf_cache_entry(tmp_path, "embed-lab", "Qwen3-8B-mlx-4bit")
+        _, snapshot = self._make_hf_cache_entry(
+            tmp_path, "embed-lab", "Qwen3-8B-mlx-4bit"
+        )
         (snapshot / "config.json").write_text(
             json.dumps({"model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]})
         )
@@ -2994,7 +3043,6 @@ PROJECTOR_GGUF = {
 
 
 class TestGgufDiscovery:
-
     def test_split_variant_with_separately_named_table(self, tmp_path, write_gguf):
         repo = tmp_path / "models" / "Vardaan97" / "Flash-Next-Splash-GGUF"
         prefix = "Qwen3.8-Flash-Next-UD-Q4_K_XL"

@@ -24,7 +24,7 @@ def apply_mlx_vlm_unlimited_ocr_compat_patch() -> bool:
         import mlx_vlm.prompt_utils as prompt_utils
 
         _patch_prompt_utils(prompt_utils)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Unlimited-OCR mlx-vlm compat patch failed: %s", exc)
         return False
 

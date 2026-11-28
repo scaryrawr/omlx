@@ -113,7 +113,9 @@ def _normalize_tool_call_arguments(messages: list[dict[str, Any]]) -> None:
             if not isinstance(tool_call, dict):
                 continue
             function = tool_call.get("function")
-            if isinstance(function, dict) and isinstance(function.get("arguments"), dict):
+            if isinstance(function, dict) and isinstance(
+                function.get("arguments"), dict
+            ):
                 function["arguments"] = json.dumps(
                     function["arguments"], ensure_ascii=False
                 )
@@ -173,14 +175,17 @@ def apply_chat_template(
     prepared = _inject_tools(prepared, tools)
 
     encoder = _get_encoding(model_path)
-    return cast(str, encoder.encode_messages(
-        prepared,
-        thinking_mode=mode,
-        context=context,
-        drop_thinking=drop_earlier_reasoning,
-        add_default_bos_token=add_default_bos_token,
-        reasoning_effort=effort,
-    ))
+    return cast(
+        str,
+        encoder.encode_messages(
+            prepared,
+            thinking_mode=mode,
+            context=context,
+            drop_thinking=drop_earlier_reasoning,
+            add_default_bos_token=add_default_bos_token,
+            reasoning_effort=effort,
+        ),
+    )
 
 
 def install_canonical_chat_template(tokenizer: Any, model_path: str | Path) -> bool:
@@ -202,7 +207,5 @@ def install_canonical_chat_template(tokenizer: Any, model_path: str | Path) -> b
     tokenizer.has_chat_template = True
     tokenizer._omlx_dsv4_chat_template_shim = True
     tokenizer._omlx_dsv4_chat_template_orig = original
-    logger.info(
-        "Installed canonical DSV4 chat-template shim for %s", model_path
-    )
+    logger.info("Installed canonical DSV4 chat-template shim for %s", model_path)
     return True

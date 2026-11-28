@@ -81,9 +81,7 @@ def _assert_matches(got, want, meta, tag):
             expected_dtype,
             expected.dtype,
             expected.shape,
-        ), (
-            tag + name
-        )
+        ), tag + name
         np.testing.assert_allclose(
             data, expected, rtol=meta["rtol"], atol=meta["atol"], err_msg=tag + name
         )

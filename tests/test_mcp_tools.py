@@ -5,8 +5,6 @@ Tests for MCP tool utilities (omlx/mcp/tools.py).
 
 import json
 
-import pytest
-
 from omlx.mcp.tools import (
     extract_tool_calls,
     format_tool_result,
@@ -428,7 +426,10 @@ class TestHasToolCalls:
                 {
                     "message": {
                         "tool_calls": [
-                            {"id": "call_1", "function": {"name": "t", "arguments": "{}"}}
+                            {
+                                "id": "call_1",
+                                "function": {"name": "t", "arguments": "{}"},
+                            }
                         ]
                     }
                 }
@@ -439,9 +440,7 @@ class TestHasToolCalls:
 
     def test_has_tool_calls_false(self):
         """Test returns False when no tool calls."""
-        response = {
-            "choices": [{"message": {"content": "No tools"}}]
-        }
+        response = {"choices": [{"message": {"content": "No tools"}}]}
 
         assert has_tool_calls(response) is False
 

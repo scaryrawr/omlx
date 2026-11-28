@@ -119,19 +119,28 @@ def _build_gemma4_shared_kv_dir(
 class TestHasAudioWeights:
     def test_returns_true_when_audio_tower_key_present(self, tmp_path: Path):
         model_dir = _build_model_dir(
-            tmp_path, name="m1", has_audio_config=True, has_audio_weights=True,
+            tmp_path,
+            name="m1",
+            has_audio_config=True,
+            has_audio_weights=True,
         )
         assert _has_audio_weights(model_dir) is True
 
     def test_returns_false_when_no_audio_keys(self, tmp_path: Path):
         model_dir = _build_model_dir(
-            tmp_path, name="m2", has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="m2",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
         assert _has_audio_weights(model_dir) is False
 
     def test_returns_true_for_mimo_audio_sidecar(self, tmp_path: Path):
         model_dir = _build_model_dir(
-            tmp_path, name="mimo", has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="mimo",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
         sidecar = model_dir / "omnimodal" / "audio_encoder.safetensors"
         sidecar.parent.mkdir()
@@ -181,8 +190,10 @@ class TestStripAudioConfigIfOrphaned:
     def test_passthrough_when_config_has_no_audio(self, tmp_path: Path):
         # Config with no audio_config — patch must leave the dict untouched.
         model_dir = _build_model_dir(
-            tmp_path, name="vision_only",
-            has_audio_config=False, has_audio_weights=False,
+            tmp_path,
+            name="vision_only",
+            has_audio_config=False,
+            has_audio_weights=False,
         )
         with _strip_audio_config_if_orphaned(model_dir):
             cfg = _vu.load_config(model_dir)
@@ -191,8 +202,10 @@ class TestStripAudioConfigIfOrphaned:
     def test_passthrough_when_audio_weights_present(self, tmp_path: Path):
         # Healthy multimodal model — audio_config must remain in the dict.
         model_dir = _build_model_dir(
-            tmp_path, name="full",
-            has_audio_config=True, has_audio_weights=True,
+            tmp_path,
+            name="full",
+            has_audio_config=True,
+            has_audio_weights=True,
         )
         with _strip_audio_config_if_orphaned(model_dir):
             cfg = _vu.load_config(model_dir)
@@ -200,8 +213,10 @@ class TestStripAudioConfigIfOrphaned:
 
     def test_passthrough_when_audio_weights_use_hf_names(self, tmp_path: Path):
         model_dir = _build_model_dir(
-            tmp_path, name="hf_full",
-            has_audio_config=True, has_audio_weights=True,
+            tmp_path,
+            name="hf_full",
+            has_audio_config=True,
+            has_audio_weights=True,
             audio_key_prefix="model.",
         )
         with _strip_audio_config_if_orphaned(model_dir):
@@ -211,12 +226,16 @@ class TestStripAudioConfigIfOrphaned:
     def test_strips_audio_when_weights_missing(self, tmp_path: Path, caplog):
         # Defective oQ-style checkpoint: audio_config present, audio weights absent.
         model_dir = _build_model_dir(
-            tmp_path, name="defective",
-            has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="defective",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
-        with caplog.at_level("WARNING"):
-            with _strip_audio_config_if_orphaned(model_dir):
-                cfg = _vu.load_config(model_dir)
+        with (
+            caplog.at_level("WARNING"),
+            _strip_audio_config_if_orphaned(model_dir),
+        ):
+            cfg = _vu.load_config(model_dir)
         # audio_config must be explicitly None (not popped) so mlx-vlm's
         # `setdefault("audio_config", {})` does not repopulate it.
         assert "audio_config" in cfg
@@ -227,22 +246,26 @@ class TestStripAudioConfigIfOrphaned:
                 assert k not in cfg
         # WARN log fired.
         assert any(
-            "audio_tower weights missing" in rec.message
-            for rec in caplog.records
+            "audio_tower weights missing" in rec.message for rec in caplog.records
         )
 
     def test_warning_only_logged_once_per_path(self, tmp_path: Path, caplog):
         model_dir = _build_model_dir(
-            tmp_path, name="def2",
-            has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="def2",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
-        with caplog.at_level("WARNING"):
-            with _strip_audio_config_if_orphaned(model_dir):
-                _vu.load_config(model_dir)
-                _vu.load_config(model_dir)
-                _vu.load_config(model_dir)
+        with (
+            caplog.at_level("WARNING"),
+            _strip_audio_config_if_orphaned(model_dir),
+        ):
+            _vu.load_config(model_dir)
+            _vu.load_config(model_dir)
+            _vu.load_config(model_dir)
         warnings = [
-            rec for rec in caplog.records
+            rec
+            for rec in caplog.records
             if "audio_tower weights missing" in rec.message
         ]
         assert len(warnings) == 1
@@ -250,8 +273,10 @@ class TestStripAudioConfigIfOrphaned:
     def test_load_config_restored_on_normal_exit(self, tmp_path: Path):
         original = _vu.load_config
         model_dir = _build_model_dir(
-            tmp_path, name="r1",
-            has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="r1",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
         with _strip_audio_config_if_orphaned(model_dir):
             assert _vu.load_config is not original
@@ -260,12 +285,16 @@ class TestStripAudioConfigIfOrphaned:
     def test_load_config_restored_on_exception(self, tmp_path: Path):
         original = _vu.load_config
         model_dir = _build_model_dir(
-            tmp_path, name="r2",
-            has_audio_config=True, has_audio_weights=False,
+            tmp_path,
+            name="r2",
+            has_audio_config=True,
+            has_audio_weights=False,
         )
-        with pytest.raises(RuntimeError, match="boom"):
-            with _strip_audio_config_if_orphaned(model_dir):
-                raise RuntimeError("boom")
+        with (
+            pytest.raises(RuntimeError, match="boom"),
+            _strip_audio_config_if_orphaned(model_dir),
+        ):
+            raise RuntimeError("boom")
         assert _vu.load_config is original
 
     def test_skips_when_path_is_not_directory(self, tmp_path: Path):
@@ -277,9 +306,11 @@ class TestStripAudioConfigIfOrphaned:
             "audio_config": {"hidden_size": 99},
             "audio_token_id": 12345,
         }
-        with patch.object(_vu, "load_config", return_value=sentinel):
-            with _strip_audio_config_if_orphaned(nonexistent):
-                cfg = _vu.load_config(nonexistent)
+        with (
+            patch.object(_vu, "load_config", return_value=sentinel),
+            _strip_audio_config_if_orphaned(nonexistent),
+        ):
+            cfg = _vu.load_config(nonexistent)
         # cfg returned unchanged — audio_config still a dict, not None.
         assert cfg["audio_config"] == {"hidden_size": 99}
         assert cfg["audio_token_id"] == 12345
@@ -374,9 +405,10 @@ class TestDropGemma4MlxSharedKvExtrasOnLoad:
         model_dir = _build_gemma4_shared_kv_dir(tmp_path)
         nn, _, fake_load_weights = self._capture_load_weights(monkeypatch)
 
-        with pytest.raises(
-            RuntimeError, match="boom"
-        ), _drop_gemma4_mlx_shared_kv_extras_on_load(model_dir):
+        with (
+            pytest.raises(RuntimeError, match="boom"),
+            _drop_gemma4_mlx_shared_kv_extras_on_load(model_dir),
+        ):
             raise RuntimeError("boom")
 
         assert nn.Module.load_weights is fake_load_weights

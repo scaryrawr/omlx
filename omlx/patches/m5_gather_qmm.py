@@ -153,7 +153,7 @@ def _on_nax_host() -> bool:
     if _nax_host is None:
         try:
             _nax_host = bool(is_nax_available())
-        except Exception:  # noqa: BLE001
+        except Exception:
             _nax_host = False
     return _nax_host
 

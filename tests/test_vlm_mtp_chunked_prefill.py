@@ -92,9 +92,9 @@ def test_chunked_prefilled_request_routes_to_vlm_mtp_when_eligible(monkeypatch):
     Scheduler._insert_prefilled_request(sched, request, state, scheduled)
 
     assert calls["route"] == 1, "vlm_mtp routing was never considered (the #2219 bug)"
-    assert (
-        calls["bg_insert"] == 0
-    ), "request went to BatchGenerator despite eligible vlm_mtp"
+    assert calls["bg_insert"] == 0, (
+        "request went to BatchGenerator despite eligible vlm_mtp"
+    )
     # negative-uid bookkeeping mirrors the non-chunked routing path
     assert request.batch_uid == -7
     assert request.status == RequestStatus.RUNNING

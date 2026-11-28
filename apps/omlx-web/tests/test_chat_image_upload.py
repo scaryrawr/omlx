@@ -18,7 +18,9 @@ REQUIRED_IMAGE_KEYS = {
 }
 
 
-@pytest.mark.parametrize("locale", sorted(I18N_DIR.glob("*.json")), ids=lambda p: p.stem)
+@pytest.mark.parametrize(
+    "locale", sorted(I18N_DIR.glob("*.json")), ids=lambda p: p.stem
+)
 def test_i18n_image_keys_present(locale):
     translations = json.loads(locale.read_text(encoding="utf-8"))
     for key in REQUIRED_IMAGE_KEYS:

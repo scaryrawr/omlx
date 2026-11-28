@@ -4,9 +4,10 @@ import math
 
 import mlx.core as mx
 import mlx.nn as nn
-
 from mlx_lm.models.activations import swiglu
+
 from omlx.patches.m5_gather_qmm import fused_gate_up_activation
+
 from .kernels import fast as glm_fast
 
 
@@ -184,7 +185,7 @@ class SwitchGLU(nn.Module):
         input_dims: int,
         hidden_dims: int,
         num_experts: int,
-        activation=SwiGLU(),
+        activation=None,
         bias: bool = False,
         fused_gate_up: bool = False,
         inverse_scatter: bool = False,
@@ -194,7 +195,7 @@ class SwitchGLU(nn.Module):
         self.gate_proj = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.up_proj = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.down_proj = SwitchLinear(hidden_dims, input_dims, num_experts, bias=bias)
-        self.activation = activation
+        self.activation = SwiGLU() if activation is None else activation
         self.inverse_scatter = inverse_scatter
         if fused_gate_up:
             self.gate_up_proj = SwitchLinear(
@@ -281,14 +282,16 @@ class SwitchMLP(nn.Module):
         input_dims: int,
         hidden_dims: int,
         num_experts: int,
-        activation=nn.GELU(approx="precise"),
+        activation=None,
         bias: bool = False,
     ):
         super().__init__()
 
         self.fc1 = SwitchLinear(input_dims, hidden_dims, num_experts, bias=bias)
         self.fc2 = SwitchLinear(hidden_dims, input_dims, num_experts, bias=bias)
-        self.activation = activation
+        self.activation = (
+            nn.GELU(approx="precise") if activation is None else activation
+        )
 
     def __call__(self, x, indices) -> mx.array:
         x = mx.expand_dims(x, (-2, -3))

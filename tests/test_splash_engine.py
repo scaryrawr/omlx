@@ -431,7 +431,6 @@ class TestBinary:
 
 
 class TestCompatibility:
-
     def test_inkling2_uses_its_loop_draft_on_splash_1_7_3(self, tmp_path, launchers):
         model = _write_model(tmp_path / "Inkling-2-Mini", INKLING2_TEXT)
         wrong = _write_draft(tmp_path / "24-layers", INKLING2_TEXT)
@@ -660,7 +659,6 @@ def _qwen38_gguf(vocab: list[str]) -> dict:
 
 
 class TestGguf:
-
     @pytest.mark.parametrize("arch, layers", [("inkling2", 48), ("inkling2_loop", 24)])
     def test_inkling2_gguf_discovers_and_resolves(
         self, tmp_path, launchers, write_gguf, arch, layers
@@ -1748,7 +1746,6 @@ def _pool(tmp_path, with_draft=True) -> tuple[EnginePool, EngineEntry]:
 
 
 class TestEnginePool:
-
     async def test_cancelled_start_stops_splash_without_waiting_for_readiness(
         self, tmp_path, lifecycle, monkeypatch
     ):

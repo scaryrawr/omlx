@@ -49,7 +49,10 @@ def _run(body: str):
         "let pendingSave;\n"
         "const setTimeout = callback => { pendingSave = callback; return 1; };\n"
         "const clearTimeout = () => { pendingSave = null; };\n"
-        "const app = {" + "\n".join(_method_sources()) + "};\n" + """
+        "const app = {"
+        + "\n".join(_method_sources())
+        + "};\n"
+        + """
 app.modelSettings = {enable_thinking: true, thinking_budget_enabled: true,
                      thinking_budget_tokens: null};
 app.currentChatId = 'test';
@@ -63,7 +66,8 @@ app.currentModel = 'base';
 app.aliasToGateway = {base: 'base'};
 app._adminModelsList = [{id: 'base', thinking_modes: ['auto', 'on_limit', 'off'],
                          thinking_forced: true}];
-""" + body
+"""
+        + body
     )
     return json.loads(subprocess.check_output([node, "-e", script], text=True))
 
@@ -85,22 +89,28 @@ const type = (text) => {
 
 def test_typed_value_lands_verbatim():
     """Typing a small budget must not be re-stepped into 1024 + delta."""
-    result = _run(_type() + """
+    result = _run(
+        _type()
+        + """
 app.modelSettings.thinking_budget_tokens = 4096;
 type('512');
 console.log(JSON.stringify({model: app.modelSettings.thinking_budget_tokens,
                             field: app.el.value}));
-""")
+"""
+    )
     assert result["model"] == 512
     assert result["field"] == "512"
 
 
 def test_typing_a_four_digit_budget_is_not_re_stepped():
-    result = _run(_type() + """
+    result = _run(
+        _type()
+        + """
 app.modelSettings.thinking_budget_tokens = 4096;
 type('2048');
 console.log(JSON.stringify({model: app.modelSettings.thinking_budget_tokens}));
-""")
+"""
+    )
     assert result["model"] == 2048
 
 
@@ -167,7 +177,9 @@ def test_no_second_writer_is_left_on_the_field():
 
 
 def test_autosave_preserves_empty_input_and_saves_normalized_budget():
-    result = _run(_type() + """
+    result = _run(
+        _type()
+        + """
 app.modelSettings.thinking_budget_tokens = 4096;
 app.el.value = '';
 app.onThinkingBudgetTokensInput({target: app.el});
@@ -180,7 +192,8 @@ console.log(JSON.stringify({empty, savedDefault,
     typed: app.modelSettings.thinking_budget_tokens,
     saved: app.session.modelSettings.thinking_budget_tokens,
     requested: app.snapshotGenerationSettings().thinking_budget}));
-""")
+"""
+    )
     assert result == {
         "empty": None,
         "savedDefault": 4096,

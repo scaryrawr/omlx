@@ -316,7 +316,9 @@ async def test_rediscovery_does_not_serve_adapter_from_a_replaced_directory(
     lora_pool, small_mock_model_dir, write_lora_adapter
 ):
     pool, first = lora_pool
-    loaded = MagicMock(start=AsyncMock(), stop=AsyncMock(), scheduler=None, _engine=None)
+    loaded = MagicMock(
+        start=AsyncMock(), stop=AsyncMock(), scheduler=None, _engine=None
+    )
     with patch("omlx.engine_pool.BatchedEngine", return_value=loaded):
         assert await pool.get_engine("pi") is loaded
     shutil.rmtree(first)
@@ -1064,8 +1066,12 @@ class TestEnginePoolErrors:
 class TestEnginePoolStatus:
     """Tests for EnginePool status reporting."""
 
-    def test_status_reports_haru_duplex_without_loading_weights(self, small_mock_model_dir):
-        (small_mock_model_dir / "model-a" / "config.json").write_text('{"model_type":"haru"}')
+    def test_status_reports_haru_duplex_without_loading_weights(
+        self, small_mock_model_dir
+    ):
+        (small_mock_model_dir / "model-a" / "config.json").write_text(
+            '{"model_type":"haru"}'
+        )
         pool = _make_pool()
         pool.discover_models(str(small_mock_model_dir))
 
@@ -1130,7 +1136,11 @@ class TestEnginePoolStatus:
         pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
         models = {model["id"]: model for model in pool.get_status()["models"]}
-        assert models["model-a"]["reasoning_effort_options"] == ["xhigh", "medium", "low"]
+        assert models["model-a"]["reasoning_effort_options"] == [
+            "xhigh",
+            "medium",
+            "low",
+        ]
         assert models["model-a"]["reasoning_effort_default"] == "xhigh"
         assert models["model-b"]["reasoning_effort_options"] == []
         assert models["model-b"]["reasoning_effort_default"] is None
@@ -1534,7 +1544,7 @@ class TestQwenCpuShareMemoryEstimate:
         pool._entries[entry.model_id] = entry
 
         with patch(
-            "omlx.patches.deepseek_v41.residency." "deepseek_v41_residency_estimate",
+            "omlx.patches.deepseek_v41.residency.deepseek_v41_residency_estimate",
             return_value=estimate,
         ):
             projected = pool._entry_runtime_resident_size(entry, settings)
@@ -1551,8 +1561,12 @@ class TestQwenCpuShareMemoryEstimate:
 
         pool = _make_pool(ceiling=500)
         entry = EngineEntry(
-            model_id="v41", model_path=str(tmp_path), model_type="vlm",
-            engine_type="vlm", config_model_type="deepseek_v41", estimated_size=100,
+            model_id="v41",
+            model_path=str(tmp_path),
+            model_type="vlm",
+            engine_type="vlm",
+            config_model_type="deepseek_v41",
+            estimated_size=100,
         )
         pool._entries[entry.model_id] = entry
         settings = ModelSettings()
@@ -1590,8 +1604,11 @@ class TestQwenCpuShareMemoryEstimate:
 
         pool = _make_pool(ceiling=500)
         entry = EngineEntry(
-            model_id="m", model_path=str(tmp_path), model_type="llm",
-            engine_type="batched", estimated_size=100,
+            model_id="m",
+            model_path=str(tmp_path),
+            model_type="llm",
+            engine_type="batched",
+            estimated_size=100,
         )
         pool._entries[entry.model_id] = entry
         settings = ModelSettings()
@@ -1639,8 +1656,7 @@ class TestQwenCpuShareMemoryEstimate:
             patch("omlx.engine_pool.get_phys_footprint", return_value=0),
             patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
             patch(
-                "omlx.patches.deepseek_v41.residency."
-                "deepseek_v41_residency_estimate",
+                "omlx.patches.deepseek_v41.residency.deepseek_v41_residency_estimate",
                 return_value=estimate,
             ),
         ):
@@ -2527,10 +2543,7 @@ class TestEnginePoolAsync:
 
         assert engine is mock_engine
         mock_engine.start.assert_called_once()
-        assert any(
-            "no draft model is set" in r.getMessage()
-            for r in caplog.records
-        )
+        assert any("no draft model is set" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_dflash_bare_draft_name_resolves_to_local_path(
@@ -2675,7 +2688,9 @@ class TestEnginePoolAsync:
         entry.model_type = "vlm"
         entry.engine_type = "vlm"
         entry.config_model_type = "minicpmv4_7"
-        settings = ModelSettings(dflash_enabled=True, dflash_draft_model="/paired/helper")
+        settings = ModelSettings(
+            dflash_enabled=True, dflash_draft_model="/paired/helper"
+        )
         engine = MagicMock()
         engine.start = AsyncMock()
         engine.stop = AsyncMock()
@@ -3125,14 +3140,14 @@ class TestEnginePoolAsync:
         with (
             patch(
                 "omlx.engine_pool.DecisionEngine", return_value=mock_engine
-            ) as MockDecisionEngine,
+            ) as mock_decision_engine_cls,
             patch("omlx.engine_pool.load_dflash_drafter") as load_drafter,
         ):
             engine = await pool.get_engine("clef")
 
         assert engine is mock_engine
         load_drafter.assert_not_called()
-        MockDecisionEngine.assert_called_once_with(
+        mock_decision_engine_cls.assert_called_once_with(
             model_name=str(model_path),
             trust_remote_code=False,
             scheduler_config=pool._scheduler_config,
@@ -3465,9 +3480,7 @@ class TestEnginePoolEviction:
             hwm["v"] = max(hwm["v"], pool._current_model_memory)
             return hwm["v"]
 
-        monkeypatch.setattr(
-            "omlx.engine_pool.get_phys_footprint", lagging_footprint
-        )
+        monkeypatch.setattr("omlx.engine_pool.get_phys_footprint", lagging_footprint)
         monkeypatch.setattr("omlx.engine_pool.mx.get_active_memory", lambda: 0)
         return pool
 
@@ -3532,9 +3545,9 @@ class TestEnginePoolEviction:
             patch("omlx.engine_pool.BatchedEngine", return_value=mock_engine) as cls,
             patch("omlx.engine_pool.get_phys_footprint", return_value=2000),
             patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
+            pytest.raises(InsufficientMemoryError) as exc_info,
         ):
-            with pytest.raises(InsufficientMemoryError) as exc_info:
-                await pool.get_engine("model-a")
+            await pool.get_engine("model-a")
 
         assert exc_info.value.current == 2000
         cls.assert_not_called()
@@ -3558,6 +3571,7 @@ class TestEnginePoolEviction:
             # Try to load model-b - should fail (can't evict pinned model-a)
             with pytest.raises(InsufficientMemoryError):
                 await pool.get_engine("model-b")
+
 
 class TestAdmissionSoftTargetEviction:
     """#2319: idle-model eviction starts at the soft watermark, before load.
@@ -3588,9 +3602,7 @@ class TestAdmissionSoftTargetEviction:
         return pool
 
     @pytest.mark.asyncio
-    async def test_soft_band_swap_evicts_idle_model_before_load(
-        self, soft_band_pool
-    ):
+    async def test_soft_band_swap_evicts_idle_model_before_load(self, soft_band_pool):
         """Projected total in the soft..ceiling band must evict the idle
         LRU model before the new one loads, not admit both."""
         pool = soft_band_pool
@@ -3669,6 +3681,7 @@ class TestAdmissionSoftTargetEviction:
         assert pool._entries["model-b"].engine is not None
         assert pool.loaded_model_count == 2
 
+
 class TestGuardOffBestEffortAdmission:
     """#2290: model-swap eviction must survive disabling the memory guard.
 
@@ -3716,9 +3729,7 @@ class TestGuardOffBestEffortAdmission:
         assert pool._entries["model-b"].engine is not None
 
     @pytest.mark.asyncio
-    async def test_nothing_evictable_admits_over_ceiling(
-        self, guard_off_pool, caplog
-    ):
+    async def test_nothing_evictable_admits_over_ceiling(self, guard_off_pool, caplog):
         """Guard off + nothing to evict: warn and load anyway, never raise."""
         pool = guard_off_pool
         pool._entries["model-a"].is_pinned = True
@@ -3946,7 +3957,9 @@ class TestEnginePoolPrefillEviction:
                 patch(
                     "omlx.engine_pool.mx.get_cache_memory", side_effect=lambda: pool[0]
                 ),
-                patch("omlx.engine_pool.get_phys_footprint", side_effect=lambda: phys[0]),
+                patch(
+                    "omlx.engine_pool.get_phys_footprint", side_effect=lambda: phys[0]
+                ),
             ):
                 admitted = await pool_obj._evict_idle_lru_for_prefill("target", req)
 
@@ -4140,6 +4153,7 @@ class TestEnginePoolPrefillEviction:
 
         async def unload(model_id):
             pool_obj._entries[model_id].engine = None
+
         req = PrefillEvictionRequest(
             request_id="req-1",
             model_id="target",
@@ -4304,14 +4318,10 @@ class TestEnginePoolPrefillEviction:
                 ),
             ):
                 # Pass 1: the marginal reclaim satisfies the target check.
-                first = await pool._evict_idle_lru_for_prefill(
-                    "target", make_req()
-                )
+                first = await pool._evict_idle_lru_for_prefill("target", make_req())
                 # KV growth brings the pressure back on the same request.
                 phys[0] = 45 * gb
-                second = await pool._evict_idle_lru_for_prefill(
-                    "target", make_req()
-                )
+                second = await pool._evict_idle_lru_for_prefill("target", make_req())
 
         assert first is True and second is True
         # One reclaim (pass 1 only); pass 2 escalated straight to release.
@@ -4851,6 +4861,7 @@ class TestResolveModelId:
 
         settings_manager = MagicMock()
         from omlx.model_settings import ModelSettings
+
         settings_manager.get_all_settings.return_value = {
             "model-a": ModelSettings(model_alias="model-b"),
             "model-b": ModelSettings(),
@@ -4867,6 +4878,7 @@ class TestResolveModelId:
 
         settings_manager = MagicMock()
         from omlx.model_settings import ModelSettings
+
         settings_manager.get_all_settings.return_value = {
             "model-a": ModelSettings(model_alias="gpt-4"),
             "model-b": ModelSettings(model_alias="gpt-4"),
@@ -4980,6 +4992,7 @@ class TestResolveModelId:
         assert resolve("claude-haiku") == "model-a"
         assert resolve("model-a") == "model-a"
 
+
 class TestMemorySettleBarrier:
     """Tests for memory settle barrier in _unload_engine()."""
 
@@ -5057,7 +5070,9 @@ class TestMemorySettleBarrier:
                 entry, settings
             )
             entry.runtime_settle_size = pool._entry_runtime_resident_size(
-                entry, settings, include_ane_reservation=False,
+                entry,
+                settings,
+                include_ane_reservation=False,
             )
         charge = (50 if offload else 80) * gib
         assert entry.runtime_estimated_size == charge
@@ -6158,9 +6173,7 @@ class TestFailedLoadReclaim:
                     side_effect=_drop_on_clear,
                 ),
                 patch("omlx.engine_pool.get_phys_footprint", return_value=0),
-                patch(
-                    "omlx.engine_pool.get_mlx_executor", return_value=executor
-                ),
+                patch("omlx.engine_pool.get_mlx_executor", return_value=executor),
                 patch(
                     "omlx.engine_pool.asyncio.sleep",
                     new=AsyncMock(return_value=None),
@@ -6169,9 +6182,7 @@ class TestFailedLoadReclaim:
                 pool._schedule_failed_load_reclaim(
                     "model-x", pre_load_memory=1 * 1024**3
                 )
-                await asyncio.wait_for(
-                    pool._failed_load_reclaim_task, timeout=10
-                )
+                await asyncio.wait_for(pool._failed_load_reclaim_task, timeout=10)
         finally:
             executor.shutdown(wait=False)
 
@@ -6194,9 +6205,7 @@ class TestFailedLoadReclaim:
                 patch("omlx.engine_pool.mx.synchronize"),
                 patch("omlx.engine_pool.mx.clear_cache"),
                 patch("omlx.engine_pool.get_phys_footprint", return_value=0),
-                patch(
-                    "omlx.engine_pool.get_mlx_executor", return_value=executor
-                ),
+                patch("omlx.engine_pool.get_mlx_executor", return_value=executor),
                 patch(
                     "omlx.engine_pool.asyncio.sleep",
                     new=AsyncMock(return_value=None),
@@ -6205,9 +6214,7 @@ class TestFailedLoadReclaim:
                 pool._schedule_failed_load_reclaim(
                     "model-x", pre_load_memory=1 * 1024**3
                 )
-                await asyncio.wait_for(
-                    pool._failed_load_reclaim_task, timeout=10
-                )
+                await asyncio.wait_for(pool._failed_load_reclaim_task, timeout=10)
         finally:
             executor.shutdown(wait=False)
 
@@ -6252,7 +6259,9 @@ class TestSchedulerConfigModelId:
             await pool.get_engine("model-a")
 
         assert pool._scheduler_config.model_name == "model-a"
-        assert pool._scheduler_config.model_path == str(small_mock_model_dir / "model-a")
+        assert pool._scheduler_config.model_path == str(
+            small_mock_model_dir / "model-a"
+        )
 
 
 class _StubEnforcer:
@@ -6402,15 +6411,15 @@ class TestLoadRefusalNamesBindingCeiling:
         reads = iter([700, 700])
         pool._get_final_ceiling = lambda: next(reads, 12_000)
 
-        class _Admitted(Exception):
+        class _AdmittedError(Exception):
             pass
 
         with (
             patch("omlx.engine_pool._ADMISSION_CEILING_RECHECK_S", 0),
             patch("omlx.engine_pool.get_phys_footprint", return_value=0),
             patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
-            patch.object(pool, "_load_engine", AsyncMock(side_effect=_Admitted)),
-            pytest.raises(_Admitted),
+            patch.object(pool, "_load_engine", AsyncMock(side_effect=_AdmittedError)),
+            pytest.raises(_AdmittedError),
         ):
             await pool.get_engine("model-a")
 
@@ -6503,8 +6512,7 @@ def test_qwen4_ple_resident_load_must_leave_room_to_serve(tmp_path, headroom, fo
             _prefill_headroom_safety=headroom
         )
     with patch(
-        "omlx.patches.mlx_vlm_qwen4_exp_compat.residency."
-        "qwen4_exp_residency_estimate",
+        "omlx.patches.mlx_vlm_qwen4_exp_compat.residency.qwen4_exp_residency_estimate",
         return_value=estimate,
     ):
         _, is_forced, _ = pool._qwen4_ple_offload_status(
@@ -6818,7 +6826,9 @@ class TestIsMetalOutOfMemory:
         assert is_metal_out_of_memory(a) is False
 
     def test_out_of_memory_found_down_the_chain(self):
-        oom = RuntimeError("[METAL] Command buffer execution failed: Insufficient Memory")
+        oom = RuntimeError(
+            "[METAL] Command buffer execution failed: Insufficient Memory"
+        )
         outer = RuntimeError("load failed")
         outer.__cause__ = oom
 

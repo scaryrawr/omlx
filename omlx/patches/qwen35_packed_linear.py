@@ -747,7 +747,7 @@ def warmup(model: Any) -> None:
             (module.packed_weight, module.packed_scales, module.packed_biases),
         )
         store = module._store
-        if store.N != module.output_dims:
+        if module.output_dims != store.N:
             shapes.setdefault((store.K, store.N), (store.w, store.sc, store.bi))
     for (K, N), arrays in shapes.items():
         for rows in _WARM_ROWS:

@@ -140,9 +140,7 @@ def match_target_dtype(model: nn.Module, target_model: Any) -> int:
     """
     if _target_float_dtype(target_model) != mx.float16:
         return 0
-    params = [
-        p for _, p in tree_flatten(model.parameters()) if p.dtype == mx.bfloat16
-    ]
+    params = [p for _, p in tree_flatten(model.parameters()) if p.dtype == mx.bfloat16]
     if not params:
         return 0
     peak = mx.max(mx.stack([mx.abs(p).max().astype(mx.float32) for p in params]))
@@ -153,9 +151,11 @@ def match_target_dtype(model: nn.Module, target_model: Any) -> int:
         return 0
     model.update(
         tree_map(
-            lambda p: p.astype(mx.float16)
-            if isinstance(p, mx.array) and p.dtype == mx.bfloat16
-            else p,
+            lambda p: (
+                p.astype(mx.float16)
+                if isinstance(p, mx.array) and p.dtype == mx.bfloat16
+                else p
+            ),
             model.parameters(),
         )
     )
@@ -194,20 +194,26 @@ def load_dflash_drafter(
         from ..minicpm_pairing import validate_model_pair
 
         if not Path(path).is_dir():
-            raise ValueError("MiniCPM DSpark requires an existing local helper checkpoint.")
+            raise ValueError(
+                "MiniCPM DSpark requires an existing local helper checkpoint."
+            )
         dspark_class = MiniCPMDSparkDraftModel
         if not callable(getattr(dspark_class, "propose_block", None)):
             raise ValueError("Native DSpark proposal support is incomplete.")
         validate_model_pair(target_path, path)
         model, kind = load_dspark_model(path), "dflash"
         if not isinstance(model, dspark_class):
-            raise ValueError("MiniCPM-V 4.7 requires its paired DSpark helper, not DFlash.")
+            raise ValueError(
+                "MiniCPM-V 4.7 requires its paired DSpark helper, not DFlash."
+            )
     else:
         model, kind = load_drafter(path, kind="dflash")
     if kind != "dflash":
         raise ValueError(f"{path} resolved to drafter kind {kind!r}, expected 'dflash'")
     if getattr(model, "d2t", None) is not None:
-        raise ValueError(f"{path} drafts in a reduced vocabulary, which is not supported")
+        raise ValueError(
+            f"{path} drafts in a reduced vocabulary, which is not supported"
+        )
     cast = match_target_dtype(model, target_model)
     if cast:
         logger.info("DFlash drafter cast to fp16 to match the target: %d arrays", cast)
@@ -264,7 +270,9 @@ def load_dflash_drafter(
             source_path=path,
             adaptive=adaptive,
             window_size=window_size,
-            value_scale=(config.get("dflash_config") or {}).get("attention_value_scale"),
+            value_scale=(config.get("dflash_config") or {}).get(
+                "attention_value_scale"
+            ),
             mask_embedding=mask_embedding,
         )
     logger.info(

@@ -18,7 +18,7 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 import mlx.core as mx
 from mlx_vlm.encoder_loader import load_encoder_model
@@ -164,7 +164,7 @@ class MLXRerankerModel:
                 config = json.load(f)
             architectures = config.get("architectures", [])
             return architectures[0] if architectures else None
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return None
 
     def _detect_jina_v35(self) -> bool:
@@ -203,8 +203,7 @@ class MLXRerankerModel:
             sliding_window = config.get("sliding_window")
             if not isinstance(sliding_window, int) or sliding_window <= 0:
                 raise ValueError(
-                    "Jina sliding_attention layers require a positive "
-                    "sliding_window."
+                    "Jina sliding_attention layers require a positive sliding_window."
                 )
 
         return True
@@ -251,10 +250,12 @@ class MLXRerankerModel:
         indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         return RerankOutput(scores=scores, indices=indices, total_tokens=total_tokens)
 
-    def _load_causal_lm(self) -> Tuple[Any, Any]:
+    def _load_causal_lm(self) -> tuple[Any, Any]:
         """Load a CausalLM-based reranker model using mlx-lm."""
         from ..utils.model_loading import (
             lm_load_compat as mlx_lm_load,
+        )
+        from ..utils.model_loading import (
             maybe_load_custom_quantization,
         )
 
@@ -304,7 +305,7 @@ class MLXRerankerModel:
 
         return model, tokenizer
 
-    def _extract_causal_lm_affixes(self, tokenizer: Any) -> Tuple[str, str]:
+    def _extract_causal_lm_affixes(self, tokenizer: Any) -> tuple[str, str]:
         """Extract the static prompt prefix/suffix around the rerank content.
 
         Handles two chat template shapes:
@@ -328,10 +329,10 @@ class MLXRerankerModel:
                 f"cannot derive the CausalLM reranker prompt prefix/suffix."
             )
 
-        _SENTINEL = "<<__CONTENT_SENTINEL__>>"
+        _sentinel = "<<__CONTENT_SENTINEL__>>"
         messages = [
             {"role": "system", "content": self._CAUSAL_LM_SYSTEM_PROMPT},
-            {"role": "user", "content": _SENTINEL},
+            {"role": "user", "content": _sentinel},
         ]
         standard_rendered = ""
         standard_error: Exception | None = None
@@ -342,11 +343,10 @@ class MLXRerankerModel:
         except Exception as e:
             standard_error = e
             logger.warning(
-                f"system/user chat template rendering failed for "
-                f"{self.model_name}: {e}"
+                f"system/user chat template rendering failed for {self.model_name}: {e}"
             )
 
-        parts = standard_rendered.split(_SENTINEL)
+        parts = standard_rendered.split(_sentinel)
         if len(parts) == 2:
             suffix = parts[1]
             # Append <think> block for models that use the
@@ -377,7 +377,7 @@ class MLXRerankerModel:
 
     def _extract_reranker_native_affixes(
         self, tokenizer: Any
-    ) -> "Tuple[Tuple[str, str] | None, str, Exception | None]":
+    ) -> "tuple[tuple[str, str] | None, str, Exception | None]":
         """Extract affixes from a reranker-native chat template, if present.
 
         Returns (affixes, rendered, error). Affixes is None when the template
@@ -424,7 +424,7 @@ class MLXRerankerModel:
         # suffix is used as-is.
         return (parts[0], parts[1]), rendered, None
 
-    def _load_jina_reranker(self) -> Tuple[Any, Any]:
+    def _load_jina_reranker(self) -> tuple[Any, Any]:
         """
         Load a Jina v3 reranker model using mlx-lm.
 
@@ -433,6 +433,8 @@ class MLXRerankerModel:
         """
         from ..utils.model_loading import (
             lm_load_compat as mlx_lm_load,
+        )
+        from ..utils.model_loading import (
             maybe_load_custom_quantization,
         )
 
@@ -832,13 +834,13 @@ class MLXRerankerModel:
                 "mlx-lm, mlx-vlm, or transformers is required for reranking. "
                 "Install with: pip install mlx-lm mlx-vlm transformers"
             ) from e
-        except FileNotFoundError:
+        except FileNotFoundError as _cause:
             raise FileNotFoundError(
                 f"No safetensors weight files found for '{self.model_name}'. "
                 f"Reranker models require weights in safetensors format. "
                 f"If this is a PyTorch model, use an MLX-converted version "
                 f"(e.g., from mlx-community on HuggingFace)."
-            )
+            ) from _cause
         except Exception as e:
             logger.error(f"Failed to load reranker model: {e}")
             raise
@@ -1144,7 +1146,7 @@ class MLXRerankerModel:
 
         def _truncate_doc_to_fit(
             query_text: str, doc_text: str
-        ) -> Tuple[str, list[int]]:
+        ) -> tuple[str, list[int]]:
             doc_token_ids = _to_token_ids(doc_text)
             if not doc_token_ids:
                 prompt = self._format_jina_prompt(query_text, [""])
@@ -1426,7 +1428,7 @@ class MLXRerankerModel:
         try:
             with open(config_path) as f:
                 config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Failed to read config.json: {e}")
             return
 

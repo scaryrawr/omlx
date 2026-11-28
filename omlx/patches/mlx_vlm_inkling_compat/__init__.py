@@ -39,7 +39,7 @@ def apply_mlx_vlm_inkling_compat_patch() -> bool:
         _patch_prompt_utils(prompt_utils)
         _patch_load_config(vlm_utils)
         _register_auto_processor()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Inkling mlx-vlm compat patch failed: %s", exc)
         return False
 
@@ -181,9 +181,7 @@ def _patch_load_config(vlm_utils: Any) -> None:
                 or config.get("model_type") not in _MODEL_TYPES
             ):
                 return config
-            if not config.get("quantization") and not config.get(
-                "quantization_config"
-            ):
+            if not config.get("quantization") and not config.get("quantization_config"):
                 hf_quant_path = Path(model_path) / "hf_quant_config.json"
                 if hf_quant_path.exists():
                     with open(hf_quant_path, encoding="utf-8") as f:
@@ -223,7 +221,7 @@ def _patch_load_config(vlm_utils: Any) -> None:
             )
             text_config["qkvr_fused_layers"] = trunk_policy
             text_config["mtp_qkvr_fused_layers"] = mtp_policy
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Inkling hf_quant_config translation failed: %s", exc)
         return config
 

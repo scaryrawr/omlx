@@ -1056,6 +1056,7 @@ class TestCacheTypeRegistry:
         assert "BufferedRotatingKVCache" in names
         assert "ArraysCache" in names
 
+
 class TestCacheListHandler:
     """Tests for CacheListHandler."""
 

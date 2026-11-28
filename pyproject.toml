@@ -220,12 +220,11 @@ bundle = [
 # PEP 735 development dependencies — installed by uv sync or pip install --group dev.
 [dependency-groups]
 dev = [
+    {include-group = "lint"},
     # pytest 9.2 ignores xdist 3.8's loadgroup node id suffix (see ci.yml).
     "pytest>=7.0.0,<9.2",
     "pytest-asyncio>=0.21.0",
     "pytest-xdist>=3.8",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
     "mypy>=1.0.0",
     "mcp>=2.0.0,<3",
     "venvstacks>=0.7.0",
@@ -236,6 +235,7 @@ dev = [
     "xgrammar==0.2.9",
     "apache-tvm-ffi==0.1.11",
 ]
+lint = ["ruff==0.17.6"]
 
 [project.urls]
 Homepage = "https://github.com/jundot/omlx"
@@ -278,17 +278,35 @@ override-dependencies = [
     "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@0d4d3d04f8ab7ce4a51e7209e8615755a48ba94d",
 ]
 
-[tool.black]
-line-length = 88
-target-version = ["py311", "py312", "py313"]
-
 [tool.ruff]
 line-length = 88
+target-version = "py311"
+required-version = "==0.17.6"
 extend-exclude = ["omlx/patches/*/vendor"]
+force-exclude = true
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
-ignore = ["E501", "B905"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF100"]
+# .keys() protocols need not support iteration; StrEnum changes str(member).
+ignore = ["E501", "B905", "SIM118", "UP042"]
+unfixable = ["SIM118", "UP042"]
+
+[tool.ruff.lint.pep8-naming]
+# Tensor dimensions and checkpoint parameter names follow MLX's public APIs.
+extend-ignore-names = [
+    "[A-Z]", "[A-Z][a-z]", "A_log", "A_log_", "qL", "kL",
+    "NK", "NQ", "NE", "NT", "DV", "D1", "D2", "Hkv",
+    "K_packed", "NK_aligned", "NQ_aligned", "L_in", "S_chunk", "E_r", "T_new",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Form"]
+
+[tool.ruff.lint.per-file-ignores]
+# These functions replace upstream special methods, preserving their names.
+"omlx/patches/**/*.py" = ["N807"]
+# Optional MLX imports must be skipped before importing their consumers.
+"tests/test_mtp_prompt_priming.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

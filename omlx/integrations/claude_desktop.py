@@ -188,9 +188,9 @@ def configure_omlx_gateway(
     # idempotent and never capture our own "3p" as the user's default.
     profile = _read_json(paths["profile"])
     if _PREVIOUS_DEPLOYMENT_MODE_KEY not in profile:
-        profile[_PREVIOUS_DEPLOYMENT_MODE_KEY] = _read_json(
-            paths["claude_config"]
-        ).get("deploymentMode")
+        profile[_PREVIOUS_DEPLOYMENT_MODE_KEY] = _read_json(paths["claude_config"]).get(
+            "deploymentMode"
+        )
 
     _set_deployment_mode(paths["claude_config"], "3p")
     _set_deployment_mode(paths["claude3p_config"], "3p")

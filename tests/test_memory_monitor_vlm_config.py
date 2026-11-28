@@ -161,12 +161,8 @@ def test_qwen4_prefill_profile_gathered_core_caps_score_matrix():
         prefill_memory_profile=profile,
     )
     query, kv_len = 4096, 233_472
-    dense = monitor.estimate_chunk_transient_bytes(
-        query, kv_len, gathered_core=False
-    )
-    gathered = monitor.estimate_chunk_transient_bytes(
-        query, kv_len, gathered_core=True
-    )
+    dense = monitor.estimate_chunk_transient_bytes(query, kv_len, gathered_core=False)
+    gathered = monitor.estimate_chunk_transient_bytes(query, kv_len, gathered_core=True)
     assert gathered * 8 < dense
     # 147GB resident + this gathered gulp stays under the 214GB safety cap.
     assert gathered < 12 * 1024**3
@@ -272,9 +268,9 @@ class TestSetModelInfoForMonitorVLMWalk:
         sched._set_model_info_for_monitor()
 
         kwargs = sched.memory_monitor.set_model_info.call_args.kwargs
-        assert (
-            kwargs["num_layers"] == 24
-        ), "GPT-style ``n_layer`` in the sub-config should be recognized"
+        assert kwargs["num_layers"] == 24, (
+            "GPT-style ``n_layer`` in the sub-config should be recognized"
+        )
 
 
 class TestMlaKvMemoryEstimate:

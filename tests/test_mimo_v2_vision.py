@@ -117,12 +117,12 @@ def test_sanitize_strips_visual_prefix_and_transposes_conv3d():
     assert "blocks.0.norm1.weight" in sanitized
 
 
-def test_sidecar_loader_composes_text_vision_and_processor(
-    tmp_path, monkeypatch
-):
+def test_sidecar_loader_composes_text_vision_and_processor(tmp_path, monkeypatch):
     from mlx_lm.models.mimo_v2_flash import Model, ModelArgs
 
-    vision_config = _tiny_config(depth=1, fullatt_block_indexes=[], vit_window_attn_types=[-1])
+    vision_config = _tiny_config(
+        depth=1, fullatt_block_indexes=[], vit_window_attn_types=[-1]
+    )
     sidecar_dir = tmp_path / "omnimodal"
     sidecar_dir.mkdir()
     (tmp_path / "config.json").write_text(
@@ -139,9 +139,7 @@ def test_sidecar_loader_composes_text_vision_and_processor(
             value = value.transpose(0, 4, 1, 2, 3)
         source_weights[f"visual.{name}"] = value
     mx.eval(source_weights)
-    mx.save_safetensors(
-        str(sidecar_dir / "vision_encoder.safetensors"), source_weights
-    )
+    mx.save_safetensors(str(sidecar_dir / "vision_encoder.safetensors"), source_weights)
 
     text_args = ModelArgs(
         model_type="mimo_v2_flash",

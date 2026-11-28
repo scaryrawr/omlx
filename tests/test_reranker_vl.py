@@ -157,7 +157,9 @@ class TestVLRerankScoring:
             "omlx.models.reranker.score_documents",
             return_value=([0.2, 0.9, 0.5], 42),
         ) as score:
-            output = model._rerank_vl(query="cat", documents=["doc a", "doc b", "doc c"])
+            output = model._rerank_vl(
+                query="cat", documents=["doc a", "doc b", "doc c"]
+            )
 
         assert isinstance(output, RerankOutput)
         assert output.scores == pytest.approx([0.2, 0.9, 0.5], rel=1e-5)

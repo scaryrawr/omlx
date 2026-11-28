@@ -122,9 +122,12 @@ def test_index_scores_packed_candidates_and_causal(
         )
     actual = packed_index_scores(q, keys, weights, 263, 2, candidates)
     expanded = unpack_activation(keys, 4, dtype=mx.float32)
+
     # DeepSeek-V4.1-Flash-1017 Indexer rounding points, in the activation dtype R:
     # R(q.k), R(relu(.) * w), then an fp32 head sum stored as R.
-    rnd = lambda v: v.astype(dtype).astype(mx.float32)
+    def rnd(v):
+        return v.astype(dtype).astype(mx.float32)
+
     terms = rnd(
         mx.maximum(rnd(mx.einsum("bshd,btd->bsht", q.astype(mx.float32), expanded)), 0)
         * weights[..., None]
@@ -139,8 +142,10 @@ def test_index_scores_packed_candidates_and_causal(
         )
         magnitude = mx.take_along_axis(magnitude, mx.clip(candidates, 0, n - 1), -1)
     # Free orders (the q.k dot and the head sum) can move each R rounding by one ulp.
-    eps = float(np.finfo(np.float32).eps) if dtype == mx.float32 else (
-        2.0**-10 if dtype == mx.float16 else 2.0**-7
+    eps = (
+        float(np.finfo(np.float32).eps)
+        if dtype == mx.float32
+        else (2.0**-10 if dtype == mx.float16 else 2.0**-7)
     )
     actual, expected = np.asarray(actual), np.asarray(expected)
     finite = np.isfinite(expected)
@@ -659,7 +664,7 @@ def test_index_select_matches_selection_pipelines(width, distinct):
         data = rng.integers(0, distinct, (1, 4, width)).astype(np.float32)
     else:
         data = rng.normal(size=(1, 4, width)).astype(np.float32)
-    data[0, 0, : width * 4 // 5] = -np.inf   # fewer finite scores than selected
+    data[0, 0, : width * 4 // 5] = -np.inf  # fewer finite scores than selected
     data[0, 1, ::3] = 0.0
     data[0, 1, 1::3] = -0.0
     scores = mx.array(data)
@@ -670,12 +675,18 @@ def test_index_select_matches_selection_pipelines(width, distinct):
         values, ids = kernels._tile_topk(scores, c)
         expected = mx.sort(mx.where(values > -float("inf"), ids, -1), axis=-1)
         if c < count:
-            expected = mx.concatenate([mx.full((1, 4, count - c), -1, mx.int32), expected], -1)
+            expected = mx.concatenate(
+                [mx.full((1, 4, count - c), -1, mx.int32), expected], -1
+            )
         assert mx.array_equal(kernels.index_select(scores, count), expected).item()
         order = mx.argsort(-scores, axis=-1)[..., :c].astype(mx.int32)
         valid = mx.take_along_axis(scores, order, axis=-1) > -float("inf")
-        expected = mx.sort(mx.where(valid, mx.take_along_axis(candidates, order, -1), -1), axis=-1)
-        assert mx.array_equal(kernels.index_select(scores, c, candidates), expected).item()
+        expected = mx.sort(
+            mx.where(valid, mx.take_along_axis(candidates, order, -1), -1), axis=-1
+        )
+        assert mx.array_equal(
+            kernels.index_select(scores, c, candidates), expected
+        ).item()
 
 
 def test_deep_prefill_index_selection_matches_full_scores():
@@ -776,31 +787,48 @@ def test_nax_index_scores_match_reference_rounding(monkeypatch, key_start):
     )
 
 
-@pytest.mark.parametrize("heads", [8, 32])   # 32: the head-split MMA tiles DeepSeek-V4.1 runs
+@pytest.mark.parametrize(
+    "heads", [8, 32]
+)  # 32: the head-split MMA tiles DeepSeek-V4.1 runs
 @pytest.mark.parametrize("restricted", [False, True])
 def test_row_batched_index_matches_each_request_alone(heads, restricted):
     """packed_index_scores_rows / index_select_rows: each decode request's row (own keys,
     position, width, count; widths above and below the count, repeated positions) gets the
     scores and indices packed_index_scores / index_select give that request alone."""
-    from omlx.patches.deepseek_v41.kernels import index_select, index_select_rows, packed_index_scores_rows
+    from omlx.patches.deepseek_v41.kernels import (
+        index_select,
+        index_select_rows,
+        packed_index_scores_rows,
+    )
 
     rng = np.random.default_rng(23)
     dim, count, ratio = 128, 24, 2
     lengths = [57, 9, 300, 57, 130]
     positions = [2 * n - 1 for n in lengths]
     positions[3] = positions[0]
-    q = quantize_activation(mx.array(rng.normal(size=(1, len(lengths), heads, dim)), mx.bfloat16), bits=4)
+    q = quantize_activation(
+        mx.array(rng.normal(size=(1, len(lengths), heads, dim)), mx.bfloat16), bits=4
+    )
     w = mx.array(rng.normal(size=(1, len(lengths), heads)).astype(np.float32)) / heads
-    keys = [pack_activation(mx.array(rng.normal(size=(1, n, dim)).astype(np.float32)), 4) for n in lengths]
+    keys = [
+        pack_activation(mx.array(rng.normal(size=(1, n, dim)).astype(np.float32)), 4)
+        for n in lengths
+    ]
     # Scores tie across rows whose keys repeat: the selection must still take the lower position.
     keys[3] = mx.concatenate([keys[3][:, :20], keys[3][:, :20], keys[3][:, 40:]], 1)
     if restricted:
         cand = [np.sort(rng.choice(n, size=min(n, 40), replace=False)) for n in lengths]
-        cand[1] = np.concatenate([[-1, -1], cand[1]])   # leading -1 slots, as candidate blocks give
+        cand[1] = np.concatenate(
+            [[-1, -1], cand[1]]
+        )  # leading -1 slots, as candidate blocks give
         widths = [len(x) for x in cand]
         rows = [mx.array(x, mx.int32).reshape(1, 1, -1) for x in cand]
-        candidates = mx.array(np.stack([np.pad(x, (0, max(widths) - len(x)), constant_values=-1) for x in cand]),
-                              mx.int32)[None]
+        candidates = mx.array(
+            np.stack(
+                [np.pad(x, (0, max(widths) - len(x)), constant_values=-1) for x in cand]
+            ),
+            mx.int32,
+        )[None]
     else:
         widths = [min(n, (p + 1) // ratio) for n, p in zip(lengths, positions)]
         rows = [None] * len(lengths)
@@ -809,6 +837,13 @@ def test_row_batched_index_matches_each_request_alone(heads, restricted):
     scores = packed_index_scores_rows(q, keys, w, positions, ratio, widths, candidates)
     ids = index_select_rows(scores, widths, counts, candidates)
     for r, (k, p, n, c, cr) in enumerate(zip(keys, positions, widths, counts, rows)):
-        alone = packed_index_scores(q[:, r : r + 1], k if restricted else k[:, :n], w[:, r : r + 1], p, ratio, cr)
+        alone = packed_index_scores(
+            q[:, r : r + 1],
+            k if restricted else k[:, :n],
+            w[:, r : r + 1],
+            p,
+            ratio,
+            cr,
+        )
         assert mx.array_equal(scores[:, r : r + 1, :n], alone).item()
         assert mx.array_equal(ids[r], index_select(alone, c, cr)).item()

@@ -92,7 +92,9 @@ def test_a_node_holding_only_its_stage_is_refused(tmp_path):
 def test_a_missing_shard_is_refused(tmp_path):
     """The index names every file, so a stage-only node cannot even be read."""
 
-    root = _model(tmp_path / "m", present_layers=range(4), declared_layers=8, index=True)
+    root = _model(
+        tmp_path / "m", present_layers=range(4), declared_layers=8, index=True
+    )
 
     with pytest.raises(PlanningError, match="weight file is missing"):
         complete_model_layout(root)
@@ -233,7 +235,9 @@ def test_the_peer_runs_the_same_layout_code(monkeypatch):
 
     assert captured["target"] == "studio"
     assert captured["argument"] == "~/.omlx/models/m"
-    assert "complete_model_layout" in captured["snippet"], "the peer runs our checks too"
+    assert "complete_model_layout" in captured["snippet"], (
+        "the peer runs our checks too"
+    )
     assert layout.source == "/Users/omlx/.omlx/models/m"
     assert layout.layer_weight_bytes == (100, 200, 300)
     assert layout.supports_pipeline

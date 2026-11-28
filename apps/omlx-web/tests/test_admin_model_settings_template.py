@@ -62,11 +62,14 @@ def test_kv_compression_dashboard_state_and_profile_serialization():
     if node is None:
         pytest.skip("Node.js is required to exercise dashboard state")
     root = Path(__file__).resolve().parents[1]
-    script = """
+    script = (
+        """
 const assert = require('node:assert/strict');
 globalThis.localStorage = {getItem: () => null};
 globalThis.window = {t: key => key};
-""" + _dashboard_script() + """
+"""
+        + _dashboard_script()
+        + """
 const app = dashboard();
 const legacy = app.buildModelSettingsState({}, {turboquant_kv_enabled: true, turboquant_kv_bits: 2.5});
 assert.equal(legacy.turboquant_kv_scheme, 'turboquant');
@@ -89,7 +92,10 @@ for (const [scheme, bits] of [['affine8', 8], ['affine4', 4], ['turboquant', 4]]
     assert.equal(payload.turboquant_kv_bits, bits);
 }
 """
-    result = subprocess.run([node], input=script, cwd=root, capture_output=True, text=True)
+    )
+    result = subprocess.run(
+        [node], input=script, cwd=root, capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -187,7 +193,9 @@ def test_minicpm_media_controls_are_editable_and_model_specific():
     )
     assert 'id="ms-media"' in section
     assert 'x-model="modelSettings.mm_processor_kwargs.downsample_mode"' in section
-    assert 'x-model.number="modelSettings.mm_processor_kwargs.max_slice_nums"' in section
+    assert (
+        'x-model.number="modelSettings.mm_processor_kwargs.max_slice_nums"' in section
+    )
     for mode in ("", "4x", "16x"):
         assert f'<option value="{mode}">' in section
     assert 'min="1" step="1"' in section
@@ -606,9 +614,9 @@ def test_profile_api_toggle_i18n_keys_exist_in_every_locale():
             assert catalog["modal.model_settings.profiles.expose_as_model_off"] == "AUS"
             continue
         for key, value in english.items():
-            assert (
-                catalog[key] == value
-            ), f"{path.name} {key} is not the English fallback"
+            assert catalog[key] == value, (
+                f"{path.name} {key} is not the English fallback"
+            )
 
 
 def test_moe_expert_offload_toggle_blocks_speculative_decoding():
@@ -1190,9 +1198,7 @@ assert.equal(app.statsNumberScale, 'exact');
 
 def test_model_settings_header_wraps_only_below_sm():
     header = _section(_model_settings_template(), "<!-- Title bar;", "</h4>")
-    actions = _section(
-        _model_settings_template(), "</h4>", '<i data-lucide="x"'
-    )
+    actions = _section(_model_settings_template(), "</h4>", '<i data-lucide="x"')
     assert "max-sm:flex-wrap" in header
     assert "flex-shrink-0 max-sm:flex-shrink" in actions
     assert "max-sm:justify-end max-sm:ml-auto" in actions

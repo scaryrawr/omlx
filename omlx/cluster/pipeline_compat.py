@@ -45,7 +45,14 @@ def pipeline_assignment_is_honored(model_path: str | Path) -> bool:
         if not isinstance(model_type, str):
             return False
         module = importlib.import_module(f"mlx_lm.models.{model_type}")
-    except (ImportError, KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+    except (
+        ImportError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         return False
 
     return _module_honors_pipeline_assignment(module, seen=frozenset())
@@ -78,9 +85,7 @@ def _module_honors_pipeline_assignment(
     # methods count: install_unequal_pipeline_plan replaces PipelineMixin's
     # method, and subclasses inherit that exact marked callable.
     candidates = [
-        candidate
-        for candidate in vars(module).values()
-        if isinstance(candidate, type)
+        candidate for candidate in vars(module).values() if isinstance(candidate, type)
     ]
     for candidate in candidates:
         method = getattr(candidate, "pipeline", None)
@@ -93,10 +98,7 @@ def _module_honors_pipeline_assignment(
         for base in getattr(candidate, "__bases__", ())
     }
     for base_module in sorted(base_modules):
-        if (
-            not base_module.startswith("mlx_lm.models.")
-            or base_module in seen
-        ):
+        if not base_module.startswith("mlx_lm.models.") or base_module in seen:
             continue
         try:
             inherited = importlib.import_module(base_module)
@@ -141,12 +143,8 @@ def _install_nemotron_h_pipeline(
         (NemotronHModel, "pipeline_layers"): NemotronHModel.__dict__.get(
             "pipeline_layers", _MISSING
         ),
-        (NemotronHModel, "pipeline"): NemotronHModel.__dict__.get(
-            "pipeline", _MISSING
-        ),
-        (NemotronHModel, "__call__"): NemotronHModel.__dict__.get(
-            "__call__", _MISSING
-        ),
+        (NemotronHModel, "pipeline"): NemotronHModel.__dict__.get("pipeline", _MISSING),
+        (NemotronHModel, "__call__"): NemotronHModel.__dict__.get("__call__", _MISSING),
         (Model, "model"): Model.__dict__.get("model", _MISSING),
         (Model, "layers"): Model.__dict__.get("layers", _MISSING),
     }
@@ -205,9 +203,7 @@ def _install_nemotron_h_pipeline(
         layers = pipeline_model.pipeline_layers
 
         if cache is None:
-            cache = [None] * sum(
-                layer.block_type in {"M", "*"} for layer in layers
-            )
+            cache = [None] * sum(layer.block_type in {"M", "*"} for layer in layers)
 
         # The first attention / SSM cache slots. ``NemotronHModel.__init__``
         # always sets both, and ``pipeline()`` re-publishes them for its stage
@@ -228,9 +224,7 @@ def _install_nemotron_h_pipeline(
         )
 
         if pipeline_rank < pipeline_size - 1:
-            hidden_states = mx.distributed.recv_like(
-                hidden_states, pipeline_rank + 1
-            )
+            hidden_states = mx.distributed.recv_like(hidden_states, pipeline_rank + 1)
 
         cache_index = 0
         for layer in layers:

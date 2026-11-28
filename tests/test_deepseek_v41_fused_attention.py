@@ -260,7 +260,9 @@ def test_fused_attention_matches_three_kernel_reference(
     assert mx.array_equal(fused, reference).item(), f"gathered={gathered}"
 
 
-def test_rounded_attention_routes_large_candidate_lists_to_the_fused_kernel(monkeypatch):
+def test_rounded_attention_routes_large_candidate_lists_to_the_fused_kernel(
+    monkeypatch,
+):
     args = _inputs(3, 2, 16, 128, 128, 700, 128, 512)
     calls = []
     real = fused_attention.fused_mma_attention

@@ -351,9 +351,12 @@ def gated_delta_chunked_metal(
     for s0 in range(0, T, SEGMENT):
         s1 = min(s0 + SEGMENT, T)
         y, state = _gated_delta_chunked_metal_seg(
-            mx.contiguous(q[:, s0:s1]), mx.contiguous(k[:, s0:s1]),
-            mx.contiguous(v[:, s0:s1]), mx.contiguous(g[:, s0:s1]),
-            mx.contiguous(beta[:, s0:s1]), state,
+            mx.contiguous(q[:, s0:s1]),
+            mx.contiguous(k[:, s0:s1]),
+            mx.contiguous(v[:, s0:s1]),
+            mx.contiguous(g[:, s0:s1]),
+            mx.contiguous(beta[:, s0:s1]),
+            state,
         )
         ys.append(y)
     return mx.concatenate(ys, axis=1), state

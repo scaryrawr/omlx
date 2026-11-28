@@ -6,18 +6,8 @@ This adapter handles conversion between OpenAI API format and the internal
 request/response format used by the inference engine.
 """
 
-import json
-import time
 import uuid
-from typing import Any, List, Optional
 
-from .base import (
-    BaseAdapter,
-    InternalMessage,
-    InternalRequest,
-    InternalResponse,
-    StreamChunk,
-)
 from ..openai_models import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -30,8 +20,15 @@ from ..openai_models import (
     Usage,
 )
 from ..thinking import extract_thinking
-from ..utils import clean_special_tokens, extract_text_content
 from ..tool_calling import convert_tools_for_template
+from ..utils import clean_special_tokens, extract_text_content
+from .base import (
+    BaseAdapter,
+    InternalMessage,
+    InternalRequest,
+    InternalResponse,
+    StreamChunk,
+)
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -79,12 +76,16 @@ class OpenAIAdapter(BaseAdapter):
             temperature=request.temperature if request.temperature is not None else 1.0,
             top_p=request.top_p if request.top_p is not None else 1.0,
             min_p=request.min_p if request.min_p is not None else 0.0,
-            presence_penalty=request.presence_penalty if request.presence_penalty is not None else 0.0,
-            frequency_penalty=request.frequency_penalty if request.frequency_penalty is not None else 0.0,
+            presence_penalty=request.presence_penalty
+            if request.presence_penalty is not None
+            else 0.0,
+            frequency_penalty=request.frequency_penalty
+            if request.frequency_penalty is not None
+            else 0.0,
             stream=request.stream or False,
-            stop=request.stop if isinstance(request.stop, list) else (
-                [request.stop] if request.stop else None
-            ),
+            stop=request.stop
+            if isinstance(request.stop, list)
+            else ([request.stop] if request.stop else None),
             tools=tools,
             tool_choice=request.tool_choice,
             response_format=request.response_format,
@@ -115,9 +116,7 @@ class OpenAIAdapter(BaseAdapter):
         content = regular_content.strip() if regular_content else None
 
         # Determine finish reason
-        finish_reason = (
-            "tool_calls" if response.tool_calls else response.finish_reason
-        )
+        finish_reason = "tool_calls" if response.tool_calls else response.finish_reason
 
         return ChatCompletionResponse(
             id=response.request_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -126,7 +125,9 @@ class OpenAIAdapter(BaseAdapter):
                 ChatCompletionChoice(
                     message=AssistantMessage(
                         content=content,
-                        reasoning_content=thinking_content if thinking_content else None,
+                        reasoning_content=thinking_content
+                        if thinking_content
+                        else None,
                         tool_calls=response.tool_calls,
                     ),
                     finish_reason=finish_reason,
@@ -161,7 +162,9 @@ class OpenAIAdapter(BaseAdapter):
 
         delta = ChatCompletionChunkDelta(
             content=chunk.text if chunk.text else None,
-            reasoning_content=chunk.reasoning_content if chunk.reasoning_content else None,
+            reasoning_content=chunk.reasoning_content
+            if chunk.reasoning_content
+            else None,
             tool_calls=chunk.tool_call_delta,
         )
 

@@ -217,7 +217,9 @@ for (int e = int(t); e < NO * R; e += 32 * SG) {
 # mlx.nn.gelu_approx with each bf16 op rounded and bf16 constants, like the
 # Python weak scalars.
 _SRC_FF1 = (
-    _PRELUDE + _gemv(1024, "W1 + (ob + n) * 1024", "LDW(X, r * 1024 + i)", True) + """
+    _PRELUDE
+    + _gemv(1024, "W1 + (ob + n) * 1024", "LDW(X, r * 1024 + i)", True)
+    + """
 for (int e = int(t); e < NO * R; e += 32 * SG) {
     const int n = e / R, r = e % R, o = ob + n;
     const float x = rb(rsum(n, r) * rinv(r) + float(B1[o]));
@@ -230,7 +232,9 @@ for (int e = int(t); e < NO * R; e += 32 * SG) {
 )
 
 _SRC_FF2 = (
-    _PRELUDE + _gemv(4096, "W2 + (ob + n) * 4096", "LDW(HH, r * 4096 + i)", False) + """
+    _PRELUDE
+    + _gemv(4096, "W2 + (ob + n) * 4096", "LDW(HH, r * 4096 + i)", False)
+    + """
 for (int e = int(t); e < NO * R; e += 32 * SG) {
     const int n = e / R, r = e % R, o = ob + n;
     OUT[r * 1024 + o] = bfloat16_t(float(X[r * 1024 + o]) + rb(rsum(n, r) + float(B2[o])));

@@ -12,7 +12,9 @@ from omlx.cluster.strategy_benchmarks import (
 )
 
 
-def _measurement(*, tp=1, context=8000, prefill=100.0, decode=20.0, at="2026-07-29T12:00:00+00:00"):
+def _measurement(
+    *, tp=1, context=8000, prefill=100.0, decode=20.0, at="2026-07-29T12:00:00+00:00"
+):
     return StrategyBenchmark(
         model="org/model",
         node_ids=("mbp", "studio"),
@@ -27,7 +29,10 @@ def _measurement(*, tp=1, context=8000, prefill=100.0, decode=20.0, at="2026-07-
 
 
 def test_context_buckets_match_the_hardware_gate_lengths():
-    assert [context_bucket(value) for value in (1, 1024, 1025, 8192, 8193, 32768, 32769, 262144)] == [
+    assert [
+        context_bucket(value)
+        for value in (1, 1024, 1025, 8192, 8193, 32768, 32769, 262144)
+    ] == [
         1024,
         1024,
         8192,

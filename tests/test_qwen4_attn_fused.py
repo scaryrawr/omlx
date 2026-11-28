@@ -43,7 +43,8 @@ q35_language = importlib.import_module("mlx_vlm.models.qwen3_5.language")
 q35_verifier = importlib.import_module("mlx_vlm.models.qwen3_5.speculative_verifier")
 
 requires_kernels = pytest.mark.skipif(
-    attn_fused._gpu_class() != "d", reason="MLX's vector SDPA plan is transcribed for 'd' GPUs"
+    attn_fused._gpu_class() != "d",
+    reason="MLX's vector SDPA plan is transcribed for 'd' GPUs",
 )
 
 
@@ -128,12 +129,22 @@ def _attention(seed: int, config=_CONFIG):
     for _, module in attn.named_modules():
         if isinstance(module, nn.Linear):
             fan_in = module.weight.shape[1]
-            module.weight = (mx.random.normal(module.weight.shape) * fan_in**-0.5).astype(
-                mx.bfloat16
-            )
-    for norm in (attn.q_norm, attn.k_norm, attn.indexer.q_layernorm, attn.indexer.k_layernorm):
+            module.weight = (
+                mx.random.normal(module.weight.shape) * fan_in**-0.5
+            ).astype(mx.bfloat16)
+    for norm in (
+        attn.q_norm,
+        attn.k_norm,
+        attn.indexer.q_layernorm,
+        attn.indexer.k_layernorm,
+    ):
         norm.weight = (mx.random.normal(norm.weight.shape) * 0.1).astype(mx.bfloat16)
-    nn.quantize(attn, group_size=64, bits=6, class_predicate=lambda _, m: isinstance(m, nn.Linear))
+    nn.quantize(
+        attn,
+        group_size=64,
+        bits=6,
+        class_predicate=lambda _, m: isinstance(m, nn.Linear),
+    )
     for _, module in attn.named_modules():
         if isinstance(module, nn.QuantizedLinear):
             module.scales = module.scales.astype(mx.bfloat16)
@@ -380,7 +391,9 @@ def test_prep_matches_norms_and_mrope(rows, pos_ndim, config, dtype):
         positions = _positions(start, rows)[0]
     rotary = attn.rotary_emb
 
-    queries = attn.q_norm(q_proj.reshape(1, rows, 24, 2, 256)[:, :, :, 0]).transpose(0, 2, 1, 3)
+    queries = attn.q_norm(q_proj.reshape(1, rows, 24, 2, 256)[:, :, :, 0]).transpose(
+        0, 2, 1, 3
+    )
     keys = attn.k_norm(k_proj.reshape(1, rows, 2, 256)).transpose(0, 2, 1, 3)
     want_q, want_k = rotary.apply_rotary(queries, keys, positions, unsqueeze_dim=1)
 

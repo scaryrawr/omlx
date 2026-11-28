@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class StubHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 — http.server convention
+    def do_GET(self) -> None:
         if self.path == "/health":
             payload = json.dumps({"status": "ok", "stub": True}).encode()
             self.send_response(200)
@@ -34,7 +34,7 @@ class StubHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: object) -> None:
         # Pipe access logs to stderr so the parent's tail captures them.
         import sys
 

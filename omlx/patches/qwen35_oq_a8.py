@@ -1,4 +1,3 @@
-# ruff: noqa: N806
 """Model-local routing for Qwen INT8-activation prefill.
 
 Eligible Q4/Q5/Q8 projections cache a dispatch plan and share activation
@@ -607,8 +606,7 @@ def apply_qwen35_oq_a8_patch(
 
     if _MLP_PATCHED or _GDN_REGISTERED:
         logger.info(
-            "oQ A8 prefill kernels enabled (mlp=%s, gdn=%s, modules=%d, "
-            "min_tokens=%d)",
+            "oQ A8 prefill kernels enabled (mlp=%s, gdn=%s, modules=%d, min_tokens=%d)",
             _MLP_PATCHED,
             _GDN_REGISTERED,
             tagged,

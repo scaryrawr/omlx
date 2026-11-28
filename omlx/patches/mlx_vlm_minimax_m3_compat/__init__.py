@@ -49,7 +49,7 @@ def apply_mlx_vlm_minimax_m3_compat_patch() -> bool:
 
         _patch_utils(vlm_utils)
         _patch_prompt_utils(prompt_utils)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("MiniMax M3 mlx-vlm compat patch failed: %s", exc)
         return False
 
@@ -140,9 +140,7 @@ def _patch_get_model_and_args(vlm_utils: Any) -> None:
         return
 
     def patched_get_model_and_args(config: dict, model_path=None):
-        raw_model_type = (
-            config.get("model_type") if isinstance(config, dict) else None
-        )
+        raw_model_type = config.get("model_type") if isinstance(config, dict) else None
         if raw_model_type == "minimax_m3_vl":
             module, model_type = original(config, model_path=model_path)
             if model_type != "minimax_m3_vl":
@@ -196,8 +194,7 @@ def _patch_process_inputs(vlm_utils: Any) -> None:
         process_method = getattr(processor, "process", processor)
         parameters = inspect.signature(process_method).parameters
         accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in parameters.values()
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
         )
 
         args = {
@@ -287,7 +284,7 @@ def _patch_load_config_and_model(vlm_utils: Any) -> None:
             load_kwargs.pop("strict", None)
             config = vlm_utils.load_config(model_path, **load_kwargs)
             ignored_layers = _quantization_ignored_layers(config)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("Could not inspect quantization ignored_layers: %s", exc)
 
         with _ignored_layers_context(ignored_layers):
@@ -408,7 +405,9 @@ def _patch_nn_quantize_for_ignored_layers() -> None:
 
 
 def _is_ignored_layer(path: str, ignored_layers: tuple[str, ...]) -> bool:
-    return any(path == layer or path.startswith(f"{layer}.") for layer in ignored_layers)
+    return any(
+        path == layer or path.startswith(f"{layer}.") for layer in ignored_layers
+    )
 
 
 @contextlib.contextmanager

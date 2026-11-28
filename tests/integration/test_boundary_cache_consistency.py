@@ -22,7 +22,6 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -63,7 +62,7 @@ MODELS = {
 }
 
 
-def _build_8k_prompt(tokenizer) -> List[int]:
+def _build_8k_prompt(tokenizer) -> list[int]:
     """Build a prompt of ~8K tokens using chat template."""
     base_text = (
         "You are an expert software engineer. "
@@ -85,9 +84,7 @@ def _build_8k_prompt(tokenizer) -> List[int]:
     ]
 
     try:
-        token_ids = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True
-        )
+        token_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     except Exception:
         text = f"{long_system}\n\nUser: {question}\n\nAssistant:"
         token_ids = tokenizer.encode(text)
@@ -114,12 +111,12 @@ def _build_8k_prompt(tokenizer) -> List[int]:
 def _generate_tokens(
     model,
     tokenizer,
-    prompt_token_ids: List[int],
+    prompt_token_ids: list[int],
     *,
     max_tokens: int = 100,
-    ssd_cache_dir: Optional[str] = None,
+    ssd_cache_dir: str | None = None,
     block_size: int = 2048,
-) -> Tuple[List[int], int]:
+) -> tuple[list[int], int]:
     """Run generation and return (output_token_ids, cached_tokens)."""
     from omlx.request import Request, SamplingParams
     from omlx.scheduler import Scheduler, SchedulerConfig
@@ -175,9 +172,7 @@ def _check_output_quality(text: str, model_desc: str):
     assert len(text.strip()) > 0, f"[{model_desc}] Empty output"
 
     words = text.split()
-    assert len(words) >= 5, (
-        f"[{model_desc}] Too few words ({len(words)}): {text!r}"
-    )
+    assert len(words) >= 5, f"[{model_desc}] Too few words ({len(words)}): {text!r}"
 
     alpha_chars = sum(1 for c in text if c.isalpha())
     alpha_ratio = alpha_chars / max(len(text), 1)
@@ -190,7 +185,7 @@ def _check_output_quality(text: str, model_desc: str):
         if len(set(text[i : i + 20])) == 1:
             pytest.fail(
                 f"[{model_desc}] Excessive single-char repetition: "
-                f"{text[max(0,i-5):i+25]!r}"
+                f"{text[max(0, i - 5) : i + 25]!r}"
             )
 
 
@@ -199,10 +194,10 @@ def _run_model_test(model_path: str, model_desc: str, expect_on_off_match: bool)
     import mlx.core as mx
     from mlx_lm import load
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Testing: {model_desc}")
     print(f"Path: {model_path}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     model, tokenizer = load(model_path)
 
@@ -215,14 +210,19 @@ def _run_model_test(model_path: str, model_desc: str, expect_on_off_match: bool)
     tmp_dir = tempfile.mkdtemp(prefix="omlx_test_")
     try:
         tokens_on, _ = _generate_tokens(
-            model, tokenizer, prompt_token_ids,
-            ssd_cache_dir=tmp_dir, block_size=2048,
+            model,
+            tokenizer,
+            prompt_token_ids,
+            ssd_cache_dir=tmp_dir,
+            block_size=2048,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     tokens_off, _ = _generate_tokens(
-        model, tokenizer, prompt_token_ids,
+        model,
+        tokenizer,
+        prompt_token_ids,
         ssd_cache_dir=None,
     )
 
@@ -246,8 +246,12 @@ def _run_model_test(model_path: str, model_desc: str, expect_on_off_match: bool)
             min_len,
         )
         print(f"    Token match: DIFFER at position {diff_idx}")
-        print(f"      ON[{diff_idx}]: {tokens_on[diff_idx] if diff_idx < len(tokens_on) else 'END'}")
-        print(f"      OFF[{diff_idx}]: {tokens_off[diff_idx] if diff_idx < len(tokens_off) else 'END'}")
+        print(
+            f"      ON[{diff_idx}]: {tokens_on[diff_idx] if diff_idx < len(tokens_on) else 'END'}"
+        )
+        print(
+            f"      OFF[{diff_idx}]: {tokens_off[diff_idx] if diff_idx < len(tokens_off) else 'END'}"
+        )
 
     if expect_on_off_match:
         assert match, f"[{model_desc}] Boundary ON/OFF tokens differ"
@@ -264,14 +268,20 @@ def _run_model_test(model_path: str, model_desc: str, expect_on_off_match: bool)
     tmp_dir = tempfile.mkdtemp(prefix="omlx_test_ssd_")
     try:
         tokens_fresh, cached_fresh = _generate_tokens(
-            model, tokenizer, prompt_token_ids,
-            ssd_cache_dir=tmp_dir, block_size=2048,
+            model,
+            tokenizer,
+            prompt_token_ids,
+            ssd_cache_dir=tmp_dir,
+            block_size=2048,
         )
         print(f"    Fresh: {len(tokens_fresh)} tokens, cached={cached_fresh}")
 
         tokens_cached, cached_count = _generate_tokens(
-            model, tokenizer, prompt_token_ids,
-            ssd_cache_dir=tmp_dir, block_size=2048,
+            model,
+            tokenizer,
+            prompt_token_ids,
+            ssd_cache_dir=tmp_dir,
+            block_size=2048,
         )
         print(f"    Cached: {len(tokens_cached)} tokens, cached={cached_count}")
 

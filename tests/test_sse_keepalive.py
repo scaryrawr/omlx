@@ -771,9 +771,7 @@ def responses_route(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["chunk", None])
-async def test_prefill_emits_response_events_before_model_output(
-    responses_route, mode
-):
+async def test_prefill_emits_response_events_before_model_output(responses_route, mode):
     route = responses_route
     stream = await route.create(mode)
     try:

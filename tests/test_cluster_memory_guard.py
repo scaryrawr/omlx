@@ -90,11 +90,14 @@ def test_a_manual_slider_is_the_rank_guard_limit_even_on_a_workstation():
 
     # Automatic Workstation policy admits 54 GiB here; the explicit slider
     # says 90 GiB and both planning and the live rank must honour that number.
-    assert guard_rank_load(
-        assignment,
-        rank=0,
-        ceiling_bytes=108 * GIB,
-    ) == 108 * GIB
+    assert (
+        guard_rank_load(
+            assignment,
+            rank=0,
+            ceiling_bytes=108 * GIB,
+        )
+        == 108 * GIB
+    )
 
 
 def test_the_safety_margin_leaves_room_for_kv_and_activations():
@@ -233,10 +236,18 @@ def test_pressure_from_other_apps_changes_the_verdict(monkeypatch):
 
     from omlx.cluster import memory_guard
 
-    idle = {"static": 122 * GIB, "dynamic": 115 * GIB,
-            "metal_cap": 107 * GIB, "hard_limit": 107 * GIB}
-    busy = {"static": 122 * GIB, "dynamic": 40 * GIB,
-            "metal_cap": 107 * GIB, "hard_limit": 40 * GIB}
+    idle = {
+        "static": 122 * GIB,
+        "dynamic": 115 * GIB,
+        "metal_cap": 107 * GIB,
+        "hard_limit": 107 * GIB,
+    }
+    busy = {
+        "static": 122 * GIB,
+        "dynamic": 40 * GIB,
+        "metal_cap": 107 * GIB,
+        "hard_limit": 40 * GIB,
+    }
 
     monkeypatch.setattr(memory_guard, "ceiling_breakdown", lambda tier="balanced": idle)
     assert check_rank_fits(60 * GIB, rank=0)
@@ -344,13 +355,16 @@ def test_an_overrun_aborts_the_rank_while_it_is_still_loading():
 
     interrupted = threading.Event()
 
-    with pytest.raises(InsufficientMemoryError, match="test-mbp"), watch_rank_load(
-        1 * GIB,
-        rank=0,
-        node_id="test-mbp",
-        interval=0.0,
-        usage=lambda: 9 * GIB,
-        interrupt=interrupted.set,
+    with (
+        pytest.raises(InsufficientMemoryError, match="test-mbp"),
+        watch_rank_load(
+            1 * GIB,
+            rank=0,
+            node_id="test-mbp",
+            interval=0.0,
+            usage=lambda: 9 * GIB,
+            interrupt=interrupted.set,
+        ),
     ):
         assert interrupted.wait(5), "the loading thread must be interrupted"
 
@@ -456,9 +470,7 @@ def test_the_stage_that_took_the_macbook_down_is_still_refused(monkeypatch):
     _mac(monkeypatch, 115_427_246_080)
 
     with pytest.raises(InsufficientMemoryError) as excinfo:
-        check_rank_fits(
-            60_262_615_040, rank=0, node_id="test-mbp", role="workstation"
-        )
+        check_rank_fits(60_262_615_040, rank=0, node_id="test-mbp", role="workstation")
 
     assert excinfo.value.required == 60_262_615_040
     assert excinfo.value.current == 115_427_246_080 // 2
@@ -635,15 +647,19 @@ def test_a_plan_the_planner_built_is_a_plan_the_rank_admits(role):
     """
 
     plan = _plan_for(role)
-    macbook = next(item for item in _as_the_rank_sees_it(plan.assignments)
-                   if item.node_id == "macbook")
+    macbook = next(
+        item
+        for item in _as_the_rank_sees_it(plan.assignments)
+        if item.node_id == "macbook"
+    )
 
     assert macbook.role == role, "the role has to survive the wire to matter"
     assert macbook.planned_weight_bytes > 0
     # No role passed by hand: the rank reads it off the plan.
-    assert guard_rank_load(
-        macbook, rank=0, ceiling_bytes=_MACBOOK_CEILING_BYTES
-    ) == _MACBOOK_CEILING_BYTES
+    assert (
+        guard_rank_load(macbook, rank=0, ceiling_bytes=_MACBOOK_CEILING_BYTES)
+        == _MACBOOK_CEILING_BYTES
+    )
 
 
 @pytest.mark.parametrize("role", ["headless", "workstation"])
@@ -743,9 +759,10 @@ def test_a_headless_rank_admits_what_the_same_mac_admits_on_its_own():
 
     for planned in (1 * GIB, 50 * GIB, 96 * GIB, ceiling):
         assert single_node_admits(planned)
-        assert check_rank_fits(
-            planned, rank=0, role="headless", ceiling_bytes=ceiling
-        ) == ceiling
+        assert (
+            check_rank_fits(planned, rank=0, role="headless", ceiling_bytes=ceiling)
+            == ceiling
+        )
 
     assert stage_budget(ceiling, role="headless") == ceiling
     # ...and the pool's own ceiling still binds: past the Mac is past the Mac.
@@ -805,9 +822,7 @@ def test_a_plan_that_reserved_nothing_does_not_widen_the_guard():
 
     assert reserved_nothing.planned_weight_bytes == _MACBOOK_INCIDENT_STAGE
     with pytest.raises(InsufficientMemoryError, match="Workstation"):
-        guard_rank_load(
-            reserved_nothing, rank=0, ceiling_bytes=_MACBOOK_CEILING_BYTES
-        )
+        guard_rank_load(reserved_nothing, rank=0, ceiling_bytes=_MACBOOK_CEILING_BYTES)
 
 
 def test_the_refusal_states_a_comparison_that_is_actually_true():
@@ -959,9 +974,7 @@ def test_operator_memory_settings_falls_back_when_load_fails(monkeypatch):
         raise OSError("settings.json unreadable")
 
     monkeypatch.setattr(settings_module, "get_settings", fake_get_settings)
-    monkeypatch.setattr(
-        settings_module.GlobalSettings, "load", classmethod(fake_load)
-    )
+    monkeypatch.setattr(settings_module.GlobalSettings, "load", classmethod(fake_load))
 
     tier, custom_gb, enabled = _operator_memory_settings()
     assert tier == "balanced"

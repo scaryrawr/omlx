@@ -28,9 +28,10 @@ def _cache(reserve: int = 0):
 
 
 def _append(cache, start: int, stop: int) -> None:
-    length = stop - start
     raw = mx.arange(1 * stop * 8, dtype=mx.float32).reshape(1, stop, 8)
-    cache.update_indexer(raw[:, start:stop], mx.arange(start, stop, dtype=mx.int32)[None])
+    cache.update_indexer(
+        raw[:, start:stop], mx.arange(start, stop, dtype=mx.int32)[None]
+    )
 
 
 def _capacity(cache) -> int:
@@ -218,8 +219,8 @@ def test_chunked_reservation_includes_restored_prefix(snapshots_enabled):
         [cache, SimpleNamespace(offset=128)],
     )
     ns._prefill_step_size_for_progress = lambda *a: 64
-    ns._reserve_qsa_index_capacity = (
-        lambda caches, tokens: Scheduler._reserve_qsa_index_capacity(ns, caches, tokens)
+    ns._reserve_qsa_index_capacity = lambda caches, tokens: (
+        Scheduler._reserve_qsa_index_capacity(ns, caches, tokens)
     )
 
     def stop(*args, **kwargs):

@@ -54,9 +54,7 @@ def cpu_fp16_affine_qmm_t(
         cpu_threads,
     )
     if hasattr(_ext, "cpu_shared_resource_available"):
-        return _ext.cpu_fp16_affine_qmm_t(
-            *args, cpu_shared_resource
-        )
+        return _ext.cpu_fp16_affine_qmm_t(*args, cpu_shared_resource)
     return _ext.cpu_fp16_affine_qmm_t(*args)
 
 
@@ -74,9 +72,7 @@ def ane_dual_cpu_fp16_q4_swiglu_t(
     cpu_shared_resource: bool = False,
     up_suffix: tuple[mx.array, mx.array, mx.array] | None = None,
 ) -> mx.array:
-    if _ext is None or not hasattr(
-        _ext, "ane_dual_cpu_fp16_q4_swiglu_t"
-    ):
+    if _ext is None or not hasattr(_ext, "ane_dual_cpu_fp16_q4_swiglu_t"):
         raise RuntimeError("ANE/CPU/GPU fp16 hybrid SwiGLU is unavailable")
     args = (
         x,
@@ -206,9 +202,7 @@ def ane_dual_cpu_fp16_swiglu_t(
     cpu_shared_resource: bool = False,
     up_suffix: tuple[mx.array, mx.array, mx.array] | None = None,
 ) -> mx.array:
-    if _ext is None or not hasattr(
-        _ext, "ane_dual_cpu_fp16_swiglu_t"
-    ):
+    if _ext is None or not hasattr(_ext, "ane_dual_cpu_fp16_swiglu_t"):
         raise RuntimeError("ANE/CPU/GPU fp16 hybrid SwiGLU is unavailable")
     return _ext.ane_dual_cpu_fp16_swiglu_t(
         x,
@@ -242,9 +236,7 @@ def ane_dual_cpu_fp16_affine_qmm_t(
     cpu_threads: int = 0,
     cpu_shared_resource: bool = False,
 ) -> mx.array:
-    if _ext is None or not hasattr(
-        _ext, "ane_dual_cpu_fp16_affine_qmm_t"
-    ):
+    if _ext is None or not hasattr(_ext, "ane_dual_cpu_fp16_affine_qmm_t"):
         raise RuntimeError("ANE/CPU/GPU fp16 hybrid affine qmm is unavailable")
     return _ext.ane_dual_cpu_fp16_affine_qmm_t(
         x,
@@ -275,9 +267,7 @@ def cpu_shared_resource_available() -> bool:
 def ane_available() -> bool:
     """Whether the opt-in private ANE runtime is usable on this host."""
     return bool(
-        _ext is not None
-        and hasattr(_ext, "ane_available")
-        and _ext.ane_available()
+        _ext is not None and hasattr(_ext, "ane_available") and _ext.ane_available()
     )
 
 
@@ -334,9 +324,7 @@ def ane_profile_snapshot() -> dict[str, dict[str, float]]:
     }
 
 
-def ane_compile_linear(
-    weight: mx.array, sequence_length: int, ane_instance: int = 0
-):
+def ane_compile_linear(weight: mx.array, sequence_length: int, ane_instance: int = 0):
     if not ane_available():
         raise RuntimeError("Private ANE runtime is unavailable")
     try:
@@ -367,17 +355,13 @@ def ane_compile_linear_bank(
 ):
     if not ane_bank_compiler_available():
         raise RuntimeError("Private ANE procedure-bank compiler is unavailable")
-    return _ext.ane_compile_linear_bank(
-        weights, sequence_length, ane_instance
-    )
+    return _ext.ane_compile_linear_bank(weights, sequence_length, ane_instance)
 
 
 def ane_linear_bank_builder(sequence_length: int):
     """Incremental bank builder: add() converts one fp32 slice at a time so
     the caller can release each staging array immediately (issue #2781)."""
-    if not ane_available() or _ext is None or not hasattr(
-        _ext, "AneLinearBankBuilder"
-    ):
+    if not ane_available() or _ext is None or not hasattr(_ext, "AneLinearBankBuilder"):
         raise RuntimeError("Private ANE procedure-bank builder is unavailable")
     return _ext.AneLinearBankBuilder(sequence_length)
 
@@ -386,9 +370,7 @@ def ane_fused_bank_builder(sequence_length: int):
     """Incremental fused SwiGLU/down bank builder: add() converts one fp32
     gate/up/down triple at a time so the caller can release each staging
     array immediately (the issue #2781 recipe applied to fused banks)."""
-    if not ane_available() or _ext is None or not hasattr(
-        _ext, "AneFusedBankBuilder"
-    ):
+    if not ane_available() or _ext is None or not hasattr(_ext, "AneFusedBankBuilder"):
         raise RuntimeError("Private ANE procedure-bank builder is unavailable")
     return _ext.AneFusedBankBuilder(sequence_length)
 
@@ -420,9 +402,7 @@ def ane_affine_qmm_t(
 
 
 def ane_compile_fp16_linear(weight: mx.array, sequence_length: int):
-    if not ane_available() or not hasattr(
-        _ext, "ane_compile_fp16_linear"
-    ):
+    if not ane_available() or not hasattr(_ext, "ane_compile_fp16_linear"):
         raise RuntimeError("Private ANE fp16 runtime is unavailable")
     return _ext.ane_compile_fp16_linear(weight, sequence_length)
 
@@ -606,9 +586,7 @@ def ane_dual_affine_swiglu_t(
     up_suffix: tuple[mx.array, mx.array, mx.array] | None = None,
 ) -> mx.array:
     if _ext is None or not hasattr(_ext, "ane_dual_affine_swiglu_t"):
-        raise RuntimeError(
-            "Dual ANE hybrid affine SwiGLU native kernel is unavailable"
-        )
+        raise RuntimeError("Dual ANE hybrid affine SwiGLU native kernel is unavailable")
     return _ext.ane_dual_affine_swiglu_t(
         x,
         gpu_weight,
@@ -698,9 +676,7 @@ def ane_dual_cpu_fp16_q4_swiglu_down_t(
     cpu_threads: int = 0,
     cpu_shared_resource: bool = False,
 ) -> mx.array:
-    if _ext is None or not hasattr(
-        _ext, "ane_dual_cpu_fp16_q4_swiglu_down_t"
-    ):
+    if _ext is None or not hasattr(_ext, "ane_dual_cpu_fp16_q4_swiglu_down_t"):
         raise RuntimeError(
             "Dual-ANE/CPU fused SwiGLU/down native kernel is unavailable"
         )

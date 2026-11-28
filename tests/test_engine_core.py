@@ -1194,7 +1194,7 @@ class TestAsyncEngineCore:
         not raise AttributeError in that late-cleanup path.
         """
         async_engine = AsyncEngineCore.__new__(AsyncEngineCore)
-        setattr(async_engine, "engine", None)
+        async_engine.engine = None
 
         result = await async_engine.abort_request("request-after-close")
 
@@ -1204,7 +1204,7 @@ class TestAsyncEngineCore:
     async def test_context_manager_exit_after_close_does_not_raise(self):
         """Context-manager cleanup should tolerate an already-closed wrapper."""
         async_engine = AsyncEngineCore.__new__(AsyncEngineCore)
-        setattr(async_engine, "engine", None)
+        async_engine.engine = None
 
         await async_engine.__aexit__(None, None, None)
 
@@ -1212,7 +1212,7 @@ class TestAsyncEngineCore:
     async def test_abort_all_requests_after_close_returns_zero(self):
         """Bulk abort should no-op if the async wrapper is already closed."""
         async_engine = AsyncEngineCore.__new__(AsyncEngineCore)
-        setattr(async_engine, "engine", None)
+        async_engine.engine = None
 
         count = await async_engine.abort_all_requests()
 
@@ -1369,9 +1369,7 @@ class TestEngineCoreAbortAllRequests:
                 await engine.start()
                 engine.scheduler.has_requests = lambda: False
                 engine.scheduler._memory_hard_limit_bytes = 30 * 1024**3
-                engine.scheduler._memory_hard_watermark_bytes = int(
-                    30 * 1024**3 * 0.95
-                )
+                engine.scheduler._memory_hard_watermark_bytes = int(30 * 1024**3 * 0.95)
 
                 rid = await engine.add_request(prompt="Hello")
                 await engine.abort_all_requests()
@@ -1453,7 +1451,7 @@ class TestEngineCoreAbortAllRequests:
                 await engine.start()
                 engine.scheduler.has_requests = lambda: False
 
-                rid = await engine.add_request(prompt="Hello")
+                await engine.add_request(prompt="Hello")
                 await engine.abort_all_requests()
 
                 # Engine should still be running
@@ -1601,8 +1599,7 @@ class TestGlobalMLXExecutor:
         with patch("omlx.engine_core.get_registry") as mock_registry:
             mock_registry.return_value.acquire.return_value = True
             engines = [
-                EngineCore(model=mock_model, tokenizer=mock_tokenizer)
-                for _ in range(2)
+                EngineCore(model=mock_model, tokenizer=mock_tokenizer) for _ in range(2)
             ]
             try:
                 results = [
@@ -1628,8 +1625,7 @@ class TestGlobalMLXExecutor:
         ):
             mock_registry.return_value.acquire.return_value = True
             engines = [
-                EngineCore(model=mock_model, tokenizer=mock_tokenizer)
-                for _ in range(3)
+                EngineCore(model=mock_model, tokenizer=mock_tokenizer) for _ in range(3)
             ]
             for e in engines:
                 e.close()
@@ -1750,9 +1746,9 @@ class TestGlobalMLXExecutor:
                 engine1.close()
                 engine2.close()
 
-        assert (
-            total_steps >= 4
-        ), f"Expected at least 4 steps from two engines, got {total_steps}"
+        assert total_steps >= 4, (
+            f"Expected at least 4 steps from two engines, got {total_steps}"
+        )
         # With per-engine executors (#1248), two engines CAN run concurrently.
         # max_concurrent >= 2 means both engines overlapped at least once.
         assert max_concurrent >= 2, (

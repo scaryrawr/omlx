@@ -16,9 +16,19 @@ from omlx.utils.system_sampler import (
 )
 
 
-def make_sample(t=0.0, cpu_total=None, cpu_p=None, cpu_e=None, gpu=None,
-                thermal=None, footprint=0, mlx_active=0, mlx_cache=0,
-                sys_used=0, sys_wired=0):
+def make_sample(
+    t=0.0,
+    cpu_total=None,
+    cpu_p=None,
+    cpu_e=None,
+    gpu=None,
+    thermal=None,
+    footprint=0,
+    mlx_active=0,
+    mlx_cache=0,
+    sys_used=0,
+    sys_wired=0,
+):
     return _Sample(
         t=t,
         cpu_total=cpu_total,
@@ -83,10 +93,20 @@ class TestAggregate:
 
     def test_memory_reports_peaks_in_gib(self):
         samples = [
-            make_sample(footprint=10 * GIB, mlx_active=8 * GIB,
-                        mlx_cache=1 * GIB, sys_used=20 * GIB, sys_wired=15 * GIB),
-            make_sample(footprint=12 * GIB, mlx_active=9 * GIB,
-                        mlx_cache=2 * GIB, sys_used=25 * GIB, sys_wired=18 * GIB),
+            make_sample(
+                footprint=10 * GIB,
+                mlx_active=8 * GIB,
+                mlx_cache=1 * GIB,
+                sys_used=20 * GIB,
+                sys_wired=15 * GIB,
+            ),
+            make_sample(
+                footprint=12 * GIB,
+                mlx_active=9 * GIB,
+                mlx_cache=2 * GIB,
+                sys_used=25 * GIB,
+                sys_wired=18 * GIB,
+            ),
         ]
         mem = aggregate(samples, 1.0)["memory"]
         assert mem["phys_footprint_peak"] == 12.0
@@ -178,30 +198,45 @@ class TestClusterMap:
         )
 
     def test_parses_interleaved_layout(self):
-        with self._run_with_ioreg(_ULTRA_IOREG), \
-             patch("omlx.utils.system_sampler.IS_DARWIN", True):
+        with (
+            self._run_with_ioreg(_ULTRA_IOREG),
+            patch("omlx.utils.system_sampler.IS_DARWIN", True),
+        ):
             assert _cluster_map_from_ioreg() == (
-                True, True, False, False, True, True, False, False
+                True,
+                True,
+                False,
+                False,
+                True,
+                True,
+                False,
+                False,
             )
 
     def test_interleaved_layout_disagrees_with_the_prefix_heuristic(self):
         # The bug this parser exists to avoid: hw.perflevel1.logicalcpu says
         # there are 4 efficiency cores, and assuming they are indices 0-3
         # mislabels half of them on a fused-die part.
-        with self._run_with_ioreg(_ULTRA_IOREG), \
-             patch("omlx.utils.system_sampler.IS_DARWIN", True):
+        with (
+            self._run_with_ioreg(_ULTRA_IOREG),
+            patch("omlx.utils.system_sampler.IS_DARWIN", True),
+        ):
             actual = _cluster_map_from_ioreg()
         prefix_guess = tuple(i < 4 for i in range(8))
         assert actual != prefix_guess
 
     def test_parses_contiguous_layout(self):
-        with self._run_with_ioreg(_CONTIGUOUS_IOREG), \
-             patch("omlx.utils.system_sampler.IS_DARWIN", True):
+        with (
+            self._run_with_ioreg(_CONTIGUOUS_IOREG),
+            patch("omlx.utils.system_sampler.IS_DARWIN", True),
+        ):
             assert _cluster_map_from_ioreg() == (True, True, False)
 
     def test_malformed_output_returns_none(self):
-        with self._run_with_ioreg("no cpu entries here"), \
-             patch("omlx.utils.system_sampler.IS_DARWIN", True):
+        with (
+            self._run_with_ioreg("no cpu entries here"),
+            patch("omlx.utils.system_sampler.IS_DARWIN", True),
+        ):
             assert _cluster_map_from_ioreg() is None
 
     def test_gap_in_cpu_ids_returns_none(self):
@@ -211,30 +246,57 @@ class TestClusterMap:
     | |     "cluster-type" = <"P">
     | |     "logical-cpu-id" = 5
 """
-        with self._run_with_ioreg(broken), \
-             patch("omlx.utils.system_sampler.IS_DARWIN", True):
+        with (
+            self._run_with_ioreg(broken),
+            patch("omlx.utils.system_sampler.IS_DARWIN", True),
+        ):
             assert _cluster_map_from_ioreg() is None
 
     def test_falls_back_to_prefix_when_ioreg_unavailable(self):
-        with patch(
-            "omlx.utils.system_sampler._cluster_map_from_ioreg", return_value=None
-        ), patch("omlx.utils.system_sampler._sysctl_int", return_value=4):
-            assert _cluster_map(8) == (True, True, True, True,
-                                       False, False, False, False)
+        with (
+            patch(
+                "omlx.utils.system_sampler._cluster_map_from_ioreg", return_value=None
+            ),
+            patch("omlx.utils.system_sampler._sysctl_int", return_value=4),
+        ):
+            assert _cluster_map(8) == (
+                True,
+                True,
+                True,
+                True,
+                False,
+                False,
+                False,
+                False,
+            )
 
     def test_falls_back_to_all_performance_when_nothing_is_known(self):
-        with patch(
-            "omlx.utils.system_sampler._cluster_map_from_ioreg", return_value=None
-        ), patch("omlx.utils.system_sampler._sysctl_int", return_value=None):
+        with (
+            patch(
+                "omlx.utils.system_sampler._cluster_map_from_ioreg", return_value=None
+            ),
+            patch("omlx.utils.system_sampler._sysctl_int", return_value=None),
+        ):
             assert _cluster_map(4) == (False, False, False, False)
 
     def test_ioreg_map_ignored_when_length_disagrees_with_cpu_count(self):
-        with patch(
-            "omlx.utils.system_sampler._cluster_map_from_ioreg",
-            return_value=(True, True),
-        ), patch("omlx.utils.system_sampler._sysctl_int", return_value=2):
-            assert _cluster_map(8) == (True, True, False, False,
-                                       False, False, False, False)
+        with (
+            patch(
+                "omlx.utils.system_sampler._cluster_map_from_ioreg",
+                return_value=(True, True),
+            ),
+            patch("omlx.utils.system_sampler._sysctl_int", return_value=2),
+        ):
+            assert _cluster_map(8) == (
+                True,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            )
 
 
 class TestSamplerLifecycle:
@@ -259,23 +321,27 @@ class TestSamplerLifecycle:
 
     def test_window_excludes_samples_outside_the_range(self):
         sampler = SystemSampler(interval_s=1.0)
-        sampler._samples.extend([
-            make_sample(t=1.0, cpu_total=1.0),
-            make_sample(t=5.0, cpu_total=0.0),
-            make_sample(t=6.0, cpu_total=0.0),
-            make_sample(t=9.0, cpu_total=1.0),
-        ])
+        sampler._samples.extend(
+            [
+                make_sample(t=1.0, cpu_total=1.0),
+                make_sample(t=5.0, cpu_total=0.0),
+                make_sample(t=6.0, cpu_total=0.0),
+                make_sample(t=9.0, cpu_total=1.0),
+            ]
+        )
         out = sampler.window(4.0, 7.0)
         assert out["sample_count"] == 2
         assert out["cpu"]["total_max"] == 0.0
 
     def test_run_peak_footprint_is_the_max_seen(self):
         sampler = SystemSampler(interval_s=1.0)
-        sampler._samples.extend([
-            make_sample(footprint=5 * GIB),
-            make_sample(footprint=9 * GIB),
-            make_sample(footprint=7 * GIB),
-        ])
+        sampler._samples.extend(
+            [
+                make_sample(footprint=5 * GIB),
+                make_sample(footprint=9 * GIB),
+                make_sample(footprint=7 * GIB),
+            ]
+        )
         assert sampler.run_peak_footprint() == 9 * GIB
 
     def test_run_peak_footprint_without_samples_is_zero(self):

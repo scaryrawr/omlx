@@ -199,6 +199,4 @@ def matmul(xa: mx.array, xs: mx.array, wb: mx.array, ws: mx.array) -> mx.array:
         threadgroup=(256, 1, 1),
         output_shapes=[(rows, out)],
         output_dtypes=[mx.bfloat16],
-    )[
-        0
-    ]
+    )[0]

@@ -695,7 +695,7 @@ class TestMemoryByteLRU:
             max_memory_bytes=3 * 32,
         )
         try:
-            for i, h in enumerate(["h0", "h1", "h2", "h3"]):
+            for _i, h in enumerate(["h0", "h1", "h2", "h3"]):
                 cache.put(h, "m", mx.zeros((16,), dtype=mx.bfloat16))
             assert cache.get("h0", "m") is None
             assert cache.get("h1", "m") is not None

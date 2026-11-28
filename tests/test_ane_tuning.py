@@ -280,6 +280,7 @@ async def test_tuner_recommends_best_combined_split(monkeypatch):
 
     monkeypatch.setattr(ane_tuning, "_measure_candidate", measure)
     monkeypatch.setattr(ane_tuning, "_calibrate_components", calibrate)
+
     async def get_engine(*args, **kwargs):
         return object()
 
@@ -290,9 +291,7 @@ async def test_tuner_recommends_best_combined_split(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
 
@@ -359,9 +358,7 @@ async def test_fused_tuner_verifies_the_actual_calibrated_worker_counts(monkeypa
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
 
@@ -424,9 +421,7 @@ async def test_fused_tuner_can_spend_runner_up_slot_on_gdn(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
 
@@ -500,9 +495,7 @@ async def test_full_model_gdn_correction_precedes_worker_runner_up(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
 
@@ -533,12 +526,11 @@ async def test_tuner_keeps_gpu_for_sub_noise_gain(monkeypatch):
         }
 
     async def calibrate(run, engine, settings):
-        return ane_tuning._CalibrationChoice(
-            0.5, 0.125, 0.2, True, 0.5, True, 8, True
-        )
+        return ane_tuning._CalibrationChoice(0.5, 0.125, 0.2, True, 0.5, True, 8, True)
 
     monkeypatch.setattr(ane_tuning, "_measure_candidate", measure)
     monkeypatch.setattr(ane_tuning, "_calibrate_components", calibrate)
+
     async def get_engine(*args, **kwargs):
         return object()
 
@@ -549,9 +541,7 @@ async def test_tuner_keeps_gpu_for_sub_noise_gain(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
 
@@ -583,9 +573,7 @@ def test_required_mlp_execution_cannot_be_masked_by_gdn():
 
     assert ane_tuning._ane_execution_observed(trace, require_mlp=True) is False
     assert (
-        ane_tuning._ane_execution_observed(
-            trace, require_mlp=True, require_gdn=True
-        )
+        ane_tuning._ane_execution_observed(trace, require_mlp=True, require_gdn=True)
         is False
     )
 
@@ -780,6 +768,7 @@ async def test_tuner_preserves_partial_matrix_and_failure_reason(monkeypatch):
 
     monkeypatch.setattr(ane_tuning, "_measure_candidate", measure)
     monkeypatch.setattr(ane_tuning, "_calibrate_components", calibrate)
+
     async def get_engine(*args, **kwargs):
         return object()
 
@@ -790,9 +779,7 @@ async def test_tuner_preserves_partial_matrix_and_failure_reason(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
     snapshot = ane_tuning.run_snapshot(run)
@@ -887,9 +874,7 @@ async def test_failed_refinement_keeps_the_verified_prediction(monkeypatch):
         get_loaded_model_ids=lambda: [],
         get_engine=get_engine,
     )
-    run = ane_tuning.create_run(
-        ane_tuning.ANETuningRequest(model_id="qwen", repeats=1)
-    )
+    run = ane_tuning.create_run(ane_tuning.ANETuningRequest(model_id="qwen", repeats=1))
 
     await ane_tuning.run_tuning(run, pool)
     snapshot = ane_tuning.run_snapshot(run)

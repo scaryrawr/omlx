@@ -1273,9 +1273,7 @@ def _kv_bytes_per_token_per_layer(config: dict[str, Any]) -> int:
         text_config = config.get("text_config")
         layer_config = text_config if isinstance(text_config, dict) else config
         layer_types = layer_config.get("layer_types")
-        if config.get("model_type") == "glm5_next" and isinstance(
-            layer_types, list
-        ):
+        if config.get("model_type") == "glm5_next" and isinstance(layer_types, list):
             num_layers = _config_int(config, "num_hidden_layers", 0)
             sparse_layers = sum(
                 layer_type != "linear_attention" for layer_type in layer_types
@@ -1554,9 +1552,9 @@ def inspect_safetensors_layout(model_path: str | Path) -> ModelLayout:
                 elif split_units:
                     kind = _tensor_split_kind(name)
                     if kind is not None:
-                        split_sizes.setdefault(layer_index, [0, 0])[
-                            kind
-                        ] += tensor_bytes
+                        split_sizes.setdefault(layer_index, [0, 0])[kind] += (
+                            tensor_bytes
+                        )
             tensor_count += 1
         intervals.sort()
         for previous, current in zip(intervals, intervals[1:]):

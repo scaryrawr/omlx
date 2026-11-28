@@ -30,6 +30,7 @@ assertion policy).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -140,10 +141,8 @@ class CheckpointExpertStore:
 
     def __del__(self):
         for fd in self._fds.values():
-            try:
+            with contextlib.suppress(Exception):
                 os.close(fd)
-            except Exception:
-                pass
 
     def __bool__(self) -> bool:
         return bool(self._specs)
@@ -222,8 +221,9 @@ class _GLUStoreView:
     file. The view hides the difference from :class:`ExpertCache`.
     """
 
-    def __init__(self, store: CheckpointExpertStore, prefix: str,
-                 per_expert: bool = False):
+    def __init__(
+        self, store: CheckpointExpertStore, prefix: str, per_expert: bool = False
+    ):
         self._store = store
         self._prefix = prefix  # stacked: the GLU path; per-expert: its parent
         self._per_expert = per_expert
@@ -952,7 +952,7 @@ def _resolve_model_dir(model_path: str | Path) -> Path | None:
         )
     except Exception:
         logger.warning(
-            "moe expert offload: cannot resolve %r to a local " "checkpoint directory",
+            "moe expert offload: cannot resolve %r to a local checkpoint directory",
             str(model_path),
         )
         return None
@@ -1308,8 +1308,10 @@ def estimate_offload_admission_bytes(
                     nvfp4.add(name.rsplit(".", 2)[0])
                 elif len(shape) == 3:
                     parts = name.rsplit(".", 2)
-                    if len(parts) == 3 and parts[1] in projs and parts[2] in (
-                        "weight", "scales", "biases"
+                    if (
+                        len(parts) == 3
+                        and parts[1] in projs
+                        and parts[2] in ("weight", "scales", "biases")
                     ):
                         b = stacked.setdefault(
                             parts[0], {"bytes": 0, "fields": set(), "e": set()}
@@ -1412,8 +1414,7 @@ def release_moe_offload_slots(caches, need_bytes=None, reclaim=None) -> int:
                 for c in caches
             ]
             covered = sum(
-                max(0, c.capacity - t) * c.expert_bytes
-                for c, t in zip(caches, targets)
+                max(0, c.capacity - t) * c.expert_bytes for c, t in zip(caches, targets)
             )
             if covered >= need_bytes:
                 break

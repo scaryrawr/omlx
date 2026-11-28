@@ -52,7 +52,8 @@ class TestRemoteCodePreflight:
         )
         actual = loader.call_args.kwargs
         assert actual["tokenizer_config"] == {
-            "trust_remote_code": trusted, "tool_parser_type": "k2_horizon"
+            "trust_remote_code": trusted,
+            "tool_parser_type": "k2_horizon",
         }
         assert actual["trust_remote_code"] is trusted
         assert options["trust_remote_code"] is not trusted
@@ -679,7 +680,9 @@ class TestVlmMtpPreLoadDispatch:
         text = {"num_nextn_predict_layers": 3, "dspark_block_size": 5}
         path = _write_config(
             tmp_path,
-            json.dumps({"model_type": "deepseek_v41", "vision_config": {}, "text_config": text}),
+            json.dumps(
+                {"model_type": "deepseek_v41", "vision_config": {}, "text_config": text}
+            ),
         )
         _write_mtp_index(tmp_path, has_mtp=True)
         settings = types.SimpleNamespace(mtp_enabled=True, mtp_adaptive_max_depth=depth)
@@ -974,8 +977,8 @@ class TestCheckpointHasMtpWeights:
         assert model_loading._checkpoint_has_mtp_weights(str(tmp_path)) is False
 
     def test_returns_true_when_later_shard_has_mtp(self, tmp_path):
-        from safetensors.numpy import save_file
         import numpy as np
+        from safetensors.numpy import save_file
 
         save_file(
             {
@@ -1051,14 +1054,14 @@ class TestExpandPerLayerQuantKeys:
 
         model_loading.expand_per_layer_quant_keys(cfg)
 
-        assert (
-            cfg["quantization"]["model.layers.1.mlp.gate.proj"]
-            == {"bits": 8, "group_size": 64}
-        )
-        assert (
-            cfg["quantization"]["model.layers.2.mlp.gate.proj"]
-            == {"bits": 8, "group_size": 64}
-        )
+        assert cfg["quantization"]["model.layers.1.mlp.gate.proj"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
+        assert cfg["quantization"]["model.layers.2.mlp.gate.proj"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
         # The original key is preserved (other code paths may still use it)
         assert "model.layers.1.mlp.gate" in cfg["quantization"]
 

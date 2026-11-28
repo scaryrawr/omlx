@@ -48,7 +48,7 @@ def _scutil_local_hostname() -> str | None:
     if sys.platform != "darwin":
         return None
     try:
-        result = subprocess.run(  # noqa: S603 - fixed system executable
+        result = subprocess.run(
             ["/usr/sbin/scutil", "--get", "LocalHostName"],
             capture_output=True,
             text=True,

@@ -91,8 +91,7 @@ def _minimax_m3_adaptive_prefill_config(
         prefill_step_size != 2048
         or os.environ.get("MLX_MINIMAX_M3_ADAPTIVE_PREFILL_STEP", "1") != "1"
         or not (
-            _declares_minimax_m3(model)
-            or _declares_minimax_m3_model_path(model_path)
+            _declares_minimax_m3(model) or _declares_minimax_m3_model_path(model_path)
         )
     ):
         return None

@@ -51,8 +51,8 @@ def _stub():
     stub._extract_cache_states = lambda caches: Scheduler._extract_cache_states(
         stub, caches
     )
-    stub._extract_snapshot_cache_states = (
-        lambda caches: Scheduler._extract_snapshot_cache_states(stub, caches)
+    stub._extract_snapshot_cache_states = lambda caches: (
+        Scheduler._extract_snapshot_cache_states(stub, caches)
     )
     return stub
 

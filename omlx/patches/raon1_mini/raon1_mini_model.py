@@ -608,12 +608,15 @@ def fused_mhc_norm(rows, branch, post, res, mhc, do_mix, norm, with_f32=False):
     if isinstance(branch, tuple):
         mo, mw, sh = branch
         k = mw.shape[-1]
-        kernel, inputs = decode_kernel("pass1_moe"), [
-            rows,
-            mo.reshape(n, k, h),
-            mw.reshape(n, k),
-            sh.reshape(n, h),
-        ]
+        kernel, inputs = (
+            decode_kernel("pass1_moe"),
+            [
+                rows,
+                mo.reshape(n, k, h),
+                mw.reshape(n, k),
+                sh.reshape(n, h),
+            ],
+        )
         template.append(("TOPK", k))
     else:
         kernel, inputs = _fused_kernels()[0], [rows, branch]
@@ -785,9 +788,17 @@ from mlx_lm.models.switch_layers import (
 
 # rda_config keys this model reads; any other key is an error.
 _RDA_CONFIG_KEYS = frozenset(
-    {"num_heads", "head_dim", "conv_kernel_size", "full_rank_gate", "gate_lower_bound", "rda_layers",
-     "mla_layers"}
+    {
+        "num_heads",
+        "head_dim",
+        "conv_kernel_size",
+        "full_rank_gate",
+        "gate_lower_bound",
+        "rda_layers",
+        "mla_layers",
+    }
 )
+
 
 # Adapted from mlx-lm (MIT License).
 # SiTU activation: beta * tanh(gate / beta) * sigmoid(gate) times linear_beta * tanh(x / linear_beta), computed in float32
@@ -880,7 +891,9 @@ class ModelArgs(BaseModelArgs):
         unknown = set(self.rda_config) - _RDA_CONFIG_KEYS
         missing = {"rda_layers", "mla_layers"} - set(self.rda_config)
         if unknown or missing:
-            raise ValueError(f"rda_config keys: unknown {sorted(unknown)}, missing {sorted(missing)}")
+            raise ValueError(
+                f"rda_config keys: unknown {sorted(unknown)}, missing {sorted(missing)}"
+            )
         if not self.rda_config.get("full_rank_gate", True):
             raise ValueError("Only full-rank RDA gates are supported")
         linear = self.rda_config["rda_layers"]
@@ -1638,8 +1651,9 @@ class MergedSwitchGLU(nn.Module):
             )
         else:
             # the matrix kernels tile by output width: keep the shapes of the separate products
-            x_up, x_gate = self._half(x, idx, sort, 0, h), self._half(
-                x, idx, sort, h, 2 * h
+            x_up, x_gate = (
+                self._half(x, idx, sort, 0, h),
+                self._half(x, idx, sort, h, 2 * h),
             )
         x = self.down_proj(self.activation(x_up, x_gate), idx, sorted_indices=sort)
         if sort:
@@ -1767,9 +1781,7 @@ class DecoderLayer(nn.Module):
         x = self.post_attention_layernorm(MHC.aggregate(rows, pre)).reshape(
             batch, length, hidden
         )
-        branch = (self.moe(x) if self.is_moe else self.mlp(x)).reshape(
-            -1, hidden
-        )
+        branch = (self.moe(x) if self.is_moe else self.mlp(x)).reshape(-1, hidden)
         return MHC.mix(rows, branch, post, residual).reshape(stream.shape)
 
 
@@ -1847,9 +1859,9 @@ class RaonModel(nn.Module):
                 rows, branch, post, res, layer.mlp_raon_mhc, True
             )
             x = layer.post_attention_layernorm(agg).reshape(batch, length, hidden)
-            branch = (
-                layer.moe(x) if layer.is_moe else layer.mlp(x)
-            ).reshape(-1, hidden)
+            branch = (layer.moe(x) if layer.is_moe else layer.mlp(x)).reshape(
+                -1, hidden
+            )
         rows = MHC.mix(rows, branch, post, res)
         stream = rows.reshape(batch, length, self.streams, hidden)
         return self.norm(stream.astype(mx.float32).mean(axis=2).astype(h.dtype))
@@ -1887,9 +1899,7 @@ class RaonModel(nn.Module):
                     with_f32=True,
                 )
                 shape = (batch, length, hidden)
-                branch = layer.moe.parts(
-                    x.reshape(shape), x32.reshape(shape)
-                )
+                branch = layer.moe.parts(x.reshape(shape), x32.reshape(shape))
             else:
                 rows, x, post, res = fused_mhc_norm(
                     rows,
@@ -1901,9 +1911,9 @@ class RaonModel(nn.Module):
                     layer.post_attention_layernorm,
                 )
                 x = x.reshape(batch, length, hidden)
-                branch = (
-                    layer.moe(x) if layer.is_moe else layer.mlp(x)
-                ).reshape(-1, hidden)
+                branch = (layer.moe(x) if layer.is_moe else layer.mlp(x)).reshape(
+                    -1, hidden
+                )
         if isinstance(branch, tuple):
             return fused_final(rows, branch, post, res, self.norm).reshape(
                 batch, length, hidden
@@ -1956,8 +1966,13 @@ class Model(nn.Module):
         weights = dict(weights)
         args = self.args
         for k, v in weights.items():
-            if k.endswith("self_attn.f_a_proj.weight") and v.shape[0] != args.rda_decay_rank:
-                raise ValueError(f"{k} has {v.shape[0]} rows but rda_decay_rank is {args.rda_decay_rank}")
+            if (
+                k.endswith("self_attn.f_a_proj.weight")
+                and v.shape[0] != args.rda_decay_rank
+            ):
+                raise ValueError(
+                    f"{k} has {v.shape[0]} rows but rda_decay_rank is {args.rda_decay_rank}"
+                )
         for i in range(
             args.num_hidden_layers,
             args.num_hidden_layers + args.num_nextn_predict_layers,
@@ -2032,24 +2047,28 @@ class Model(nn.Module):
 
     @property
     def cast_predicate(self):
-        return lambda path: not (
-            path.endswith(
-                (
-                    "A_log",
-                    "dt_bias",
-                    "e_score_correction_bias",
-                    "res.eta",
-                    "global_scale",
-                    "reasoning_effort_steering",
+        return lambda path: (
+            not (
+                path.endswith(
+                    (
+                        "A_log",
+                        "dt_bias",
+                        "e_score_correction_bias",
+                        "res.eta",
+                        "global_scale",
+                        "reasoning_effort_steering",
+                    )
                 )
+                or (self.args.raon_fp32_export_head and path == "lm_head.weight")
             )
-            or (self.args.raon_fp32_export_head and path == "lm_head.weight")
         )
 
     @property
     def quant_predicate(self):
-        return lambda path, module: not (
-            path.endswith("moe.gate")
-            or isinstance(module, GlobalScaledLinear)
-            or (self.args.raon_fp32_export_head and path == "lm_head")
+        return lambda path, module: (
+            not (
+                path.endswith("moe.gate")
+                or isinstance(module, GlobalScaledLinear)
+                or (self.args.raon_fp32_export_head and path == "lm_head")
+            )
         )

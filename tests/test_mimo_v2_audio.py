@@ -108,7 +108,12 @@ def test_audio_tokenizer_uses_reference_hybrid_attention_schedule():
         }
     )
 
-    assert [layer.self_attn.window_size for layer in encoder.layers] == [128, -1, 128, -1]
+    assert [layer.self_attn.window_size for layer in encoder.layers] == [
+        128,
+        -1,
+        128,
+        -1,
+    ]
 
 
 def test_audio_bridge_local_transformer_uses_reference_causal_mask():

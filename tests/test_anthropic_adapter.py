@@ -6,13 +6,11 @@ Tests the AnthropicAdapter class for converting between Anthropic Messages API
 format and internal oMLX format.
 """
 
-import json
 import pytest
 
 from omlx.api.adapters.anthropic import AnthropicAdapter
 from omlx.api.adapters.base import (
     BaseAdapter,
-    InternalMessage,
     InternalRequest,
     InternalResponse,
     StreamChunk,
@@ -20,9 +18,6 @@ from omlx.api.adapters.base import (
 from omlx.api.anthropic_models import (
     AnthropicMessage,
     AnthropicTool,
-    ContentBlockText,
-    ContentBlockToolResult,
-    ContentBlockToolUse,
     MessagesRequest,
 )
 
@@ -620,8 +615,8 @@ class TestAnthropicToolUseConversion:
 
     def test_tool_use_block_converted_to_calling_tool_format(self):
         """tool_use blocks should be converted to [Calling tool: ...] format, not [Tool call: ...]."""
+        from omlx.api.anthropic_models import AnthropicMessage, MessagesRequest
         from omlx.api.anthropic_utils import convert_anthropic_to_internal
-        from omlx.api.anthropic_models import MessagesRequest, AnthropicMessage
 
         request = MessagesRequest(
             model="test-model",
@@ -670,10 +665,11 @@ class TestAnthropicAudioConversion:
 
     def test_input_audio_block_preserved_with_preserve_images(self):
         """input_audio blocks should be passed through when preserve_images=True."""
-        from omlx.api.anthropic_utils import convert_anthropic_to_internal
-        from omlx.api.anthropic_models import MessagesRequest, AnthropicMessage
-
         import base64
+
+        from omlx.api.anthropic_models import AnthropicMessage, MessagesRequest
+        from omlx.api.anthropic_utils import convert_anthropic_to_internal
+
         fake_audio = base64.b64encode(b"\x00" * 100).decode()
 
         request = MessagesRequest(
@@ -696,9 +692,7 @@ class TestAnthropicAudioConversion:
             ],
         )
 
-        messages = convert_anthropic_to_internal(
-            request, preserve_images=True
-        )
+        messages = convert_anthropic_to_internal(request, preserve_images=True)
 
         assert len(messages) == 1
         content = messages[0]["content"]
@@ -715,10 +709,11 @@ class TestAnthropicAudioConversion:
 
     def test_input_audio_block_dropped_without_preserve_images(self):
         """input_audio blocks should be dropped when preserve_images=False."""
-        from omlx.api.anthropic_utils import convert_anthropic_to_internal
-        from omlx.api.anthropic_models import MessagesRequest, AnthropicMessage
-
         import base64
+
+        from omlx.api.anthropic_models import AnthropicMessage, MessagesRequest
+        from omlx.api.anthropic_utils import convert_anthropic_to_internal
+
         fake_audio = base64.b64encode(b"\x00" * 100).decode()
 
         request = MessagesRequest(
@@ -741,9 +736,7 @@ class TestAnthropicAudioConversion:
             ],
         )
 
-        messages = convert_anthropic_to_internal(
-            request, preserve_images=False
-        )
+        messages = convert_anthropic_to_internal(request, preserve_images=False)
 
         content = messages[0]["content"]
         # Without preserve_images, content should be string, not list
@@ -752,10 +745,11 @@ class TestAnthropicAudioConversion:
 
     def test_audio_only_message(self):
         """A message with only audio blocks should still produce valid output."""
-        from omlx.api.anthropic_utils import convert_anthropic_to_internal
-        from omlx.api.anthropic_models import MessagesRequest, AnthropicMessage
-
         import base64
+
+        from omlx.api.anthropic_models import AnthropicMessage, MessagesRequest
+        from omlx.api.anthropic_utils import convert_anthropic_to_internal
+
         fake_audio = base64.b64encode(b"\x00" * 100).decode()
 
         request = MessagesRequest(
@@ -777,9 +771,7 @@ class TestAnthropicAudioConversion:
             ],
         )
 
-        messages = convert_anthropic_to_internal(
-            request, preserve_images=True
-        )
+        messages = convert_anthropic_to_internal(request, preserve_images=True)
 
         assert len(messages) == 1
         content = messages[0]["content"]
@@ -849,8 +841,7 @@ class TestClientBudgetMarkerStripping:
                 AnthropicMessage(
                     role="system",
                     content=(
-                        "Inline system."
-                        "\n\n<total_tokens>42 tokens left</total_tokens>"
+                        "Inline system.\n\n<total_tokens>42 tokens left</total_tokens>"
                     ),
                 ),
                 AnthropicMessage(role="user", content="Hello"),
@@ -861,9 +852,7 @@ class TestClientBudgetMarkerStripping:
             request, consolidate_system_messages=False
         )
 
-        system_contents = [
-            m["content"] for m in messages if m["role"] == "system"
-        ]
+        system_contents = [m["content"] for m in messages if m["role"] == "system"]
         assert any(c == "Inline system." for c in system_contents)
         assert all("<total_tokens>" not in c for c in system_contents)
 
@@ -877,8 +866,7 @@ class TestClientBudgetMarkerStripping:
                 AnthropicMessage(
                     role="user",
                     content=(
-                        "Quoting a log line: "
-                        "<total_tokens>7 tokens left</total_tokens>"
+                        "Quoting a log line: <total_tokens>7 tokens left</total_tokens>"
                     ),
                 ),
             ],

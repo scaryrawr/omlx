@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bit-exactness tests for the DSA indexer score kernels.
 
 dsa_indexer_scores_mma (zero-per-head-barrier from-scratch simdgroup GEMM,
@@ -71,9 +72,7 @@ def test_unaligned_tail_matches_zero_padded_reference(L, P, dtype):
         pooled,
         ((0, 0), (0, 0), (0, padded_p - P), (0, 0)),
     )
-    padded_weights = mx.pad(
-        weights, ((0, 0), (0, padded_l - L), (0, 0))
-    )
+    padded_weights = mx.pad(weights, ((0, 0), (0, padded_l - L), (0, 0)))
     reference = glm_fast.dsa_indexer_scores(
         padded_q,
         padded_pool,
@@ -228,9 +227,7 @@ def test_mma_scores_batched():
     ref = glm_fast.dsa_indexer_scores(
         q, k, w, causal=False, mask_ratio=4, mask_q_offset=4096
     )
-    got = glm_fast.dsa_indexer_scores_mma(
-        q, k, w, mask_ratio=4, mask_q_offset=4096
-    )
+    got = glm_fast.dsa_indexer_scores_mma(q, k, w, mask_ratio=4, mask_q_offset=4096)
     assert _bit_equal(ref, got)
 
 
@@ -241,7 +238,7 @@ def test_mma_scores_batched():
 def test_mma_scores_rejects_unsupported_configs():
     # fp16 (kernel is bf16-only)
     q, k, w = _inputs(128, 512)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         glm_fast.dsa_indexer_scores_mma(
             q.astype(mx.float16), k.astype(mx.float16), w.astype(mx.float16)
         )
@@ -249,10 +246,10 @@ def test_mma_scores_rejects_unsupported_configs():
     mx.random.seed(0)
     q32 = mx.random.uniform(-0.5, 0.5, (1, 32, 128, 128)).astype(mx.bfloat16)
     w32 = mx.random.uniform(-0.5, 0.5, (1, 128, 32)).astype(mx.bfloat16)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         glm_fast.dsa_indexer_scores_mma(q32, k, w32)
     # weights rank 4 (LH layout only)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         glm_fast.dsa_indexer_scores_mma(q, k, w[..., None])
 
 
@@ -266,9 +263,7 @@ def test_mma_topk_selection_matches_steel():
     ref = glm_fast.dsa_indexer_scores(
         q, k, w, causal=False, mask_ratio=4, mask_q_offset=4096
     )
-    got = glm_fast.dsa_indexer_scores_mma(
-        q, k, w, mask_ratio=4, mask_q_offset=4096
-    )
+    got = glm_fast.dsa_indexer_scores_mma(q, k, w, mask_ratio=4, mask_q_offset=4096)
     idx_ref = glm_fast.dsa_topk_indices(ref, 512)
     idx_got = glm_fast.dsa_topk_indices(got, 512)
     mx.eval(idx_ref, idx_got)

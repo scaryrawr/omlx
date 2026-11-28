@@ -818,9 +818,9 @@ class TestDisabledWhenCeilingZero:
             "from dynamic-on-reclaim-tier (close other apps)"
         )
         assert scheduler._prefill_headroom_safety == 0.95
-        assert (
-            scheduler._memory_hard_limit_bytes == dynamic_b
-        ), "hard limit must be min of the three components"
+        assert scheduler._memory_hard_limit_bytes == dynamic_b, (
+            "hard limit must be min of the three components"
+        )
 
     @pytest.mark.asyncio
     async def test_propagates_hot_cache_reservation_for_binding_messages(
@@ -1566,21 +1566,21 @@ class TestMetalWiredLimit:
         enforcer = ProcessMemoryEnforcer(
             engine_pool=mock_engine_pool, memory_guard_tier="balanced"
         )
-        with caplog.at_level("WARNING", logger="omlx.process_memory_enforcer"):
-            with (
-                patch("omlx.settings.get_system_memory", return_value=512 * 1024**3),
-                patch(
-                    "omlx.process_memory_enforcer.get_effective_metal_cap_bytes",
-                    return_value=128 * 1024**3,  # Apple default below static ceiling
-                ),
-                patch(
-                    "omlx.process_memory_enforcer.get_iogpu_wired_limit_bytes",
-                    return_value=0,  # sysctl unset; cap comes from working set
-                ),
-                patch("omlx.process_memory_enforcer.mx") as mock_mx,
-                patch.object(asyncio, "create_task", side_effect=_close_coro),
-            ):
-                enforcer.start()
+        with (
+            caplog.at_level("WARNING", logger="omlx.process_memory_enforcer"),
+            patch("omlx.settings.get_system_memory", return_value=512 * 1024**3),
+            patch(
+                "omlx.process_memory_enforcer.get_effective_metal_cap_bytes",
+                return_value=128 * 1024**3,  # Apple default below static ceiling
+            ),
+            patch(
+                "omlx.process_memory_enforcer.get_iogpu_wired_limit_bytes",
+                return_value=0,  # sysctl unset; cap comes from working set
+            ),
+            patch("omlx.process_memory_enforcer.mx") as mock_mx,
+            patch.object(asyncio, "create_task", side_effect=_close_coro),
+        ):
+            enforcer.start()
         # balanced @ 512 GB static = 506 GB, clamped to the 5%-of-RAM
         # recommendation reserve for the admin banner (#2184). The scheduler
         # still clamps to the 128 GB effective cap, but MLX's wired limit is
@@ -1697,7 +1697,9 @@ class TestSingleModelMemoryPressure:
         assert entry.abort_requested is False
 
     @pytest.mark.asyncio
-    async def test_hard_pressure_terminates_running_video(self, enforcer, tmp_path, caplog):
+    async def test_hard_pressure_terminates_running_video(
+        self, enforcer, tmp_path, caplog
+    ):
         engine = VideoEngine(str(tmp_path))
         process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -1712,10 +1714,14 @@ class TestSingleModelMemoryPressure:
         enforcer._engine_pool._entries = {"video": entry}
         enforcer._engine_pool._find_lru_victim.return_value = None
         try:
-            with patch.object(enforcer, "_current_usage_bytes", return_value=11 * 1024**3):
+            with patch.object(
+                enforcer, "_current_usage_bytes", return_value=11 * 1024**3
+            ):
                 await enforcer._check_and_enforce()
             assert process.returncode == -signal.SIGTERM
-            assert "Hard memory pressure: aborted 1 request(s) on 'video'" in caplog.text
+            assert (
+                "Hard memory pressure: aborted 1 request(s) on 'video'" in caplog.text
+            )
         finally:
             if process.returncode is None:
                 process.terminate()
@@ -2217,9 +2223,9 @@ class TestMemoryLimitPropagation:
         matching = [
             r for r in caplog.records if "could not resolve scheduler" in r.message
         ]
-        assert (
-            len(matching) == 1
-        ), f"expected 1 warning, got {[r.message for r in matching]}"
+        assert len(matching) == 1, (
+            f"expected 1 warning, got {[r.message for r in matching]}"
+        )
 
 
 class TestUnresolvableSchedulerWarning:
@@ -2355,9 +2361,9 @@ class TestUnresolvableSchedulerWarning:
         warnings = [
             r for r in caplog.records if "could not resolve scheduler" in r.getMessage()
         ]
-        assert (
-            warnings == []
-        ), f"Unloaded engine must not warn, got {len(warnings)} warning(s)"
+        assert warnings == [], (
+            f"Unloaded engine must not warn, got {len(warnings)} warning(s)"
+        )
 
     def test_no_warning_for_stopped_engine_during_unload(self, enforcer, caplog):
         """During EnginePool unload there is a short window where the engine
@@ -3022,9 +3028,7 @@ class TestWiredLimitSuggestionClamp:
         user_cap = 124518 * 1024**2  # highest whole-MiB value below 95%
         with (
             self._with_total(total),
-            patch.object(
-                pme, "get_iogpu_wired_limit_bytes", return_value=user_cap
-            ),
+            patch.object(pme, "get_iogpu_wired_limit_bytes", return_value=user_cap),
             patch.object(pme.mx, "set_wired_limit", return_value=0),
             caplog.at_level("WARNING", logger="omlx.process_memory_enforcer"),
         ):
@@ -3036,9 +3040,7 @@ class TestWiredLimitSuggestionClamp:
         user_cap = total - 2 * 1024**3  # 510 GiB, the crash-loop setting
         with (
             self._with_total(total),
-            patch.object(
-                pme, "get_iogpu_wired_limit_bytes", return_value=user_cap
-            ),
+            patch.object(pme, "get_iogpu_wired_limit_bytes", return_value=user_cap),
             patch.object(pme.mx, "set_wired_limit", return_value=0),
             caplog.at_level("WARNING", logger="omlx.process_memory_enforcer"),
         ):
@@ -3436,9 +3438,9 @@ async def test_image_cache_reclaimed_before_model_eviction(
         with patch.object(
             enforcer,
             "_current_usage_bytes",
-            side_effect=lambda: initial_usage
-            - retained_bytes
-            + images._image_decode_cache_bytes,
+            side_effect=lambda: (
+                initial_usage - retained_bytes + images._image_decode_cache_bytes
+            ),
         ):
             await enforcer._check_and_enforce()
         assert not images._image_decode_cache
