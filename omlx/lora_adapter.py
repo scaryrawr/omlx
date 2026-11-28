@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Protocol, TypeGuard
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx_lm.models import switch_layers as lm_switch_layers
 
 from .exceptions import AdapterError, AdapterShapeError, UnsupportedAdapterError
 from .patches.inkling2 import INKLING2_MODEL_TYPES
@@ -803,19 +804,23 @@ def _target_name(
 
 
 def _linear_features(name: str, target: nn.Module, adapter: Path) -> tuple[int, int]:
-    """(in_features, out_features) of a Linear or QuantizedLinear.
+    """(in_features, out_features) of a dense or quantized linear.
 
     Any other module type is an AdapterShapeError. oMLX cannot know how a custom
     wrapper applies its weights, so it fails closed.
     """
+    from .oqh.modules import OQH_DENSE
+
     if isinstance(target, nn.QuantizedLinear):
         # scales.shape[-1] * group_size is exact for every bit width and mode.
         return target.scales.shape[-1] * target.group_size, target.weight.shape[0]
     if isinstance(target, nn.Linear):
         return target.weight.shape[-1], target.weight.shape[0]
+    if type(target) in OQH_DENSE:
+        return target.input_dims, target.output_dims
     raise AdapterShapeError(
         f"Base module {name} is a {type(target).__name__}, not a Linear or "
-        "QuantizedLinear, so oMLX will not wrap it.",
+        "QuantizedLinear or oQh linear, so oMLX will not wrap it.",
         adapter,
     )
 
@@ -846,20 +851,20 @@ def _plan_replacement(
     stem = module.hf_path
     rank = source.config.rank
     if isinstance(module, _RoutedModule):
-        from mlx_lm.models import switch_layers as lm
+        from mlx_vlm.models import switch_layers as vlm_switch_layers
 
-        supported = type(parent) is lm.SwitchGLU and type(target) in (
-            lm.SwitchLinear,
-            lm.QuantizedSwitchLinear,
+        from .oqh.modules import OQH_SWITCH
+        from .oqh.runtime import _FusedSwitchGLU
+
+        parent_type = type(parent)
+        if issubclass(parent_type, _FusedSwitchGLU):
+            parent_type = parent_type.__bases__[1]
+        supported = any(
+            parent_type is layers.SwitchGLU and type(target)
+            in (layers.SwitchLinear, layers.QuantizedSwitchLinear, *OQH_SWITCH)
+            for layers in (lm_switch_layers, vlm_switch_layers)
         )
-        if not supported and type(parent).__module__ == "mlx_vlm.models.switch_layers":
-            from mlx_vlm.models import switch_layers as vlm
-
-            supported = type(parent) is vlm.SwitchGLU and type(target) in (
-                vlm.SwitchLinear,
-                vlm.QuantizedSwitchLinear,
-            )
-        if not supported or getattr(parent, "oqh_experts", None) is not None:
+        if not supported:
             raise AdapterShapeError(
                 f"Base module {name} is not a supported routed expert projection.",
                 source.path,
@@ -949,6 +954,8 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
     carries an adapter) therefore leaves the model unmodified. Returns the number of
     wrapped modules.
     """
+    from .oqh import runtime as oqh_runtime
+
     source = binding.source
     if lora_revision_of(model) is not None:
         raise AdapterShapeError(
@@ -1004,6 +1011,7 @@ def attach_lora(model: Any, binding: AdapterBinding) -> int:
         for replacement in reversed(installed):
             _install(replacement.parent, replacement.key, replacement.target)
         raise
+    oqh_runtime.release_wrapped(model)
     return len(plan)
 
 

@@ -18,7 +18,9 @@ import mlx.nn as nn
 import numpy as np
 import pytest
 from mlx.utils import tree_flatten
+from mlx_lm.utils import load_model
 
+from omlx.custom_kernels.oqh import fast as oqh_fast
 from omlx.exceptions import (
     AdapterError,
     AdapterShapeError,
@@ -46,6 +48,8 @@ from omlx.lora_adapter import (
     resolve_adapters,
 )
 from omlx.model_discovery import DiscoveredModel
+from omlx.oqh.loading import install_load_hook
+from tests.test_oqh import _tiny_qwen
 
 CONFIG = "adapter_config.json"
 WEIGHTS = "adapter_model.safetensors"
@@ -1468,6 +1472,88 @@ def test_invalid_routed_adapter_is_rejected(
     assert layer.mlp.dense is dense
     assert switch.down_proj is down
     assert lora_revision_of(model) is None
+
+
+@pytest.mark.skipif(not oqh_fast.has_native(), reason="oQh kernels not built")
+@pytest.mark.parametrize("group_size", [None, 128], ids=["row", "group"])
+def test_lora_model_entry_runs_on_fused_oqh_layers(
+    tmp_path, write_lora_adapter, group_size
+):
+    path, ref, _ = _tiny_qwen(tmp_path, True, group_size)
+    install_load_hook()
+    model, _ = load_model(path, strict=True)
+    layer = model.model.layers[0]
+    rank, experts = 2, layer.mlp.num_experts
+    stem = "model.layers.0.mlp.experts"
+    rng = np.random.default_rng(42)
+    a = rng.normal(0, 0.1, (experts, rank, 256)).astype(np.float32)
+    b = rng.normal(0, 0.1, (256, rank, experts)).astype(np.float32)
+    adapter = write_lora_adapter(
+        tmp_path / "adapter",
+        rank=rank,
+        alpha=4,
+        modules={
+            "model.layers.0.mlp.shared_expert.down_proj": (256, 256),
+            "model.layers.0.linear_attn.out_proj": (1024, 256),
+        },
+        tensors={
+            f"base_model.model.{stem}.lora_A.weight": a.reshape(experts * rank, 256),
+            f"base_model.model.{stem}.lora_B.weight": b.reshape(256, rank * experts),
+        },
+        config={"target_parameters": [stem + ".down_proj"]},
+    )
+    weights = mx.load(str(adapter / WEIGHTS))
+    cases = []
+    for name, projection in (
+        ("mlp.shared_expert.down_proj", layer.mlp.shared_expert.down_proj),
+        ("linear_attn.out_proj", layer.linear_attn.out_proj),
+    ):
+        x = mx.array(rng.standard_normal((1, 3, projection.input_dims))).astype(
+            mx.bfloat16
+        )
+        prefix = f"base_model.model.model.layers.0.{name}"
+        expected = np.array(projection(x).astype(mx.float32)) + folded_output(
+            np.array(x.astype(mx.float32)),
+            np.zeros((projection.output_dims, projection.input_dims)),
+            None,
+            np.array(weights[f"{prefix}.lora_A.weight"]),
+            np.array(weights[f"{prefix}.lora_B.weight"]),
+            2,
+        )
+        cases.append((name, x, expected))
+    routed = []
+    delta = 2 * np.einsum("ore,eri->eoi", b, a)
+    for routes, sorted_indices in (
+        (np.array([[2, 0], [1, 2]]), False),
+        (np.array([0, 1, 2, 2]), True),
+    ):
+        x = mx.array(rng.standard_normal((*routes.shape, 1, 256))).astype(mx.bfloat16)
+        baseline = layer.mlp.switch_mlp.down_proj(x, mx.array(routes), sorted_indices)
+        expected = np.array(baseline.astype(mx.float32)) + np.array(
+            x.astype(mx.float32)
+        ) @ np.swapaxes(delta[routes], -1, -2)
+        routed.append((x, routes, sorted_indices, expected))
+    binding = bind_adapter(parse_adapter(adapter), BaseRef("base", path))
+    assert attach_lora(model, binding) == attach_lora(ref, binding) == 3
+    for name, x, expected in cases:
+        actual = dict(layer.named_modules())[name](x)
+        np.testing.assert_allclose(
+            np.array(actual.astype(mx.float32)), expected, atol=0.01, rtol=0.01
+        )
+    for x, routes, sorted_indices, expected in routed:
+        actual = layer.mlp.switch_mlp.down_proj(x, mx.array(routes), sorted_indices)
+        np.testing.assert_allclose(
+            np.array(actual.astype(mx.float32)), expected, atol=0.01, rtol=0.01
+        )
+    for length in (1, 40):
+        x = mx.array(rng.standard_normal((1, length, 256))).astype(mx.bfloat16)
+        actual = layer.mlp(x)
+        np.testing.assert_allclose(
+            np.array(actual.astype(mx.float32)),
+            np.array(ref.model.layers[0].mlp(x).astype(mx.float32)),
+            atol=0.01,
+            rtol=0.03,
+        )
 
 
 def effective_parts(linear, quant):
