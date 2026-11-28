@@ -1,4 +1,5 @@
 <div x-data="adapterBasePicker({{ adapter_picker_id }})" x-id="['adapter-base', 'adapter-base-hint']"
+     x-init="$watch('selectedModel?.id === adapterId ? selectedModel.loaded || selectedModel.is_loading : null', active => { if (active !== null) init(true); })"
      @models-reloaded.window="init(true)" class="space-y-2">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-6">
         <div class="min-w-0">

@@ -266,6 +266,94 @@ picker.loadModels = async () => { picker.models = []; };
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_adapter_base_picker_refreshes_after_settings_auto_unload():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for dashboard behavior tests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('omlx_web/static/js/dashboard.js', 'utf8');
+const template = fs.readFileSync('omlx_web/templates/dashboard/_adapter_base_picker.html', 'utf8');
+const wiring = template.match(/x-init="([^"]+)"/)?.[1];
+assert.ok(wiring, 'the picker must observe adapter activity');
+const model = {
+    id: 'tuned', loaded: false, is_loading: false, is_pinned: false,
+    adapter: {base_model_id: 'base'},
+};
+const context = vm.createContext({
+    localStorage: {getItem: () => null},
+    window: {t: key => key}, console, alert: () => {},
+    fetch: async (url, options) => {
+        if (url === '/admin/api/models/tuned/settings/reset') {
+            assert.equal(options.method, 'POST');
+            model.loaded = false;
+            return {ok: true, json: async () => ({
+                settings: {}, requires_reload: true, auto_unloaded: true,
+            })};
+        }
+        if (url === '/admin/api/models') {
+            return {ok: true, json: async () => ({models: [{...model}]})};
+        }
+        assert.equal(url, '/admin/api/adapters/tuned/base');
+        return {ok: true, json: async () => ({
+            base_model_id: 'base', resolved_base_model_id: 'base',
+            candidates: ['base', 'draft'], can_change: !model.loaded && !model.is_loading,
+        })};
+    },
+});
+vm.runInContext(source, context);
+const state = context.dashboard();
+state.selectedModel = {...model};
+state.showModelSettingsModal = true;
+const picker = context.adapterBasePicker('tuned');
+picker.formatApiError = state.formatApiError;
+let expression;
+let notify;
+let refreshed;
+const component = vm.createContext({
+    get selectedModel() { return state.selectedModel; },
+    adapterId: picker.adapterId,
+    $watch: (watched, callback) => { expression = watched; notify = callback; },
+    init: preserveSelection => { refreshed = picker.init(preserveSelection); },
+});
+vm.runInContext(wiring, component);
+(async () => {
+    await picker.init();
+    picker.baseId = 'draft';
+    assert.equal(vm.runInContext(expression, component), false);
+    model.is_loading = true;
+    state.selectedModel = {...model};
+    assert.equal(vm.runInContext(expression, component), true);
+    notify(true);
+    await refreshed;
+    assert.equal(picker.canChange, false);
+    assert.equal(picker.baseId, 'draft');
+    model.is_loading = false;
+    model.loaded = true;
+    state.selectedModel = {...model};
+    assert.equal(vm.runInContext(expression, component), true, 'loading to loaded stays active');
+    state.settingsApply.mode = 'reset';
+    await state.runSettingsApply();
+    assert.equal(state.selectedModel.loaded, false);
+    assert.equal(state.selectedModel.id, 'tuned', 'the keyed picker stays mounted');
+    assert.equal(state.showModelSettingsModal, true);
+    assert.equal(vm.runInContext(expression, component), false);
+    notify(false);
+    await refreshed;
+    assert.equal(picker.canChange, true, 'the unloaded adapter can be rebound');
+    assert.equal(picker.baseId, 'draft', 'the unapplied base choice survives');
+    assert.equal(picker.savedBaseId, 'base');
+    assert.equal(picker.error, '');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_adapters_can_show_updates_and_report_unavailable_entries():
     node = shutil.which("node")
     if node is None:
