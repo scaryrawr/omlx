@@ -89,6 +89,10 @@ picker.loadModels = async () => {
     assert.equal(picker.modelSettings.temperature, 0.5, 'other edits survive');
     await picker.init();
     assert.equal(picker.baseId, 'Qwen-oQ8', 'reopening restores the saved choice');
+    picker.baseId = '';
+    await picker.init(true);
+    assert.equal(picker.baseId, '', 'refresh preserves an unapplied Automatic choice');
+    assert.equal(picker.savedBaseId, 'Qwen-oQ8');
     fail = true;
     picker.baseId = '';
     await picker.saveBase();
@@ -130,6 +134,7 @@ const issues = [{
     candidates: [], path: '/models/tuned',
 }];
 let candidates = ['old-local-checkpoint'];
+let nextCandidates = ['old-local-checkpoint', 'new-local-checkpoint'];
 let refreshed;
 let picker;
 const context = vm.createContext({
@@ -148,7 +153,7 @@ const context = vm.createContext({
     fetch: async (url, options) => {
         if (url === '/admin/api/reload') {
             assert.equal(options.method, 'POST');
-            candidates = [...candidates, 'new-local-checkpoint'];
+            candidates = nextCandidates;
             return {ok: true};
         }
         if (url === '/admin/api/models') {
@@ -179,6 +184,80 @@ picker.formatApiError = state.formatApiError;
     ]);
     assert.equal(picker.baseId, 'old-local-checkpoint', 'the unapplied choice survives');
     assert.equal(picker.savedBaseId, '', 'refresh does not save the choice');
+    nextCandidates = ['new-local-checkpoint'];
+    await state.reloadModels();
+    await refreshed;
+    assert.deepEqual(Array.from(picker.candidates), ['new-local-checkpoint']);
+    assert.equal(picker.baseId, '', 'a removed draft choice restores the saved preference');
+    assert.equal(picker.savedBaseId, '');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_adapter_base_save_supersedes_an_older_reload_response():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for dashboard behavior tests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('omlx_web/static/js/dashboard.js', 'utf8');
+const pendingRead = Promise.withResolvers();
+const pendingWrite = Promise.withResolvers();
+const issue = {kind: 'base_missing', reason: 'Download the base.'};
+let override = 'missing-checkpoint';
+let candidates = ['old-local-checkpoint'];
+let pauseRead = false;
+const picker = vm.runInNewContext(source + '\n adapterBasePicker;', {
+    window: {t: key => key}, console,
+    fetch: async (url, options) => {
+        assert.equal(url, '/admin/api/adapters/tuned/base');
+        if (options) {
+            assert.equal(options.method, 'PUT');
+            assert.deepEqual(JSON.parse(options.body), {base_model_id: null});
+            await pendingWrite.promise;
+            override = null;
+            candidates = ['new-local-checkpoint'];
+            return {ok: true, json: async () => ({
+                base_model_id: null, adapter: null, issue,
+            })};
+        }
+        const snapshot = {
+            base_model_id: override, resolved_base_model_id: null,
+            candidates: [...candidates], can_change: true,
+        };
+        if (pauseRead) {
+            pauseRead = false;
+            await pendingRead.promise;
+        }
+        return {ok: true, json: async () => snapshot};
+    },
+})('tuned');
+picker.formatApiError = value => value;
+picker.loadModels = async () => { picker.models = []; };
+(async () => {
+    await picker.init();
+    picker.baseId = '';
+    const saving = picker.saveBase();
+    pauseRead = true;
+    const reloading = picker.init(true);
+    pendingWrite.resolve();
+    await saving;
+    pendingRead.resolve();
+    await reloading;
+    assert.equal(picker.baseId, '', 'the successful Automatic choice stays selected');
+    assert.equal(picker.savedBaseId, '', 'the stale read cannot restore the cleared override');
+    assert.equal(picker.resolvedBaseId, null);
+    assert.deepEqual(Array.from(picker.candidates), ['new-local-checkpoint']);
+    assert.equal(picker.status, issue.reason, 'the unresolved notice remains usable');
+    assert.equal(picker.error, '');
+    assert.equal(picker.loading, false);
+    assert.equal(picker.saving, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(

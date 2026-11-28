@@ -159,7 +159,8 @@
 
                     this.candidates = data.candidates;
                     this.savedBaseId = data.base_model_id || '';
-                    this.baseId = selection ?? this.savedBaseId;
+                    this.baseId = selection !== null && (selection === '' || this.candidates.includes(selection))
+                        ? selection : this.savedBaseId;
                     this.resolvedBaseId = data.resolved_base_model_id;
                     this.canChange = data.can_change;
                     this.error = '';
@@ -192,8 +193,10 @@
                     }
 
                     this.savedBaseId = data.base_model_id || '';
+                    this.baseId = this.savedBaseId;
                     this.resolvedBaseId = data.adapter?.base_model_id || null;
                     this.status = data.issue?.reason || window.t('modal.model_settings.adapter_base_saved');
+                    await this.init();
                     await this.loadModels();
 
                     if (this.selectedModel?.id === this.adapterId) {
