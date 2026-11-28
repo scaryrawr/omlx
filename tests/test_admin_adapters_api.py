@@ -200,6 +200,35 @@ async def set_base(base_id, adapter_id="tuned"):
     )
 
 
+@pytest.mark.parametrize("state", ["automatic", "pinned", "unresolved", "loaded", "loading"])
+async def test_get_base_lists_explicit_choices_and_binding(admin, adapter, state):
+    pool, settings, _ = admin
+    if state == "pinned":
+        settings.set_adapter_base("tuned", "z-base")
+    elif state == "unresolved":
+        pool.adapter_issues = (ambiguous_issue(adapter.adapter.source.path),)
+        del pool._entries["tuned"]
+    elif state == "loaded":
+        adapter.engine = object()
+    elif state == "loading":
+        adapter.is_loading = True
+
+    assert await routes.get_adapter_base("tuned", is_admin=True) == {
+        "base_model_id": "z-base" if state == "pinned" else None,
+        "resolved_base_model_id": None if state == "unresolved" else "z-base",
+        "candidates": ["Base-4bit", "a-base", "z-base"],
+        "can_change": state not in {"loaded", "loading"},
+    }
+
+
+async def test_get_base_rejects_plain_models(admin, adapter):
+    pool, _, _ = admin
+    pool._entries["z-base"] = Entry("z-base", adapter.model_path)
+    with pytest.raises(HTTPException) as exc:
+        await routes.get_adapter_base("z-base", is_admin=True)
+    assert exc.value.status_code == 404
+
+
 async def test_list_models_includes_binding_and_all_issues(
     admin, adapter, tmp_path, monkeypatch
 ):

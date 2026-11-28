@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "omlx_web"
 CARD_KEYS = ("models.detail.adapter_info", "models.detail.adapter_no_base")
 NOTICE_KEY = "models.manager.adapter_issues_heading"
+BASE_KEYS = (
+    "adapter_base", "adapter_base_hint", "adapter_base_auto", "adapter_base_apply",
+    "adapter_base_current", "adapter_base_unload", "adapter_base_saved",
+)
 
 
 def test_adapter_copy_is_available_in_every_locale():
@@ -30,7 +34,83 @@ def test_adapter_copy_is_available_in_every_locale():
         for key in CARD_KEYS:
             assert copy[key].count("{base}") == 1, (locale.name, key)
         assert copy[NOTICE_KEY], locale.name
+        for key in BASE_KEYS:
+            assert copy[f"modal.model_settings.{key}"], (locale.name, key)
         assert not any(key in entry for key in retired_keys for entry in copy)
+
+
+def test_adapter_base_picker_saves_clears_and_reports_errors():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for dashboard behavior tests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync('omlx_web/static/js/dashboard.js', 'utf8');
+const requests = [];
+let fail = false;
+let override = null;
+let resolved = 'Qwen-oQ4e';
+const picker = vm.runInNewContext(source + '\n adapterBasePicker;', {
+    window: {t: key => key}, console: {error: () => {}},
+    fetch: async (url, options) => {
+        assert.equal(url, '/admin/api/adapters/tuned%20adapter/base');
+        if (!options) return {ok: true, json: async () => ({
+            base_model_id: override, resolved_base_model_id: resolved,
+            candidates: ['Qwen-oQ4e', 'Qwen-oQ8'], can_change: true,
+        })};
+        requests.push(JSON.parse(options.body));
+        assert.equal(options.method, 'PUT');
+        if (fail) return {ok: false, json: async () => ({detail: 'Unload adapter first.'})};
+        override = JSON.parse(options.body).base_model_id;
+        resolved = override || 'Qwen-oQ4e';
+        return {ok: true, json: async () => ({
+            base_model_id: override, adapter: {base_model_id: resolved}, issue: null,
+        })};
+    },
+})('tuned adapter');
+picker.formatApiError = value => value;
+picker.selectedModel = {id: 'tuned adapter', adapter: {base_model_id: resolved}};
+picker.modelSettings = {temperature: 0.5};
+picker.loadModels = async () => {
+    picker.models = [{id: 'tuned adapter', adapter: {base_model_id: resolved}}];
+};
+(async () => {
+    await picker.init();
+    assert.equal(picker.baseId, '');
+    assert.equal(picker.resolvedBaseId, 'Qwen-oQ4e');
+    assert.deepEqual(Array.from(picker.candidates), ['Qwen-oQ4e', 'Qwen-oQ8']);
+    picker.baseId = 'Qwen-oQ8';
+    assert.equal(requests.length, 0, 'selection does not submit');
+    await picker.saveBase();
+    assert.deepEqual(requests, [{base_model_id: 'Qwen-oQ8'}]);
+    assert.equal(picker.selectedModel.adapter.base_model_id, 'Qwen-oQ8');
+    assert.equal(picker.modelSettings.temperature, 0.5, 'other edits survive');
+    await picker.init();
+    assert.equal(picker.baseId, 'Qwen-oQ8', 'reopening restores the saved choice');
+    fail = true;
+    picker.baseId = '';
+    await picker.saveBase();
+    assert.equal(picker.error, 'Unload adapter first.');
+    assert.equal(picker.savedBaseId, 'Qwen-oQ8');
+    fail = false;
+    await picker.saveBase();
+    assert.deepEqual(requests.at(-1), {base_model_id: null});
+    assert.equal(picker.resolvedBaseId, 'Qwen-oQ4e');
+    assert.equal(picker.savedBaseId, '');
+    assert.equal(picker.error, '');
+    picker.canChange = false;
+    picker.baseId = 'Qwen-oQ8';
+    const count = requests.length;
+    await picker.saveBase();
+    assert.equal(requests.length, count, 'active adapters cannot be changed');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_adapters_can_show_updates_and_report_unavailable_entries():

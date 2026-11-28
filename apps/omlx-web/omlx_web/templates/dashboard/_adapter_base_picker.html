@@ -1,0 +1,28 @@
+<div x-data="adapterBasePicker({{ adapter_picker_id }})" x-id="['adapter-base', 'adapter-base-hint']" class="space-y-2">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-6">
+        <div class="min-w-0">
+            <label :for="$id('adapter-base')" class="text-sm font-medium text-neutral-700">{{ t('modal.model_settings.adapter_base') }}</label>
+            <p :id="$id('adapter-base-hint')" class="text-xs text-neutral-500 mt-0.5">{{ t('modal.model_settings.adapter_base_hint') }}</p>
+        </div>
+        <div class="flex items-center gap-2 min-w-0" style="width: 22rem; max-width: 100%;">
+            <select :id="$id('adapter-base')" :aria-describedby="$id('adapter-base-hint')" x-model="baseId"
+                    @change="error = ''; status = ''"
+                    :disabled="loading || saving || !canChange" class="w-full min-w-0 px-3 py-1.5 border border-neutral-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-neutral-900 disabled:opacity-50">
+                <option value="">{{ t('modal.model_settings.adapter_base_auto') }}</option>
+                <template x-if="savedBaseId && !candidates.includes(savedBaseId)">
+                    <option :value="savedBaseId" :selected="baseId === savedBaseId" x-text="savedBaseId"></option>
+                </template>
+                <template x-for="candidate in candidates" :key="candidate">
+                    <option :value="candidate" :selected="baseId === candidate" x-text="candidate"></option>
+                </template>
+            </select>
+            <button type="button" @click="saveBase()" :disabled="loading || saving || !canChange || baseId === savedBaseId"
+                    class="shrink-0 px-3 py-1.5 text-sm font-medium border border-neutral-200 rounded-lg hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed">{{ t('modal.model_settings.adapter_base_apply') }}</button>
+        </div>
+    </div>
+    <p x-show="resolvedBaseId" class="text-xs text-neutral-500"
+       x-text="window.t('modal.model_settings.adapter_base_current').replace('{base}', () => resolvedBaseId)"></p>
+    <p x-show="!loading && !canChange && !error" class="text-xs text-amber-700">{{ t('modal.model_settings.adapter_base_unload') }}</p>
+    <p x-show="error" x-text="error" role="alert" class="text-xs text-amber-700"></p>
+    <p x-show="status" x-text="status" role="status" class="text-xs text-neutral-500"></p>
+</div>

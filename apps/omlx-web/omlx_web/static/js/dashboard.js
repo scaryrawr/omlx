@@ -127,6 +127,79 @@
     };
     const ACC_PRESET_NAMES = ['quick', 'standard', 'full'];
 
+    function adapterBasePicker(adapterId) {
+        return {
+            adapterId,
+            candidates: [],
+            baseId: '',
+            savedBaseId: '',
+            resolvedBaseId: null,
+            canChange: false,
+            loading: true,
+            saving: false,
+            error: '',
+            status: '',
+            async init() {
+                try {
+                    const response = await fetch(`/admin/api/adapters/${encodeURIComponent(this.adapterId)}/base`);
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(this.formatApiError(data.detail) || window.t('js.error.save_failed'));
+                    }
+
+                    this.candidates = data.candidates;
+                    this.baseId = data.base_model_id || '';
+                    this.savedBaseId = this.baseId;
+                    this.resolvedBaseId = data.resolved_base_model_id;
+                    this.canChange = data.can_change;
+                } catch (error) {
+                    console.error('Failed to load adapter bases:', error);
+                    this.error = error.message;
+                } finally {
+                    this.loading = false;
+                }
+            },
+            async saveBase() {
+                if (this.saving || !this.canChange || this.baseId === this.savedBaseId) return;
+
+                const baseId = this.baseId;
+                this.saving = true;
+                this.error = '';
+                this.status = '';
+                try {
+                    const response = await fetch(`/admin/api/adapters/${encodeURIComponent(this.adapterId)}/base`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ base_model_id: baseId || null }),
+                    });
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(this.formatApiError(data.detail) || window.t('js.error.save_failed'));
+                    }
+
+                    this.savedBaseId = data.base_model_id || '';
+                    this.resolvedBaseId = data.adapter?.base_model_id || null;
+                    this.status = data.issue?.reason || window.t('modal.model_settings.adapter_base_saved');
+                    await this.loadModels();
+
+                    if (this.selectedModel?.id === this.adapterId) {
+                        const model = this.models.find(model => model.id === this.adapterId);
+
+                        if (model) this.selectedModel = model;
+                        else this.showModelSettingsModal = false;
+                    }
+                } catch (error) {
+                    console.error('Failed to save adapter base:', error);
+                    this.error = error.message;
+                } finally {
+                    this.saving = false;
+                }
+            },
+        };
+    }
+
     function dashboard() {
         // GridStack instance and helpers stay outside the reactive Alpine state.
         let dashGrid = null;
